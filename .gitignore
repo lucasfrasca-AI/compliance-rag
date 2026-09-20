@@ -1,0 +1,32 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+credentials*.json
+service-account*.json
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.pyright/
+dist/
+build/
+
+# claude code — local overrides stay local
+.claude/settings.local.json
+
+# billable approvals are local, human-written, and single-use — never shared
+.claude/billable-approvals.txt
+
+# corpus raw sources are fetched, not committed (parser output and mappings ARE committed)
+corpus/instruments/**/raw/
+
+# local data
+*.db
+*.sqlite
+data/
+docs/handoffs/*.tmp

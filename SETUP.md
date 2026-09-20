@@ -1,0 +1,79 @@
+# SETUP — steps only you can do
+
+Everything here needs a browser login, a credit card, or a one-time secret that only you should see. Claude Code does everything else. Tick each box; the kickoff prompt will check them.
+
+## Status as of 2026-09-17
+
+Done:
+- GCP project created (number `423977975910` — put the **project ID string**, not the number, in `.env` and `gcloud config`; `gcloud projects list` shows both), region `australia-southeast1`
+- $200 budget with 50/75/90/100% alerts
+- Claude (Sonnet-class) enabled in Vertex Model Garden; model ID captured
+- Neo4j AuraDB Free instance `compliance-rag-neo` (ID `5b790f49`); URI, username and one-time password captured
+- Qdrant Cloud Free cluster `compliance-rag-quad` in GCP `australia-southeast1` (1 GB RAM, 0.5 vCPU, 4 GiB disk); URL and API key captured. *(Name appears once as `compliance-rag-cluster` in notes — the console name wins; put whichever is real in `.env` as `QDRANT_CLUSTER_NAME`.)*
+
+Remaining: §0 local tools, §1 GitHub, §2 API enablement + ADC login + runtime service account, §4 Qdrant inference-model check (BM25 and ColBERT), §7 fill `.env`, §8 open in VS Code.
+
+
+## 0. Local machine
+
+- [ ] Node.js 20+ (`node -v`), Python 3.12+ (`python3 --version`), `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [ ] `jq` (used by the billable guard hook)
+- [ ] Docker Desktop (local Postgres for Phase 0; Cloud Build does production images so this is optional later)
+- [ ] `gcloud` CLI installed and updated (`gcloud components update`)
+- [ ] `gh` CLI installed, `gh auth login` completed
+- [ ] VS Code with the **Claude Code** extension from the marketplace, signed in to your Anthropic account
+- [ ] Claude Code CLI works in the integrated terminal: `claude --version`
+
+## 1. GitHub
+
+- [ ] Create a **private** repo, e.g. `compliance-rag`. Do not initialise with a README.
+- [ ] Clone it, copy this kit into the root, commit as `chore: kickoff kit`.
+- [ ] Settings → Branches → protect `main`: require a pull request, require status checks (you'll name the check after Phase 0 creates it).
+- [ ] Settings → Actions → allow GitHub Actions.
+- [ ] Issues enabled (the skills plugin uses GitHub Issues as the tracker).
+
+## 2. Google Cloud
+
+Region for everything: **`australia-southeast1`**. Pick a project ID you can type, e.g. `compliance-rag-dev`.
+
+- [x] Create the project. Link a billing account. *(done — project number `423977975910`)*
+- [x] **Billing → Budgets & alerts**: budget `USD 200`, alert thresholds 50%, 75%, 90% (`$150`), 100%. *(done)* Claude Code will later wire the 90% alert to a Pub/Sub topic that disables Cloud Run.
+- [ ] Enable these APIs (console or `gcloud services enable` — the kickoff prompt will do it after asking): `run`, `cloudbuild`, `artifactregistry`, `sqladmin`, `aiplatform`, `secretmanager`, `cloudscheduler`, `workflows`, `storage`, `iam`, `cloudtrace`, `logging`, `documentai` (leave `documentai` off until a scanned PDF appears).
+- [x] **Vertex AI → Model Garden → Claude**: Sonnet-class model enabled, terms accepted. *(done)*
+- [x] Exact model ID string captured for `.env`. *(done — paste it into `VERTEX_CLAUDE_MODEL`)*
+- [ ] Ranking API: confirmed **not** available in `australia-southeast1`. Nothing to set up; the reranker is a Cloud Run service Claude Code builds in Phase 1. The Ranking API is used only by CI in `us-central1` with synthetic data.
+- [ ] Artifact Registry: nothing manual — Claude Code creates the `compliance-rag` Docker repository in Phase 1 (after asking) to hold the reranker image.
+- [ ] Local auth: `gcloud auth login`, then `gcloud auth application-default login`, then `gcloud config set project <id>` and `gcloud config set run/region australia-southeast1`.
+- [ ] Create a service account `compliance-rag-runtime@<project>.iam.gserviceaccount.com`. Grant: Vertex AI User, Cloud SQL Client, Secret Manager Secret Accessor, Storage Object Admin (scoped to the corpus bucket later), Cloud Trace Agent, Logs Writer. **Do not create or download a key** — Cloud Run uses it directly; your laptop uses ADC.
+
+## 3. Neo4j AuraDB Free
+
+- [x] Sign in at console.neo4j.io → New instance → **AuraDB Free**. *(done)*
+- [x] Name: `compliance-rag-neo` (instance ID `5b790f49`). *(done)* Cloud/region: whatever Free offers closest to you (Free is not offered in Australia — acceptable during build because the graph holds public law only; see `DECISIONS.md` D-09).
+- [x] Credentials captured. *(done)* Put `NEO4J_URI` (`neo4j+s://5b790f49.databases.neo4j.io` — verify against the console), `NEO4J_USERNAME`, `NEO4J_PASSWORD` in `.env`.
+- [ ] Nothing else to configure. Constraints, indexes and the bitemporal schema are created by code (`db/neo4j/schema.cypher`), and the keep-alive is a scheduled job Claude Code adds in Phase 4. Until then, open the console at least every 3 days or the instance pauses.
+
+## 4. Qdrant Cloud
+
+- [x] Sign in at cloud.qdrant.io → Create cluster → **Free**. *(done)*
+- [x] Provider: **GCP**. Region: **`australia-southeast1`**. *(done — 1 GB RAM, 0.5 vCPU, 4 GiB disk)*
+- [x] Name: `compliance-rag-quad`. *(done)*
+- [x] API key captured. *(done)* Put `QDRANT_URL` (`https://xxxx.gcp.cloud.qdrant.io:6333`) and `QDRANT_API_KEY` in `.env`.
+- [ ] Cloud Inference: confirm it is available on the cluster. Two models are used: `Qdrant/bm25` (sparse channel) and `colbert-ir/colbertv2.0` (ColBERT rescoring A/B). Check both appear in the cluster's inference model list; if ColBERT is not on the free tier, note it and the cross-encoder remains the sole reranker.
+- [ ] Nothing else to configure. Collection schema is created by code with these settings, which you may want to recognise later: dense vector `1536` dims cosine (embedding model called with `output_dimensionality=1536`), sparse vector named `bm25` via cloud inference model `Qdrant/bm25`, payload indexes on `clause_id`, `obligation_id`, `tenant_id`, `scope` (keyword) and `valid_from`, `valid_to` (integer, epoch days).
+
+## 5. Telemetry (nothing manual)
+
+- [ ] Nothing to do. OpenTelemetry → a Cloud Logging regional bucket `compliance-rag-logs` in `australia-southeast1` is the only sink; Claude Code creates the bucket in Phase 0 after asking. There is no Langfuse account to create. A trace UI (Phoenix on Cloud Run Sydney planned; self-hosted Langfuse unlikely) is a later ADR, not a setup step.
+
+## 6. Web search fallback (optional until Phase 3)
+
+- [ ] Brave Search API or Tavily free key → `WEB_SEARCH_API_KEY`.
+
+## 7. Secrets
+
+- [ ] Copy `.env.example` to `.env`, fill it in. `.env` is gitignored. Claude Code reads it locally; in Phase 3 it moves each value into Secret Manager (after asking).
+
+## 8. Open the repo in VS Code
+
+- [ ] Open the repo folder. Open the Claude Code panel. Paste `prompts/00-setup-prompt.md` as your first message.

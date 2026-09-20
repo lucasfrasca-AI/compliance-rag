@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compliance RAG — workflow map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --pitch:#05010E; --bone:#F3F3F1; --sub:#D4D2CE; --mute:#A4A098;
+  --violet:#A855F7; --indigo:#6366F1; --amber:#FCD34D; --accent:#895AF6;
+  --surface:#160F24; --surface2:#1C1528; --input:#1B122B; --red:#DC2828;
+  --rule:rgba(243,243,241,.12); --rule2:rgba(243,243,241,.07);
+  --spectrum:linear-gradient(to right,#6366F1,#A855F7,#FCD34D);
+  --spectrum-v:linear-gradient(to bottom,#6366F1,#A855F7,#FCD34D);
+  --sans:"Geist",ui-sans-serif,system-ui,sans-serif;
+  --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ } }
+:root[data-theme="dark"]{ }
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--pitch);color:var(--bone);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1040px;margin:0 auto;padding:56px 28px 80px}
+
+header h1{font-size:clamp(28px,4vw,40px);font-weight:500;letter-spacing:-.02em;margin:0 0 10px;line-height:1.1}
+header p{color:var(--sub);max-width:62ch;margin:0}
+.legend{display:flex;gap:22px;flex-wrap:wrap;margin:26px 0 0;color:var(--mute);font-size:13px}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.i-indigo{background:var(--indigo)} .i-violet{background:var(--violet)} .i-amber{background:var(--amber)}
+
+section{margin-top:56px}
+.loop-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;border-bottom:1px solid var(--rule);padding-bottom:12px;flex-wrap:wrap}
+.loop-head h2{font-size:20px;font-weight:500;margin:0;letter-spacing:-.01em}
+.loop-head small{color:var(--mute);font-family:var(--mono);font-size:12px}
+
+.rail{position:relative;margin-top:8px}
+.rail::before{content:"";position:absolute;left:19px;top:0;bottom:0;width:2px;background:var(--spectrum-v);opacity:.9}
+.step{display:grid;grid-template-columns:40px 1.15fr 1.6fr 120px;gap:18px;padding:20px 0;border-bottom:1px solid var(--rule2);align-items:start}
+.step:last-child{border-bottom:0}
+.dot{width:40px;display:flex;justify-content:center;padding-top:4px}
+.dot b{width:14px;height:14px;border-radius:50%;background:var(--pitch);border:2px solid var(--accent);display:block;box-shadow:0 0 0 4px var(--pitch)}
+.step.a .dot b{border-color:var(--indigo)}
+.step.b .dot b{border-color:var(--violet)}
+.step.x .dot b{border-color:var(--amber)}
+.name{font-weight:500;font-size:16px;letter-spacing:-.005em}
+.name small{display:block;color:var(--mute);font-weight:400;font-size:13px;margin-top:3px}
+.svc{font-family:var(--mono);font-size:12.5px;color:var(--sub);line-height:1.6}
+.svc em{font-style:normal;color:var(--bone)}
+.svc .p{color:var(--mute)}
+.cost{font-family:var(--mono);font-size:13px;text-align:right;color:var(--amber);white-space:nowrap}
+.cost small{display:block;color:var(--mute);font-size:11px}
+
+.strip{margin-top:56px;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:22px 24px}
+.strip h2{font-size:16px;font-weight:500;margin:0 0 14px}
+.strip .row{display:grid;grid-template-columns:1.1fr 1.7fr 110px;gap:16px;padding:10px 0;border-top:1px solid var(--rule2);align-items:baseline}
+.strip .row:first-of-type{border-top:0}
+.strip .k{font-size:14px}
+.strip .v{font-family:var(--mono);font-size:12px;color:var(--sub)}
+.strip .c{font-family:var(--mono);font-size:12.5px;color:var(--amber);text-align:right}
+
+.total{margin-top:40px;border-top:2px solid transparent;border-image:var(--spectrum) 1;padding-top:20px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.total div{background:var(--surface2);border:1px solid var(--rule2);border-radius:6px;padding:16px 18px}
+.total .t{color:var(--mute);font-size:13px}
+.total .n{font-family:var(--mono);font-size:26px;margin-top:6px;letter-spacing:-.01em}
+.total .d{color:var(--mute);font-size:12px;margin-top:6px}
+footer{margin-top:28px;color:var(--mute);font-size:12.5px;max-width:78ch}
+
+@media (max-width:760px){
+  .step{grid-template-columns:32px 1fr;gap:10px 14px}
+  .dot{width:32px}
+  .rail::before{left:15px}
+  .svc{grid-column:2}
+  .cost{grid-column:2;text-align:left;margin-top:2px}
+  .strip .row{grid-template-columns:1fr}
+  .strip .c{text-align:left}
+  .total{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Compliance RAG — how a request moves through the system</h1>
+  <p>Hybrid graph RAG on GCP with Qdrant and Neo4j. Two loops: the corpus loop keeps law and policy current; the assessment loop answers questions and checks documents. Costs are monthly estimates at ~2,000 queries and a ~30&nbsp;MB corpus, single tenant.</p>
+  <div class="legend">
+    <span><i class="i-indigo"></i>Corpus loop, scheduled</span>
+    <span><i class="i-violet"></i>Assessment loop, per request</span>
+    <span><i class="i-amber"></i>Cross-cutting</span>
+  </div>
+</header>
+
+<section>
+  <div class="loop-head"><h2>Loop A — keep the corpus current</h2><small>runs on a schedule, human-gated</small></div>
+  <div class="rail">
+
+    <div class="step a">
+      <div class="dot"><b></b></div>
+      <div class="name">Poll regulatory feeds<small>Detect new instruments and compilations</small></div>
+      <div class="svc"><em>Cloud Scheduler → Cloud Run job</em><br><span class="p">Federal Register OData · EUR-Lex Cellar (CELEX) · NIST OSCAL · OAIC/APRA RSS</span></div>
+      <div class="cost">$0<small>free tiers</small></div>
+    </div>
+
+    <div class="step a">
+      <div class="dot"><b></b></div>
+      <div class="name">Parse to clause records<small>Stable IDs, page and character offsets captured here</small></div>
+      <div class="svc"><em>Cloud Run job · PyMuPDF / XML parsers</em><br><span class="p">Canonical text written to Cloud Storage (versioned, australia-southeast1) · Document AI only for scanned PDFs</span></div>
+      <div class="cost">&lt;$1<small>storage</small></div>
+    </div>
+
+    <div class="step a">
+      <div class="dot"><b></b></div>
+      <div class="name">Version and diff<small>Which mapped clauses changed, and only those</small></div>
+      <div class="svc"><em>Cloud SQL Postgres (ledger) · clause-level diff</em><br><span class="p">valid_from / valid_to / status on every version · diff opens a GitHub PR naming affected mappings · merge = publish</span></div>
+      <div class="cost">~$9<small>Cloud SQL micro, shared</small></div>
+    </div>
+
+    <div class="step a">
+      <div class="dot"><b></b></div>
+      <div class="name">Chunk and embed<small>Clause-level chunks under the reranker cap</small></div>
+      <div class="svc"><em>Cloud Run · Vertex AI Embeddings</em><br><span class="p">≤500-token chunks · gemini-embedding dense vectors · payload: clause_id, obligation_id, version, valid_from/to, scope</span></div>
+      <div class="cost">&lt;$1<small>~2M tokens once</small></div>
+    </div>
+
+    <div class="step a">
+      <div class="dot"><b></b></div>
+      <div class="name">Load the two derived stores<small>Structure to the graph, text to the vector store</small></div>
+      <div class="svc"><em>Qdrant Cloud Free, australia-southeast1</em> <span class="p">· HNSW dense + BM25 sparse (server-side inference) + ColBERT multivectors (rescoring, HNSW off) + keyword index on clause_id</span><br><em>Neo4j AuraDB Free</em> <span class="p">· Cypher · instrument → article → obligation · SUPERSEDES edges · crosswalks from YAML</span></div>
+      <div class="cost">$0<small>rebuildable</small></div>
+    </div>
+
+    <div class="step a">
+      <div class="dot"><b></b></div>
+      <div class="name">Regression gate<small>Nothing publishes if findings drift</small></div>
+      <div class="svc"><em>GitHub Actions · Ragas</em><br><span class="p">Golden set: recall@k per channel, clause-ID exact match, verifier pass rate · blocks the merge on regression</span></div>
+      <div class="cost">$0<small>2,000 min/mo</small></div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="loop-head"><h2>Loop B — answer a question or check a document</h2><small>runs per request</small></div>
+  <div class="rail">
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Sign in, load company context<small>Company profile is shared; personal additions stay private</small></div>
+      <div class="svc"><em>Firebase Authentication · Cloud SQL</em><br><span class="p">Tenant profile, roles, chat history · scope filter = public + tenant + this user</span></div>
+      <div class="cost">$0<small>50k MAU free</small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Upload or ask<small>PDF, DOCX, Markdown, or a chat question</small></div>
+      <div class="svc"><em>Cloud Run service (SSE streaming)</em><br><span class="p">Same parser as Loop A · positions captured for click-to-clause · file text is data, never instructions</span></div>
+      <div class="cost">$0–3<small>Cloud Run seconds</small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Extract the document's claims<small>What does this proposal actually commit to?</small></div>
+      <div class="svc"><em>Claude on Vertex AI · schema-validated JSON</em><br><span class="p">Provenance: inferred · shown to the user before it counts</span></div>
+      <div class="cost">in LLM line<small></small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Track A — what applies to us<small>Deterministic, every obligation, no top-k</small></div>
+      <div class="svc"><em>Neo4j · Cypher traversal scoped by as_of</em><br><span class="p">Profile → applicable obligations → mapped policy clauses · conditions (turnover, jurisdiction, actor) evaluated as nodes</span></div>
+      <div class="cost">$0<small></small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Track B — find the supporting text<small>Only within what Track A identified</small></div>
+      <div class="svc"><em>Qdrant Query API</em><br><span class="p">prefetch dense (cosine) + sparse (BM25) → RRF fusion → 50 candidates · filter: obligation_id, valid window, scope · exact clause-ID queries hit the keyword index and skip reranking</span></div>
+      <div class="cost">$0<small></small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Rerank<small>Answerability, not similarity</small></div>
+      <div class="svc"><em>Reranker service on Cloud Run, Sydney</em><br><span class="p">Cross-encoder (BGE-reranker-v2-m3, ONNX int8, CPU) · 50 → 10 · scale-to-zero · A/B: ColBERT rescoring inside Qdrant · Vertex Ranking API is not in AU — CI only</span></div>
+      <div class="cost">$0–15<small>min instances 0 → 1</small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Generate<small>Findings per claim, or a grounded chat answer</small></div>
+      <div class="svc"><em>Claude on Vertex AI, Australia</em><br><span class="p">Cached prefix: system prompt + obligation digest + full company policy corpus (CAG) · law arrives via retrieval · temperature 0 · structured output</span></div>
+      <div class="cost">$30–80<small>the line that moves</small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Verify every citation<small>The product claim, enforced in code</small></div>
+      <div class="svc"><em>Deterministic verifier · Cloud Storage canonical text</em><br><span class="p">Citation must exist in the retrieved or cached set, span must match canonical source · fail → targeted repair, not regeneration · thin coverage → web fallback, tagged external</span></div>
+      <div class="cost">$0<small></small></div>
+    </div>
+
+    <div class="step b">
+      <div class="dot"><b></b></div>
+      <div class="name">Answer and record<small>Reproducible a year later</small></div>
+      <div class="svc"><em>Cloud Run stream → UI · Cloud SQL</em><br><span class="p">Click a citation → opens the document at the clause · findings stored with corpus version, mapping version, as_of, provenance tier per finding</span></div>
+      <div class="cost">$0<small></small></div>
+    </div>
+
+  </div>
+</section>
+
+<div class="strip">
+  <h2>Runs across every step</h2>
+  <div class="row"><div class="k">Tracing, end to end</div><div class="v">OpenTelemetry SDK → Cloud Logging regional bucket, Sydney — the only sink · both retrieval channels logged as structured spans · trace UI later by ADR only (Phoenix planned) · telemetry follows the same residency rule as data</div><div class="c">$0</div></div>
+  <div class="row"><div class="k">Prompt caching (CAG layer)</div><div class="v">Claude prompt caching on Vertex · write ~1.25× once per session, reads ~0.1× · invalidates itself when the policy version changes</div><div class="c">saves, not costs</div></div>
+  <div class="row"><div class="k">Secrets and budget</div><div class="v">Secret Manager (6 free) · Cloud Billing budget alert at $150 → Pub/Sub → disable Cloud Run</div><div class="c">$0</div></div>
+  <div class="row"><div class="k">Web fallback, last resort</div><div class="v">Brave Search or Tavily · results tagged external, shown after the grounded answer, never blended</div><div class="c">$0–5</div></div>
+  <div class="row"><div class="k">Keep-alive</div><div class="v">Cloud Scheduler pings Aura and Qdrant daily so the free tiers never pause</div><div class="c">$0</div></div>
+</div>
+
+<div class="total">
+  <div><div class="t">Idle month</div><div class="n">~$10</div><div class="d">Cloud SQL only; everything else scales to zero</div></div>
+  <div><div class="t">Typical month</div><div class="n">~$45–90</div><div class="d">Claude usage dominates; +$8–15 if the reranker runs at min instances 1</div></div>
+  <div><div class="t">Heavy month</div><div class="n">~$110–130</div><div class="d">Still under the $200 ceiling</div></div>
+</div>
+
+<footer>Rates are published figures as of September 2026; volumes are estimates. Qdrant is confirmed in australia-southeast1 and the reranker is self-hosted there; Neo4j AuraDB Free is the one store still offshore (public law only). The first real policy is the residency trigger; the upgrade path (Aura Pro in AU) adds roughly $65.</footer>
+
+</div>
+</body>
+</html>
