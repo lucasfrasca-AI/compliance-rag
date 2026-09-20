@@ -154,6 +154,15 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
         "SETUP.md §2 (runtime service account roles).",
     ),
     (
+        r"gcloud\s+iam\s+(workload-identity-pools|service-accounts\s+add-iam-policy-binding)",
+        "Workload Identity Federation",
+        "pool / OIDC provider / impersonation binding",
+        "global",
+        "$0",
+        "SERVICES.md: Workload Identity Federation row — Phase 0. Federation decides who "
+        "outside GCP may act as a service account, so it is gated like any other grant.",
+    ),
+    (
         r"gcloud\s+run\s+deploy\s+reranker|gcloud\s+run\s+services\s+update\s+reranker",
         "Cloud Run",
         "reranker",
