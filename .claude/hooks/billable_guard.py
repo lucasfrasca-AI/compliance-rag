@@ -28,7 +28,9 @@ match; a chain must be approved as the whole chain.
 
 Only the human writes approval lines. This script never adds one; it only
 marks an existing line used. Claude is denied Edit/Write/Bash access to the
-approvals file in .claude/settings.json.
+approvals file in .claude/settings.json; the Read tool is left open on purpose,
+so a refused approval can be diagnosed. Reading grants nothing — only a line
+already in the file authorises a command.
 """
 
 import datetime
