@@ -24,6 +24,7 @@ Deliverables
 Exit criteria
 - `uv run pytest` green in CI
 - A trace visible in the Sydney Cloud Logging bucket from a CI run, queryable by `trace_id` in Logs Explorer
+- The CI trace check asserts **both** halves of the routing, not just the first: the span landed in `compliance-rag-logs`, **and** nothing matching the sink filter landed in `_Default`. A span that reaches Sydney while a copy also sits in the global bucket fails the criterion — `_Default` is global, and a leak there is a residency breach whatever arrives in Sydney (D-16)
 - Interfaces have fakes and a contract test each
 
 Unlocks: nothing billable.

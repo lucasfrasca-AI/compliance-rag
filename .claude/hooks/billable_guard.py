@@ -194,6 +194,15 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
         "SERVICES.md: 'Cloud Logging regional log bucket' — Phase 0. The only telemetry sink (D-16).",
     ),
     (
+        r"gcloud\s+logging\s+(sinks\s+(create|update|delete)|buckets\s+update)",
+        "Cloud Logging",
+        "log router sink / bucket configuration",
+        "australia-southeast1",
+        "$0 (routing is free; storage stays inside the 50 GiB free tier)",
+        "SERVICES.md: 'Cloud Logging regional log bucket' — Phase 0. Where logs are routed "
+        "decides residency, so a sink change is gated exactly like creating the bucket (D-16).",
+    ),
+    (
         r"gcloud\s+sql\s+(instances\s+(create|patch)|databases\s+create)",
         "Cloud SQL",
         "db-f1-micro, 10 GB SSD, no HA, no replica",
