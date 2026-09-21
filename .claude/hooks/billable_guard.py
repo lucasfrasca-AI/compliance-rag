@@ -154,7 +154,11 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
         "SETUP.md §2 (runtime service account roles).",
     ),
     (
-        r"gcloud\s+iam\s+(workload-identity-pools|service-accounts\s+add-iam-policy-binding)",
+        # Mutating verbs only. `describe`, `list` and `--help` create nothing, and
+        # gating them blocks the verification that proves what was created.
+        r"gcloud\s+iam\s+(?:workload-identity-pools\s+(?:(?:create|update|delete|undelete)\b"
+        r"|providers\s+(?:create-\w+|update|delete|undelete)\b)"
+        r"|service-accounts\s+add-iam-policy-binding\b)",
         "Workload Identity Federation",
         "pool / OIDC provider / impersonation binding",
         "global",
