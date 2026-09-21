@@ -327,3 +327,49 @@ async def test_citation_against_unknown_clause_blocks(clause: ClauseRecord) -> N
         "take such steps as are reasonable",
         clauses=(clause,),
     )
+
+
+# --------------------------------------------------------------------------
+# Reserved public tenant (CONTEXT.md: Tenant id, Scope)
+# --------------------------------------------------------------------------
+
+
+def test_public_clause_carries_the_reserved_tenant() -> None:
+    from compliance_rag.corpus.models import PUBLIC_TENANT_ID
+
+    record = ClauseRecord.build(
+        instrument_id="privacy-act-1988",
+        version_id="C2024C00276",
+        clause_path="APP11.1",
+        text="An APP entity must take such steps as are reasonable.",
+    )
+    assert record.tenant_id == PUBLIC_TENANT_ID
+
+
+def test_public_scope_rejects_a_real_tenant() -> None:
+    with pytest.raises(ValueError, match="_public"):
+        ClauseRecord.build(
+            instrument_id="privacy-act-1988",
+            version_id="C2024C00276",
+            clause_path="APP11.1",
+            text="Text.",
+            tenant_id="acme",
+        )
+
+
+def test_reserved_tenant_is_rejected_for_a_policy() -> None:
+    """`_public` is reserved; a tenant-scoped clause may never claim it."""
+    from compliance_rag.corpus.models import PUBLIC_TENANT_ID
+
+    # NB: not "acme/hr-policy". CONTEXT.md now specifies tenant-prefixed
+    # instrument ids, but INSTRUMENT_ID_RE does not accept "/" yet — that is a
+    # separate Phase 1 ticket. This test is about the reserved tenant only.
+    with pytest.raises(ValueError, match="reserved"):
+        ClauseRecord.build(
+            instrument_id="acme-hr-policy",
+            version_id="v3",
+            clause_path="sec2.1",
+            text="Text.",
+            scope=Scope.TENANT,
+            tenant_id=PUBLIC_TENANT_ID,
+        )

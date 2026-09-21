@@ -6,15 +6,20 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 
 - **Instrument** — a law, regulation or standard as a whole (Privacy Act 1988, EU AI Act, ISO 27001). Has versions.
 - **Instrument version** — one compilation of an instrument. Identified by the register's own ID (compilation number, CELEX, catalogue revision).
+- **Tenant id** — the identifier for one company. Contains neither `:` nor `/`, because both are separators inside a stable ID. `_public` is reserved for public law and is never a real tenant's id.
 - **Clause** — the smallest citable unit of an instrument: an APP sub-clause, an article paragraph, an Annex A control. Has a **stable ID**: `{instrument_id}:{version_id}:{clause_path}`.
-- **Canonical text** — a clause's text after canonicalisation (NFC, whitespace, quotes normalised). The verifier compares canonical to canonical. Lives in Cloud Storage. Never edited.
+- **Instrument id** — globally unique on its own. A tenant-scoped instrument is prefixed with its tenant — `acme/hr-policy` — so two companies cannot both claim `hr-policy`. Public instruments are unprefixed. A stable ID that is unique only given out-of-band context is not stable: the ID is what a citation carries and what the verifier looks up.
+- **Canonical text** — a clause's text after canonicalisation. The verifier compares canonical to canonical. Lives in Cloud Storage. Never edited. _Avoid_: normalised text, cleaned text.
+- **Canonicalisation** — the exact transformation producing canonical text, in order: NFC normalisation; `‘ ’` → `'`; `“ ”` → `"`; en dash and em dash → `-`; non-breaking space → space; every whitespace run collapsed to one space; ends stripped. This defines what counts as a matching citation, so it is a definition, not an implementation detail.
+- **Canonicalisation version** — an integer identifying one canonicalisation. Every citation records the version it was verified under, so changing canonicalisation cannot silently invalidate citations already issued. A change to the transformation is a new version, never an edit to an existing one.
 - **Chunk** — a retrieval unit derived from a clause, ≤500 tokens. One chunk belongs to at most one obligation. Chunks live in Qdrant; clauses live in Cloud Storage.
 - **Policy** — a company's own document, treated exactly like an instrument: versions, clauses, canonical text.
-- **Corpus version** — a git tag over `corpus/` plus the set of instrument versions loaded. Recorded on every assessment.
+- **Corpus version** — a git tag over `corpus/instruments/`, identifying which instrument versions were loaded. Recorded on every assessment.
+- **Mapping version** — a git tag over `corpus/mappings/`, identifying which obligations, conditions and crosswalks were in force. Moves independently of the corpus version: a mapping correction changes no clause text, and a new compilation changes no mapping. Recorded on every assessment; an assessment is reproducible only with both.
 
 ## Graph
 
-- **Obligation** — a graph node for a clause that imposes a requirement. Not every clause is an obligation (recitals, definitions aren't).
+- **Obligation** — a graph node for a clause that imposes a requirement. Not every clause is an obligation (recitals, definitions aren't). Carries its own stable id, independent of `clause_id`: an obligation is a human claim *about* a clause and survives a new instrument version via `SUPERSEDES`, where the clause's stable ID does not.
 - **Condition** — a node that gates an obligation (turnover > $3M, actor is deployer, jurisdiction is EU). Evaluated against the **profile**.
 - **Crosswalk** — a `CROSSWALKS_TO` edge between obligations or controls across instruments, authored in **mapping YAML**.
 - **Mapping YAML** — hand-authored files in `corpus/mappings/`, reviewed via PR. The only source of crosswalks and obligation metadata.
@@ -29,8 +34,8 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 - **Channel** — one retrieval signal: dense (cosine), sparse (BM25), keyword (exact `clause_id`).
 - **Fusion** — RRF over channels inside Qdrant, producing ~50 candidates.
 - **Rerank** — second-stage scoring of fused candidates to top 10. Default: the **reranker service** (cross-encoder on Cloud Run, Sydney). Alternative: **ColBERT rescoring** (late-interaction multivectors inside Qdrant).
-- **Router** — the single fixed decision: clause-ID regex → keyword channel, skip rerank; else full pipeline.
-- **Scope** — which corpus partition a chunk belongs to: `public` (law), `tenant` (company policies), `user` (one person's private additions).
+- **Router** — the single fixed decision: clause-ID regex → keyword channel, skip rerank; else full pipeline. The regex accepts a tenant-prefixed instrument id, so a policy clause ID is routed like any other.
+- **Scope** — which corpus partition a chunk belongs to: `public` (law), `tenant` (company policies), `user` (one person's private additions). Scope `public` implies the reserved tenant id `_public`; `tenant_id` always names an owner, never nobody.
 
 ## Assessment
 
@@ -52,5 +57,5 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 
 ## Stores
 
-- **Ledger** — Postgres. The one non-derivable store: assessments, profile, evidence, manifest, chats, usage.
+- **Ledger** — Postgres. The one store whose contents cannot be rebuilt: assessments, profile, evidence, manifest, chats, usage. The corpus tables in the same database (`instrument`, `instrument_version`, `clause`, `clause_version`) are a derived index kept there for join convenience; they are not the ledger and are rebuildable like any other derived store.
 - **Derived store** — Qdrant and Neo4j. Rebuildable from Cloud Storage + git.

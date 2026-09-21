@@ -12,7 +12,7 @@ import re
 import unicodedata
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # One path segment: letters, digits, and the separators legislation actually uses.
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
@@ -31,6 +31,16 @@ class Status(StrEnum):
     IN_FORCE = "in_force"
     NOT_YET_COMMENCED = "not_yet_commenced"
     REPEALED = "repealed"
+
+
+PUBLIC_TENANT_ID = "_public"
+"""Reserved tenant id for public law (`CONTEXT.md`).
+
+Public law belongs to no company, but `tenant_id` is NOT NULL on every table
+(`PHASES.md`), and a row-level-security policy needs something to match on
+rather than a three-valued predicate. So public rows carry this id instead of
+NULL, and `tenant_id` always names an owner.
+"""
 
 
 class Scope(StrEnum):
@@ -155,8 +165,9 @@ class ClauseRecord(BaseModel):
     text: str
     canonical_text: str
     scope: Scope = Scope.PUBLIC
-    tenant_id: str | None = Field(
-        default=None, description="None for public law; set for tenant and user scopes"
+    tenant_id: str = Field(
+        default=PUBLIC_TENANT_ID,
+        description="`_public` for law; the owning tenant for tenant and user scopes",
     )
     char_start: int | None = Field(
         default=None, description="Offset in the source document, for click-to-clause"
@@ -176,6 +187,14 @@ class ClauseRecord(BaseModel):
             raise ValueError("canonical_text must already be in canonical form")
         return v
 
+    @model_validator(mode="after")
+    def _scope_matches_tenant(self) -> ClauseRecord:
+        if self.scope is Scope.PUBLIC and self.tenant_id != PUBLIC_TENANT_ID:
+            raise ValueError(f"public scope requires tenant_id {PUBLIC_TENANT_ID!r}")
+        if self.scope is not Scope.PUBLIC and self.tenant_id == PUBLIC_TENANT_ID:
+            raise ValueError(f"{PUBLIC_TENANT_ID!r} is reserved for public law")
+        return self
+
     @classmethod
     def build(
         cls,
@@ -186,7 +205,7 @@ class ClauseRecord(BaseModel):
         text: str,
         heading: str | None = None,
         scope: Scope = Scope.PUBLIC,
-        tenant_id: str | None = None,
+        tenant_id: str = PUBLIC_TENANT_ID,
         char_start: int | None = None,
         char_end: int | None = None,
         page: int | None = None,
@@ -222,7 +241,7 @@ class Chunk(BaseModel):
     obligation_id: str | None = None
     text: str
     scope: Scope = Scope.PUBLIC
-    tenant_id: str | None = None
+    tenant_id: str = PUBLIC_TENANT_ID
     valid_from: dt.date | None = None
     valid_to: dt.date | None = None
 
