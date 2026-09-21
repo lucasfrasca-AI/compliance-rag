@@ -1,6 +1,6 @@
 # PHASES
 
-Current phase: **0 — Foundations** (update this line when a phase exits; the exit is a commit that changes it.)
+Current phase: **1 — Corpus, retrieval, verifier** (update this line when a phase exits; the exit is a commit that changes it.)
 
 Rules:
 - Work only on the current phase. Ideas for later phases go into GitHub Issues with the `later` label, not into code.
