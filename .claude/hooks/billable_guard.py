@@ -207,7 +207,9 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
         "SERVICES.md: 'Cloud Logging regional log bucket' — Phase 0. The only telemetry sink (D-16).",
     ),
     (
-        r"gcloud\s+logging\s+(sinks\s+(create|update|delete)|buckets\s+update)",
+        r"gcloud\s+logging\s+(sinks\s+(create|update|delete)|buckets\s+update"
+        r"|views\s+(create|update|delete|add-iam-policy-binding|remove-iam-policy-binding)"
+        r"|buckets\s+(add-iam-policy-binding|remove-iam-policy-binding))",
         "Cloud Logging",
         "log router sink / bucket configuration",
         "australia-southeast1",
