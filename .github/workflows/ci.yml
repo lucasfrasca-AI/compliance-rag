@@ -40,3 +40,64 @@ jobs:
 
       - name: Tests
         run: uv run pytest
+
+  trace:
+    name: trace-check
+    runs-on: ubuntu-latest
+    needs: ci
+    timeout-minutes: 10
+
+    # A fork PR gets no GCP token: the OIDC provider's attribute condition pins
+    # repository and owner, so requesting one would fail anyway. Skipping is
+    # honest about that rather than failing on something a contributor cannot fix.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      id-token: write # mint the OIDC token for Workload Identity Federation
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --all-extras --dev
+
+      # Fail loudly rather than skipping: a silent auth failure would find zero
+      # entries in both buckets, and the _Default half of the assertion would
+      # read as a pass.
+      - name: Authenticate to GCP (keyless, Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Assert the three variables are set
+        run: |
+          missing=0
+          for v in GCP_PROJECT_ID GCP_WORKLOAD_IDENTITY_PROVIDER GCP_SERVICE_ACCOUNT; do
+            if [ -z "${!v}" ]; then echo "::error::repository variable $v is not set"; missing=1; fi
+          done
+          exit $missing
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # Exits 1 if the span is missing from compliance-rag-logs OR present in
+      # _Default. Both halves are required (PHASES.md Phase 0).
+      - name: Trace check — Sydney yes, _Default no
+        run: uv run python ci/trace_check.py
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}

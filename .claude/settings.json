@@ -37,6 +37,8 @@
       "Edit(.claude/billable-approvals.txt)",
       "Write(.claude/billable-approvals.txt)",
       "Bash(*billable-approvals*)",
+      "Edit(ci/wif-provider-flags.yaml)",
+      "Write(ci/wif-provider-flags.yaml)",
       "Bash(gcloud projects delete*)",
       "Bash(gcloud sql instances delete*)",
       "Bash(gcloud run services delete*)",
