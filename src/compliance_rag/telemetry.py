@@ -58,6 +58,22 @@ def assert_in_region(endpoint: str) -> None:
         )
 
 
+def span_record(span: ReadableSpan) -> dict[str, Any]:  # Any: attributes are heterogeneous
+    """One span as a structured log record. Shared by both transports."""
+    context = span.get_span_context()
+    return {
+        "severity": "INFO",
+        "message": span.name,
+        "trace_id": format(context.trace_id, "032x") if context else None,
+        "span_id": format(context.span_id, "016x") if context else None,
+        "parent_span_id": format(span.parent.span_id, "016x") if span.parent else None,
+        "start_time": span.start_time,
+        "end_time": span.end_time,
+        "status": span.status.status_code.name if span.status else None,
+        "attributes": dict(span.attributes or {}),
+    }
+
+
 class StructuredLogSpanExporter(SpanExporter):
     """Writes every span as one structured log record keyed by `trace_id`.
 
@@ -72,37 +88,57 @@ class StructuredLogSpanExporter(SpanExporter):
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         for readable in spans:
-            self._logger.info(json.dumps(self._record(readable), default=str))
+            self._logger.info(json.dumps(span_record(readable), default=str))
         return SpanExportResult.SUCCESS
-
-    @staticmethod
-    def _record(span: ReadableSpan) -> dict[str, Any]:  # Any: span attributes are heterogeneous
-        context = span.get_span_context()
-        return {
-            "severity": "INFO",
-            "message": span.name,
-            "trace_id": format(context.trace_id, "032x") if context else None,
-            "span_id": format(context.span_id, "016x") if context else None,
-            "parent_span_id": format(span.parent.span_id, "016x") if span.parent else None,
-            "start_time": span.start_time,
-            "end_time": span.end_time,
-            "status": span.status.status_code.name if span.status else None,
-            "attributes": dict(span.attributes or {}),
-        }
 
     def shutdown(self) -> None:
         logging.shutdown()
 
 
+class CloudLoggingApiSpanExporter(SpanExporter):
+    """Writes spans through the Cloud Logging API rather than stdout.
+
+    Needed anywhere the process is not running on GCP — GitHub Actions above
+    all. On Cloud Run the logging agent turns stdout into log entries, but a
+    CI runner has no agent, so a span printed to stdout reaches nothing and the
+    trace check would look like a silent residency pass.
+
+    The log name must stay `compliance_rag.spans`: it is what the
+    compliance-rag-to-regional router sink matches on, and what the _Default
+    exclusion suppresses (D-16).
+    """
+
+    LOG_NAME = "compliance_rag.spans"
+
+    def __init__(self, project: str) -> None:
+        from google.cloud import logging as gcp_logging
+
+        self._client = gcp_logging.Client(project=project)
+        # google-cloud-logging ships no precise stubs for Client.logger.
+        self._logger = self._client.logger(self.LOG_NAME)  # pyright: ignore[reportUnknownMemberType]
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        for readable in spans:
+            record = span_record(readable)
+            # google-cloud-logging ships no precise stubs for log_struct.
+            self._logger.log_struct(record, severity="INFO")  # pyright: ignore[reportUnknownMemberType]
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        self._client.close()
+
+
 def _cloud_logging_exporter(settings: Settings) -> SpanExporter:
-    """The only sink. Structured logs into the Sydney regional bucket."""
-    handler: logging.Handler
-    if settings.env == "cloud":
-        # Cloud Run collects stdout into Cloud Logging; the regional bucket is a
-        # sink configuration on the project, not a client setting.
-        handler = logging.StreamHandler(sys.stdout)
-    else:
-        handler = logging.StreamHandler(sys.stderr)
+    """The only sink, reached by whichever transport the environment allows.
+
+    cloud : stdout, collected by the Cloud Run logging agent
+    ci    : the Cloud Logging API, because a CI runner has no agent
+    local : stderr, so development needs no credentials
+    """
+    if settings.env == "ci":
+        return CloudLoggingApiSpanExporter(settings.gcp_project_id)
+
+    handler = logging.StreamHandler(sys.stdout if settings.env == "cloud" else sys.stderr)
     logger = logging.getLogger("compliance_rag.spans")
     logger.handlers = [handler]
     logger.propagate = False
@@ -111,7 +147,9 @@ def _cloud_logging_exporter(settings: Settings) -> SpanExporter:
 
 
 SINK_BUILDERS: dict[str, Callable[[Settings], SpanExporter]] = {
-    "cloud-logging": _cloud_logging_exporter,
+    # Name fixed by .env.example (OTEL_SINKS=gcp_logging). The key is the
+    # contract with configuration, so it is not renamed for taste.
+    "gcp_logging": _cloud_logging_exporter,
 }
 """Config only. A trace UI is added here by ADR, never at a call site (D-16)."""
 

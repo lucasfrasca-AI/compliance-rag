@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 from collections.abc import Iterator
 
 import pytest
@@ -73,7 +74,7 @@ def test_secrets_need_an_explicit_unwrap() -> None:
 
 
 def test_sinks_parse_to_a_tuple() -> None:
-    assert IsolatedSettings(otel_sinks="cloud-logging").sinks == ("cloud-logging",)
+    assert IsolatedSettings(otel_sinks="gcp_logging").sinks == ("gcp_logging",)
     assert IsolatedSettings(otel_sinks=" a , b ").sinks == ("a", "b")
 
 
@@ -105,9 +106,35 @@ def test_offshore_endpoints_refuse_to_start(endpoint: str) -> None:
         assert_in_region(endpoint)
 
 
+def test_default_sink_is_registered() -> None:
+    """The configured default must exist in SINK_BUILDERS, or nothing starts."""
+    from compliance_rag.telemetry import SINK_BUILDERS
+
+    for sink in IsolatedSettings().sinks:
+        assert sink in SINK_BUILDERS, f"{sink!r} is configured but has no builder"
+
+
 def test_unknown_sink_is_rejected() -> None:
     """D-16: adding a sink requires an ADR, not a config string."""
     from compliance_rag.telemetry import configure
 
     with pytest.raises(ValueError, match="unknown telemetry sink"):
         configure(IsolatedSettings(otel_sinks="langfuse-cloud"))
+
+
+def test_reranker_backend_values_match_env_example() -> None:
+    """settings.py must accept exactly the spellings .env.example documents.
+
+    A mismatch here is invisible until something loads the real .env, which is
+    how `cross_encoder` vs `cross-encoder` got as far as the trace check.
+    """
+    import re
+
+    line = next(
+        ln
+        for ln in pathlib.Path(".env.example").read_text().splitlines()
+        if ln.startswith("RERANKER_BACKEND=")
+    )
+    documented = {v.strip() for v in re.split(r"[|]", line.split("#", 1)[1])}
+    for value in documented:
+        assert IsolatedSettings(reranker_backend=value).reranker_backend == value  # type: ignore[arg-type]

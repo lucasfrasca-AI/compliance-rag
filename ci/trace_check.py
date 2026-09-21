@@ -80,14 +80,13 @@ def emit_span(project: str) -> str:
 
 
 def count_entries(project: str, trace_id: str, bucket: str, location: str) -> int:
-    view = f"projects/{project}/locations/{location}/buckets/{bucket}/views/_AllLogs"
     out = gcloud(
         "logging",
         "read",
         f'jsonPayload.trace_id="{trace_id}"',
         f"--bucket={bucket}",
         f"--location={location}",
-        f"--view={view}",
+        "--view=_AllLogs",  # a bare view name; gcloud builds the full path
         "--format=value(insertId)",
         "--limit=10",
     )

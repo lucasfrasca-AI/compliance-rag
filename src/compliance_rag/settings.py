@@ -55,7 +55,9 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr("")
 
     # --- Reranker ----------------------------------------------------------
-    reranker_backend: Literal["cross-encoder", "colbert", "none"] = "cross-encoder"
+    # Values are fixed by .env.example; vertex_ci is the Ranking API path,
+    # which is CI-only and synthetic-only (D-15).
+    reranker_backend: Literal["cross_encoder", "colbert", "vertex_ci"] = "cross_encoder"
     reranker_url: str = ""
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_max_tokens: int = 512
@@ -63,7 +65,7 @@ class Settings(BaseSettings):
     # --- Telemetry ---------------------------------------------------------
     otel_service_name: str = "compliance-rag"
     otel_sinks: str = Field(
-        default="cloud-logging",
+        default="gcp_logging",
         description="Comma-separated sink names. Config only — never a call site (D-16).",
     )
 
