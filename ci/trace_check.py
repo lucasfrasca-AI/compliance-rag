@@ -8,6 +8,23 @@ bucket is a residency breach, so a one-sided pass is a failure here (D-16).
 Emits one span through the same `telemetry.py` path the application uses, then
 reads it back out of each bucket by `trace_id`.
 
+Two different clocks matter, and conflating them produces a misleading failure:
+
+  Log ingest      seconds. A span written now is readable within about half a
+                  minute, so INGEST_BUDGET_SECONDS covers the regional read.
+  Sink exclusion  minutes. Measured at roughly 11 minutes in this project
+                  (BUILD_LOG 2026-09-21); checks at 1 and 7 minutes still saw
+                  the leak. A span appearing in _Default shortly after the
+                  exclusion was written therefore says nothing about whether
+                  the exclusion is correct.
+
+So the check reads the exclusion's configuration directly. Missing exclusion,
+or a filter that does not match, is a hard failure. A correct exclusion written
+inside PROPAGATION_GRACE_SECONDS still fails the run — routing is not proven
+until a span stays out — but says plainly that the cause is propagation and
+that re-running later is the fix, rather than sending someone to debug a filter
+that is already right.
+
 Exit codes
     0  span in compliance-rag-logs, absent from _Default
     1  assertion failed (missing where required, or present where forbidden)
@@ -16,6 +33,8 @@ Exit codes
 
 from __future__ import annotations
 
+import datetime as dt
+import json
 import os
 import subprocess
 import sys
@@ -24,8 +43,11 @@ import time
 REGION = "australia-southeast1"
 BUCKET = "compliance-rag-logs"
 LOG_NAME = "compliance_rag.spans"
+EXCLUSION_NAME = "compliance-rag-not-default"
+
 POLL_SECONDS = 15
-POLL_ATTEMPTS = 12  # up to 3 minutes; Cloud Logging ingest is not instant
+INGEST_BUDGET_SECONDS = 180  # log ingest only; nothing to do with the exclusion
+PROPAGATION_GRACE_SECONDS = 20 * 60  # measured ~11 min; 20 gives honest headroom
 
 
 def fail(code: int, message: str) -> None:
@@ -65,6 +87,24 @@ def require_auth(project: str) -> None:
     print(f"can read {BUCKET}")
 
 
+def exclusion_state(project: str) -> tuple[bool, bool, float]:
+    """(exists, filter_matches, seconds_since_the__Default_sink_was_updated)."""
+    sink = json.loads(gcloud("logging", "sinks", "describe", "_Default", "--format=json"))
+    expected = f'logName="projects/{project}/logs/{LOG_NAME}"'
+    match = next(
+        (e for e in sink.get("exclusions", []) if e.get("name") == EXCLUSION_NAME),
+        None,
+    )
+    try:
+        updated = dt.datetime.fromisoformat(sink.get("updateTime", "").replace("Z", "+00:00"))
+        age = (dt.datetime.now(dt.UTC) - updated).total_seconds()
+    except ValueError:
+        age = float("inf")
+    if match is None:
+        return False, False, age
+    return True, match.get("filter", "") == expected, age
+
+
 def emit_span(project: str) -> str:
     """Emit one span through telemetry.py and return its trace_id."""
     sys.path.insert(0, "src")
@@ -79,7 +119,7 @@ def emit_span(project: str) -> str:
     return trace_id
 
 
-def count_entries(project: str, trace_id: str, bucket: str, location: str) -> int:
+def count_entries(trace_id: str, bucket: str, location: str) -> int:
     out = gcloud(
         "logging",
         "read",
@@ -96,37 +136,70 @@ def count_entries(project: str, trace_id: str, bucket: str, location: str) -> in
 def main() -> None:
     project = os.environ.get("GCP_PROJECT_ID", "")
     require_auth(project)
+
+    exists, filter_ok, age = exclusion_state(project)
+    age_minutes = age / 60
+    print(
+        f"exclusion {EXCLUSION_NAME}: exists={exists} filter_matches={filter_ok} "
+        f"_Default sink updated {age_minutes:.1f} min ago"
+    )
+
     trace_id = emit_span(project)
 
     found_regional = 0
-    for attempt in range(1, POLL_ATTEMPTS + 1):
-        found_regional = count_entries(project, trace_id, BUCKET, REGION)
-        if found_regional:
-            print(f"found in {BUCKET} after {attempt * POLL_SECONDS}s")
+    deadline = time.monotonic() + INGEST_BUDGET_SECONDS
+    while True:
+        found_regional = count_entries(trace_id, BUCKET, REGION)
+        if found_regional or time.monotonic() >= deadline:
             break
         time.sleep(POLL_SECONDS)
+    if found_regional:
+        print(f"found in {BUCKET}")
 
-    # _Default is global. Read it only after the regional read succeeded, so a
-    # slow ingest cannot make the exclusion look effective.
-    found_default = count_entries(project, trace_id, "_Default", "global")
+    # _Default is global. Read it only after the regional read, so slow ingest
+    # cannot make the exclusion look effective.
+    found_default = count_entries(trace_id, "_Default", "global")
 
-    print(f"\ntrace_id       : {trace_id}")
-    print(f"{BUCKET}: {found_regional} entries (want >= 1)")
-    print(f"_Default       : {found_default} entries (want 0)")
+    print(f"\ntrace_id            : {trace_id}")
+    print(f"{BUCKET} : {found_regional} entries (want >= 1)")
+    print(f"_Default            : {found_default} entries (want 0)")
 
     problems: list[str] = []
     if found_regional < 1:
         problems.append(
-            f"span {trace_id} never arrived in {BUCKET}. The sink "
-            "compliance-rag-to-regional may not match logName "
+            f"span {trace_id} never arrived in {BUCKET} within {INGEST_BUDGET_SECONDS}s. "
+            "The sink compliance-rag-to-regional may not match logName "
             f'"projects/{project}/logs/{LOG_NAME}".'
         )
     if found_default > 0:
-        problems.append(
-            f"span {trace_id} also landed in the global _Default bucket. The exclusion "
-            "compliance-rag-not-default is missing or its filter does not match. This is a "
-            "residency breach (D-16) regardless of what reached Sydney."
-        )
+        if not exists:
+            problems.append(
+                f"span {trace_id} landed in the global _Default bucket and the exclusion "
+                f"{EXCLUSION_NAME} does not exist. Residency breach (D-16)."
+            )
+        elif not filter_ok:
+            problems.append(
+                f"span {trace_id} landed in the global _Default bucket. The exclusion "
+                f"{EXCLUSION_NAME} exists but its filter does not match "
+                f'logName="projects/{project}/logs/{LOG_NAME}". Residency breach (D-16).'
+            )
+        elif age < PROPAGATION_GRACE_SECONDS:
+            problems.append(
+                f"span {trace_id} landed in the global _Default bucket, but the exclusion "
+                f"{EXCLUSION_NAME} is correctly configured and the _Default sink was updated "
+                f"only {age_minutes:.1f} minutes ago. Sink exclusions have taken about 11 "
+                "minutes to take effect in this project, so this is most likely propagation "
+                "rather than a misconfiguration: re-run once the sink is at least "
+                f"{PROPAGATION_GRACE_SECONDS // 60} minutes old. Failing anyway, because "
+                "routing is not proven until a span stays out of _Default."
+            )
+        else:
+            problems.append(
+                f"span {trace_id} landed in the global _Default bucket even though the "
+                f"exclusion {EXCLUSION_NAME} is correct and {age_minutes:.0f} minutes old, "
+                "well past any propagation window. Residency breach (D-16)."
+            )
+
     if problems:
         for problem in problems:
             print(f"::error::{problem}", file=sys.stderr)
