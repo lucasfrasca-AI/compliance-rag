@@ -37,8 +37,8 @@ from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
 
-APP11 = "privacy-act-1988:TEST-FIXTURE-001:APP11.1"
-APP12 = "privacy-act-1988:TEST-FIXTURE-001:APP12.1"
+APP11 = "privacy-act-1988:TEST-FIXTURE-001:sch1/app11/1"
+APP12 = "privacy-act-1988:TEST-FIXTURE-001:sch1/app12/1"
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def graph() -> FakeGraphStore:
             ),
             "OB-ISO-A8": Obligation(
                 obligation_id="OB-ISO-A8",
-                clause_id="iso-27001:2022:A.8.3",
+                clause_id="iso-27001:2022:annexa/8/3",
                 instrument_id="iso-27001",
                 summary="Information access restriction.",
             ),
@@ -88,7 +88,7 @@ def chunks() -> tuple[Chunk, ...]:
         ),
         Chunk(
             chunk_id="c3",
-            clause_id="acme-policy:v3:sec2.1",
+            clause_id="acme-policy:v3:sec2/1",
             obligation_id=None,
             text="Acme retains customer records for seven years to protect the information.",
             scope=Scope.TENANT,
@@ -281,7 +281,7 @@ def clause() -> ClauseRecord:
     return ClauseRecord.build(
         instrument_id="privacy-act-1988",
         version_id="TEST-FIXTURE-001",
-        clause_path="APP11.1",
+        clause_path="sch1/app11/1",
         text="An APP entity must take such steps as are reasonable in the circumstances "
         "to protect the information from misuse, interference and loss.",
     )
@@ -323,7 +323,7 @@ async def test_citation_matching_is_canonical_not_literal(clause: ClauseRecord) 
 async def test_citation_against_unknown_clause_blocks(clause: ClauseRecord) -> None:
     verifier = FakeCitationVerifier()
     assert not await verifier.verify(
-        "privacy-act-1988:TEST-FIXTURE-001:APP99.9",
+        "privacy-act-1988:TEST-FIXTURE-001:sch1/app99/9",
         "take such steps as are reasonable",
         clauses=(clause,),
     )
@@ -340,7 +340,7 @@ def test_public_clause_carries_the_reserved_tenant() -> None:
     record = ClauseRecord.build(
         instrument_id="privacy-act-1988",
         version_id="TEST-FIXTURE-001",
-        clause_path="APP11.1",
+        clause_path="sch1/app11/1",
         text="An APP entity must take such steps as are reasonable.",
     )
     assert record.tenant_id == PUBLIC_TENANT_ID
@@ -351,7 +351,7 @@ def test_public_scope_rejects_a_real_tenant() -> None:
         ClauseRecord.build(
             instrument_id="privacy-act-1988",
             version_id="TEST-FIXTURE-001",
-            clause_path="APP11.1",
+            clause_path="sch1/app11/1",
             text="Text.",
             tenant_id="acme",
         )
@@ -368,7 +368,7 @@ def test_reserved_tenant_is_rejected_for_a_policy() -> None:
         ClauseRecord.build(
             instrument_id="acme-hr-policy",
             version_id="v3",
-            clause_path="sec2.1",
+            clause_path="sec2/1",
             text="Text.",
             scope=Scope.TENANT,
             tenant_id=PUBLIC_TENANT_ID,

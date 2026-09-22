@@ -18,7 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 INSTRUMENT_ID_RE = re.compile(rf"^{_SEGMENT}$")
 VERSION_ID_RE = re.compile(rf"^{_SEGMENT}$")
-# A clause path is dotted or slashed segments: "APP11.1", "art9/para2", "A.8.3".
+# A clause path is slash-separated, hierarchical and lowercase (CONTEXT.md):
+# "sch1/app11/1", "s6c/1/a", "art9/2/b". The dot is still accepted inside a
+# segment for ids that genuinely contain one, e.g. an instrument id.
 CLAUSE_PATH_RE = re.compile(rf"^{_SEGMENT}(?:[./]{_SEGMENT})*$")
 STABLE_ID_RE = re.compile(
     rf"^(?P<instrument_id>{_SEGMENT}):(?P<version_id>{_SEGMENT}):(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)$"

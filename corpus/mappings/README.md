@@ -19,7 +19,7 @@ author: jane.doe@example.com
 reviewed_by: sam.smith@example.com   # must differ from author
 date: 2026-09-20                     # ISO date the mapping was authored
 source_clause_ids:                   # every clause the mapping is derived from
-  - privacy-act-1988:C2026C00227:APP11.1
+  - privacy-act-1988:C2026C00227:sch1/app11/1
 ```
 
 A file missing any of these four fields fails the loader and the CI check.
@@ -31,11 +31,11 @@ author: jane.doe@example.com
 reviewed_by: sam.smith@example.com
 date: 2026-09-20
 source_clause_ids:
-  - privacy-act-1988:C2026C00227:APP11.1
+  - privacy-act-1988:C2026C00227:sch1/app11/1
 
 obligations:
   - id: OB-APP11-1                       # stable, never reused
-    clause_id: privacy-act-1988:C2026C00227:APP11.1
+    clause_id: privacy-act-1988:C2026C00227:sch1/app11/1
     summary: >
       Take such steps as are reasonable in the circumstances to protect
       personal information from misuse, interference and loss.
@@ -81,10 +81,10 @@ A `CROSSWALKS_TO` edge between obligations or controls across instruments.
 ```yaml
 crosswalks:
   - from: OB-APP11-1
-    to: iso-27001:2022:A.8.3
+    to: iso-27001:2022:annexa/8/3
     kind: partial                        # equivalent | partial | related
     note: >
-      ISO A.8.3 covers access restriction only; APP 11.1 is broader and also
+      ISO annexa/8/3 covers access restriction only; APP 11.1 is broader and also
       covers misuse, interference and loss.
 ```
 
@@ -96,7 +96,7 @@ score (D-06).
 ```yaml
 policy_mappings:
   - id: MAP-ACME-SEC2-APP11
-    policy_clause_id: acme-policy:v3:sec2.1
+    policy_clause_id: acme-policy:v3:sec2/1
     obligation_id: OB-APP11-1
     kind: partial
     status: proposed                     # proposed | approved | rejected
