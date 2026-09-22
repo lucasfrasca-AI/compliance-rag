@@ -214,6 +214,30 @@ class LedgerStore(ABC):
     ) -> dict[str, object] | None: ...
 
 
+class ClauseStore(ABC):
+    """Canonical text and per-version manifests (`PHASES.md`: Cloud Storage
+    layout, issue #15). The only seam a Cloud Storage call crosses — nothing
+    else in the codebase reads or writes object storage.
+    """
+
+    @abstractmethod
+    async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
+        """One clause by its stable ID, or `None` if it doesn't exist."""
+
+    @abstractmethod
+    async def put_clause(self, clause: ClauseRecord) -> None:
+        """Store one clause, keyed by its stable ID and `clause.tenant_id`."""
+
+    @abstractmethod
+    async def get_manifest(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> dict[str, str]:
+        """Every clause path in this instrument version, mapped to its
+        `canonical_sha256` — one `manifest.json` per instrument version
+        (`PHASES.md`).
+        """
+
+
 class Reranker(ABC):
     """Second-stage scoring, in Australia or not at all (D-15)."""
 

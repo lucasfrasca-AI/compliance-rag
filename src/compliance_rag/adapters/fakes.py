@@ -14,6 +14,7 @@ from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
     CitationVerifier,
+    ClauseStore,
     Embedder,
     Generation,
     Generator,
@@ -26,7 +27,7 @@ from compliance_rag.adapters.interfaces import (
     RetrievalStore,
     ScoredDocument,
 )
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, canonicalise
+from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, canonical_sha256, canonicalise
 
 
 class FakeGraphStore(GraphStore):
@@ -247,6 +248,30 @@ class FakeLedgerStore(LedgerStore):
 
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> dict[str, object] | None:
         return self._assessments.get((tenant_id, assessment_id))
+
+
+class FakeClauseStore(ClauseStore):
+    """Clauses in a dict keyed by (tenant_id, clause_id)."""
+
+    def __init__(self) -> None:
+        self._clauses: dict[tuple[str, str], ClauseRecord] = {}
+
+    async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
+        return self._clauses.get((tenant_id, clause_id))
+
+    async def put_clause(self, clause: ClauseRecord) -> None:
+        self._clauses[(clause.tenant_id, clause.clause_id)] = clause
+
+    async def get_manifest(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> dict[str, str]:
+        return {
+            clause.clause_path: canonical_sha256(clause.canonical_text)
+            for (stored_tenant_id, _), clause in self._clauses.items()
+            if stored_tenant_id == tenant_id
+            and clause.instrument_id == instrument_id
+            and clause.version_id == version_id
+        }
 
 
 class FakeReranker(Reranker):
