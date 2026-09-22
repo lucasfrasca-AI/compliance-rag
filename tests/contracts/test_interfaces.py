@@ -361,9 +361,9 @@ def test_reserved_tenant_is_rejected_for_a_policy() -> None:
     """`_public` is reserved; a tenant-scoped clause may never claim it."""
     from compliance_rag.corpus.models import PUBLIC_TENANT_ID
 
-    # NB: not "acme/hr-policy". CONTEXT.md now specifies tenant-prefixed
-    # instrument ids, but INSTRUMENT_ID_RE does not accept "/" yet — that is a
-    # separate Phase 1 ticket. This test is about the reserved tenant only.
+    # NB: not "acme/hr-policy" — that would fail on the mismatched prefix
+    # (tenant "acme" vs. tenant_id "_public"), not the reserved-tenant check
+    # this test is about (see issue #4's tests for the prefix behaviour).
     with pytest.raises(ValueError, match="reserved"):
         ClauseRecord.build(
             instrument_id="acme-hr-policy",
@@ -418,3 +418,51 @@ def test_profile_rejects_every_invalid_tenant_id(bad_tenant_id: str) -> None:
 
 def test_profile_accepts_a_real_tenant_id() -> None:
     assert Profile(tenant_id="acme").tenant_id == "acme"
+
+
+# --------------------------------------------------------------------------
+# Tenant-prefixed instrument ids (CONTEXT.md: Instrument id, issue #4)
+# --------------------------------------------------------------------------
+
+
+def test_clause_record_accepts_a_tenant_prefixed_instrument_id() -> None:
+    record = ClauseRecord.build(
+        instrument_id="acme/hr-policy",
+        version_id="v3",
+        clause_path="sec2/1",
+        text="Text.",
+        scope=Scope.TENANT,
+        tenant_id="acme",
+    )
+    assert record.clause_id == "acme/hr-policy:v3:sec2/1"
+
+
+def test_clause_record_rejects_a_mismatched_tenant_prefix() -> None:
+    """`beta`'s policy may not be filed under `acme`'s instrument id."""
+    with pytest.raises(ValueError, match="does not match"):
+        ClauseRecord.build(
+            instrument_id="beta/hr-policy",
+            version_id="v3",
+            clause_path="sec2/1",
+            text="Text.",
+            scope=Scope.TENANT,
+            tenant_id="acme",
+        )
+
+
+def test_public_clause_rejects_a_tenant_prefixed_instrument_id() -> None:
+    """Public instruments stay unprefixed (CONTEXT.md: Instrument id).
+
+    A default-scope build's `tenant_id` is `PUBLIC_TENANT_ID`, which can never
+    equal a prefix's tenant (that prefix itself must pass `validate_tenant_id`,
+    which rejects `PUBLIC_TENANT_ID` — see `test_instrument_id.py`) — so this
+    goes through the *mismatch* path, not a separate "public" rule.
+    """
+    with pytest.raises(ValueError, match="does not match"):
+        ClauseRecord.build(
+            instrument_id="acme/hr-policy",
+            version_id="v3",
+            clause_path="sec2/1",
+            text="Text.",
+            scope=Scope.PUBLIC,
+        )

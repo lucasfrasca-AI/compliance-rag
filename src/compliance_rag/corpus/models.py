@@ -17,14 +17,22 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 
 # One path segment: letters, digits, and the separators legislation actually uses.
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
-INSTRUMENT_ID_RE = re.compile(rf"^{_SEGMENT}$")
+# The tenant part of a tenant-prefixed instrument id is a tenant id, not a
+# segment (CONTEXT.md: Instrument id) — its grammar is "not ':' or '/'"
+# (issue #3), not "starts with a letter or digit". Semantic rules that
+# _TENANT_PREFIX can't express as a character class (`_public` reserved) are
+# enforced by validate_tenant_id() in validate_instrument_id() below.
+_TENANT_PREFIX = r"[^/:]+"
+INSTRUMENT_ID_RE = re.compile(rf"^(?:(?P<tenant>{_TENANT_PREFIX})/)?(?P<instrument>{_SEGMENT})$")
+_INSTRUMENT_ID_BODY = rf"(?:{_TENANT_PREFIX}/)?{_SEGMENT}"
 VERSION_ID_RE = re.compile(rf"^{_SEGMENT}$")
 # A clause path is slash-separated, hierarchical and lowercase (CONTEXT.md):
 # "sch1/app11/1", "s6c/1/a", "art9/2/b". The dot is still accepted inside a
 # segment for ids that genuinely contain one, e.g. an instrument id.
 CLAUSE_PATH_RE = re.compile(rf"^{_SEGMENT}(?:[./]{_SEGMENT})*$")
 STABLE_ID_RE = re.compile(
-    rf"^(?P<instrument_id>{_SEGMENT}):(?P<version_id>{_SEGMENT}):(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)$"
+    rf"^(?P<instrument_id>{_INSTRUMENT_ID_BODY}):(?P<version_id>{_SEGMENT}):"
+    rf"(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)$"
 )
 
 
@@ -86,6 +94,39 @@ directly instead, since it is a plain dataclass and a real tenant may never be
 `PUBLIC_TENANT_ID`."""
 
 
+def _match_instrument_id(value: str) -> re.Match[str] | None:
+    return INSTRUMENT_ID_RE.match(value)
+
+
+def validate_instrument_id(value: str) -> str:
+    """Validate an instrument id (`CONTEXT.md`: Instrument id, issue #4).
+
+    Globally unique on its own (public law), or tenant-prefixed as
+    `tenant/instrument` for a company's own policy — at most one `/`. The
+    tenant part obeys the tenant-id rules from issue #3, so a public
+    instrument can never be prefixed: `validate_tenant_id` rejects
+    `PUBLIC_TENANT_ID`.
+    """
+    match = _match_instrument_id(value)
+    if match is None:
+        raise ValueError(f"invalid instrument_id: {value!r}")
+    tenant = match.group("tenant")
+    if tenant is not None:
+        validate_tenant_id(tenant)
+    return value
+
+
+def instrument_tenant_prefix(value: str) -> str | None:
+    """The tenant prefix of a tenant-prefixed instrument id, or `None` if
+    unprefixed (or not a well-formed instrument id — callers that need
+    format validation should call `validate_instrument_id` first).
+    """
+    match = _match_instrument_id(value)
+    if match is None:
+        return None
+    return match.group("tenant")
+
+
 class Scope(StrEnum):
     """Which corpus partition a record belongs to (`CONTEXT.md`, D-14)."""
 
@@ -122,8 +163,7 @@ def canonicalise(text: str) -> str:
 
 def stable_id(instrument_id: str, version_id: str, clause_path: str) -> str:
     """Build a clause's stable ID, validating each part."""
-    if not INSTRUMENT_ID_RE.match(instrument_id):
-        raise ValueError(f"invalid instrument_id: {instrument_id!r}")
+    validate_instrument_id(instrument_id)
     if not VERSION_ID_RE.match(version_id):
         raise ValueError(f"invalid version_id: {version_id!r}")
     if not CLAUSE_PATH_RE.match(clause_path):
@@ -156,9 +196,7 @@ class Instrument(BaseModel):
     @field_validator("instrument_id")
     @classmethod
     def _check_id(cls, v: str) -> str:
-        if not INSTRUMENT_ID_RE.match(v):
-            raise ValueError(f"invalid instrument_id: {v!r}")
-        return v
+        return validate_instrument_id(v)
 
 
 class InstrumentVersion(BaseModel):
@@ -231,11 +269,17 @@ class ClauseRecord(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _scope_matches_tenant(self) -> ClauseRecord:
+    def _tenant_consistency(self) -> ClauseRecord:
         if self.scope is Scope.PUBLIC and self.tenant_id != PUBLIC_TENANT_ID:
             raise ValueError(f"public scope requires tenant_id {PUBLIC_TENANT_ID!r}")
         if self.scope is not Scope.PUBLIC and self.tenant_id == PUBLIC_TENANT_ID:
             raise ValueError(f"{PUBLIC_TENANT_ID!r} is reserved for public law")
+        prefix = instrument_tenant_prefix(self.instrument_id)
+        if prefix is not None and prefix != self.tenant_id:
+            raise ValueError(
+                f"instrument_id tenant prefix {prefix!r} "
+                f"does not match tenant_id {self.tenant_id!r}"
+            )
         return self
 
     @classmethod
