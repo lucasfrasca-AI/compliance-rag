@@ -1,0 +1,25 @@
+# Local Postgres for the Phase 0–1 ledger (SERVICES.md: "Local Postgres (Docker)").
+# Nothing else belongs here: Qdrant and Neo4j are managed free tiers created by
+# the human, and the reranker is a Cloud Run service from Phase 1.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: compliance-rag-ledger
+    environment:
+      POSTGRES_USER: compliance
+      POSTGRES_PASSWORD: compliance
+      POSTGRES_DB: compliance_rag
+    ports:
+      - "5432:5432"
+    volumes:
+      - ledger-data:/var/lib/postgresql/data
+      - ./db/ledger:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U compliance -d compliance_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ledger-data:

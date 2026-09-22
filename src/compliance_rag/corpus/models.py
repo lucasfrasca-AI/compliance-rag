@@ -1,0 +1,310 @@
+"""Canonical corpus records and the stable ID scheme.
+
+Vocabulary is `CONTEXT.md`; the names here are the names there. A clause is the
+smallest citable unit of an instrument and its stable ID is
+`{instrument_id}:{version_id}:{clause_path}` (D-02, D-05).
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import re
+import unicodedata
+from enum import StrEnum
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# One path segment: letters, digits, and the separators legislation actually uses.
+_SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+INSTRUMENT_ID_RE = re.compile(rf"^{_SEGMENT}$")
+VERSION_ID_RE = re.compile(rf"^{_SEGMENT}$")
+# A clause path is slash-separated, hierarchical and lowercase (CONTEXT.md):
+# "sch1/app11/1", "s6c/1/a", "art9/2/b". The dot is still accepted inside a
+# segment for ids that genuinely contain one, e.g. an instrument id.
+CLAUSE_PATH_RE = re.compile(rf"^{_SEGMENT}(?:[./]{_SEGMENT})*$")
+STABLE_ID_RE = re.compile(
+    rf"^(?P<instrument_id>{_SEGMENT}):(?P<version_id>{_SEGMENT}):(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)$"
+)
+
+
+class Status(StrEnum):
+    """Bitemporal status of an instrument version or clause (D-05)."""
+
+    IN_FORCE = "in_force"
+    NOT_YET_COMMENCED = "not_yet_commenced"
+    REPEALED = "repealed"
+
+
+PUBLIC_TENANT_ID = "_public"
+"""Reserved tenant id for public law (`CONTEXT.md`).
+
+Public law belongs to no company, but `tenant_id` is NOT NULL on every table
+(`PHASES.md`), and a row-level-security policy needs something to match on
+rather than a three-valued predicate. So public rows carry this id instead of
+NULL, and `tenant_id` always names an owner.
+"""
+
+
+def validate_tenant_segment(value: str) -> str:
+    """Reject characters that break the stable-ID grammar (`CONTEXT.md`: Tenant id).
+
+    `:` is the only stable-ID delimiter and `/` appears inside both
+    tenant-prefixed instrument ids and clause paths — a tenant id containing
+    either makes `{instrument_id}:{version_id}:{clause_path}` ambiguous to
+    parse. `PUBLIC_TENANT_ID` passes: it is a legitimate sentinel value
+    wherever a record's scope is public (`ClauseRecord`, `Chunk`).
+    """
+    if not value:
+        raise ValueError("tenant_id must not be empty")
+    if ":" in value:
+        raise ValueError(f"tenant_id must not contain ':': {value!r}")
+    if "/" in value:
+        raise ValueError(f"tenant_id must not contain '/': {value!r}")
+    return value
+
+
+def validate_tenant_id(value: str) -> str:
+    """Validate a *real* tenant id, applied where a tenant enters the system.
+
+    Stricter than `validate_tenant_segment`: also rejects `PUBLIC_TENANT_ID`
+    itself, since a company may never register under the name reserved for
+    public law. Apply this to `Profile` and any future tenant-creation path;
+    apply `validate_tenant_segment` where `PUBLIC_TENANT_ID` is a legitimate
+    field value instead (`ClauseRecord.tenant_id`, `Chunk.tenant_id`).
+    """
+    value = validate_tenant_segment(value)
+    if value == PUBLIC_TENANT_ID:
+        raise ValueError(f"{PUBLIC_TENANT_ID!r} is reserved and may not be used as a tenant id")
+    return value
+
+
+TenantSegment = Annotated[str, AfterValidator(validate_tenant_segment)]
+"""A `tenant_id` field type for records where `PUBLIC_TENANT_ID` is itself a
+legitimate value (`ClauseRecord`, `Chunk`). `Profile` uses `validate_tenant_id`
+directly instead, since it is a plain dataclass and a real tenant may never be
+`PUBLIC_TENANT_ID`."""
+
+
+class Scope(StrEnum):
+    """Which corpus partition a record belongs to (`CONTEXT.md`, D-14)."""
+
+    PUBLIC = "public"
+    TENANT = "tenant"
+    USER = "user"
+
+
+def canonicalise(text: str) -> str:
+    """Canonical form used by the verifier on both sides of the comparison.
+
+    NFC normalisation, curly quotes and dashes folded to ASCII, all whitespace
+    runs collapsed to a single space, ends stripped. The verifier compares
+    canonical to canonical (D-02), so this function is load-bearing: changing it
+    changes what counts as a matching citation.
+    """
+    text = unicodedata.normalize("NFC", text)
+    # The ambiguous characters below are the point: this table folds the
+    # typographic forms legislation actually uses into ASCII. RUF001 is
+    # suppressed per line rather than per file so a stray one elsewhere
+    # still gets flagged.
+    for curly, plain in (
+        ("‘", "'"),  # noqa: RUF001
+        ("’", "'"),  # noqa: RUF001
+        ("“", '"'),
+        ("”", '"'),
+        ("–", "-"),  # noqa: RUF001
+        ("—", "-"),
+        (" ", " "),  # noqa: RUF001
+    ):
+        text = text.replace(curly, plain)
+    return " ".join(text.split())
+
+
+def stable_id(instrument_id: str, version_id: str, clause_path: str) -> str:
+    """Build a clause's stable ID, validating each part."""
+    if not INSTRUMENT_ID_RE.match(instrument_id):
+        raise ValueError(f"invalid instrument_id: {instrument_id!r}")
+    if not VERSION_ID_RE.match(version_id):
+        raise ValueError(f"invalid version_id: {version_id!r}")
+    if not CLAUSE_PATH_RE.match(clause_path):
+        raise ValueError(f"invalid clause_path: {clause_path!r}")
+    return f"{instrument_id}:{version_id}:{clause_path}"
+
+
+def parse_stable_id(value: str) -> tuple[str, str, str]:
+    """Split a stable ID back into (instrument_id, version_id, clause_path)."""
+    match = STABLE_ID_RE.match(value)
+    if match is None:
+        raise ValueError(f"not a stable clause ID: {value!r}")
+    return (
+        match.group("instrument_id"),
+        match.group("version_id"),
+        match.group("clause_path"),
+    )
+
+
+class Instrument(BaseModel):
+    """A law, regulation or standard as a whole. Has versions."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instrument_id: str
+    title: str
+    jurisdiction: str
+    scope: Scope = Scope.PUBLIC
+
+    @field_validator("instrument_id")
+    @classmethod
+    def _check_id(cls, v: str) -> str:
+        if not INSTRUMENT_ID_RE.match(v):
+            raise ValueError(f"invalid instrument_id: {v!r}")
+        return v
+
+
+class InstrumentVersion(BaseModel):
+    """One compilation of an instrument, identified by the register's own ID."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instrument_id: str
+    version_id: str
+    title: str
+    status: Status
+    valid_from: dt.date
+    valid_to: dt.date | None = None
+    recorded_at: dt.datetime
+    source_url: str | None = None
+    supersedes: str | None = Field(
+        default=None, description="version_id of the version this one supersedes (D-05)"
+    )
+
+    @field_validator("valid_to")
+    @classmethod
+    def _check_interval(cls, v: dt.date | None, info: object) -> dt.date | None:
+        return v
+
+    def is_current(self, as_of: dt.date) -> bool:
+        """Whether this version is in force on `as_of` (D-05)."""
+        if as_of < self.valid_from:
+            return False
+        if self.valid_to is not None and as_of >= self.valid_to:
+            return False
+        return self.status is Status.IN_FORCE
+
+
+class ClauseRecord(BaseModel):
+    """The smallest citable unit of an instrument, with its canonical text.
+
+    `canonical_text` is never edited after ingest. The verifier compares a
+    citation's span against it (D-02).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instrument_id: str
+    version_id: str
+    clause_path: str
+    heading: str | None = None
+    text: str
+    canonical_text: str
+    scope: Scope = Scope.PUBLIC
+    tenant_id: TenantSegment = Field(
+        default=PUBLIC_TENANT_ID,
+        description="`_public` for law; the owning tenant for tenant and user scopes",
+    )
+    char_start: int | None = Field(
+        default=None, description="Offset in the source document, for click-to-clause"
+    )
+    char_end: int | None = None
+    page: int | None = None
+
+    @property
+    def clause_id(self) -> str:
+        """The stable ID: `{instrument_id}:{version_id}:{clause_path}`."""
+        return stable_id(self.instrument_id, self.version_id, self.clause_path)
+
+    @field_validator("canonical_text")
+    @classmethod
+    def _already_canonical(cls, v: str) -> str:
+        if v != canonicalise(v):
+            raise ValueError("canonical_text must already be in canonical form")
+        return v
+
+    @model_validator(mode="after")
+    def _scope_matches_tenant(self) -> ClauseRecord:
+        if self.scope is Scope.PUBLIC and self.tenant_id != PUBLIC_TENANT_ID:
+            raise ValueError(f"public scope requires tenant_id {PUBLIC_TENANT_ID!r}")
+        if self.scope is not Scope.PUBLIC and self.tenant_id == PUBLIC_TENANT_ID:
+            raise ValueError(f"{PUBLIC_TENANT_ID!r} is reserved for public law")
+        return self
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        instrument_id: str,
+        version_id: str,
+        clause_path: str,
+        text: str,
+        heading: str | None = None,
+        scope: Scope = Scope.PUBLIC,
+        tenant_id: str = PUBLIC_TENANT_ID,
+        char_start: int | None = None,
+        char_end: int | None = None,
+        page: int | None = None,
+    ) -> ClauseRecord:
+        """Build a record, deriving `canonical_text` from `text`."""
+        stable_id(instrument_id, version_id, clause_path)  # validate early
+        return cls(
+            instrument_id=instrument_id,
+            version_id=version_id,
+            clause_path=clause_path,
+            heading=heading,
+            text=text,
+            canonical_text=canonicalise(text),
+            scope=scope,
+            tenant_id=tenant_id,
+            char_start=char_start,
+            char_end=char_end,
+            page=page,
+        )
+
+
+class Chunk(BaseModel):
+    """A retrieval unit derived from a clause, <=500 tokens.
+
+    One chunk belongs to at most one obligation (`CONTEXT.md`). Chunks live in
+    Qdrant; clauses live in Cloud Storage.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    chunk_id: str
+    clause_id: str
+    obligation_id: str | None = None
+    text: str
+    scope: Scope = Scope.PUBLIC
+    tenant_id: TenantSegment = PUBLIC_TENANT_ID
+    valid_from: dt.date | None = None
+    valid_to: dt.date | None = None
+
+    @field_validator("clause_id")
+    @classmethod
+    def _check_clause_id(cls, v: str) -> str:
+        parse_stable_id(v)
+        return v
+
+
+class Citation(BaseModel):
+    """A span of a clause quoted in an answer. The verifier checks it (D-02)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    clause_id: str
+    quoted_text: str
+
+    @field_validator("clause_id")
+    @classmethod
+    def _check_clause_id(cls, v: str) -> str:
+        parse_stable_id(v)
+        return v

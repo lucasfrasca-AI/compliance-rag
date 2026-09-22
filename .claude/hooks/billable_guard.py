@@ -28,7 +28,9 @@ match; a chain must be approved as the whole chain.
 
 Only the human writes approval lines. This script never adds one; it only
 marks an existing line used. Claude is denied Edit/Write/Bash access to the
-approvals file in .claude/settings.json.
+approvals file in .claude/settings.json; the Read tool is left open on purpose,
+so a refused approval can be diagnosed. Reading grants nothing — only a line
+already in the file authorises a command.
 """
 
 import datetime
@@ -152,6 +154,19 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
         "SETUP.md §2 (runtime service account roles).",
     ),
     (
+        # Mutating verbs only. `describe`, `list` and `--help` create nothing, and
+        # gating them blocks the verification that proves what was created.
+        r"gcloud\s+iam\s+(?:workload-identity-pools\s+(?:(?:create|update|delete|undelete)\b"
+        r"|providers\s+(?:create-\w+|update|delete|undelete)\b)"
+        r"|service-accounts\s+add-iam-policy-binding\b)",
+        "Workload Identity Federation",
+        "pool / OIDC provider / impersonation binding",
+        "global",
+        "$0",
+        "SERVICES.md: Workload Identity Federation row — Phase 0. Federation decides who "
+        "outside GCP may act as a service account, so it is gated like any other grant.",
+    ),
+    (
         r"gcloud\s+run\s+deploy\s+reranker|gcloud\s+run\s+services\s+update\s+reranker",
         "Cloud Run",
         "reranker",
@@ -190,6 +205,17 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
         "australia-southeast1",
         "$0 (50 GiB free tier)",
         "SERVICES.md: 'Cloud Logging regional log bucket' — Phase 0. The only telemetry sink (D-16).",
+    ),
+    (
+        r"gcloud\s+logging\s+(sinks\s+(create|update|delete)|buckets\s+update"
+        r"|views\s+(create|update|delete|add-iam-policy-binding|remove-iam-policy-binding)"
+        r"|buckets\s+(add-iam-policy-binding|remove-iam-policy-binding))",
+        "Cloud Logging",
+        "log router sink / bucket configuration",
+        "australia-southeast1",
+        "$0 (routing is free; storage stays inside the 50 GiB free tier)",
+        "SERVICES.md: 'Cloud Logging regional log bucket' — Phase 0. Where logs are routed "
+        "decides residency, so a sink change is gated exactly like creating the bucket (D-16).",
     ),
     (
         r"gcloud\s+sql\s+(instances\s+(create|patch)|databases\s+create)",
