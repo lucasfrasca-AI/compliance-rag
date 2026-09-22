@@ -12,6 +12,7 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 - **Canonical text** — a clause's text after canonicalisation. The verifier compares canonical to canonical. Lives in Cloud Storage. Never edited. _Avoid_: normalised text, cleaned text.
 - **Canonicalisation** — the exact transformation producing canonical text, in order: NFC normalisation; `‘ ’` → `'`; `“ ”` → `"`; en dash and em dash → `-`; non-breaking space → space; every whitespace run collapsed to one space; ends stripped. This defines what counts as a matching citation, so it is a definition, not an implementation detail.
 - **Canonicalisation version** — an integer identifying one canonicalisation. Every citation records the version it was verified under, so changing canonicalisation cannot silently invalidate citations already issued. A change to the transformation is a new version, never an edit to an existing one.
+- **Position map** — how a clause is located in its source rendering for click-to-clause. Law resolves to an **anchor in the stored HTML**, which is also where canonical text comes from. An uploaded PDF resolves to page and character offsets captured at parse time. These are different mechanisms for different sources and are never joined: extracted PDF text fabricates whitespace, so deriving canonical text from it would make the verifier fail on its own corpus (D-02).
 - **Chunk** — a retrieval unit derived from a clause, ≤420 tokens as counted by the **reranker's** tokenizer. One chunk belongs to at most one obligation. Chunks live in Qdrant; clauses live in Cloud Storage. The cap is set by the cross-encoder, not the embedder: `gemini-embedding-001` accepts about 2048 tokens, but a cross-encoder scores query and chunk together in one 512-token window, and overflow truncates the tail of the clause silently — losing exactly the operative words an obligation usually ends on. 420 leaves a query budget inside 512.
 - **Policy** — a company's own document, treated like an instrument in the corpus: versions, clauses, canonical text. Unlike an instrument it gets no persisted graph node; its clauses appear only in the tenant subgraph, projected per request.
 - **Corpus version** — a git tag over `corpus/instruments/`, identifying which instrument versions were loaded. Recorded on every assessment.
@@ -53,7 +54,7 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 
 - **Loop A** — corpus maintenance: poll → parse → version → diff → PR → load → regression gate.
 - **Loop B** — assessment: sign in → upload/ask → claims → Track A → Track B → rerank → generate → verify → answer → record.
-- **Golden set** — labelled queries and profiles with known-correct answers. The regression gate.
+- **Golden set** — labelled queries and profiles with known-correct answers. The regression gate. Lives in `corpus/golden/` as YAML carrying the same `author`, `reviewed_by` and `date` front matter as mapping YAML, because it is the same kind of artefact: a human assertion that CI enforces. The **label** — which clause is correct for a query — is always human-authored; query text may be drafted by an LLM and then reviewed. Note that the corpus version is a tag over `corpus/instruments/` only, so editing the golden set never changes it: a retrieval regression and a corpus change stay distinguishable.
 
 ## Stores
 

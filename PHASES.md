@@ -34,8 +34,10 @@ Unlocks: nothing billable.
 Goal: ask a question about the Australian Privacy Act and get a verified, verbatim, versioned citation.
 
 Deliverables
-- Parser for legislation.gov.au compilations → clause records → Cloud Storage (versioned), positions captured
-- Synthetic company policy set (5–8 documents, MD + PDF) parsed the same way
+- **Format spike first** (`docs/research/legislation-gov-au-format.md`): fetch the actual ePub bytes and document the markup — what wraps an APP heading, what wraps a numbered sub-clause, whether clause numbers are separate elements. Blocks the parser ticket. If the HTML has no clause semantics, the parser estimate changes materially and we learn that before writing it, not during
+- Parser for legislation.gov.au compilations → clause records → Cloud Storage (versioned). Source is the **ePub HTML**, which is where the clause hierarchy is machine-readable and where `canonical_text` comes from. Click-to-clause for law is an anchor into that stored HTML; PDF position capture is for uploaded documents only (`CONTEXT.md` **Position map**). Pinned compilation: **C2026C00227**, 4 June 2026, series `C2004A03712`, set in config — not a `latest` redirect, so a red regression gate is never ambiguous between a retrieval regression and a change in the law. Tracking latest is Phase 4's job, and it arrives with a diff and a PR
+- The parser handles the whole compilation; **selection is a manifest in `corpus/`, not a special case in the parser**. Phase 1 chunks and embeds Schedule 1 (the APPs) plus ss 6, 6C, 6D and 6E. The definitions are needed because APP 11's "reasonable steps" is meaningless without the Act's definition of personal information, and the small-business exemption in ss 6C–6E decides whether the APPs apply at all — Track A needs it in Phase 2, and pulling it in later means a re-embed
+- Synthetic company policy set (5–8 documents, MD + PDF) parsed the same way, designed against a matrix checked into `docs/research/synthetic-policy-set.md`: for each of APP 1, 5, 6, 8, 11, 12, 13, which document addresses it and whether it is consistent, conflicting, silent or ambiguous. Every verdict appears at least twice, at least one pair of policies contradicts each other, and the same document exists in both MD and PDF to exercise PDF position capture
 - Chunker (clause-level, ≤420 tokens as counted by the reranker's tokenizer — see `CONTEXT.md` **Chunk** and issue #6; the cross-encoder's 512-token query+passage window binds, not the embedder), embedder (Vertex, 1536 dims), Qdrant adapter with dense + sparse + keyword payload and native RRF
 - Router: clause-ID regex → keyword lookup, skip rerank; else hybrid → rerank
 - **Reranker service** on Cloud Run (`australia-southeast1`): FastAPI + ONNX Runtime, `POST /rerank {query, documents[]}` → scores; models benchmarked: `BAAI/bge-reranker-v2-m3` (default), `mixedbread-ai/mxbai-rerank-base-v2`, `cross-encoder/ms-marco-MiniLM-L-6-v2`
@@ -50,6 +52,8 @@ Exit criteria
 - Verifier pass rate 100% on the golden set, with at least one deliberately bad citation proven to block
 - Cost per query logged; projected monthly under $60 at 2,000 queries
 - Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG
+
+Sequencing: **nothing writes to Cloud Storage or Qdrant until #2, #3 and #4 are merged.** Those three shape `ClauseRecord` and the stable-ID grammar, so a parser run before them produces records that must be rewritten and embeddings that must be paid for twice. Order: #3 → #4 → #2 → format spike → parser → #6 → chunker → #5 → router.
 
 Unlocks: Cloud Storage bucket, Vertex Embeddings, Claude on Vertex, Cloud Run `reranker` service (min 0), Cloud Run jobs, Cloud Build + Artifact Registry (needed to build the reranker image), Cloud Trace/Logging, budget Pub/Sub wiring. Ranking API in `us-central1` for CI only.
 
