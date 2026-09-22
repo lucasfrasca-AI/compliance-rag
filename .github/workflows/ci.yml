@@ -15,6 +15,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Ledger schema tests connect here. Fresh per run, so migrations always
+    # apply to an empty database — the same thing CI proves on every future
+    # schema ticket, not just this one.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: compliance
+          POSTGRES_PASSWORD: compliance
+          POSTGRES_DB: compliance_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U compliance -d compliance_rag"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DATABASE_URL: postgresql://compliance:compliance@localhost:5432/compliance_rag
+
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +58,21 @@ jobs:
 
       - name: Type check
         run: uv run pyright
+
+      - name: Install postgresql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # Every file in db/ledger/, in filename order, against a fresh database.
+      # This is what docker-compose's initdb.d mount does on a container's
+      # first start; CI does it explicitly so a broken migration fails here,
+      # not on someone's laptop.
+      - name: Apply ledger migrations
+        run: |
+          set -e
+          for f in db/ledger/*.sql; do
+            echo "applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
 
       - name: Tests
         run: uv run pytest
