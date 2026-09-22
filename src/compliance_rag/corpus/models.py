@@ -8,6 +8,7 @@ smallest citable unit of an instrument and its stable ID is
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 import unicodedata
 from enum import StrEnum
@@ -173,6 +174,17 @@ def canonicalise(text: str) -> str:
     ):
         text = text.replace(curly, plain)
     return " ".join(text.split())
+
+
+def canonical_sha256(canonical_text: str) -> str:
+    """Hex-encoded SHA-256 of already-canonical text.
+
+    `PHASES.md`'s per-instrument-version `manifest.json` lists every clause
+    path with this hash, so `ClauseStore.get_manifest` (issue #15) has a
+    single deterministic value to compare without fetching every clause
+    object — the same reasoning D-02 gives the verifier's own read path.
+    """
+    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
 
 
 def stable_id(instrument_id: str, version_id: str, clause_path: str) -> str:

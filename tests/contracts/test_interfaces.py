@@ -13,6 +13,7 @@ import pytest
 
 from compliance_rag.adapters.fakes import (
     FakeCitationVerifier,
+    FakeClauseStore,
     FakeEmbedder,
     FakeGenerator,
     FakeGraphStore,
@@ -23,6 +24,7 @@ from compliance_rag.adapters.fakes import (
 from compliance_rag.adapters.interfaces import (
     Channel,
     CitationVerifier,
+    ClauseStore,
     Embedder,
     Generator,
     GraphStore,
@@ -32,7 +34,13 @@ from compliance_rag.adapters.interfaces import (
     Reranker,
     RetrievalStore,
 )
-from compliance_rag.corpus.models import CANONICALISATION_VERSION, Chunk, ClauseRecord, Scope
+from compliance_rag.corpus.models import (
+    CANONICALISATION_VERSION,
+    Chunk,
+    ClauseRecord,
+    Scope,
+    canonical_sha256,
+)
 
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
@@ -490,3 +498,153 @@ def test_public_clause_rejects_a_tenant_prefixed_instrument_id() -> None:
             text="Text.",
             scope=Scope.PUBLIC,
         )
+
+
+# --------------------------------------------------------------------------
+# ClauseStore (PHASES.md: Cloud Storage layout, issue #15)
+# --------------------------------------------------------------------------
+
+
+def test_clause_store_is_a_clause_store() -> None:
+    assert isinstance(FakeClauseStore(), ClauseStore)
+
+
+async def test_put_then_get_clause_round_trips() -> None:
+    store = FakeClauseStore()
+    written = ClauseRecord.build(
+        instrument_id="privacy-act-1988",
+        version_id="TEST-FIXTURE-001",
+        clause_path="sch1/app11/1",
+        text="An APP entity must take such steps as are reasonable.",
+    )
+    await store.put_clause(written)
+    read = await store.get_clause(written.clause_id, tenant_id=written.tenant_id)
+    assert read == written
+
+
+async def test_get_unknown_clause_returns_none() -> None:
+    from compliance_rag.corpus.models import PUBLIC_TENANT_ID
+
+    store = FakeClauseStore()
+    assert await store.get_clause(APP11, tenant_id=PUBLIC_TENANT_ID) is None
+
+
+async def test_manifest_lists_every_clause_path_with_its_canonical_hash() -> None:
+    """PHASES.md: one manifest.json per instrument version, listing every
+    clause path with its canonical_sha256 — the verifier's single
+    deterministic GET, Phase 4's diff surface."""
+    from compliance_rag.corpus.models import PUBLIC_TENANT_ID
+
+    store = FakeClauseStore()
+    first = ClauseRecord.build(
+        instrument_id="privacy-act-1988",
+        version_id="TEST-FIXTURE-001",
+        clause_path="sch1/app11/1",
+        text="An APP entity must take such steps as are reasonable.",
+    )
+    second = ClauseRecord.build(
+        instrument_id="privacy-act-1988",
+        version_id="TEST-FIXTURE-001",
+        clause_path="sch1/app11/2",
+        text="A different clause entirely.",
+    )
+    await store.put_clause(first)
+    await store.put_clause(second)
+
+    manifest = await store.get_manifest(
+        "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+    )
+
+    assert manifest == {
+        "sch1/app11/1": canonical_sha256(first.canonical_text),
+        "sch1/app11/2": canonical_sha256(second.canonical_text),
+    }
+
+
+async def test_manifest_excludes_a_different_instrument_version() -> None:
+    from compliance_rag.corpus.models import PUBLIC_TENANT_ID
+
+    store = FakeClauseStore()
+    in_scope = ClauseRecord.build(
+        instrument_id="privacy-act-1988",
+        version_id="TEST-FIXTURE-001",
+        clause_path="sch1/app11/1",
+        text="Text.",
+    )
+    other_version = ClauseRecord.build(
+        instrument_id="privacy-act-1988",
+        version_id="TEST-FIXTURE-002",
+        clause_path="sch1/app11/1",
+        text="A later compilation of the same clause.",
+    )
+    await store.put_clause(in_scope)
+    await store.put_clause(other_version)
+
+    manifest = await store.get_manifest(
+        "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+    )
+
+    assert manifest == {"sch1/app11/1": canonical_sha256(in_scope.canonical_text)}
+
+
+async def test_manifest_excludes_a_different_tenant() -> None:
+    """A well-formed corpus can't actually produce this collision — issue #4
+    requires a tenant-owned instrument id to be prefixed by its tenant, so two
+    tenants can never share one unprefixed `instrument_id` like this test
+    does on purpose. It exists as defense in depth: `get_manifest`'s
+    `tenant_id` must scope correctly even if something upstream failed to
+    keep that invariant, not only when the corpus is already well-formed.
+    """
+    store = FakeClauseStore()
+    acme_clause = ClauseRecord.build(
+        instrument_id="acme-hr-policy",
+        version_id="v1",
+        clause_path="sec1",
+        text="Text.",
+        scope=Scope.TENANT,
+        tenant_id="acme",
+    )
+    beta_clause = ClauseRecord.build(
+        instrument_id="acme-hr-policy",
+        version_id="v1",
+        clause_path="sec1",
+        text="A different tenant's clause under the same instrument id string.",
+        scope=Scope.TENANT,
+        tenant_id="beta",
+    )
+    await store.put_clause(acme_clause)
+    await store.put_clause(beta_clause)
+
+    manifest = await store.get_manifest("acme-hr-policy", "v1", tenant_id="acme")
+
+    assert manifest == {"sec1": canonical_sha256(acme_clause.canonical_text)}
+
+
+async def test_get_clause_is_scoped_to_its_tenant() -> None:
+    """Same defense-in-depth reasoning as `test_manifest_excludes_a_different_tenant`:
+    two tenants sharing one unprefixed `instrument_id` shouldn't occur in a
+    well-formed corpus (issue #4), but `get_clause` must not let one tenant
+    read another's clause if it somehow does.
+    """
+    store = FakeClauseStore()
+    acme_clause = ClauseRecord.build(
+        instrument_id="acme-hr-policy",
+        version_id="v1",
+        clause_path="sec1",
+        text="Text.",
+        scope=Scope.TENANT,
+        tenant_id="acme",
+    )
+    beta_clause = ClauseRecord.build(
+        instrument_id="acme-hr-policy",
+        version_id="v1",
+        clause_path="sec1",
+        text="A different tenant's clause under the same instrument id string.",
+        scope=Scope.TENANT,
+        tenant_id="beta",
+    )
+    await store.put_clause(acme_clause)
+    await store.put_clause(beta_clause)
+
+    assert await store.get_clause(acme_clause.clause_id, tenant_id="acme") == acme_clause
+    assert await store.get_clause(beta_clause.clause_id, tenant_id="beta") == beta_clause
