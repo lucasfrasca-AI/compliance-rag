@@ -1,6 +1,6 @@
 # ADR-0015 — Facts live in the ledger and the graph; documents live in storage and Qdrant
 
-- Status: accepted
+- Status: superseded by ADR-0018
 - Date: 2026-09-20
 - Decision ID: `D-14` (`DECISIONS.md`)
 
