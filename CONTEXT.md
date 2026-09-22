@@ -12,8 +12,8 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 - **Canonical text** — a clause's text after canonicalisation. The verifier compares canonical to canonical. Lives in Cloud Storage. Never edited. _Avoid_: normalised text, cleaned text.
 - **Canonicalisation** — the exact transformation producing canonical text, in order: NFC normalisation; `‘ ’` → `'`; `“ ”` → `"`; en dash and em dash → `-`; non-breaking space → space; every whitespace run collapsed to one space; ends stripped. This defines what counts as a matching citation, so it is a definition, not an implementation detail.
 - **Canonicalisation version** — an integer identifying one canonicalisation. Every citation records the version it was verified under, so changing canonicalisation cannot silently invalidate citations already issued. A change to the transformation is a new version, never an edit to an existing one.
-- **Chunk** — a retrieval unit derived from a clause, ≤500 tokens. One chunk belongs to at most one obligation. Chunks live in Qdrant; clauses live in Cloud Storage.
-- **Policy** — a company's own document, treated exactly like an instrument: versions, clauses, canonical text.
+- **Chunk** — a retrieval unit derived from a clause, ≤420 tokens as counted by the **reranker's** tokenizer. One chunk belongs to at most one obligation. Chunks live in Qdrant; clauses live in Cloud Storage. The cap is set by the cross-encoder, not the embedder: `gemini-embedding-001` accepts about 2048 tokens, but a cross-encoder scores query and chunk together in one 512-token window, and overflow truncates the tail of the clause silently — losing exactly the operative words an obligation usually ends on. 420 leaves a query budget inside 512.
+- **Policy** — a company's own document, treated like an instrument in the corpus: versions, clauses, canonical text. Unlike an instrument it gets no persisted graph node; its clauses appear only in the tenant subgraph, projected per request.
 - **Corpus version** — a git tag over `corpus/instruments/`, identifying which instrument versions were loaded. Recorded on every assessment.
 - **Mapping version** — a git tag over `corpus/mappings/`, identifying which obligations, conditions and crosswalks were in force. Moves independently of the corpus version: a mapping correction changes no clause text, and a new compilation changes no mapping. Recorded on every assessment; an assessment is reproducible only with both.
 
@@ -24,8 +24,8 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 - **Crosswalk** — a `CROSSWALKS_TO` edge between obligations or controls across instruments, authored in **mapping YAML**.
 - **Mapping YAML** — hand-authored files in `corpus/mappings/`, reviewed via PR. The only source of crosswalks and obligation metadata.
 - **Bitemporal** — every node carries `valid_from`, `valid_to`, `status`, `recorded_at`. **as_of** is the mandatory date parameter on every traversal.
-- **Supersession** — the `SUPERSEDES` edge from a new version node to the old. Nodes are never deleted or mutated.
-- **Tenant subgraph** — the small graph of one company's profile (`Organisation`, sectors, jurisdictions, actors, policy clauses). Built per request from the ledger; not persisted during build.
+- **Supersession** — the `SUPERSEDES` edge from a new version node to the old. Nodes are never deleted or mutated. Applies to instruments only. A policy's version history lives in the ledger on `instrument_version.supersedes`, because a policy has no persisted node to carry the edge.
+- **Tenant subgraph** — the small graph of one company's profile (`Organisation`, sectors, jurisdictions, actors, policy clauses). Projected per request from the ledger at `as_of`, never persisted. This is the only place a policy clause is a graph node, which is what lets a mapping traverse to one without a company document acquiring permanent graph presence.
 
 ## Retrieval
 
@@ -40,13 +40,13 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 ## Assessment
 
 - **Profile** — a tenant's structured facts (jurisdictions, sector, size bands, actor roles, data categories, regulators). Lives in the ledger. Never embedded.
-- **Claim** — a statement extracted from an uploaded document ("data will be retained for 7 years"). Provenance inferred until the user confirms.
+- **Claim** — a statement extracted from an uploaded document ("data will be retained for 7 years"). About a *document*: what it says. Provenance inferred until the user confirms. A claim is never promoted or mutated; it stays the record of what the document said.
 - **Finding** — one claim against one obligation or policy clause: `consistent` / `conflicts` / `not_addressed` / `ambiguous`, with citations and provenance.
 - **Provenance tier** — how a fact entered the system: `parsed` (deterministic), `asserted` (a user said so), `inferred` (extracted from prose), `external` (web fallback, unverified against the corpus).
 - **Coverage** — for an assessment, which obligations were assessable, which weren't, and why.
 - **Verifier** — the deterministic check that every citation exists in the retrieved or cached set and its span matches canonical text.
 - **Repair** — the targeted regeneration of only the failing citation. Never a full regeneration.
-- **Evidence** — a confirmed claim or questionnaire answer that satisfies or fails a condition. Documents inform; humans assert.
+- **Evidence** — an asserted fact that satisfies or fails a condition, created by confirming a claim or by answering a questionnaire. About a *condition*, where a claim is about a document; confirming a claim creates evidence rather than changing the claim. Documents inform; humans assert.
 - **CAG prefix** — the cached prompt prefix: system prompt + obligation digest + tenant policy corpus.
 
 ## Loops
