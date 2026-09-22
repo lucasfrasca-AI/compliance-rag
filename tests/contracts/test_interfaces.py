@@ -373,3 +373,48 @@ def test_reserved_tenant_is_rejected_for_a_policy() -> None:
             scope=Scope.TENANT,
             tenant_id=PUBLIC_TENANT_ID,
         )
+
+
+# --------------------------------------------------------------------------
+# Tenant id validation (CONTEXT.md: Tenant id, issue #3)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_tenant_id", ["acme:corp", "acme/corp", ""])
+def test_clause_record_rejects_unsafe_tenant_ids(bad_tenant_id: str) -> None:
+    """':' and '/' would make a stable ID ambiguous to parse (CONTEXT.md: Clause)."""
+    with pytest.raises(ValueError):
+        ClauseRecord.build(
+            instrument_id="acme-hr-policy",
+            version_id="v3",
+            clause_path="sec2/1",
+            text="Text.",
+            scope=Scope.TENANT,
+            tenant_id=bad_tenant_id,
+        )
+
+
+@pytest.mark.parametrize("bad_tenant_id", ["acme:corp", "acme/corp", ""])
+def test_chunk_rejects_unsafe_tenant_ids(bad_tenant_id: str) -> None:
+    with pytest.raises(ValueError):
+        Chunk(
+            chunk_id="c1",
+            clause_id="acme-hr-policy:v3:sec2/1",
+            text="Text.",
+            scope=Scope.TENANT,
+            tenant_id=bad_tenant_id,
+        )
+
+
+@pytest.mark.parametrize("bad_tenant_id", ["acme:corp", "acme/corp", "", "_public"])
+def test_profile_rejects_every_invalid_tenant_id(bad_tenant_id: str) -> None:
+    """Profile is a tenant's structured facts (CONTEXT.md) — where a tenant
+    enters the system. `_public` is rejected here even though it is a valid
+    `tenant_id` value on public-scope records: a Profile is never public law.
+    """
+    with pytest.raises(ValueError):
+        Profile(tenant_id=bad_tenant_id)
+
+
+def test_profile_accepts_a_real_tenant_id() -> None:
+    assert Profile(tenant_id="acme").tenant_id == "acme"

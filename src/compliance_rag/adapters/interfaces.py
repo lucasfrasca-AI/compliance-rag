@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from compliance_rag.corpus.models import ClauseRecord, Scope
+from compliance_rag.corpus.models import ClauseRecord, Scope, validate_tenant_id
 
 # --------------------------------------------------------------------------
 # Shared value objects
@@ -54,7 +54,13 @@ class Obligation:
 
 @dataclass(frozen=True, slots=True)
 class Profile:
-    """A tenant's structured facts. Lives in the ledger; never embedded (D-14)."""
+    """A tenant's structured facts. Lives in the ledger; never embedded (D-14).
+
+    `Profile` is where a tenant enters the system (`CONTEXT.md`: Tenant id,
+    issue #3), so `tenant_id` is validated here rather than only where a
+    clause or chunk happens to be built. `_public` is rejected: a profile is
+    always a real company, never public law.
+    """
 
     tenant_id: str
     jurisdictions: tuple[str, ...] = ()
@@ -63,6 +69,9 @@ class Profile:
     data_categories: tuple[str, ...] = ()
     regulators: tuple[str, ...] = ()
     size_band: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_tenant_id(self.tenant_id)
 
 
 @dataclass(frozen=True, slots=True)

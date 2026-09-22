@@ -11,8 +11,9 @@ import datetime as dt
 import re
 import unicodedata
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # One path segment: letters, digits, and the separators legislation actually uses.
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
@@ -43,6 +44,46 @@ Public law belongs to no company, but `tenant_id` is NOT NULL on every table
 rather than a three-valued predicate. So public rows carry this id instead of
 NULL, and `tenant_id` always names an owner.
 """
+
+
+def validate_tenant_segment(value: str) -> str:
+    """Reject characters that break the stable-ID grammar (`CONTEXT.md`: Tenant id).
+
+    `:` is the only stable-ID delimiter and `/` appears inside both
+    tenant-prefixed instrument ids and clause paths — a tenant id containing
+    either makes `{instrument_id}:{version_id}:{clause_path}` ambiguous to
+    parse. `PUBLIC_TENANT_ID` passes: it is a legitimate sentinel value
+    wherever a record's scope is public (`ClauseRecord`, `Chunk`).
+    """
+    if not value:
+        raise ValueError("tenant_id must not be empty")
+    if ":" in value:
+        raise ValueError(f"tenant_id must not contain ':': {value!r}")
+    if "/" in value:
+        raise ValueError(f"tenant_id must not contain '/': {value!r}")
+    return value
+
+
+def validate_tenant_id(value: str) -> str:
+    """Validate a *real* tenant id, applied where a tenant enters the system.
+
+    Stricter than `validate_tenant_segment`: also rejects `PUBLIC_TENANT_ID`
+    itself, since a company may never register under the name reserved for
+    public law. Apply this to `Profile` and any future tenant-creation path;
+    apply `validate_tenant_segment` where `PUBLIC_TENANT_ID` is a legitimate
+    field value instead (`ClauseRecord.tenant_id`, `Chunk.tenant_id`).
+    """
+    value = validate_tenant_segment(value)
+    if value == PUBLIC_TENANT_ID:
+        raise ValueError(f"{PUBLIC_TENANT_ID!r} is reserved and may not be used as a tenant id")
+    return value
+
+
+TenantSegment = Annotated[str, AfterValidator(validate_tenant_segment)]
+"""A `tenant_id` field type for records where `PUBLIC_TENANT_ID` is itself a
+legitimate value (`ClauseRecord`, `Chunk`). `Profile` uses `validate_tenant_id`
+directly instead, since it is a plain dataclass and a real tenant may never be
+`PUBLIC_TENANT_ID`."""
 
 
 class Scope(StrEnum):
@@ -167,7 +208,7 @@ class ClauseRecord(BaseModel):
     text: str
     canonical_text: str
     scope: Scope = Scope.PUBLIC
-    tenant_id: str = Field(
+    tenant_id: TenantSegment = Field(
         default=PUBLIC_TENANT_ID,
         description="`_public` for law; the owning tenant for tenant and user scopes",
     )
@@ -243,7 +284,7 @@ class Chunk(BaseModel):
     obligation_id: str | None = None
     text: str
     scope: Scope = Scope.PUBLIC
-    tenant_id: str = PUBLIC_TENANT_ID
+    tenant_id: TenantSegment = PUBLIC_TENANT_ID
     valid_from: dt.date | None = None
     valid_to: dt.date | None = None
 
