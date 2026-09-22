@@ -1,4 +1,4 @@
-"""Ledger schema DDL, proven against a real Postgres (issue #3).
+"""Ledger schema DDL, proven against a real Postgres (issues #3, #2).
 
 `db/ledger/*.sql` is applied once, in filename order, before this test runs —
 by CI's own step (`.github/workflows/ci.yml`), or by docker-compose's
@@ -16,11 +16,13 @@ locating its own database, not the application reading its runtime config.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 from collections.abc import Iterator
 
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -69,3 +71,163 @@ def test_check_constraint_allows_a_real_tenant_id(
     conn: psycopg.Connection[tuple[object, ...]],
 ) -> None:
     _insert_tenant(conn, "acme")  # must not raise
+
+
+# --------------------------------------------------------------------------
+# db/ledger/0003_canonicalisation_version.sql (issue #2)
+# --------------------------------------------------------------------------
+
+
+def _seed_clause(
+    conn: psycopg.Connection[tuple[object, ...]],
+    tenant_id: str,
+    instrument_id: str,
+    version_id: str,
+    clause_path: str,
+) -> str:
+    """Everything clause_version's foreign keys require, so each test only
+    inserts the clause_version row it's actually testing."""
+    _insert_tenant(conn, tenant_id)
+    conn.execute(
+        "INSERT INTO instrument (tenant_id, instrument_id, title, jurisdiction) "
+        "VALUES (%s, %s, %s, %s)",
+        (tenant_id, instrument_id, "Test Instrument", "AU"),
+    )
+    conn.execute(
+        "INSERT INTO instrument_version "
+        "(tenant_id, instrument_id, version_id, title, status, valid_from) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (tenant_id, instrument_id, version_id, "v1", "in_force", dt.date(2020, 1, 1)),
+    )
+    conn.execute(
+        "INSERT INTO clause (tenant_id, instrument_id, clause_path) VALUES (%s, %s, %s)",
+        (tenant_id, instrument_id, clause_path),
+    )
+    return f"{instrument_id}:{version_id}:{clause_path}"
+
+
+@pytest.fixture
+def clause_id(conn: psycopg.Connection[tuple[object, ...]]) -> str:
+    return _seed_clause(conn, "acme", "acme-hr-policy", "v1", "sec1")
+
+
+def test_clause_version_canonicalisation_version_defaults_to_one(
+    conn: psycopg.Connection[tuple[object, ...]], clause_id: str
+) -> None:
+    """db/ledger/0003_canonicalisation_version.sql, proven — not inferred from reading it."""
+    conn.execute(
+        "INSERT INTO clause_version "
+        "(tenant_id, clause_id, instrument_id, version_id, clause_path, "
+        "canonical_sha256, storage_uri) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        ("acme", clause_id, "acme-hr-policy", "v1", "sec1", "deadbeef", "gs://bucket/clause"),
+    )
+    row = conn.execute(
+        "SELECT canonicalisation_version FROM clause_version "
+        "WHERE tenant_id = %s AND clause_id = %s",
+        ("acme", clause_id),
+    ).fetchone()
+    assert row == (1,)
+
+
+def test_clause_version_canonicalisation_version_is_not_null(
+    conn: psycopg.Connection[tuple[object, ...]], clause_id: str
+) -> None:
+    with pytest.raises(psycopg.errors.NotNullViolation):
+        conn.execute(
+            "INSERT INTO clause_version "
+            "(tenant_id, clause_id, instrument_id, version_id, clause_path, "
+            "canonical_sha256, storage_uri, canonicalisation_version) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, NULL)",
+            ("acme", clause_id, "acme-hr-policy", "v1", "sec1", "deadbeef", "gs://bucket/clause"),
+        )
+
+
+def _insert_assessment(
+    conn: psycopg.Connection[tuple[object, ...]], tenant_id: str, assessment_id: str
+) -> None:
+    conn.execute(
+        "INSERT INTO assessment "
+        "(tenant_id, assessment_id, corpus_version, mapping_version, as_of, trace_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (tenant_id, assessment_id, "corpus-v1", "mapping-v1", dt.date(2026, 1, 1), "trace-1"),
+    )
+
+
+def _insert_finding(
+    conn: psycopg.Connection[tuple[object, ...]],
+    tenant_id: str,
+    finding_id: str,
+    assessment_id: str,
+    citations: list[dict[str, object]],
+) -> None:
+    conn.execute(
+        "INSERT INTO finding "
+        "(tenant_id, finding_id, assessment_id, claim_text, verdict, provenance_tier, "
+        "citations, trace_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            tenant_id,
+            finding_id,
+            assessment_id,
+            "Data is retained for 7 years.",
+            "consistent",
+            "parsed",
+            Jsonb(citations),
+            "trace-1",
+        ),
+    )
+
+
+@pytest.fixture
+def assessment_id(conn: psycopg.Connection[tuple[object, ...]]) -> str:
+    _insert_tenant(conn, "acme")
+    _insert_assessment(conn, "acme", "assess-1")
+    return "assess-1"
+
+
+@pytest.mark.parametrize(
+    "citations",
+    [
+        [{"clause_id": "acme-hr-policy:v1:sec1", "quoted_text": "Text."}],
+        [
+            {
+                "clause_id": "acme-hr-policy:v1:sec1",
+                "quoted_text": "Text.",
+                "canonicalisation_version": "1",
+            }
+        ],
+        [
+            {
+                "clause_id": "acme-hr-policy:v1:sec1",
+                "quoted_text": "Text.",
+                "canonicalisation_version": 0,
+            }
+        ],
+    ],
+    ids=["missing", "non_numeric", "not_positive"],
+)
+def test_finding_citations_check_rejects_an_invalid_version(
+    conn: psycopg.Connection[tuple[object, ...]],
+    assessment_id: str,
+    citations: list[dict[str, object]],
+) -> None:
+    """db/ledger/0003_canonicalisation_version.sql, proven — not inferred from reading it."""
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _insert_finding(conn, "acme", "finding-1", assessment_id, citations)
+
+
+def test_finding_citations_check_allows_a_citation_carrying_the_version(
+    conn: psycopg.Connection[tuple[object, ...]], assessment_id: str
+) -> None:
+    _insert_finding(
+        conn,
+        "acme",
+        "finding-1",
+        assessment_id,
+        [
+            {
+                "clause_id": "acme-hr-policy:v1:sec1",
+                "quoted_text": "Text.",
+                "canonicalisation_version": 1,
+            }
+        ],
+    )  # must not raise

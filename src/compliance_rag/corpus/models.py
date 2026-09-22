@@ -135,6 +135,20 @@ class Scope(StrEnum):
     USER = "user"
 
 
+CANONICALISATION_VERSION = 1
+"""The current canonicalisation transformation (`CONTEXT.md`: Canonicalisation
+version, issue #2). `ClauseRecord` and `Citation` default to this, but the
+field itself is a plain int, not validated against it: reconstructing a
+stored record must be able to carry an older version untouched, so that a
+citation verified under v1 is never silently re-verified under v2. A change
+to `canonicalise()` bumps this constant — it is never an edit in place, and
+old canonicalise() logic is not kept around: a citation recorded under a
+retired version becomes permanently unverifiable rather than silently
+re-run under new rules, which is the point (`CONTEXT.md`: Canonicalisation
+version).
+"""
+
+
 def canonicalise(text: str) -> str:
     """Canonical form used by the verifier on both sides of the comparison.
 
@@ -245,6 +259,10 @@ class ClauseRecord(BaseModel):
     heading: str | None = None
     text: str
     canonical_text: str
+    canonicalisation_version: int = Field(
+        default=CANONICALISATION_VERSION,
+        description="Version of canonicalise() that produced canonical_text (issue #2)",
+    )
     scope: Scope = Scope.PUBLIC
     tenant_id: TenantSegment = Field(
         default=PUBLIC_TENANT_ID,
@@ -346,6 +364,10 @@ class Citation(BaseModel):
 
     clause_id: str
     quoted_text: str
+    canonicalisation_version: int = Field(
+        default=CANONICALISATION_VERSION,
+        description="Version the citation was verified under (issue #2)",
+    )
 
     @field_validator("clause_id")
     @classmethod
