@@ -36,7 +36,7 @@ Goal: ask a question about the Australian Privacy Act and get a verified, verbat
 Deliverables
 - Parser for legislation.gov.au compilations → clause records → Cloud Storage (versioned), positions captured
 - Synthetic company policy set (5–8 documents, MD + PDF) parsed the same way
-- Chunker (clause-level, ≤500 tokens), embedder (Vertex, 1536 dims), Qdrant adapter with dense + sparse + keyword payload and native RRF
+- Chunker (clause-level, ≤420 tokens as counted by the reranker's tokenizer — see `CONTEXT.md` **Chunk** and issue #6; the cross-encoder's 512-token query+passage window binds, not the embedder), embedder (Vertex, 1536 dims), Qdrant adapter with dense + sparse + keyword payload and native RRF
 - Router: clause-ID regex → keyword lookup, skip rerank; else hybrid → rerank
 - **Reranker service** on Cloud Run (`australia-southeast1`): FastAPI + ONNX Runtime, `POST /rerank {query, documents[]}` → scores; models benchmarked: `BAAI/bge-reranker-v2-m3` (default), `mixedbread-ai/mxbai-rerank-base-v2`, `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - **ColBERT rescoring** in Qdrant (multivector, HNSW off) as the A/B; Vertex Ranking API adapter kept for CI only, hard-gated to `TENANT_ID == dev-tenant`

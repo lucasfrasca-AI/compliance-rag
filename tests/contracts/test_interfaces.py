@@ -37,8 +37,8 @@ from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
 
-APP11 = "privacy-act-1988:C2024C00276:APP11.1"
-APP12 = "privacy-act-1988:C2024C00276:APP12.1"
+APP11 = "privacy-act-1988:TEST-FIXTURE-001:APP11.1"
+APP12 = "privacy-act-1988:TEST-FIXTURE-001:APP12.1"
 
 
 @pytest.fixture
@@ -280,7 +280,7 @@ async def test_generator_reports_cached_prefix_hit() -> None:
 def clause() -> ClauseRecord:
     return ClauseRecord.build(
         instrument_id="privacy-act-1988",
-        version_id="C2024C00276",
+        version_id="TEST-FIXTURE-001",
         clause_path="APP11.1",
         text="An APP entity must take such steps as are reasonable in the circumstances "
         "to protect the information from misuse, interference and loss.",
@@ -323,7 +323,7 @@ async def test_citation_matching_is_canonical_not_literal(clause: ClauseRecord) 
 async def test_citation_against_unknown_clause_blocks(clause: ClauseRecord) -> None:
     verifier = FakeCitationVerifier()
     assert not await verifier.verify(
-        "privacy-act-1988:C2024C00276:APP99.9",
+        "privacy-act-1988:TEST-FIXTURE-001:APP99.9",
         "take such steps as are reasonable",
         clauses=(clause,),
     )
@@ -339,7 +339,7 @@ def test_public_clause_carries_the_reserved_tenant() -> None:
 
     record = ClauseRecord.build(
         instrument_id="privacy-act-1988",
-        version_id="C2024C00276",
+        version_id="TEST-FIXTURE-001",
         clause_path="APP11.1",
         text="An APP entity must take such steps as are reasonable.",
     )
@@ -350,7 +350,7 @@ def test_public_scope_rejects_a_real_tenant() -> None:
     with pytest.raises(ValueError, match="_public"):
         ClauseRecord.build(
             instrument_id="privacy-act-1988",
-            version_id="C2024C00276",
+            version_id="TEST-FIXTURE-001",
             clause_path="APP11.1",
             text="Text.",
             tenant_id="acme",
