@@ -264,5 +264,13 @@ class CitationVerifier(ABC):
         quoted_text: str,
         *,
         clauses: tuple[ClauseRecord, ...],
+        canonicalisation_version: int,
     ) -> bool:
-        """True only if the quote appears in the clause's canonical text."""
+        """True only if the quote appears in the clause's canonical text.
+
+        `canonicalisation_version` is the version the citation was recorded
+        under (`CONTEXT.md`: Canonicalisation version, issue #2). Comparing it
+        against a clause canonicalised under a different version would
+        silently compare text produced by different rules, so implementations
+        must raise rather than attempt it — never a bool for "I don't know".
+        """

@@ -325,7 +325,12 @@ class FakeGenerator(Generator):
 
 
 class FakeCitationVerifier(CitationVerifier):
-    """The real comparison: canonical quote must be a substring of canonical text."""
+    """The real comparison: canonical quote must be a substring of canonical text.
+
+    Raises rather than comparing when the citation's `canonicalisation_version`
+    doesn't match the clause's (issue #2) — text canonicalised under different
+    rules is never comparable, however textually similar it looks.
+    """
 
     async def verify(
         self,
@@ -333,11 +338,19 @@ class FakeCitationVerifier(CitationVerifier):
         quoted_text: str,
         *,
         clauses: tuple[ClauseRecord, ...],
+        canonicalisation_version: int,
     ) -> bool:
         quote = canonicalise(quoted_text)
         if not quote:
             return False
         for clause in clauses:
-            if clause.clause_id == clause_id:
-                return quote in clause.canonical_text
+            if clause.clause_id != clause_id:
+                continue
+            if canonicalisation_version != clause.canonicalisation_version:
+                raise ValueError(
+                    f"cannot verify a canonicalisation v{canonicalisation_version} citation "
+                    f"against clause {clause_id!r}, canonicalised under "
+                    f"v{clause.canonicalisation_version}"
+                )
+            return quote in clause.canonical_text
         return False

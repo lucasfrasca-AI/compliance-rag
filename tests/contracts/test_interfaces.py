@@ -32,7 +32,7 @@ from compliance_rag.adapters.interfaces import (
     Reranker,
     RetrievalStore,
 )
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
+from compliance_rag.corpus.models import CANONICALISATION_VERSION, Chunk, ClauseRecord, Scope
 
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
@@ -297,6 +297,7 @@ async def test_good_citation_passes(clause: ClauseRecord) -> None:
         clause.clause_id,
         "take such steps as are reasonable in the circumstances",
         clauses=(clause,),
+        canonicalisation_version=CANONICALISATION_VERSION,
     )
 
 
@@ -307,6 +308,7 @@ async def test_bad_citation_blocks(clause: ClauseRecord) -> None:
         clause.clause_id,
         "must encrypt all personal information at rest using AES-256",
         clauses=(clause,),
+        canonicalisation_version=CANONICALISATION_VERSION,
     )
 
 
@@ -317,6 +319,7 @@ async def test_citation_matching_is_canonical_not_literal(clause: ClauseRecord) 
         clause.clause_id,
         "  protect   the information from misuse,\ninterference and loss.  ",
         clauses=(clause,),
+        canonicalisation_version=CANONICALISATION_VERSION,
     )
 
 
@@ -326,7 +329,28 @@ async def test_citation_against_unknown_clause_blocks(clause: ClauseRecord) -> N
         "privacy-act-1988:TEST-FIXTURE-001:sch1/app99/9",
         "take such steps as are reasonable",
         clauses=(clause,),
+        canonicalisation_version=CANONICALISATION_VERSION,
     )
+
+
+async def test_stale_citation_is_not_silently_reverified_under_a_new_version(
+    clause: ClauseRecord,
+) -> None:
+    """A citation recorded under an older canonicalisation version must fail
+    loudly against a clause recorded under a newer one — never silently
+    compared as if the same rules produced both (`CONTEXT.md`:
+    Canonicalisation version, issue #2). The quote below is the same one
+    `test_good_citation_passes` proves matches textually, so the raise here
+    can only be the version check, nothing else.
+    """
+    verifier = FakeCitationVerifier()
+    with pytest.raises(ValueError, match="canonicalis"):
+        await verifier.verify(
+            clause.clause_id,
+            "take such steps as are reasonable in the circumstances",
+            clauses=(clause,),
+            canonicalisation_version=CANONICALISATION_VERSION + 1,
+        )
 
 
 # --------------------------------------------------------------------------
