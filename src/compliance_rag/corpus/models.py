@@ -429,7 +429,9 @@ class ClauseRecord(BaseModel):
 
 
 class Chunk(BaseModel):
-    """A retrieval unit derived from a clause, <=500 tokens.
+    """A retrieval unit derived from a clause, <=`chunker.CHUNK_MAX_TOKENS`
+    (420) as counted by the reranker's own tokenizer, not a word count
+    (`CONTEXT.md`: Chunk, issue #6).
 
     One chunk belongs to at most one obligation (`CONTEXT.md`). Chunks live in
     Qdrant; clauses live in Cloud Storage.
