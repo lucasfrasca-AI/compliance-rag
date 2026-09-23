@@ -20,6 +20,7 @@ from compliance_rag.adapters.interfaces import (
     ScoredDocument,
 )
 from compliance_rag.corpus.models import Scope
+from compliance_rag.retrieval.router import is_clause_id_query
 from compliance_rag.telemetry import span
 
 
@@ -97,5 +98,41 @@ class RetrievalPipeline:
             return RetrievalTrace(
                 per_channel=result.per_channel,
                 fused=result.fused,
+                reranked=reranked,
+            )
+
+    async def route(
+        self,
+        query: str,
+        tenant_id: str,
+        as_of: dt.date,
+        *,
+        scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
+        limit: int = 50,
+        top_k: int = 10,
+    ) -> RetrievalTrace:
+        """The router's fixed decision (`CONTEXT.md`: Router, D-04, D-12):
+        a clause-ID query goes straight to `lookup_clause` on the keyword
+        channel and never reaches the reranker; anything else runs the full
+        `retrieve()` pipeline unchanged.
+        """
+        if not is_clause_id_query(query):
+            return await self.retrieve(
+                query, tenant_id, as_of, scopes=scopes, limit=limit, top_k=top_k
+            )
+
+        with span(
+            "retrieve.router_hit", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()
+        ) as current:
+            hit = await self.retrieval_store.lookup_clause(
+                query.strip(), tenant_id=tenant_id, as_of=as_of
+            )
+            fused = (hit,) if hit is not None else ()
+            current.set_attribute("retrieval.channel.keyword", _scored(fused))
+            current.set_attribute("retrieval.fused", _scored(fused))
+            reranked = tuple(ScoredDocument(index=i, score=c.score) for i, c in enumerate(fused))
+            return RetrievalTrace(
+                per_channel={Channel.KEYWORD: fused},
+                fused=fused,
                 reranked=reranked,
             )
