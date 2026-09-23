@@ -136,7 +136,7 @@ class Scope(StrEnum):
     USER = "user"
 
 
-CANONICALISATION_VERSION = 1
+CANONICALISATION_VERSION = 2
 """The current canonicalisation transformation (`CONTEXT.md`: Canonicalisation
 version, issue #2). `ClauseRecord` and `Citation` default to this, but the
 field itself is a plain int, not validated against it: reconstructing a
@@ -147,22 +147,31 @@ old canonicalise() logic is not kept around: a citation recorded under a
 retired version becomes permanently unverifiable rather than silently
 re-run under new rules, which is the point (`CONTEXT.md`: Canonicalisation
 version).
+
+v2 (issue #9's ePub format spike): folds U+2011 (non-breaking hyphen),
+used throughout real legislative text for compound words ("cross-border",
+"out-of-date", "de-identified" all use it in the source) and missed by
+v1 — a citation quoting an ordinary hyphen would have silently failed to
+match.
 """
 
 
 def canonicalise(text: str) -> str:
     """Canonical form used by the verifier on both sides of the comparison.
 
-    NFC normalisation, curly quotes and dashes folded to ASCII, all whitespace
-    runs collapsed to a single space, ends stripped. The verifier compares
-    canonical to canonical (D-02), so this function is load-bearing: changing it
-    changes what counts as a matching citation.
+    NFC normalisation, curly quotes and dashes (including the non-breaking
+    hyphen) folded to ASCII, all whitespace runs collapsed to a single space,
+    ends stripped. The verifier compares canonical to canonical (D-02), so
+    this function is load-bearing: changing it changes what counts as a
+    matching citation (see `CANONICALISATION_VERSION`).
     """
     text = unicodedata.normalize("NFC", text)
     # The ambiguous characters below are the point: this table folds the
     # typographic forms legislation actually uses into ASCII. RUF001 is
     # suppressed per line rather than per file so a stray one elsewhere
-    # still gets flagged.
+    # still gets flagged. Every entry is drawn from a real full-document
+    # audit (docs/research/legislation-gov-au-format.md, issue #9), not a
+    # speculative list of "characters that might appear".
     for curly, plain in (
         ("‘", "'"),  # noqa: RUF001
         ("’", "'"),  # noqa: RUF001
@@ -171,6 +180,7 @@ def canonicalise(text: str) -> str:
         ("–", "-"),  # noqa: RUF001
         ("—", "-"),
         (" ", " "),  # noqa: RUF001
+        ("‑", "-"),  # noqa: RUF001
     ):
         text = text.replace(curly, plain)
     return " ".join(text.split())

@@ -15,8 +15,13 @@ from compliance_rag.corpus.models import CANONICALISATION_VERSION, Citation, Cla
 CLAUSE_ID = "privacy-act-1988:TEST-FIXTURE-001:sch1/app11/1"
 
 
-def test_canonicalisation_version_starts_at_one() -> None:
-    assert CANONICALISATION_VERSION == 1
+def test_canonicalisation_version_is_two() -> None:
+    """Bumped from 1 to 2 when canonicalise() gained the non-breaking-hyphen
+    fold (issue #9's ePub format spike, docs/research/legislation-gov-au-format.md).
+    A future bump updates this assertion too — that's the point of pinning
+    an exact number rather than a range.
+    """
+    assert CANONICALISATION_VERSION == 2
 
 
 def test_clause_record_build_stamps_the_current_version() -> None:
