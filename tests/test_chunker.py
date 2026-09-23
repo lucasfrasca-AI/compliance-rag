@@ -20,8 +20,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
-from compliance_rag.corpus.chunker import CHUNK_MAX_TOKENS, chunk_clause, chunk_clauses
 
+from compliance_rag.corpus.chunker import CHUNK_MAX_TOKENS, chunk_clause, chunk_clauses
 from compliance_rag.corpus.models import ClauseRecord
 
 WORD_COUNT: Callable[[str], int] = lambda text: len(text.split())  # noqa: E731
