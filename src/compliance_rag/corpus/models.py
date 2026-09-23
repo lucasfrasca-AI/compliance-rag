@@ -11,6 +11,7 @@ import datetime as dt
 import hashlib
 import re
 import unicodedata
+from collections.abc import Iterable
 from enum import StrEnum
 from typing import Annotated
 
@@ -241,6 +242,53 @@ def clause_anchor_id(clause_path: str) -> str:
     """
     escaped_segments = (segment.replace("-", "--") for segment in clause_path.split("/"))
     return "clause-" + "-".join(escaped_segments)
+
+
+_NON_SLUG_CHARS = re.compile(r"[^a-z0-9]+")
+
+
+def definition_slug(term: str) -> str:
+    """The `clause_path` segment for one of s6's flat, unnumbered
+    Definition paragraphs (`CONTEXT.md`: Definition).
+
+    Lowercase, every run of non-alphanumeric characters folded to a single
+    '-', ends stripped: `"ACT enactment"` -> `"act-enactment"`. Pure
+    function of the term text alone — same term always yields the same
+    slug, no counter, no dependence on parse order or on any other term
+    seen. A positional index would silently repoint an already-issued
+    citation whenever a later compilation inserts a new term alphabetically
+    before an existing one; this only changes if the term itself is
+    renamed, and a rename is a new clause_path in the new version_id, via
+    ordinary supersession — never a mutation of the old path.
+
+    Two different terms colliding on the same slug is
+    `assert_unique_definition_slugs`'s problem, not this function's: taken
+    alone, a term always slugs the same way regardless of what else is in
+    the section.
+    """
+    slug = _NON_SLUG_CHARS.sub("-", term.strip().lower()).strip("-")
+    if not slug:
+        raise ValueError(f"term has no sluggable characters: {term!r}")
+    return slug
+
+
+def assert_unique_definition_slugs(terms: Iterable[str]) -> None:
+    """Raise if two distinct terms in one section produce the same
+    `definition_slug` (`CONTEXT.md`: Definition).
+
+    A collision is a hard parse failure, never a silently suffixed `-2`:
+    a suffix would be assigned by parse order, reintroducing exactly the
+    citation instability a stable ID exists to prevent.
+    """
+    seen: dict[str, str] = {}
+    for term in terms:
+        slug = definition_slug(term)
+        if slug in seen and seen[slug] != term:
+            raise ValueError(
+                f"duplicate definition slug {slug!r}: {seen[slug]!r} and {term!r} "
+                "both slug to the same clause_path segment"
+            )
+        seen[slug] = term
 
 
 class Instrument(BaseModel):
