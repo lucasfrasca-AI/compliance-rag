@@ -1,0 +1,423 @@
+"""`parse_compilation()`: legislation.gov.au ePub HTML to clause records
+(issue #17, ADR-0019).
+
+Pure function over markup: no network, no storage. Findings this module
+implements are all from issue #9's ePub format spike
+(`docs/research/legislation-gov-au-format.md`):
+
+- The markup is flat, non-nesting Word-export HTML — hierarchy lives
+  entirely in a fixed set of CSS class names on sibling `<p>` elements, not
+  in DOM nesting. A regex-based block scanner is enough; a general HTML
+  parser would buy nothing this format needs.
+- Section numbers are not globally unique (`CharSectno="6"` appears in the
+  main body, inside Schedule 1's APP numbering, and would repeat in any
+  other Schedule), so the parser tracks which container it's in — a stack,
+  not a flat class -> clause_path mapping.
+- Schedule 1's subclauses use a different numbering register (`11.1`, dot-
+  separated) from the main body's (`(1)`, bracketed) — both are handled,
+  selected by which class produced the token, not by a schedule number.
+- No clause below section/Part/Schedule level carries its own `id` in the
+  source. `clause_anchor_id(clause_path)` (issue #9 follow-up, ADR-0019) is
+  computed and injected into each clause's opening `<p>` tag in the
+  returned HTML, rather than read from the markup.
+- s6's flat, unnumbered `Definition` paragraphs need a term-slug clause_path
+  segment (`definition_slug`, issue #9 follow-up); a section with exactly
+  one `Definition` under a subsection (s6C's `organisation`) does not —
+  `CONTEXT.md`'s pre-existing `s6c/1/a` example has no `organisation`
+  segment, so the singleton case folds the definition's own text into its
+  enclosing subsection instead of giving it a path of its own.
+"""
+
+from __future__ import annotations
+
+import html as html_module
+import re
+from dataclasses import dataclass, field
+
+from compliance_rag.corpus.models import (
+    ClauseRecord,
+    Scope,
+    assert_unique_definition_slugs,
+    clause_anchor_id,
+    definition_slug,
+)
+
+# --------------------------------------------------------------------------
+# Block scanning: the source has no nested <p> (issue #9 spike), so a
+# non-greedy regex over <p ...>...</p> is a faithful, much simpler stand-in
+# for a general HTML parser.
+# --------------------------------------------------------------------------
+
+_P_BLOCK_RE = re.compile(r"<p\b[^>]*>.*?</p>", re.DOTALL)
+_P_OPEN_TAG_RE = re.compile(r"<p\b[^>]*>", re.DOTALL)
+_CLASS_RE = re.compile(r'class="([^"]*)"')
+_SPAN_RE = re.compile(r"<span\b[^>]*>(.*?)</span>", re.DOTALL)
+_ANY_TAG_RE = re.compile(r"<[^>]+>")
+
+# Leading-token patterns, one per class, per the spike's documented forms.
+_SUBSECTION_PAREN_RE = re.compile(r"^\((\d+)\)\s*")
+_SUBSECTION_DOT_RE = re.compile(r"^\d+\.(\d+)\s*")
+_PARAGRAPH_RE = re.compile(r"^\(([a-z]+)\)\s*")
+_PARAGRAPHSUB_RE = re.compile(r"^\(([ivx]+)\)\s*")
+_PARAGRAPHSUB_SUB_RE = re.compile(r"^\(([A-Z])\)\s*")
+
+_APP_TITLE_MARKER = "Australian Privacy Principle"
+
+
+def _strip_tags(fragment: str) -> str:
+    return html_module.unescape(_ANY_TAG_RE.sub("", fragment))
+
+
+def _normalise_ws(text: str) -> str:
+    return " ".join(text.split())
+
+
+@dataclass(frozen=True, slots=True)
+class _Block:
+    class_name: str
+    inner_text: str  # tags stripped, entities unescaped, whitespace collapsed
+    inner_html: str  # raw, tags intact — only Definition's term-span split needs this
+    open_tag_start: int
+
+
+def _scan_blocks(source: str) -> list[_Block]:
+    blocks: list[_Block] = []
+    for match in _P_BLOCK_RE.finditer(source):
+        full = match.group(0)
+        open_tag_match = _P_OPEN_TAG_RE.match(full)
+        assert open_tag_match is not None
+        class_match = _CLASS_RE.search(open_tag_match.group(0))
+        class_name = class_match.group(1) if class_match is not None else ""
+        inner = full[open_tag_match.end() : -len("</p>")]
+        blocks.append(
+            _Block(
+                class_name=class_name,
+                inner_text=_normalise_ws(_strip_tags(inner)),
+                inner_html=inner,
+                open_tag_start=match.start(),
+            )
+        )
+    return blocks
+
+
+def _definition_term(block: _Block) -> tuple[str, str]:
+    """The defined term (first `<span>`) and the remaining body text, for a
+    `Definition` block — `CONTEXT.md`'s Definition entry requires capturing
+    the term itself, not just the paragraph."""
+    spans = _SPAN_RE.findall(block.inner_html)
+    if not spans:
+        return "", block.inner_text
+    term = _normalise_ws(html_module.unescape(_strip_tags(spans[0])))
+    body = _normalise_ws(html_module.unescape(_strip_tags("".join(spans[1:]))))
+    return term, body
+
+
+# --------------------------------------------------------------------------
+# Tree: a subsection's children are Definition-or-paragraph nodes, whose own
+# children (paragraphsub, paragraphsub-sub) nest by ordinary depth — only
+# the Definition-vs-paragraph decision at the subsection's direct children
+# is content-dependent (issue #17: singleton Definition merges, multiple
+# Definitions each get their own term-slug segment).
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class _ParagraphNode:
+    token: str
+    text: str
+    block_index: int
+    children: list[_ParagraphNode] = field(default_factory=list["_ParagraphNode"])
+
+
+@dataclass
+class _DefinitionNode:
+    term: str
+    text: str
+    block_index: int
+    children: list[_ParagraphNode] = field(default_factory=list[_ParagraphNode])
+
+
+@dataclass
+class _SubsectionNode:
+    token: str
+    # Document-order text of the subsection's OWN clause: plain strings
+    # (chapeau, the subsection2 tail) interleaved with _DefinitionNode
+    # references for a singleton Definition's lead-in — resolved at
+    # emission time (`_emit_subsection`), once "singleton vs multiple
+    # Definitions" is known, so the merge lands in the same order the
+    # source has it rather than always at the end.
+    text_parts: list[str | _DefinitionNode]
+    block_index: int
+    children: list[_ParagraphNode | _DefinitionNode] = field(
+        default_factory=list[_ParagraphNode | _DefinitionNode]
+    )
+
+
+@dataclass
+class _SectionNode:
+    prefix: str
+    subsections: list[_SubsectionNode] = field(default_factory=list[_SubsectionNode])
+
+
+def _strip_leading_token(text: str, pattern: re.Pattern[str]) -> tuple[str, str]:
+    match = pattern.match(text)
+    if match is None:
+        return "", text
+    return match.group(1), text[match.end() :]
+
+
+def _section_prefix(title_text: str, sectno: str, current_schedule: str | None) -> str:
+    local_number = sectno.strip().lower()
+    if _APP_TITLE_MARKER in title_text:
+        schedule = current_schedule or "1"
+        return f"sch{schedule}/app{local_number}"
+    local = f"s{local_number}"
+    return f"sch{current_schedule}/{local}" if current_schedule is not None else local
+
+
+def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
+    sections: list[_SectionNode] = []
+    current_schedule: str | None = None
+    current_section: _SectionNode | None = None
+    current_subsection: _SubsectionNode | None = None
+    # Explicit "currently open" pointers, one per depth below the subsection
+    # — not a generic stack, because "paragraph" and "paragraphsub" are each
+    # used for SIBLINGS at their own depth (e.g. (a), (b), (c) all attach to
+    # the same Definition, never nesting one under another), which a stack
+    # keyed only on class name can't distinguish from real nesting.
+    current_definition: _DefinitionNode | None = None
+    current_paragraph: _ParagraphNode | None = None
+    current_paragraphsub: _ParagraphNode | None = None
+
+    for index, block in enumerate(blocks):
+        cls = block.class_name
+
+        if cls == "ActHead1":
+            # CharChapNo carries the schedule number as its own span text,
+            # first in the block — a bare digit search is enough since it's
+            # the first token in document order.
+            number_match = re.search(r"\d+", block.inner_text)
+            current_schedule = number_match.group(0) if number_match is not None else None
+            current_section = None
+            current_subsection = None
+            current_definition = current_paragraph = current_paragraphsub = None
+            continue
+
+        if cls in ("ActHead2", "ActHead3", "ActHead4"):
+            current_subsection = None
+            current_definition = current_paragraph = current_paragraphsub = None
+            continue
+
+        if cls == "ActHead5":
+            sectno_match = re.search(r"[A-Za-z0-9]+", block.inner_text)
+            sectno = sectno_match.group(0) if sectno_match is not None else ""
+            prefix = _section_prefix(block.inner_text, sectno, current_schedule)
+            current_section = _SectionNode(prefix=prefix)
+            sections.append(current_section)
+            current_subsection = None
+            current_definition = current_paragraph = current_paragraphsub = None
+            continue
+
+        if cls == "subsection":
+            if current_section is None:
+                continue
+            token, rest = _strip_leading_token(block.inner_text, _SUBSECTION_PAREN_RE)
+            if not token:
+                token, rest = _strip_leading_token(block.inner_text, _SUBSECTION_DOT_RE)
+            current_subsection = _SubsectionNode(token=token, text_parts=[rest], block_index=index)
+            current_section.subsections.append(current_subsection)
+            current_definition = current_paragraph = current_paragraphsub = None
+            continue
+
+        if cls == "subsection2":
+            # Still part of the currently open subsection, not a new one
+            # (issue #9 spike) — text only, no state change.
+            if current_subsection is not None:
+                current_subsection.text_parts.append(block.inner_text)
+            continue
+
+        if cls == "Definition":
+            if current_subsection is None:
+                continue
+            term, body = _definition_term(block)
+            node = _DefinitionNode(term=term, text=body, block_index=index)
+            current_subsection.children.append(node)
+            # Recorded in document order alongside the chapeau/subsection2
+            # text — whether it's actually rendered here (singleton case)
+            # or dropped in favour of its own clause (multi-Definition
+            # case) is decided later, once every Definition in this
+            # subsection is known (`_emit_subsection`).
+            current_subsection.text_parts.append(node)
+            current_definition = node
+            current_paragraph = current_paragraphsub = None
+            continue
+
+        if cls == "paragraph":
+            token, rest = _strip_leading_token(block.inner_text, _PARAGRAPH_RE)
+            node = _ParagraphNode(token=token, text=rest, block_index=index)
+            parent = (
+                current_definition.children
+                if current_definition is not None
+                else (current_subsection.children if current_subsection is not None else None)
+            )
+            if parent is None:
+                continue
+            parent.append(node)
+            current_paragraph = node
+            current_paragraphsub = None
+            continue
+
+        if cls == "paragraphsub":
+            if current_paragraph is None:
+                continue
+            token, rest = _strip_leading_token(block.inner_text, _PARAGRAPHSUB_RE)
+            node = _ParagraphNode(token=token, text=rest, block_index=index)
+            current_paragraph.children.append(node)
+            current_paragraphsub = node
+            continue
+
+        if cls == "paragraphsub-sub":
+            if current_paragraphsub is None:
+                continue
+            token, rest = _strip_leading_token(block.inner_text, _PARAGRAPHSUB_SUB_RE)
+            node = _ParagraphNode(token=token.lower(), text=rest, block_index=index)
+            current_paragraphsub.children.append(node)
+            continue
+
+        # SubsectionHead, notetext/notepara/notemargin, TOC*, Table*, and
+        # any other class the spike catalogued as "not operative text" —
+        # skipped: no clause, no contribution to any clause's text.
+
+    return sections
+
+
+# --------------------------------------------------------------------------
+# Emission: the tree to ClauseRecords, applying the singleton-vs-multiple
+# Definition rule described in the module docstring.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _EmitContext:
+    """The record-building fields every emission call needs, unchanged
+    through the whole recursive walk — bundled so `_emit_paragraph` and
+    `_emit_subsection` take one context argument instead of five identical
+    parameters apiece, plus the two accumulators (`clauses`, `anchors`)
+    they both write into."""
+
+    instrument_id: str
+    version_id: str
+    tenant_id: str
+    scope: Scope
+    clauses: list[ClauseRecord]
+    anchors: dict[int, str]
+
+    def build(self, clause_path: str, text: str) -> ClauseRecord:
+        return ClauseRecord.build(
+            instrument_id=self.instrument_id,
+            version_id=self.version_id,
+            clause_path=clause_path,
+            text=text,
+            scope=self.scope,
+            tenant_id=self.tenant_id,
+        )
+
+
+def _emit_paragraph(node: _ParagraphNode, *, parent_path: str, ctx: _EmitContext) -> None:
+    path = f"{parent_path}/{node.token}"
+    ctx.clauses.append(ctx.build(path, node.text))
+    ctx.anchors[node.block_index] = path
+    for child in node.children:
+        _emit_paragraph(child, parent_path=path, ctx=ctx)
+
+
+def _emit_subsection(
+    subsection: _SubsectionNode, *, section_prefix: str, ctx: _EmitContext
+) -> None:
+    subsection_path = f"{section_prefix}/{subsection.token}"
+    definitions = [c for c in subsection.children if isinstance(c, _DefinitionNode)]
+    bare_paragraphs = [c for c in subsection.children if isinstance(c, _ParagraphNode)]
+    singleton = len(definitions) <= 1
+
+    assert_unique_definition_slugs(d.term for d in definitions)
+
+    # Resolve text_parts in the document order they were recorded — a
+    # singleton Definition's lead-in renders in place (between the chapeau
+    # and a later subsection2 tail, exactly where the source has it);
+    # dropped here when there are multiple Definitions, since each of those
+    # gets its own separate clause below instead.
+    rendered_parts: list[str] = []
+    for part in subsection.text_parts:
+        if isinstance(part, _DefinitionNode):
+            if singleton:
+                rendered_parts.append(f"{part.term} {part.text}".strip())
+        else:
+            rendered_parts.append(part)
+    ctx.clauses.append(ctx.build(subsection_path, " ".join(p for p in rendered_parts if p)))
+    ctx.anchors[subsection.block_index] = subsection_path
+
+    for definition in definitions:
+        if singleton:
+            definition_path = subsection_path
+        else:
+            definition_path = f"{subsection_path}/{definition_slug(definition.term)}"
+            text = f"{definition.term} {definition.text}".strip()
+            ctx.clauses.append(ctx.build(definition_path, text))
+            ctx.anchors[definition.block_index] = definition_path
+        for child in definition.children:
+            _emit_paragraph(child, parent_path=definition_path, ctx=ctx)
+
+    for paragraph in bare_paragraphs:
+        _emit_paragraph(paragraph, parent_path=subsection_path, ctx=ctx)
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedCompilation:
+    """`parse_compilation()`'s result: every clause found, and the source
+    HTML with a `clause_anchor_id` injected at each clause's position
+    (`CONTEXT.md`: Position map, ADR-0019). Nothing is written anywhere —
+    persisting `annotated_html` is a later ticket's concern (#19)."""
+
+    clauses: tuple[ClauseRecord, ...]
+    annotated_html: str
+
+
+def parse_compilation(
+    source: str,
+    *,
+    instrument_id: str,
+    version_id: str,
+    tenant_id: str = "_public",
+    scope: Scope = Scope.PUBLIC,
+) -> ParsedCompilation:
+    """Legislation.gov.au ePub HTML to clause records (issue #17).
+
+    Pure function: no network call, no store write. Handles the whole
+    compilation — Schedule and main-body sections alike — via the container
+    stack described in the module docstring; which clauses are later
+    chunked and embedded is a manifest's decision (`PHASES.md`), not this
+    function's.
+    """
+    blocks = _scan_blocks(source)
+    sections = _parse_tree(blocks)
+
+    ctx = _EmitContext(
+        instrument_id=instrument_id,
+        version_id=version_id,
+        tenant_id=tenant_id,
+        scope=scope,
+        clauses=[],
+        anchors={},
+    )
+    for section in sections:
+        for subsection in section.subsections:
+            _emit_subsection(subsection, section_prefix=section.prefix, ctx=ctx)
+
+    annotated = source
+    for block_index in sorted(ctx.anchors, reverse=True):
+        block = blocks[block_index]
+        anchor_id = clause_anchor_id(ctx.anchors[block_index])
+        insertion_point = block.open_tag_start + len("<p")
+        annotated = annotated[:insertion_point] + f' id="{anchor_id}"' + annotated[insertion_point:]
+
+    return ParsedCompilation(clauses=tuple(ctx.clauses), annotated_html=annotated)
