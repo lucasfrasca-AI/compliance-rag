@@ -277,6 +277,12 @@ class FakeClauseStore(ClauseStore):
 class FakeReranker(Reranker):
     """Deterministic token-overlap reranker. Stands in for the cross-encoder."""
 
+    def __init__(self) -> None:
+        self.rerank_calls = 0
+        """Tests use this to prove the router actually skips reranking
+        (`CONTEXT.md`: Router, issue #5) rather than just returning the
+        right candidate by coincidence."""
+
     async def rerank(
         self,
         query: str,
@@ -284,6 +290,7 @@ class FakeReranker(Reranker):
         *,
         top_k: int,
     ) -> tuple[ScoredDocument, ...]:
+        self.rerank_calls += 1
         q = set(canonicalise(query).lower().split())
         scored = [
             ScoredDocument(
