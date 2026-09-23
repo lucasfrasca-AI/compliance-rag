@@ -219,6 +219,30 @@ def parse_stable_id(value: str) -> tuple[str, str, str]:
     )
 
 
+def clause_anchor_id(clause_path: str) -> str:
+    """The synthesized click-to-clause anchor for a clause (`CONTEXT.md`:
+    Position map, issue #9's ePub format spike).
+
+    Law's source markup carries no per-clause anchor of its own — only
+    section/Part/Schedule headings do. The parser writes this id into the
+    stored HTML at the corresponding position when it ingests a clause;
+    citation rendering recomputes the same id from `clause_path`, which it
+    already has, rather than reading one off the markup. Pure function of
+    `clause_path` alone: same path, same anchor, every time.
+
+    A clause_path segment may itself contain '-' (a defined-term slug like
+    `access-seeker`, `CONTEXT.md`: Definition), so joining segments with a
+    bare '-' would let two different paths collide — e.g. the segments
+    `["s6", "1", "access-seeker"]` and `["s6", "1-access-seeker"]` would
+    both naively join to the same string. Each segment's own '-' is
+    escaped to '--' before segments are joined on a single '-', which
+    keeps "a real segment boundary" and "a hyphen inside one segment"
+    distinguishable no matter what the segments contain.
+    """
+    escaped_segments = (segment.replace("-", "--") for segment in clause_path.split("/"))
+    return "clause-" + "-".join(escaped_segments)
+
+
 class Instrument(BaseModel):
     """A law, regulation or standard as a whole. Has versions."""
 
@@ -291,7 +315,9 @@ class ClauseRecord(BaseModel):
         description="`_public` for law; the owning tenant for tenant and user scopes",
     )
     char_start: int | None = Field(
-        default=None, description="Offset in the source document, for click-to-clause"
+        default=None,
+        description="PDF page/character offset for click-to-clause (CONTEXT.md: Position "
+        "map). Law uses clause_anchor_id(clause_path) instead — these stay None for law.",
     )
     char_end: int | None = None
     page: int | None = None
