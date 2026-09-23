@@ -1,0 +1,101 @@
+"""`retrieve()`: Track B end to end, from query to reranked candidates (issue #16).
+
+Track A (`GraphStore`, obligation filtering) is a later ticket's concern —
+this tracer bullet proves the retrieve -> rerank -> generate -> verify shape
+end to end (Loop B, `CONTEXT.md`), not the full loop. `obligation_ids` is
+always passed empty to `RetrievalStore.search`, which is D-03's "no filter"
+case, not a bypass of it.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass
+
+from compliance_rag.adapters.interfaces import (
+    Candidate,
+    Channel,
+    Reranker,
+    RetrievalStore,
+    ScoredDocument,
+)
+from compliance_rag.corpus.models import Scope
+from compliance_rag.telemetry import span
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalTrace:
+    """Every stage of `retrieve()`, kept separate rather than collapsed into a
+    top-k list — so a later swap of one fake for a real adapter (the reranker
+    service, Qdrant) is attributable to that adapter, not the composition
+    (issue #16).
+    """
+
+    per_channel: dict[Channel, tuple[Candidate, ...]]
+    fused: tuple[Candidate, ...]
+    reranked: tuple[ScoredDocument, ...]
+    """The reranker's own output — `ScoredDocument.index` indexes into
+    `fused`, exactly as `Reranker.rerank()` promises."""
+
+    def ranked_candidates(self) -> tuple[Candidate, ...]:
+        """`fused`, reordered (and trimmed) by rerank score — what generation
+        should actually see, rather than the pre-rerank fused order."""
+        return tuple(self.fused[doc.index] for doc in self.reranked)
+
+    def top_candidate(self) -> Candidate | None:
+        """The single best candidate after reranking, or `None` if nothing
+        was retrieved."""
+        ranked = self.ranked_candidates()
+        return ranked[0] if ranked else None
+
+
+def _scored(candidates: tuple[Candidate, ...]) -> list[str]:
+    return [f"{c.chunk_id}:{c.score:.4f}" for c in candidates]
+
+
+class RetrievalPipeline:
+    """Composes exactly one `RetrievalStore` and one `Reranker` (D-08)."""
+
+    def __init__(self, retrieval_store: RetrievalStore, reranker: Reranker) -> None:
+        self.retrieval_store = retrieval_store
+        self.reranker = reranker
+
+    async def retrieve(
+        self,
+        query: str,
+        tenant_id: str,
+        as_of: dt.date,
+        *,
+        scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
+        limit: int = 50,
+        top_k: int = 10,
+    ) -> RetrievalTrace:
+        """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank)."""
+        with span("retrieve", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
+            result = await self.retrieval_store.search(
+                query,
+                obligation_ids=(),
+                tenant_id=tenant_id,
+                scopes=scopes,
+                as_of=as_of,
+                limit=limit,
+            )
+            # Both retrieval channels are logged before fusion (CLAUDE.md).
+            for channel, candidates in result.per_channel.items():
+                current.set_attribute(f"retrieval.channel.{channel.value}", _scored(candidates))
+            current.set_attribute("retrieval.fused", _scored(result.fused))
+
+            reranked = await self.reranker.rerank(
+                query,
+                tuple(c.text for c in result.fused),
+                top_k=top_k,
+            )
+            current.set_attribute(
+                "retrieval.rerank_scores", [f"{doc.index}:{doc.score:.4f}" for doc in reranked]
+            )
+
+            return RetrievalTrace(
+                per_channel=result.per_channel,
+                fused=result.fused,
+                reranked=reranked,
+            )
