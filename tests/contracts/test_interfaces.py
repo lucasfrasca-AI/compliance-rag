@@ -8,6 +8,7 @@ filter (D-03), a bad citation fails the verifier (D-02).
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 
 import pytest
 
@@ -618,6 +619,49 @@ async def test_manifest_excludes_a_different_tenant() -> None:
     manifest = await store.get_manifest("acme-hr-policy", "v1", tenant_id="acme")
 
     assert manifest == {"sec1": canonical_sha256(acme_clause.canonical_text)}
+
+
+async def test_manifest_metadata_round_trips_and_is_absent_before_first_write() -> None:
+    """`put_manifest` records `canonicalisation_version` and
+    `source_html`'s own sha256 once at the manifest level (issue #19),
+    alongside the per-clause paths `get_manifest` already returns."""
+    from compliance_rag.corpus.models import PUBLIC_TENANT_ID
+
+    store = FakeClauseStore()
+    assert (
+        await store.get_manifest_metadata(
+            "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+        )
+        is None
+    )
+    assert (
+        await store.get_source_html(
+            "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+        )
+        is None
+    )
+
+    html = '<p id="clause-sch1-app11-1">An APP entity must take reasonable steps.</p>'
+    await store.put_manifest(
+        "privacy-act-1988",
+        "TEST-FIXTURE-001",
+        tenant_id=PUBLIC_TENANT_ID,
+        canonicalisation_version=CANONICALISATION_VERSION,
+        source_html=html,
+    )
+
+    metadata = await store.get_manifest_metadata(
+        "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+    )
+    assert metadata is not None
+    assert metadata.canonicalisation_version == CANONICALISATION_VERSION
+    assert metadata.source_html_sha256 == hashlib.sha256(html.encode("utf-8")).hexdigest()
+    assert (
+        await store.get_source_html(
+            "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+        )
+        == html
+    )
 
 
 async def test_get_clause_is_scoped_to_its_tenant() -> None:
