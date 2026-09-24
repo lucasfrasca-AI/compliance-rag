@@ -10,6 +10,14 @@ until a human approves it by changing the status in a reviewed PR.
 Changes reach the graph only through a pull request. Every file carries
 `author`, `reviewed_by`, `date` and `source_clause_ids`.
 
+`source_clause_ids` is required here because a mapping is *derived from*
+specific existing clauses — obligations, conditions and crosswalks each
+point back at the law they came from. It does not apply to a selection
+manifest (`corpus/instruments/{instrument_id}/{version_id}/manifest.yaml`,
+issue #19): that file declares which clauses are *in scope*, prospectively,
+not which clauses a human derived a mapping from. Selection manifests carry
+`author`, `reviewed_by` and `date` only.
+
 ## Required front matter
 
 Every file in this directory starts with:
