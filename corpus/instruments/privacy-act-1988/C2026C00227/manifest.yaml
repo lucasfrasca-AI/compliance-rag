@@ -1,0 +1,24 @@
+# Selection manifest (issue #19, corpus/mappings/README.md front-matter
+# convention minus source_clause_ids — this file declares clause paths in
+# scope prospectively, it is not derived from existing clauses).
+#
+# REVIEW REQUIRED: reviewed_by is a placeholder. A human reviewer must
+# replace it with their own identity before this PR merges — this file is
+# never self-approved (corpus/mappings/README.md: "must differ from
+# author").
+author: quiettango@gmail.com
+reviewed_by: PENDING_REVIEW
+date: 2026-09-24
+
+# Phase 1 scope (issue #19 acceptance criteria): Schedule 1 (the Australian
+# Privacy Principles) plus ss 6, 6C, 6D and 6E of the main body. Each
+# section gets its own prefix rather than one "s6" prefix, so "s6/" can
+# never accidentally absorb "s6c/", "s6d/" or "s6e/" (they're sibling
+# sections, not sub-paths of s6 — see selection_manifest.py's own test for
+# this exact collision).
+prefixes:
+  - sch1/
+  - s6/
+  - s6c/
+  - s6d/
+  - s6e/
