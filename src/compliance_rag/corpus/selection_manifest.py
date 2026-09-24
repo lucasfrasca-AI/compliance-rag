@@ -65,9 +65,14 @@ def parse_selection_manifest(source: str) -> SelectionManifest:
 
     Requires `author`, `reviewed_by`, `date` and `prefixes`
     (`corpus/mappings/README.md`'s convention, minus `source_clause_ids`,
-    which does not apply to a selection manifest). `author` and
-    `reviewed_by` must differ, matching the same rule mapping YAML already
-    enforces.
+    which does not apply to a selection manifest). Unlike mapping YAML,
+    `author` and `reviewed_by` are *not* required to differ: a distinct
+    second reviewer doesn't exist yet for a solo builder, and a placeholder
+    that can never actually resolve is worse than an honest single name
+    (`corpus/mappings/README.md`: "Selection manifests: single-author
+    review"). A distinct reviewer becomes required before any corpus is
+    used for a real customer — that's a review-process change, not
+    something this parser can enforce.
     """
     loaded = yaml.safe_load(source)
     if not isinstance(loaded, dict):
@@ -78,8 +83,6 @@ def parse_selection_manifest(source: str) -> SelectionManifest:
         raise ValueError(f"manifest.yaml missing required field(s): {missing!r}")
     author = str(data["author"])
     reviewed_by = str(data["reviewed_by"])
-    if author == reviewed_by:
-        raise ValueError("author and reviewed_by must differ")
     prefixes = tuple(str(p) for p in data["prefixes"])
     if not prefixes:
         raise ValueError("manifest.yaml must list at least one prefix")

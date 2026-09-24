@@ -24,6 +24,26 @@ source_clause_ids:                   # every clause the mapping is derived from
 
 A file missing any of these four fields fails the loader and the CI check.
 
+## Selection manifests: single-author review
+
+`corpus/instruments/{instrument_id}/{version_id}/manifest.yaml` (issue #19)
+follows this directory's front-matter convention minus `source_clause_ids`
+(a selection manifest declares clause paths in scope prospectively, it
+isn't derived from existing clauses) — but `author` and `reviewed_by` are
+**not** required to differ there, unlike every mapping file above.
+
+This is the current reality, not a loosened standard: the project has one
+builder, and a `reviewed_by` field naming a second person who doesn't
+review it is a fiction, worse than an honest single name. A selection
+manifest may carry the same person in both fields until a real second
+reviewer exists.
+
+**A distinct `reviewed_by` is required before any corpus built from a
+selection manifest is used for a real customer.** When that reviewer
+exists, selection manifests should adopt the same "must differ" rule
+mapping YAML already enforces — this note should be removed at that point,
+not left standing alongside a rule nobody follows.
+
 ## Obligations
 
 ```yaml

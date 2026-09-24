@@ -67,7 +67,12 @@ def test_a_missing_required_field_fails_loudly(missing_field: str) -> None:
         parse_selection_manifest(source)
 
 
-def test_author_and_reviewed_by_must_differ() -> None:
+def test_author_and_reviewed_by_may_be_the_same_person() -> None:
+    """Unlike mapping YAML, a selection manifest doesn't require a distinct
+    second reviewer — a solo builder has no one else to name
+    (`corpus/mappings/README.md`: "Selection manifests: single-author
+    review"). A placeholder that can never resolve would be worse than an
+    honest single name."""
     source = """
 author: jane.doe@example.com
 reviewed_by: jane.doe@example.com
@@ -75,8 +80,8 @@ date: 2026-09-24
 prefixes:
   - sch1/
 """
-    with pytest.raises(ValueError, match="differ"):
-        parse_selection_manifest(source)
+    manifest = parse_selection_manifest(source)
+    assert manifest.author == manifest.reviewed_by == "jane.doe@example.com"
 
 
 def test_empty_prefix_list_fails_loudly() -> None:

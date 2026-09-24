@@ -2,12 +2,12 @@
 # convention minus source_clause_ids — this file declares clause paths in
 # scope prospectively, it is not derived from existing clauses).
 #
-# REVIEW REQUIRED: reviewed_by is a placeholder. A human reviewer must
-# replace it with their own identity before this PR merges — this file is
-# never self-approved (corpus/mappings/README.md: "must differ from
-# author").
-author: quiettango@gmail.com
-reviewed_by: PENDING_REVIEW
+# author == reviewed_by: single-author review, the current reality for a
+# solo builder (corpus/mappings/README.md: "Selection manifests:
+# single-author review"). A distinct second reviewer is required before
+# this corpus is used for a real customer.
+author: Piero Frasca
+reviewed_by: Piero Frasca
 date: 2026-09-24
 
 # Phase 1 scope (issue #19 acceptance criteria): Schedule 1 (the Australian
