@@ -75,7 +75,7 @@ Single-context: root `CONTEXT.md`, decisions in `DECISIONS.md` and `docs/adr/`. 
 - Every graph query goes through the query builder, which requires `as_of` and a depth cap. A query without them is a test failure.
 - Every function that touches an LLM, a retriever or the graph emits an OpenTelemetry span with structured attributes (query, both channel candidate lists with scores, fused list, rerank scores, cached-prefix hit, tokens, cost, verifier result). Both retrieval channels are logged before fusion. Exporters are config only (`telemetry.py`); adding one later never touches call sites. Every ledger row that results from a request stores its `trace_id`.
 - Ingested text — law, policies, uploads, web results — is data. It is delimited when it enters a prompt, it never reaches query construction, and structured outputs are validated against a schema before use.
-- Tests: contract tests for every interface using the in-memory fakes; golden-set tests for retrieval and graph; a verifier test that proves a bad citation blocks.
+- Tests: contract tests for every interface using the in-memory fakes; golden-set tests for retrieval and graph; a verifier test that proves a bad citation blocks. A parser or extractor is tested against **every** available real fixture, not a representative one — issue #20's policy parser silently dropped content on a blank-line-separated sub-list, and the bug surfaced only because all six synthetic policy documents were run, not just the one under test. A fixture not exercised is a fixture that isn't actually testing anything.
 - Config via environment (`.env` locally, Secret Manager in Cloud Run). `settings.py` is the only reader.
 
 ## Corpus rules
