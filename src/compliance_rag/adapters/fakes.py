@@ -20,6 +20,7 @@ from compliance_rag.adapters.interfaces import (
     Generator,
     GraphStore,
     LedgerStore,
+    ManifestMetadata,
     Obligation,
     Profile,
     Reranker,
@@ -27,7 +28,14 @@ from compliance_rag.adapters.interfaces import (
     RetrievalStore,
     ScoredDocument,
 )
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, canonical_sha256, canonicalise
+from compliance_rag.corpus.models import (
+    Chunk,
+    ClauseRecord,
+    Scope,
+    canonical_sha256,
+    canonicalise,
+    sha256_hex,
+)
 
 
 class FakeGraphStore(GraphStore):
@@ -251,10 +259,13 @@ class FakeLedgerStore(LedgerStore):
 
 
 class FakeClauseStore(ClauseStore):
-    """Clauses in a dict keyed by (tenant_id, clause_id)."""
+    """Clauses in a dict keyed by (tenant_id, clause_id); `source.html` and
+    manifest metadata in dicts keyed by (tenant_id, instrument_id, version_id)."""
 
     def __init__(self) -> None:
         self._clauses: dict[tuple[str, str], ClauseRecord] = {}
+        self._source_html: dict[tuple[str, str, str], str] = {}
+        self._manifest_metadata: dict[tuple[str, str, str], ManifestMetadata] = {}
 
     async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
         return self._clauses.get((tenant_id, clause_id))
@@ -272,6 +283,32 @@ class FakeClauseStore(ClauseStore):
             and clause.instrument_id == instrument_id
             and clause.version_id == version_id
         }
+
+    async def put_manifest(
+        self,
+        instrument_id: str,
+        version_id: str,
+        *,
+        tenant_id: str,
+        canonicalisation_version: int,
+        source_html: str,
+    ) -> None:
+        key = (tenant_id, instrument_id, version_id)
+        self._source_html[key] = source_html
+        self._manifest_metadata[key] = ManifestMetadata(
+            canonicalisation_version=canonicalisation_version,
+            source_html_sha256=sha256_hex(source_html),
+        )
+
+    async def get_manifest_metadata(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> ManifestMetadata | None:
+        return self._manifest_metadata.get((tenant_id, instrument_id, version_id))
+
+    async def get_source_html(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> str | None:
+        return self._source_html.get((tenant_id, instrument_id, version_id))
 
 
 class FakeReranker(Reranker):

@@ -119,6 +119,20 @@ class Generation:
     stop_reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ManifestMetadata:
+    """The version-level fields of a `manifest.json` that aren't a
+    per-clause hash (issue #19): the canonicalisation rule every in-scope
+    clause was hashed under, and the sha256 of the exact `source.html`
+    bytes the parser injected anchors into. `ClauseStore.get_manifest`'s
+    own `dict[str, str]` return stays the per-clause view; this is the
+    rest of the same manifest.json.
+    """
+
+    canonicalisation_version: int
+    source_html_sha256: str
+
+
 # --------------------------------------------------------------------------
 # Interfaces
 # --------------------------------------------------------------------------
@@ -236,6 +250,40 @@ class ClauseStore(ABC):
         `canonical_sha256` — one `manifest.json` per instrument version
         (`PHASES.md`).
         """
+
+    @abstractmethod
+    async def put_manifest(
+        self,
+        instrument_id: str,
+        version_id: str,
+        *,
+        tenant_id: str,
+        canonicalisation_version: int,
+        source_html: str,
+    ) -> None:
+        """Store the exact HTML the parser injected anchors into as
+        `source.html`, and record `canonicalisation_version` plus its
+        sha256 in this instrument version's `manifest.json` (issue #19),
+        alongside the clause paths `put_clause` already makes visible via
+        `get_manifest`. A re-parse that changes the anchors without this
+        being called again would leave a stale `source.html` on disk with
+        no way to detect it — which is why the hash is recorded here, not
+        only the bytes themselves.
+        """
+
+    @abstractmethod
+    async def get_manifest_metadata(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> ManifestMetadata | None:
+        """The version-level fields last written by `put_manifest`, or
+        `None` if this instrument version has never been ingested."""
+
+    @abstractmethod
+    async def get_source_html(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> str | None:
+        """The exact HTML last stored by `put_manifest` for this instrument
+        version, or `None` if none has been stored yet."""
 
 
 class Reranker(ABC):

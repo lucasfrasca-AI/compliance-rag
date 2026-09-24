@@ -187,6 +187,18 @@ def canonicalise(text: str) -> str:
     return " ".join(text.split())
 
 
+def sha256_hex(text: str) -> str:
+    """Hex-encoded SHA-256 of `text`, UTF-8 encoded.
+
+    The one place this encoding decision is made — `canonical_sha256` below
+    and issue #19's `manifest.json` (`source_html_sha256`, `ClauseStore`'s
+    `put_manifest`/`GCSClauseStore`) all hash a piece of stored text the same
+    way, so a future change to the encoding is one edit, not three that can
+    silently drift apart.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def canonical_sha256(canonical_text: str) -> str:
     """Hex-encoded SHA-256 of already-canonical text.
 
@@ -195,7 +207,7 @@ def canonical_sha256(canonical_text: str) -> str:
     single deterministic value to compare without fetching every clause
     object — the same reasoning D-02 gives the verifier's own read path.
     """
-    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
+    return sha256_hex(canonical_text)
 
 
 def stable_id(instrument_id: str, version_id: str, clause_path: str) -> str:
