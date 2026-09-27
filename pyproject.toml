@@ -45,6 +45,18 @@ export = [
     "optimum[onnxruntime]>=1.23,<2",
 ]
 
+# torch's default Linux wheel bundles CUDA (multi-GB) for a CPU-only export
+# script that never touches a GPU — the CPU wheel is a fraction of the size
+# and is what actually fits on a standard GitHub Actions runner's disk
+# alongside the model download and its ONNX export (both ~2.27GB).
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -69,6 +81,13 @@ ignore = ["ANN401"]  # Any is allowed where a comment justifies it (CLAUDE.md)
 
 [tool.pyright]
 include = ["src", "tests"]
+# Both import torch/optimum (only resolvable with the `export` dependency
+# group installed) — never present in the main `ci` job, whose `uv run
+# pyright` invocation would otherwise fail on an unresolvable import in a
+# file it has no way to satisfy. Checked separately, with that group
+# installed, by the `reranker-onnx` CI job's own
+# `uv run pyright -p ci/reranker-fidelity-pyrightconfig.json` step.
+exclude = ["scripts/export_reranker_onnx.py", "tests/test_reranker_onnx_fidelity.py"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false

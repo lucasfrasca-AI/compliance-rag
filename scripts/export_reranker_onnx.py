@@ -27,9 +27,13 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 import torch
-from onnxruntime.quantization import QuantType, quantize_dynamic
+from onnxruntime.quantization import (
+    QuantType,
+    quantize_dynamic,  # pyright: ignore[reportUnknownVariableType]
+)
 from optimum.onnxruntime import ORTModelForSequenceClassification
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
@@ -64,9 +68,9 @@ the ranking a reranker exists to get right (the two real clauses ahead of
 the irrelevant one) is exactly what quantization could plausibly disturb."""
 
 
-def score_with_transformers(
-    model: AutoModelForSequenceClassification, tokenizer: AutoTokenizer, pairs: list[list[str]]
-) -> list[float]:
+def score_with_transformers(model: Any, tokenizer: Any, pairs: list[list[str]]) -> list[float]:
+    # transformers/torch ship weak/partial stubs; Any on model/tokenizer
+    # stops that Unknown-ness cascading through every call site.
     with torch.no_grad():
         inputs = tokenizer(
             pairs, padding=True, truncation=True, return_tensors="pt", max_length=512
@@ -75,11 +79,9 @@ def score_with_transformers(
     return [float(s) for s in scores]
 
 
-def score_with_onnx_int8(
-    onnx_model: ORTModelForSequenceClassification,
-    tokenizer: AutoTokenizer,
-    pairs: list[list[str]],
-) -> list[float]:
+def score_with_onnx_int8(onnx_model: Any, tokenizer: Any, pairs: list[list[str]]) -> list[float]:
+    # optimum ships weak/partial stubs; Any on onnx_model/tokenizer stops
+    # that Unknown-ness cascading through every call site.
     inputs = tokenizer(pairs, padding=True, truncation=True, return_tensors="pt", max_length=512)
     scores = onnx_model(**inputs, return_dict=True).logits.view(-1).float()
     return [float(s) for s in scores]
@@ -96,11 +98,15 @@ def main() -> None:
     pairs = [[FIDELITY_QUERY, doc] for doc in FIDELITY_DOCUMENTS]
 
     print(f"Loading {MODEL_ID}@{BAAI_REVISION} (fp32, PyTorch)...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=BAAI_REVISION)
-    fp32_model = AutoModelForSequenceClassification.from_pretrained(
+    # transformers/optimum ship weak/partial stubs; Any stops that
+    # Unknown-ness cascading through every call site below.
+    tokenizer: Any = AutoTokenizer.from_pretrained(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         MODEL_ID, revision=BAAI_REVISION
     )
-    fp32_model.eval()
+    fp32_model: Any = AutoModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        MODEL_ID, revision=BAAI_REVISION
+    )
+    fp32_model.eval()  # pyright: ignore[reportUnknownMemberType]
     fp32_scores = score_with_transformers(fp32_model, tokenizer, pairs)
     fp32_order = rank_order(fp32_scores)
     print(f"fp32 scores: {fp32_scores}")
@@ -112,7 +118,7 @@ def main() -> None:
 
     fp32_onnx_dir = OUTPUT_DIR / "_fp32_onnx"
     print(f"Exporting to ONNX (fp32) at {fp32_onnx_dir}...")
-    ort_model = ORTModelForSequenceClassification.from_pretrained(
+    ort_model: Any = ORTModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
         MODEL_ID, revision=BAAI_REVISION, export=True
     )
     ort_model.save_pretrained(fp32_onnx_dir)
@@ -120,7 +126,7 @@ def main() -> None:
     fp32_onnx_path = fp32_onnx_dir / "model.onnx"
     int8_onnx_path = OUTPUT_DIR / "model.onnx"
     print(f"Quantizing to int8 at {int8_onnx_path}...")
-    quantize_dynamic(
+    quantize_dynamic(  # pyright: ignore[reportUnknownVariableType]
         model_input=str(fp32_onnx_path),
         model_output=str(int8_onnx_path),
         weight_type=QuantType.QInt8,
@@ -134,7 +140,9 @@ def main() -> None:
     shutil.rmtree(fp32_onnx_dir)
 
     print("Scoring the same pairs through the quantized int8 ONNX model...")
-    int8_model = ORTModelForSequenceClassification.from_pretrained(OUTPUT_DIR)
+    int8_model: Any = ORTModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
+        OUTPUT_DIR
+    )
     int8_scores = score_with_onnx_int8(int8_model, tokenizer, pairs)
     int8_order = rank_order(int8_scores)
     print(f"int8 scores: {int8_scores}")
