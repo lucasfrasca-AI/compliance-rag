@@ -18,10 +18,10 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 
-from compliance_rag.adapters.interfaces import Reranker
 from compliance_rag.adapters.reranker_client import RerankerClient, RerankerWindowExceeded
 from compliance_rag.reranker_service.app import create_app
 from compliance_rag.reranker_service.model import DEFAULT_ONNX_MODEL_PATH, RerankerModel
+from tests.contracts.test_interfaces import assert_reranker_contract
 
 pytestmark = pytest.mark.skipif(
     not DEFAULT_ONNX_MODEL_PATH.exists(),
@@ -110,8 +110,15 @@ async def test_an_over_long_request_is_rejected_not_silently_truncated(
 # --------------------------------------------------------------------------
 
 
-async def test_reranker_client_is_a_reranker(client: httpx.AsyncClient) -> None:
-    assert isinstance(RerankerClient(client), Reranker)
+async def test_reranker_client_satisfies_the_shared_reranker_contract(
+    client: httpx.AsyncClient,
+) -> None:
+    """The exact same contract `FakeReranker` proves in
+    `tests/contracts/test_interfaces.py`, run here against the real
+    service — not a second, independently-written test that could
+    silently diverge from it (issue #14: "contract test passes against
+    both the fake and the local service")."""
+    await assert_reranker_contract(RerankerClient(client))
 
 
 async def test_reranker_client_ranks_the_relevant_document_first(

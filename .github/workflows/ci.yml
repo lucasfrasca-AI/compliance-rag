@@ -112,6 +112,19 @@ jobs:
           uv sync --group export --dev
           uv run python scripts/export_reranker_onnx.py
 
+      # The dedicated fidelity test, not just the export script's own
+      # internal gate — it needs torch/optimum, so it runs here, while the
+      # export group is still installed, not after "Sync default
+      # dependencies" strips it back out. Only meaningful on the same
+      # cache miss that just rebuilt the artifact; on a cache hit the
+      # artifact's fidelity was already proven when it was built, and
+      # re-installing torch/optimum just to re-run the same check on
+      # unchanged bytes would be exactly the wasted-every-run cost this
+      # cache exists to avoid.
+      - name: Re-verify fp32-vs-int8 fidelity independently (cache miss only)
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        run: uv run pytest tests/test_reranker_onnx_fidelity.py -v
+
       # torch/optimum are never in this sync — the runtime service and its
       # tests load the artifact through plain onnxruntime only, same as the
       # Docker image (docker/reranker.Dockerfile).
