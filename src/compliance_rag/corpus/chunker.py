@@ -66,6 +66,19 @@ def ensure_within_reranker_window(*, chunk_tokens: int, query_tokens: int) -> No
         )
 
 
+def _ensure_within_window_named(
+    label: str, subject_id: str, *, chunk_tokens: int, query_tokens: int
+) -> None:
+    """`ensure_within_reranker_window`, naming whatever broke it — shared by
+    `chunk_clause` (a clause over budget) and `assert_chunks_fit_reranker_window`
+    (a chunk over budget), which differ only in what they call the thing and
+    which id they have on hand."""
+    try:
+        ensure_within_reranker_window(chunk_tokens=chunk_tokens, query_tokens=query_tokens)
+    except ValueError as exc:
+        raise ValueError(f"{label} {subject_id!r}: {exc}") from exc
+
+
 def chunk_clause(clause: ClauseRecord, *, count_tokens: Callable[[str], int]) -> Chunk:
     """One clause becomes one chunk (issue #18).
 
@@ -82,11 +95,9 @@ def chunk_clause(clause: ClauseRecord, *, count_tokens: Callable[[str], int]) ->
     (issue #6) — never emits a chunk over budget.
     """
     text = clause.canonical_text
-    token_count = count_tokens(text)
-    try:
-        ensure_within_reranker_window(chunk_tokens=token_count, query_tokens=0)
-    except ValueError as exc:
-        raise ValueError(f"clause {clause.clause_path!r}: {exc}") from exc
+    _ensure_within_window_named(
+        "clause", clause.clause_path, chunk_tokens=count_tokens(text), query_tokens=0
+    )
     return Chunk(
         # A consequence of the 1:1 clause-to-chunk mapping above, not an
         # assumed identity: reusing the clause's own stable id needs no
@@ -126,11 +137,9 @@ def assert_chunks_fit_reranker_window(
     clause-to-chunk mapping means this *is* the clause's own stable id, not
     a separate lookup the caller has to do to find out which clause broke.
     """
-    by_length_desc = sorted(chunks, key=lambda c: count_tokens(c.text), reverse=True)
-    for chunk in by_length_desc:
-        try:
-            ensure_within_reranker_window(
-                chunk_tokens=count_tokens(chunk.text), query_tokens=query_tokens
-            )
-        except ValueError as exc:
-            raise ValueError(f"chunk {chunk.chunk_id!r}: {exc}") from exc
+    counted = [(count_tokens(chunk.text), chunk) for chunk in chunks]
+    counted.sort(key=lambda pair: pair[0], reverse=True)
+    for token_count, chunk in counted:
+        _ensure_within_window_named(
+            "chunk", chunk.chunk_id, chunk_tokens=token_count, query_tokens=query_tokens
+        )

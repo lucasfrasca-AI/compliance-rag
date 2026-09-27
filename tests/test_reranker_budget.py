@@ -80,8 +80,9 @@ def test_the_real_tokenizer_actually_counts_more_tokens_than_words_here() -> Non
     vocabulary shared across roughly 100 languages, so it fragments plain
     English legal prose into *more* pieces than a monolingual English
     tokenizer would — the opposite of "subword tokenizers usually
-    undercount plain English." APP11/1's own sentence is 43 words but 60
-    real reranker tokens. Comfortably inside `CHUNK_MAX_TOKENS` either way
+    undercount plain English." The longest chunk in this fixture (APP
+    10.2) is 43 words but 60 real reranker tokens. Comfortably inside
+    `CHUNK_MAX_TOKENS` either way
     for this fixture, but recording the actual, measured direction is the
     whole reason #21 exists — a word-count stub would have hidden this."""
     chunks = _schedule_1_chunks()
