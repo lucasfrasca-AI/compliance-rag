@@ -106,3 +106,31 @@ def chunk_clauses(
 ) -> tuple[Chunk, ...]:
     """`chunk_clause()` over a collection — clause records become chunks."""
     return tuple(chunk_clause(clause, count_tokens=count_tokens) for clause in clauses)
+
+
+def assert_chunks_fit_reranker_window(
+    chunks: Iterable[Chunk], *, query_tokens: int, count_tokens: Callable[[str], int]
+) -> None:
+    """Every chunk fits the reranker's window against a representative
+    query (issue #21) — checked longest-first, by `count_tokens`'s own
+    count, so the worst case is what actually fails first rather than
+    whichever chunk happened to come first in iteration order.
+
+    `count_tokens` is a parameter here too, same reasoning as `chunk_clause`:
+    a stub proves the mechanism (`tests/test_chunk_token_cap.py`), the real
+    `BAAI/bge-reranker-v2-m3` tokenizer proves the assumption
+    (`corpus/reranker_tokenizer.py`, issue #21) — this function doesn't care
+    which.
+
+    On failure, names the offending chunk's `chunk_id` — issue #18's 1:1
+    clause-to-chunk mapping means this *is* the clause's own stable id, not
+    a separate lookup the caller has to do to find out which clause broke.
+    """
+    by_length_desc = sorted(chunks, key=lambda c: count_tokens(c.text), reverse=True)
+    for chunk in by_length_desc:
+        try:
+            ensure_within_reranker_window(
+                chunk_tokens=count_tokens(chunk.text), query_tokens=query_tokens
+            )
+        except ValueError as exc:
+            raise ValueError(f"chunk {chunk.chunk_id!r}: {exc}") from exc

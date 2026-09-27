@@ -25,8 +25,10 @@ from compliance_rag.corpus.chunker import (
     CHUNK_MAX_TOKENS,
     RERANKER_MAX_TOKENS,
     RESERVED_FOR_QUERY_AND_SPECIALS,
+    assert_chunks_fit_reranker_window,
     ensure_within_reranker_window,
 )
+from compliance_rag.corpus.models import Chunk
 from compliance_rag.settings import Settings
 
 
@@ -118,3 +120,54 @@ def test_stub_where_the_right_counter_passes_and_the_wrong_one_would_have_failed
     ensure_within_reranker_window(chunk_tokens=fake_subword_stub(clause_text), query_tokens=0)
     with pytest.raises(ValueError, match="chunk"):
         ensure_within_reranker_window(chunk_tokens=word_count_stub(clause_text), query_tokens=0)
+
+
+# --------------------------------------------------------------------------
+# assert_chunks_fit_reranker_window (issue #21's mechanism, stub-driven —
+# the real tokenizer over real Schedule 1 chunks is tests/test_reranker_budget.py)
+# --------------------------------------------------------------------------
+
+
+def _chunk(clause_path: str, text: str) -> Chunk:
+    # A valid-shaped stable id throughout, matching issue #18's 1:1 mapping
+    # (chunk_id == clause_id) — Chunk's own validator requires clause_id to
+    # parse as {instrument_id}:{version_id}:{clause_path}.
+    clause_id = f"privacy-act-1988:C2026C00227:{clause_path}"
+    return Chunk(chunk_id=clause_id, clause_id=clause_id, text=text)
+
+
+def test_every_chunk_within_budget_passes() -> None:
+    chunks = (_chunk("sch1/app10/1", "short"), _chunk("sch1/app10/2", "also short"))
+    assert_chunks_fit_reranker_window(chunks, query_tokens=10, count_tokens=len)
+
+
+def test_the_over_budget_chunk_fails_even_when_it_is_not_first_in_iteration_order() -> None:
+    """Longest-first ordering (by the real count, not iteration order) is
+    the point: an over-budget chunk buried last in the input must still be
+    the one reported, not silently skipped because a shorter one upstream
+    happened to pass."""
+    chunks = (
+        _chunk("sch1/app10/1", "x" * 10),
+        _chunk("sch1/app10/2", "x" * 20),
+        _chunk("sch1/app11/1", "x" * (CHUNK_MAX_TOKENS + 1)),
+    )
+    with pytest.raises(ValueError, match=r"sch1/app11/1"):
+        assert_chunks_fit_reranker_window(chunks, query_tokens=0, count_tokens=len)
+
+
+def test_failure_names_the_chunk_id_not_just_a_token_count() -> None:
+    """Issue #21's own acceptance criterion: 'Fails with a message naming
+    the offending clause path, not just a number.' `chunk_id` equals
+    `clause_id` by issue #18's 1:1 mapping, so naming it *is* naming the
+    clause."""
+    chunks = (_chunk("sch1/app11/1", "x" * (CHUNK_MAX_TOKENS + 1)),)
+    with pytest.raises(ValueError, match=r"privacy-act-1988:C2026C00227:sch1/app11/1"):
+        assert_chunks_fit_reranker_window(chunks, query_tokens=0, count_tokens=len)
+
+
+def test_a_chunk_within_budget_alone_but_over_once_the_query_joins_it_still_fails() -> None:
+    chunks = (_chunk("sch1/app10/1", "x" * CHUNK_MAX_TOKENS),)
+    with pytest.raises(ValueError, match="reranker"):
+        assert_chunks_fit_reranker_window(
+            chunks, query_tokens=RESERVED_FOR_QUERY_AND_SPECIALS + 1, count_tokens=len
+        )
