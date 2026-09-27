@@ -21,6 +21,8 @@ dependencies = [
     "httpx>=0.27,<1",
     "pyyaml>=6.0,<7",
     "sentencepiece>=0.2,<1",
+    "onnxruntime>=1.19,<1.21",
+    "transformers>=4.45,<5",
 ]
 
 [dependency-groups]
@@ -30,6 +32,17 @@ dev = [
     "pytest>=8.3,<9",
     "pytest-asyncio>=0.24,<1",
     "types-pyyaml>=6.0,<7",
+]
+# One-time (or rarely-repeated) ONNX export tooling for the reranker
+# (issue #14). Deliberately not a main dependency and not in `dev`: torch +
+# optimum are hundreds of MB and have nothing to do with the runtime service
+# or the normal test suite, which only ever load the already-converted
+# artifact via plain `onnxruntime`. `uv sync` (CI's default) never installs
+# this group; only `scripts/export_reranker_onnx.py`'s own CI job does,
+# via `uv sync --group export`.
+export = [
+    "torch>=2.4,<2.6",
+    "optimum[onnxruntime]>=1.23,<2",
 ]
 
 [build-system]

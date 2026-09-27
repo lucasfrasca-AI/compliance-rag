@@ -77,6 +77,50 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+  reranker-onnx:
+    name: reranker-onnx
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # Keyed on the export script's own contents plus the pinned upstream
+      # revision baked into it (BAAI_REVISION) — either changing invalidates
+      # the cache. Hit: skip straight to the reranker service/client tests
+      # below, no 2.27GB download, no torch/optimum install. Miss: the next
+      # step re-converts (and re-verifies fp32-vs-int8 rank order) before
+      # populating it.
+      - name: Cache the converted ONNX artifact
+        id: onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: models/reranker-onnx
+          key: reranker-onnx-${{ hashFiles('scripts/export_reranker_onnx.py') }}
+
+      - name: Export + quantize + verify fidelity (cache miss only)
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        run: |
+          uv sync --group export --dev
+          uv run python scripts/export_reranker_onnx.py
+
+      # torch/optimum are never in this sync — the runtime service and its
+      # tests load the artifact through plain onnxruntime only, same as the
+      # Docker image (docker/reranker.Dockerfile).
+      - name: Sync default dependencies
+        run: uv sync --dev
+
+      - name: Reranker service and client tests
+        run: uv run pytest tests/test_reranker_service.py -v
+
   trace:
     name: trace-check
     runs-on: ubuntu-latest
