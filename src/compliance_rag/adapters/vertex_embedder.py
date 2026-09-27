@@ -68,8 +68,9 @@ class VertexEmbedder(Embedder):
     """Dense vectors from `gemini-embedding-001` (`SERVICES.md`: Vertex AI
     Embeddings, 1536 dims)."""
 
-    def __init__(self, model: _EmbeddingModelLike, *, dimensions: int) -> None:
+    def __init__(self, model: _EmbeddingModelLike, *, model_name: str, dimensions: int) -> None:
         self._model = model
+        self._model_name = model_name
         self._dimensions = dimensions
 
     @classmethod
@@ -88,7 +89,11 @@ class VertexEmbedder(Embedder):
             "_EmbeddingModelLike",
             TextEmbeddingModel.from_pretrained(settings.vertex_embedding_model),
         )
-        return cls(model, dimensions=settings.vertex_embedding_dims)
+        return cls(
+            model,
+            model_name=settings.vertex_embedding_model,
+            dimensions=settings.vertex_embedding_dims,
+        )
 
     @property
     def dimensions(self) -> int:
@@ -98,7 +103,7 @@ class VertexEmbedder(Embedder):
         with telemetry.span(
             "vertex_embedder.embed",
             **{
-                "embedder.model": Settings.model_fields["vertex_embedding_model"].default,
+                "embedder.model": self._model_name,
                 "embedder.batch_size": len(texts),
             },
         ) as current_span:
