@@ -125,13 +125,16 @@ def main() -> None:
 
     fp32_onnx_path = fp32_onnx_dir / "model.onnx"
     int8_onnx_path = OUTPUT_DIR / "model.onnx"
+
+    # use_external_data_format=True: this model's fp32 weights are ~2.27GB —
+    # keeps quantize_dynamic from requiring the whole model resident in
+    # memory at once. (A separate quant_pre_process() pass was tried too,
+    # since onnxruntime's own warning recommends it, but it raised two
+    # different internal errors locally — "Incomplete symbolic shape
+    # inference," then an external-data file-handling error — on this
+    # model/environment combination. Reverted: this simpler path is the one
+    # that's actually produced a correct, verified artifact, repeatedly.)
     print(f"Quantizing to int8 at {int8_onnx_path}...")
-    # use_external_data_format=True: this model's fp32 weights are ~2.27GB,
-    # over onnxruntime's own documented threshold for keeping the whole
-    # model resident in memory during quantization — without it, a standard
-    # GitHub Actions runner's 7GB RAM is not enough (found the hard way: two
-    # runs in a row died mid-quantization with no Python traceback, just the
-    # runner itself losing its heartbeat under memory pressure).
     quantize_dynamic(  # pyright: ignore[reportUnknownVariableType]
         model_input=str(fp32_onnx_path),
         model_output=str(int8_onnx_path),
