@@ -77,26 +77,34 @@ jobs:
       - name: Tests
         run: uv run pytest
 
-  reranker-onnx:
-    name: reranker-onnx
+  reranker-fidelity:
+    name: reranker-fidelity
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
+
+    # Converting BAAI/bge-reranker-v2-m3 to ONNX in this job was tried and
+    # abandoned (BUILD_LOG.md 2026-09-28): the fp32 download (2.27GB) plus
+    # its own ONNX export plus onnxruntime's own internal reload-with-
+    # external-data step during quantize_dynamic together outran the
+    # runner's disk even after freeing stock preinstalled toolchains — one
+    # run failed outright with `OSError: [Errno 28] No space left on
+    # device`, two more were killed by the host ("the runner has received a
+    # shutdown signal") at the identical point, consistent with the same
+    # cause rather than three unrelated failures. Conversion now happens
+    # once, locally (`scripts/export_reranker_onnx.py`), and the verified
+    # int8 artifact is uploaded to the corpus bucket
+    # (`scripts/upload_reranker_artifact.py`). This job only fetches it and
+    # re-checks its fidelity — no torch, no optimum, no 2.27GB download.
+    #
+    # A fork PR gets no GCP token, same reasoning as the `trace` job below.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      id-token: write # mint the OIDC token for Workload Identity Federation
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
-
-      # The fp32 download (2.27GB) plus its own ONNX export (another
-      # ~2.27GB of external-data tensors, briefly) don't fit in a standard
-      # runner's free disk alongside its stock preinstalled toolchains
-      # (found the hard way: a cache-miss run failed with ENOSPC mid-
-      # quantization). None of .NET, Android, Haskell or the extra GHC
-      # toolchains this image ships are used anywhere in this repo.
-      # Unconditional (not just cache-miss): cheap, and the cache step
-      # below hasn't run yet, so its output isn't available to gate on.
-      - name: Free up runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
-          df -h /
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -106,57 +114,41 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      # Keyed on the export script's own contents plus the pinned upstream
-      # revision baked into it (BAAI_REVISION) — either changing invalidates
-      # the cache. Hit: skip straight to the reranker service/client tests
-      # below, no 2.27GB download, no torch/optimum install. Miss: the next
-      # step re-converts (and re-verifies fp32-vs-int8 rank order) before
-      # populating it.
-      - name: Cache the converted ONNX artifact
-        id: onnx-cache
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      # Same account as the `trace` job, scoped separately: compliance-rag-ci
+      # otherwise holds only logging.* roles (SERVICES.md: Workload Identity
+      # Federation row, "deliberately separate from compliance-rag-runtime so
+      # CI cannot reach Storage"). Reading the reranker artifact needs a
+      # narrow, additional storage.objectViewer grant conditioned to the
+      # `reranker/` prefix only — the rest of the corpus bucket (clause text)
+      # stays unreadable to CI.
+      - name: Authenticate to GCP (keyless, Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      # Keyed on the pinned upstream revision (BAAI_REVISION, baked into
+      # artifact_storage.OBJECT_PREFIX) — a revision bump changes the key
+      # and re-fetches. Hit: skip the download and sha256 verification
+      # entirely.
+      - name: Cache the fetched ONNX artifact
+        id: artifact-cache
         uses: actions/cache@v4
         with:
           path: models/reranker-onnx
-          key: reranker-onnx-${{ hashFiles('scripts/export_reranker_onnx.py') }}
+          key: reranker-onnx-${{ hashFiles('src/compliance_rag/reranker_service/fidelity.py') }}
 
-      - name: Install the export group (cache miss only)
-        if: steps.onnx-cache.outputs.cache-hit != 'true'
-        run: uv sync --group export --dev
+      - name: Fetch + verify the converted artifact (cache miss only)
+        if: steps.artifact-cache.outputs.cache-hit != 'true'
+        run: uv run python scripts/fetch_reranker_artifact.py
 
-      # Type-checks scripts/export_reranker_onnx.py and
-      # tests/test_reranker_onnx_fidelity.py, both excluded from the main
-      # `ci` job's pyright run (pyproject.toml) because torch/optimum
-      # aren't resolvable there. Only meaningful with the export group
-      # actually installed, same as the fidelity test below.
-      - name: Type-check the export tooling (cache miss only)
-        if: steps.onnx-cache.outputs.cache-hit != 'true'
-        run: uv run pyright -p ci/reranker-fidelity-pyrightconfig.json
-
-      - name: Export + quantize + verify fidelity (cache miss only)
-        if: steps.onnx-cache.outputs.cache-hit != 'true'
-        run: uv run python scripts/export_reranker_onnx.py
-
-      # The dedicated fidelity test, not just the export script's own
-      # internal gate — it needs torch/optimum, so it runs here, while the
-      # export group is still installed, not after "Sync default
-      # dependencies" strips it back out. Only meaningful on the same
-      # cache miss that just rebuilt the artifact; on a cache hit the
-      # artifact's fidelity was already proven when it was built, and
-      # re-installing torch/optimum just to re-run the same check on
-      # unchanged bytes would be exactly the wasted-every-run cost this
-      # cache exists to avoid.
-      - name: Re-verify fp32-vs-int8 fidelity independently (cache miss only)
-        if: steps.onnx-cache.outputs.cache-hit != 'true'
-        run: uv run pytest tests/test_reranker_onnx_fidelity.py -v
-
-      # torch/optimum are never in this sync — the runtime service and its
-      # tests load the artifact through plain onnxruntime only, same as the
-      # Docker image (docker/reranker.Dockerfile).
-      - name: Sync default dependencies
-        run: uv sync --dev
-
-      - name: Reranker service and client tests
-        run: uv run pytest tests/test_reranker_service.py -v
+      - name: Re-verify fp32-vs-int8 fidelity + reranker service tests
+        run: uv run pytest tests/test_reranker_onnx_fidelity.py tests/test_reranker_service.py -v
 
   trace:
     name: trace-check

@@ -1,15 +1,20 @@
 """Export `BAAI/bge-reranker-v2-m3` to a quantized int8 ONNX model (issue #14).
 
-Run once (or whenever `BAAI_REVISION` below changes), never at request time:
+Run once (or whenever `fidelity.BAAI_REVISION` changes), never at request time:
 
     uv sync --group export
     uv run python scripts/export_reranker_onnx.py
 
 Requires the `export` dependency group (`torch`, `optimum`, `transformers`) —
 deliberately NOT a main dependency (`pyproject.toml`'s own comment explains
-why) and NOT installed in the reranker service's Docker image. The service
-loads only the resulting `models/reranker-onnx/model.onnx` via plain
-`onnxruntime` (`src/compliance_rag/reranker_service/app.py`).
+why) and NOT installed in the reranker service's Docker image, or in CI. The
+service loads only the resulting `models/reranker-onnx/model.onnx` via plain
+`onnxruntime` (`src/compliance_rag/reranker_service/app.py`); so does CI's
+fidelity re-check (`tests/test_reranker_onnx_fidelity.py`), against a copy
+fetched from the corpus bucket rather than converted fresh — converting in
+CI is what was overrunning the runner's disk (BUILD_LOG.md 2026-09-28).
+After running this script, upload the result with
+`scripts/upload_reranker_artifact.py`.
 
 No official ONNX build of this model exists (checked: BAAI's own repo has
 only `model.safetensors`). Third-party pre-quantized builds exist on
@@ -37,35 +42,16 @@ from onnxruntime.quantization import (
 from optimum.onnxruntime import ORTModelForSequenceClassification
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-BAAI_REVISION = "953dc6f"
-"""The exact commit of `BAAI/bge-reranker-v2-m3` these weights are pulled
-from — record this alongside the conversion's BUILD_LOG.md entry. Never
-`main`: issue #32's benchmark isn't reproducible against a moving target."""
+from compliance_rag.reranker_service.fidelity import (
+    BAAI_REVISION,
+    FIDELITY_DOCUMENTS,
+    FIDELITY_QUERY,
+    FP32_RANK_ORDER,
+    MODEL_ID,
+    rank_order,
+)
 
-MODEL_ID = "BAAI/bge-reranker-v2-m3"
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "models" / "reranker-onnx"
-
-# A small, fixed, real query/document set for the fidelity check below — the
-# same "real fixture, not a representative sample" standard this repo
-# applies everywhere else (`CLAUDE.md`), just for ranking rather than
-# parsing: these are the real APP 10/11 sentences from issue #9's spike
-# fixture, not synthetic filler.
-FIDELITY_QUERY = (
-    "What steps must an entity take to protect personal information "
-    "from misuse, interference and loss?"
-)
-FIDELITY_DOCUMENTS = (
-    "An APP entity must take such steps (if any) as are reasonable in the "
-    "circumstances to protect the information from misuse, interference and "
-    "loss, and from unauthorised access, modification or disclosure.",
-    "An APP entity must give the individual access to the personal "
-    "information on request, subject to the exceptions in this Schedule.",
-    "The weather in Canberra in autumn is mild, with occasional frost "
-    "overnight and clear skies through most of the season.",
-)
-"""Two real, on-topic APP clauses and one deliberately irrelevant sentence —
-the ranking a reranker exists to get right (the two real clauses ahead of
-the irrelevant one) is exactly what quantization could plausibly disturb."""
 
 
 def score_with_transformers(model: Any, tokenizer: Any, pairs: list[list[str]]) -> list[float]:
@@ -87,13 +73,6 @@ def score_with_onnx_int8(onnx_model: Any, tokenizer: Any, pairs: list[list[str]]
     return [float(s) for s in scores]
 
 
-def rank_order(scores: list[float]) -> list[int]:
-    """Indices sorted by score descending — what the reranker's caller
-    actually consumes (`Reranker.rerank`'s `ScoredDocument` ordering), not
-    the raw score values quantization is expected to perturb slightly."""
-    return sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-
-
 def main() -> None:
     pairs = [[FIDELITY_QUERY, doc] for doc in FIDELITY_DOCUMENTS]
 
@@ -112,6 +91,21 @@ def main() -> None:
     print(f"fp32 scores: {fp32_scores}")
     print(f"fp32 rank order: {fp32_order}")
 
+    # CI's fidelity re-check trusts fidelity.FP32_RANK_ORDER instead of
+    # recomputing this — if what was just computed for real disagrees, that
+    # constant is stale (a revision or fixture change) and must be updated
+    # by hand, deliberately, not silently drift out of sync with what CI
+    # actually checks the int8 artifact against.
+    if fp32_order != list(FP32_RANK_ORDER):
+        print(
+            f"fidelity.FP32_RANK_ORDER is stale: recorded {list(FP32_RANK_ORDER)}, "
+            f"just computed {fp32_order}. Update FP32_RANK_ORDER in "
+            "src/compliance_rag/reranker_service/fidelity.py to match — after "
+            "checking why it moved.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if OUTPUT_DIR.exists():
         shutil.rmtree(OUTPUT_DIR)
     OUTPUT_DIR.mkdir(parents=True)
@@ -128,12 +122,7 @@ def main() -> None:
 
     # use_external_data_format=True: this model's fp32 weights are ~2.27GB —
     # keeps quantize_dynamic from requiring the whole model resident in
-    # memory at once. (A separate quant_pre_process() pass was tried too,
-    # since onnxruntime's own warning recommends it, but it raised two
-    # different internal errors locally — "Incomplete symbolic shape
-    # inference," then an external-data file-handling error — on this
-    # model/environment combination. Reverted: this simpler path is the one
-    # that's actually produced a correct, verified artifact, repeatedly.)
+    # memory at once.
     print(f"Quantizing to int8 at {int8_onnx_path}...")
     quantize_dynamic(  # pyright: ignore[reportUnknownVariableType]
         model_input=str(fp32_onnx_path),
@@ -171,6 +160,7 @@ def main() -> None:
 
     print(f"Fidelity check passed: rank order preserved ({fp32_order}).")
     print(f"Artifact ready at {OUTPUT_DIR}")
+    print("Next: uv run python scripts/upload_reranker_artifact.py")
 
 
 if __name__ == "__main__":

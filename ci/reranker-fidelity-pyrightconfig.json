@@ -1,7 +1,0 @@
-{
-  "include": ["../scripts", "../tests/test_reranker_onnx_fidelity.py"],
-  "executionEnvironments": [{ "root": ".." }],
-  "pythonVersion": "3.12",
-  "typeCheckingMode": "strict",
-  "reportMissingTypeStubs": false
-}
