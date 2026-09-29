@@ -248,16 +248,23 @@ async def test_assessment_records_versions_and_trace_id() -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_reranker_is_a_reranker_and_truncates_to_top_k() -> None:
-    reranker = FakeReranker()
+async def assert_reranker_contract(reranker: Reranker) -> None:
+    """The `Reranker` contract itself — top_k truncation, descending score
+    order, valid indices — shared by every implementation regardless of
+    how it actually scores. `RerankerClient` against the real local
+    service (issue #14) calls this same function, not a second,
+    independently-written test, so the two can't silently diverge
+    (`tests/test_reranker_service.py`)."""
     assert isinstance(reranker, Reranker)
-    scored = await reranker.rerank(
-        "protect the information",
-        ("protect the information now", "unrelated text", "the information"),
-        top_k=2,
-    )
+    documents = ("protect the information now", "unrelated text", "the information")
+    scored = await reranker.rerank("protect the information", documents, top_k=2)
     assert len(scored) == 2
     assert scored[0].score >= scored[1].score
+    assert all(0 <= s.index < len(documents) for s in scored)
+
+
+async def test_reranker_is_a_reranker_and_truncates_to_top_k() -> None:
+    await assert_reranker_contract(FakeReranker())
 
 
 async def test_embedder_returns_configured_dimensions() -> None:

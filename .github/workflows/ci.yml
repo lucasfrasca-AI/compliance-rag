@@ -77,6 +77,79 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+  reranker-fidelity:
+    name: reranker-fidelity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Converting BAAI/bge-reranker-v2-m3 to ONNX in this job was tried and
+    # abandoned (BUILD_LOG.md 2026-09-28): the fp32 download (2.27GB) plus
+    # its own ONNX export plus onnxruntime's own internal reload-with-
+    # external-data step during quantize_dynamic together outran the
+    # runner's disk even after freeing stock preinstalled toolchains — one
+    # run failed outright with `OSError: [Errno 28] No space left on
+    # device`, two more were killed by the host ("the runner has received a
+    # shutdown signal") at the identical point, consistent with the same
+    # cause rather than three unrelated failures. Conversion now happens
+    # once, locally (`scripts/export_reranker_onnx.py`), and the verified
+    # int8 artifact is uploaded to the corpus bucket
+    # (`scripts/upload_reranker_artifact.py`). This job only fetches it and
+    # re-checks its fidelity — no torch, no optimum, no 2.27GB download.
+    #
+    # A fork PR gets no GCP token, same reasoning as the `trace` job below.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      id-token: write # mint the OIDC token for Workload Identity Federation
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      # Same account as the `trace` job, scoped separately: compliance-rag-ci
+      # otherwise holds only logging.* roles (SERVICES.md: Workload Identity
+      # Federation row, "deliberately separate from compliance-rag-runtime so
+      # CI cannot reach Storage"). Reading the reranker artifact needs a
+      # narrow, additional storage.objectViewer grant conditioned to the
+      # `reranker/` prefix only — the rest of the corpus bucket (clause text)
+      # stays unreadable to CI.
+      - name: Authenticate to GCP (keyless, Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      # Keyed on the pinned upstream revision (BAAI_REVISION, baked into
+      # artifact_storage.OBJECT_PREFIX) — a revision bump changes the key
+      # and re-fetches. Hit: skip the download and sha256 verification
+      # entirely.
+      - name: Cache the fetched ONNX artifact
+        id: artifact-cache
+        uses: actions/cache@v4
+        with:
+          path: models/reranker-onnx
+          key: reranker-onnx-${{ hashFiles('src/compliance_rag/reranker_service/fidelity.py') }}
+
+      - name: Fetch + verify the converted artifact (cache miss only)
+        if: steps.artifact-cache.outputs.cache-hit != 'true'
+        run: uv run python scripts/fetch_reranker_artifact.py
+
+      - name: Re-verify fp32-vs-int8 fidelity + reranker service tests
+        run: uv run pytest tests/test_reranker_onnx_fidelity.py tests/test_reranker_service.py -v
+
   trace:
     name: trace-check
     runs-on: ubuntu-latest
