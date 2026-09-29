@@ -20,6 +20,9 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.28,<2",
     "httpx>=0.27,<1",
     "pyyaml>=6.0,<7",
+    "sentencepiece>=0.2,<1",
+    "onnxruntime>=1.19,<1.21",
+    "transformers>=4.45,<5",
 ]
 
 [dependency-groups]
@@ -30,6 +33,29 @@ dev = [
     "pytest-asyncio>=0.24,<1",
     "types-pyyaml>=6.0,<7",
 ]
+# One-time (or rarely-repeated) ONNX export tooling for the reranker
+# (issue #14). Deliberately not a main dependency and not in `dev`: torch +
+# optimum are hundreds of MB and have nothing to do with the runtime service
+# or the normal test suite, which only ever load the already-converted
+# artifact via plain `onnxruntime`. `uv sync` (CI's default) never installs
+# this group; only `scripts/export_reranker_onnx.py`'s own CI job does,
+# via `uv sync --group export`.
+export = [
+    "torch>=2.4,<2.6",
+    "optimum[onnxruntime]>=1.23,<2",
+]
+
+# torch's default Linux wheel bundles CUDA (multi-GB) for a CPU-only export
+# script that never touches a GPU — the CPU wheel is a fraction of the size
+# and is what actually fits on a standard GitHub Actions runner's disk
+# alongside the model download and its ONNX export (both ~2.27GB).
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
@@ -54,7 +80,14 @@ ignore = ["ANN401"]  # Any is allowed where a comment justifies it (CLAUDE.md)
 "tests/**" = ["ANN"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
+# export_reranker_onnx.py imports torch/optimum, only resolvable with the
+# `export` dependency group installed (`uv sync --group export`) — never
+# present in the main `ci` job, whose `uv run pyright` would otherwise fail
+# on an unresolvable import in a file it has no way to satisfy. Nothing else
+# in `scripts/` or `tests/` imports from it, so type-checking it for real is
+# a local, manual step after `uv sync --group export --dev`.
+exclude = ["scripts/export_reranker_onnx.py"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
