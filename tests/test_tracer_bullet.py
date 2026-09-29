@@ -8,13 +8,9 @@ test locks down (`retrieve()` -> rerank -> generate -> verify).
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Iterator
 from unittest.mock import AsyncMock
 
 import pytest
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.fakes import (
@@ -32,26 +28,6 @@ from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 TENANT_ID = "acme"
 AS_OF = dt.date(2026, 1, 1)
 QUERY = "reasonable steps information misuse"
-
-_EXPORTER = InMemorySpanExporter()
-
-
-def _install_tracer_provider() -> None:
-    """Runs once at collection: only the first `set_tracer_provider` call in
-    a process sticks, so this must not run per-test."""
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
-    trace.set_tracer_provider(provider)
-
-
-_install_tracer_provider()
-
-
-@pytest.fixture(autouse=True)
-def _clear_spans() -> Iterator[None]:
-    _EXPORTER.clear()
-    yield
-    _EXPORTER.clear()
 
 
 @pytest.fixture
@@ -157,14 +133,14 @@ async def test_answer_runs_with_fakes_only(assessment: AssessmentPipeline) -> No
 
 
 async def test_spans_are_emitted_at_every_stage_with_required_attributes(
-    assessment: AssessmentPipeline,
+    assessment: AssessmentPipeline, span_exporter: InMemorySpanExporter
 ) -> None:
     """CLAUDE.md: every function touching an LLM or a retriever emits a span
     with structured attributes — proving the trace shape, not just that the
     pipeline runs."""
     await assessment.answer(QUERY, TENANT_ID, AS_OF)
 
-    spans = {s.name: s for s in _EXPORTER.get_finished_spans()}
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
     assert "retrieve" in spans
     assert "answer" in spans
 
