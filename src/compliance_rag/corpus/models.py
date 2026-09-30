@@ -17,6 +17,23 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+NO_END_DATE = dt.date.max
+"""Sentinel for an open-ended `valid_to` — bitemporal validity never carries
+`None` (`CONTEXT.md`: Bitemporal). A real, comparable date lets every
+`as_of` check and every Qdrant payload filter (issue #22) be one
+unconditional `Range` on `valid_to`, not a range-or-is-null pair."""
+
+
+def epoch_days(d: dt.date) -> int:
+    """`d` as an integer day count — the "epoch days" a Qdrant payload
+    index sorts and range-filters on (`valid_from`/`valid_to`, issue #22).
+    `date.toordinal()` (proleptic Gregorian, day 1 = 0001-01-01) rather than
+    a Unix-epoch offset: monotonic and collision-free is all a `Range`
+    filter needs, and `NO_END_DATE.toordinal()` is a real finite int either
+    way, so there's no special-casing at the boundary."""
+    return d.toordinal()
+
+
 # One path segment: letters, digits, and the separators legislation actually uses.
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 # The tenant part of a tenant-prefixed instrument id is a tenant id, not a
@@ -329,23 +346,18 @@ class InstrumentVersion(BaseModel):
     title: str
     status: Status
     valid_from: dt.date
-    valid_to: dt.date | None = None
+    valid_to: dt.date = NO_END_DATE
     recorded_at: dt.datetime
     source_url: str | None = None
     supersedes: str | None = Field(
         default=None, description="version_id of the version this one supersedes (D-05)"
     )
 
-    @field_validator("valid_to")
-    @classmethod
-    def _check_interval(cls, v: dt.date | None, info: object) -> dt.date | None:
-        return v
-
     def is_current(self, as_of: dt.date) -> bool:
         """Whether this version is in force on `as_of` (D-05)."""
         if as_of < self.valid_from:
             return False
-        if self.valid_to is not None and as_of >= self.valid_to:
+        if as_of >= self.valid_to:
             return False
         return self.status is Status.IN_FORCE
 
@@ -457,8 +469,8 @@ class Chunk(BaseModel):
     text: str
     scope: Scope = Scope.PUBLIC
     tenant_id: TenantSegment = PUBLIC_TENANT_ID
-    valid_from: dt.date | None = None
-    valid_to: dt.date | None = None
+    valid_from: dt.date = dt.date.min
+    valid_to: dt.date = NO_END_DATE
 
     @field_validator("clause_id")
     @classmethod

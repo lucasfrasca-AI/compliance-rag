@@ -150,13 +150,18 @@ async def test_crosswalks_respect_the_depth_cap(graph: FakeGraphStore) -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_retrieval_store_is_a_retrieval_store(chunks: tuple[Chunk, ...]) -> None:
-    assert isinstance(FakeRetrievalStore(chunks), RetrievalStore)
+async def assert_retrieval_store_contract(store: RetrievalStore) -> None:
+    """The `RetrievalStore` contract itself, against a store already seeded
+    with the `chunks` fixture's three records (D-08). Shared by
+    `FakeRetrievalStore` here and by `QdrantRetrievalStore` against a real,
+    self-hosted, CI-only Qdrant server (`tests/test_qdrant_retrieval_store.py`,
+    issue #22) — one definition of the contract, not two independently
+    written tests that could silently diverge, same reasoning as
+    `assert_reranker_contract` below.
+    """
+    assert isinstance(store, RetrievalStore)
 
-
-async def test_track_b_never_escapes_track_a(chunks: tuple[Chunk, ...]) -> None:
-    """D-03: filtered to Track A's obligation IDs, whatever the text similarity."""
-    store = FakeRetrievalStore(chunks)
+    # D-03: filtered to Track A's obligation IDs, whatever the text similarity.
     result = await store.search(
         "steps to protect the information",
         obligation_ids=("OB-APP11",),
@@ -167,10 +172,7 @@ async def test_track_b_never_escapes_track_a(chunks: tuple[Chunk, ...]) -> None:
     )
     assert {c.chunk_id for c in result.fused} == {"c1"}
 
-
-async def test_both_channels_are_returned_before_fusion(chunks: tuple[Chunk, ...]) -> None:
-    """Both channel candidate lists are logged before fusion (CLAUDE.md)."""
-    store = FakeRetrievalStore(chunks)
+    # Both channel candidate lists are logged before fusion (CLAUDE.md).
     result = await store.search(
         "access to the information",
         obligation_ids=(),
@@ -182,10 +184,8 @@ async def test_both_channels_are_returned_before_fusion(chunks: tuple[Chunk, ...
     assert set(result.per_channel) == {Channel.DENSE, Channel.SPARSE}
     assert result.fused
 
-
-async def test_tenant_scope_is_enforced(chunks: tuple[Chunk, ...]) -> None:
-    """D-14 / D-09: another tenant never sees a tenant-scoped chunk."""
-    store = FakeRetrievalStore(chunks)
+    # D-14 / D-09: another tenant never sees a tenant-scoped chunk, even
+    # when they ask for tenant-scope results at all (cross-tenant leakage).
     result = await store.search(
         "retains customer records",
         obligation_ids=(),
@@ -196,14 +196,38 @@ async def test_tenant_scope_is_enforced(chunks: tuple[Chunk, ...]) -> None:
     )
     assert all(c.chunk_id != "c3" for c in result.fused)
 
+    # Scope leakage: a public-only request never sees a tenant-scoped chunk,
+    # even for the tenant that owns it.
+    result = await store.search(
+        "retains customer records",
+        obligation_ids=(),
+        tenant_id="acme",
+        scopes=(Scope.PUBLIC,),
+        as_of=TODAY,
+        limit=10,
+    )
+    assert all(c.chunk_id != "c3" for c in result.fused)
 
-async def test_clause_id_lookup_skips_ranking(chunks: tuple[Chunk, ...]) -> None:
-    """D-04 / D-12: the router's only decision, and it returns the keyword channel."""
-    store = FakeRetrievalStore(chunks)
+    # D-04 / D-12: the router's only decision, and it returns the keyword channel.
     hit = await store.lookup_clause(APP11, tenant_id="acme", as_of=TODAY)
     assert hit is not None
     assert hit.channel is Channel.KEYWORD
     assert hit.clause_id == APP11
+
+    # Cross-tenant lookup: acme can never look up beta's clause by ID either,
+    # not just by ranked search.
+    hit = await store.lookup_clause("acme-policy:v3:sec2/1", tenant_id="other-corp", as_of=TODAY)
+    assert hit is None
+
+
+async def test_retrieval_store_is_a_retrieval_store(chunks: tuple[Chunk, ...]) -> None:
+    assert isinstance(FakeRetrievalStore(chunks), RetrievalStore)
+
+
+async def test_fake_retrieval_store_satisfies_the_shared_contract(
+    chunks: tuple[Chunk, ...],
+) -> None:
+    await assert_retrieval_store_contract(FakeRetrievalStore(chunks))
 
 
 # --------------------------------------------------------------------------

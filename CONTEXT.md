@@ -27,7 +27,7 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 - **Condition** — a node that gates an obligation (turnover > $3M, actor is deployer, jurisdiction is EU). Evaluated against the **profile**.
 - **Crosswalk** — a `CROSSWALKS_TO` edge between obligations or controls across instruments, authored in **mapping YAML**.
 - **Mapping YAML** — hand-authored files in `corpus/mappings/`, reviewed via PR. The only source of crosswalks and obligation metadata.
-- **Bitemporal** — every node carries `valid_from`, `valid_to`, `status`, `recorded_at`. **as_of** is the mandatory date parameter on every traversal.
+- **Bitemporal** — every node carries `valid_from`, `valid_to`, `status`, `recorded_at`. `valid_to` is never null: an open-ended record carries the sentinel `NO_END_DATE` (`corpus/models.py`, `date.max`), so "is this in force on `as_of`" is always a plain `valid_from <= as_of < valid_to` — one unconditional range, not a range-or-is-null pair (issue #22). **as_of** is the mandatory date parameter on every traversal.
 - **Supersession** — the `SUPERSEDES` edge from a new version node to the old. Nodes are never deleted or mutated. Applies to instruments only. A policy's version history lives in the ledger on `instrument_version.supersedes`, because a policy has no persisted node to carry the edge.
 - **Tenant subgraph** — the small graph of one company's profile (`Organisation`, sectors, jurisdictions, actors, policy clauses). Projected per request from the ledger at `as_of`, never persisted. This is the only place a policy clause is a graph node, which is what lets a mapping traverse to one without a company document acquiring permanent graph presence.
 
