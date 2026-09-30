@@ -31,6 +31,7 @@ Never: configure any telemetry, log or error endpoint outside `australia-southea
 - `/to-spec` → `/to-tickets` → `/implement` with `/tdd` at the seams → `/mattpocock-skills:code-review` before commit. Tickets live in GitHub Issues. Bare `/code-review` is the harness built-in, a different skill — name the plugin prefix when you want Matt's.
 - Use **Opus** for grilling, specs, architecture, eval design, anything touching `DECISIONS.md`. Use **Sonnet** for `/implement`, `/tdd`, adapters, parsers, fixes.
 - Small PRs. One ticket per PR. CI must be green. Never merge with a failing regression gate.
+- Every ticket PR's base is `main` — verified before opening (`gh pr view <n> --json baseRefName`), never an intermediate ticket branch, even when the branch itself was built by stacking on another ticket's work for convenience (reuse the files, don't inherit the branch as the PR's base). After any merge, confirm the ticket's files actually reached `main` by listing the tree (`git ls-tree -r --name-only origin/main`), not by trusting a PR's "Merged" badge — that only proves the diff reached the PR's own base, and a stacked base means that isn't `main`.
 - When something in the plan turns out wrong, say so in chat and open an issue; don't silently route around it.
 
 ### Ticket risk classes (Phase 1, effective 2026-09-23)

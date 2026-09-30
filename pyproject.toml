@@ -23,6 +23,7 @@ dependencies = [
     "sentencepiece>=0.2,<1",
     "onnxruntime>=1.19,<1.21",
     "transformers>=4.45,<5",
+    "fastembed>=0.4,<1",
 ]
 
 [dependency-groups]

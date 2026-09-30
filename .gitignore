@@ -37,3 +37,7 @@ docs/handoffs/*.tmp
 # rebuilds it; CI restores it from an Actions cache keyed on that script's
 # own contents plus the pinned upstream revision.
 models/reranker-onnx/
+
+# fastembed's downloaded BM25 stopword files (issue #22) — fetched from
+# Hugging Face on first use, cached in CI (.github/workflows/ci.yml)
+.fastembed_cache/

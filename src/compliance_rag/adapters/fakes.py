@@ -151,8 +151,8 @@ class FakeRetrievalStore(RetrievalStore):
             if self._visible(c, tenant_id, scopes)
             # D-03: Track B only ever returns chunks under Track A's obligations.
             and (not allowed or (c.obligation_id is not None and c.obligation_id in allowed))
-            and (c.valid_from is None or as_of >= c.valid_from)
-            and (c.valid_to is None or as_of < c.valid_to)
+            and as_of >= c.valid_from
+            and as_of < c.valid_to
         ]
 
         def rank(channel: Channel) -> tuple[Candidate, ...]:
