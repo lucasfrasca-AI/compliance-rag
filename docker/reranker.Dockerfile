@@ -31,4 +31,10 @@ EXPOSE 8001
 # the lockfile by default, which re-adds the dev group (ruff, pyright,
 # pytest) that the build steps above deliberately excluded — harmless
 # packages, but a wasted download and install on every container start.
-CMD ["/app/.venv/bin/uvicorn", "compliance_rag.reranker_service.main:app", "--host", "0.0.0.0", "--port", "8001"]
+#
+# Shell form so ${PORT} expands: Cloud Run injects PORT and expects the
+# container to listen on it (issue #23); 8001 is the default so `docker run`
+# with no extra flags still works exactly as before, locally. `exec` makes
+# uvicorn PID 1 instead of a child of /bin/sh, so it receives Cloud Run's
+# SIGTERM on scale-down directly rather than the shell swallowing it.
+CMD exec /app/.venv/bin/uvicorn compliance_rag.reranker_service.main:app --host 0.0.0.0 --port ${PORT:-8001}
