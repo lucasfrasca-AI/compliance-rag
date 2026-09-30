@@ -41,7 +41,7 @@ Billable means: any GCP resource that is not free-tier-only, any paid tier of a 
 | Qdrant ColBERT rescoring (`colbertv2.0` multivectors via cloud inference, HNSW off) | Second-stage rescoring inside the Sydney cluster; A/B against the cross-encoder | Free tier | $0 | 1 | Claude Code |
 | Vertex AI Ranking API (`semantic-ranker-default`), `us-central1` | **Build/CI only.** Not available in AU. Forbidden whenever `TENANT_ID != dev-tenant` or any real policy is loaded | Per 1k queries | ~$1 | 1 | Claude Code (ask once) |
 | Claude on Vertex AI (Sonnet-class), `australia-southeast1` | Generation, claim extraction | Per token | $30–80 | 1 | Human enables; Claude Code calls |
-| Qdrant Cloud | Vector + sparse store, RRF | **Free** (1 GB) | $0 | 1 | Human |
+| Qdrant Cloud | Vector + sparse store, RRF. Sparse (BM25) vectors are computed client-side via `fastembed`'s `Qdrant/bm25` model, not Qdrant Cloud's server-side inference — a deliberate choice (issue #22), not a fallback: the vector stored is identical either way, and this keeps CI (self-hosted Qdrant, no cloud account) and production running the exact same code path | **Free** (1 GB) | $0 | 1 | Human |
 | Neo4j AuraDB | Graph | **Free** (200k nodes) | $0 | 2 | Human |
 | Cloud Logging **regional log bucket** `compliance-rag-logs` in `australia-southeast1` (+ BigQuery sink when the eval harness needs SQL over spans) | **The only telemetry sink.** OpenTelemetry spans from every LLM, retrieval and graph call land here as structured logs. The `_Default` bucket is global and must not receive application logs | Free tier (50 GiB) | $0 | 0 | Claude Code (ask) |
 | Arize Phoenix on Cloud Run `phoenix`, `australia-southeast1`, 1 vCPU / 1 GiB, min 1; Postgres database `phoenix` on the existing Cloud SQL instance | **Planned later, not now.** Trace UI added only via an ADR that names a debugging need Logs Explorer can't meet. OTel-native, so adding it is config only | Always-on 1 instance | ~$10–15 | 3+, by ADR | Claude Code (ask) |
@@ -88,5 +88,4 @@ These were evaluated and rejected. Do not use them, even "just to test".
 |---|---|
 | Reranker cold start breaches the p95 budget in eval | Raise `reranker` to min instances 1 — a separate billable ask (~$8–15/mo) |
 | ColBERT rescoring beats the cross-encoder on the golden set | Make it the default and delete the `reranker` service — record as a `decision` in BUILD_LOG |
-| Qdrant cloud inference unavailable | Client-side sparse via `fastembed` BM25 — free, no new service |
 | Qdrant free tier unavailable in AU | Nearest GCP region; log as residency item |

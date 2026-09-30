@@ -11,7 +11,7 @@ Done:
 - Neo4j AuraDB Free instance `compliance-rag-neo` (ID `5b790f49`); URI, username and one-time password captured
 - Qdrant Cloud Free cluster `compliance-rag-quad` in GCP `australia-southeast1` (1 GB RAM, 0.5 vCPU, 4 GiB disk); URL and API key captured. *(Name appears once as `compliance-rag-cluster` in notes — the console name wins; put whichever is real in `.env` as `QDRANT_CLUSTER_NAME`.)*
 
-Remaining: §0 local tools, §1 GitHub, §2 API enablement + ADC login + runtime service account, §4 Qdrant inference-model check (BM25 and ColBERT), §7 fill `.env`, §8 open in VS Code.
+Remaining: §0 local tools, §1 GitHub, §2 API enablement + ADC login + runtime service account, §4 Qdrant inference-model check (ColBERT only — BM25 is client-side, issue #22), §7 fill `.env`, §8 open in VS Code.
 
 
 ## 0. Local machine
@@ -59,8 +59,8 @@ Region for everything: **`australia-southeast1`**. Pick a project ID you can typ
 - [x] Provider: **GCP**. Region: **`australia-southeast1`**. *(done — 1 GB RAM, 0.5 vCPU, 4 GiB disk)*
 - [x] Name: `compliance-rag-quad`. *(done)*
 - [x] API key captured. *(done)* Put `QDRANT_URL` (`https://xxxx.gcp.cloud.qdrant.io:6333`) and `QDRANT_API_KEY` in `.env`.
-- [ ] Cloud Inference: confirm it is available on the cluster. Two models are used: `Qdrant/bm25` (sparse channel) and `colbert-ir/colbertv2.0` (ColBERT rescoring A/B). Check both appear in the cluster's inference model list; if ColBERT is not on the free tier, note it and the cross-encoder remains the sole reranker.
-- [ ] Nothing else to configure. Collection schema is created by code with these settings, which you may want to recognise later: dense vector `1536` dims cosine (embedding model called with `output_dimensionality=1536`), sparse vector named `bm25` via cloud inference model `Qdrant/bm25`, payload indexes on `clause_id`, `obligation_id`, `tenant_id`, `scope` (keyword) and `valid_from`, `valid_to` (integer, epoch days).
+- [ ] Cloud Inference: confirm `colbert-ir/colbertv2.0` is available on the cluster (issue #26's ColBERT rescoring A/B, not yet built) — if it's not on the free tier, note it and the cross-encoder remains the sole reranker. The sparse (BM25) channel does **not** need this: issue #22 made client-side `fastembed` encoding the permanent path, not a fallback, specifically so CI and production run the identical code (SERVICES.md's "Qdrant cloud inference" fallback row and BUILD_LOG have the decision). Nothing to verify here for BM25.
+- [ ] Nothing else to configure. Collection schema is created by code with these settings, which you may want to recognise later: dense vector `1536` dims cosine (embedding model called with `output_dimensionality=1536`), sparse vector named `sparse` via client-side `fastembed` BM25 encoding (`Qdrant/bm25` model, no cloud inference — issue #22), payload indexes on `clause_id`, `obligation_id`, `tenant_id`, `scope` (keyword) and `valid_from`, `valid_to` (integer, epoch days).
 
 ## 5. Telemetry (nothing manual)
 
