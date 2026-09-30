@@ -35,25 +35,16 @@ Never: configure any telemetry, log or error endpoint outside `australia-southea
 - Every ticket PR's body uses a closing keyword (`Closes #N`) for the ticket it completes — a merge that doesn't close its issue leaves the tracker lying about what's done, and a future session can waste real time re-planning already-finished work. This includes a ticket whose acceptance criteria a PR satisfies incidentally, not just the one the PR is titled for (#24's routing logic shipped inside #5's PR, referencing only #5 — `Closes #N` goes on both when that happens, not just the one in the title). At each phase gate, reconcile the open-issue list against what's actually merged into `main` (`gh issue list --state open` cross-checked against merged PRs, not either one trusted alone) — this has now hidden fully completed work twice (nine tickets in one audit, #24 separately).
 - When something in the plan turns out wrong, say so in chat and open an issue; don't silently route around it.
 
-### Ticket risk classes (Phase 1, effective 2026-09-23)
+### Merge protocol (effective 2026-09-30 — replaces the earlier lane/risk-chaining rules)
 
-Every open ticket is one of three risk classes, which sets how much round-tripping with the human it needs. A ticket not yet classified defaults to high risk.
+Every open ticket is one of two risk classes. A ticket not yet classified defaults to high risk. Branch protection requires `ci` on `main`, so the merge gate is mechanical, not a per-PR human review step.
 
-- **High** — one PR each, stop and wait for the human's merge before continuing to the next ticket. Currently: #10, #17, #19, #22, #23, #27, #29, #30, #31. Also anything, regardless of this list, that writes to a real store, spends money, touches the citation path, or changes `CONTEXT.md` / `DECISIONS.md`.
-- **Medium** — one PR each, but chained: open the PR, wait for CI, and if it's green start the next ticket without waiting for the merge itself. Currently: #6, #13, #14, #18, #20, #21, #24, #26, #32.
-- **Low** — batch several into one PR, reviewed once. Currently: #5, #7, #12, and any doc-only or fixture-only work.
+- **Low/Medium risk** — everything not named below. Open the PR, wait for every check to go green, then merge it yourself (`gh pr merge N --merge`) and continue straight to the next ticket — don't stop for the human. Batch the summaries and report what merged at the end of a run, not a running narration per PR.
+- **High risk** — currently #23, #27, #29, #30, #31, plus anything, regardless of this list, that is billable, changes a schema, or touches the citation path. PR only: stop and wait for the human to merge.
 
-Lanes sequence the work; a lane's next ticket never starts while its predecessor's CI is red.
+**Stop immediately, regardless of class**, when: CI is red twice in a row on the same PR; a billable approval line would be needed; a decision would change `CONTEXT.md`, `DECISIONS.md`, `PHASES.md` or `SERVICES.md`; or a ticket's acceptance criteria are ambiguous or contradict the spec.
 
-- **Lane A** (law corpus, sequential, high-risk gates): #17 → #18 → #6 → #21 → #19. Stop for the human after #17 and after #19; #18, #6, #21 chain between them per the medium-risk rule.
-- **Lane B** (low risk, one PR): #5 (router regex) + #7 (display form) + #12 (ISO control IDs and descriptors), batched.
-- **Lane C** (policy side): #11 (synthetic policy set + conflict matrix) its own PR, then #20 (policy parser) chained.
-
-Work order: Lane B, then Lane C, then Lane A.
-
-**Stop and wait, no exceptions**, regardless of risk class or lane, when: CI goes red on any PR; a billable approval would be needed; a decision would change `CONTEXT.md`, `DECISIONS.md`, `PHASES.md` or `SERVICES.md`; a ticket's acceptance criteria are ambiguous or contradict the spec; or a scope increase is about to be absorbed rather than re-planned through the ticket.
-
-Every PR still carries: the acceptance-criteria-to-test-name table, confirmation that Postgres-dependent tests actually ran in CI (passed, not skipped), and the two-axis code review. When work halts for any reason above, report back as one list of PRs ready to merge, one-line summary each, for batch review — not a running narration per PR.
+Every PR still carries: the acceptance-criteria-to-test-name table, `Closes #N` for every ticket it completes (including one it completes incidentally — see the tracker rule above), confirmation that Postgres-dependent tests actually ran in CI (passed, not skipped), and the two-axis code review.
 
 ## Agent skills
 
