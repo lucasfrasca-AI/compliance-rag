@@ -63,6 +63,8 @@ Unlocks: Cloud Storage bucket, Vertex Embeddings, Claude on Vertex, Cloud Run `r
 
 Goal: "does this apply to us, as of this date" answered by traversal, not by the LLM.
 
+First task, before any of the below: verify `compliance-rag-neo` still exists and the credentials in `.env` are current. Aura Free pauses after 3 days idle and is deleted after 30 days of inactivity (BUILD_LOG, 2026-10-01) — if Phase 2 starts weeks after Phase 1 ends, as is likely, the instance has almost certainly paused at least once in the gap, and may need resuming (console only) or, in the worst case, recreating.
+
 Deliverables
 - Neo4j schema: `Instrument`, `InstrumentVersion`, `Clause`, `Obligation`, `Condition`, `Actor`, `Control`, `Jurisdiction`, `Sector`; edges `PART_OF`, `VERSION_OF`, `SUPERSEDES`, `APPLIES_TO`, `REQUIRES`, `CROSSWALKS_TO`; bitemporal properties on every node
 - Query builder that **requires** `as_of` and a path-depth cap — an unscoped query is a test failure
