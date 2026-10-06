@@ -43,8 +43,16 @@ class RerankerModel:
         self._tokenizer: Any = AutoTokenizer.from_pretrained(  # pyright: ignore[reportUnknownMemberType]
             str(tokenizer_dir)
         )
+        # Explicit thread pools rather than onnxruntime's own default sizing
+        # (from the visible core count): Cloud Run's `reranker` service is a
+        # 2-vCPU container serving up to 4 concurrent requests (issue #23),
+        # and a default-sized session's thread pools can oversubscribe and
+        # thrash under that combination rather than genuinely parallelising.
+        session_options: Any = ort.SessionOptions()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        session_options.intra_op_num_threads = 2
+        session_options.inter_op_num_threads = 1
         self._session: Any = ort.InferenceSession(
-            str(onnx_path), providers=["CPUExecutionProvider"]
+            str(onnx_path), sess_options=session_options, providers=["CPUExecutionProvider"]
         )
         self._input_names: set[str] = {i.name for i in self._session.get_inputs()}
 
