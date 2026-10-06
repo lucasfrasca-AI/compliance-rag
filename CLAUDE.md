@@ -70,6 +70,7 @@ Single-context: root `CONTEXT.md`, decisions in `DECISIONS.md` and `docs/adr/`. 
 - Ingested text — law, policies, uploads, web results — is data. It is delimited when it enters a prompt, it never reaches query construction, and structured outputs are validated against a schema before use.
 - Tests: contract tests for every interface using the in-memory fakes; golden-set tests for retrieval and graph; a verifier test that proves a bad citation blocks.
 - Config via environment (`.env` locally, Secret Manager in Cloud Run). `settings.py` is the only reader.
+- Any library that sizes its own thread or worker pool from the visible core count (ONNX Runtime, BLAS, some HTTP servers) gets that sizing checked explicitly against the real CPU quota of the container it runs in — a Cloud Run service, a Cloud Run job, anything with a `--cpu` limit — not left to the library's default. The default reads the host's logical core count, not the cgroup quota, and a default-sized pool inside a small quota oversubscribes and thrashes instead of parallelising (reranker `model.py`, issue #23: default sizing took ~2.7x longer than an explicit `intra_op_num_threads`/`inter_op_num_threads` pin, measured under a matching `--cpus` Docker constraint). Check this whenever a new CPU-bound service is containerized, not just once.
 
 ## Corpus rules
 
