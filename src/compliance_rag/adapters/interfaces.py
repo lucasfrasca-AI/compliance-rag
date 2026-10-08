@@ -174,7 +174,12 @@ class GraphStore(ABC):
 
 
 class RetrievalStore(ABC):
-    """Track B: hybrid retrieval over chunks, filtered to Track A's IDs (D-03)."""
+    """Track B: hybrid retrieval over chunks, filtered to Track A's IDs (D-03).
+
+    Every implementation restricts a tenant to its own documents plus the
+    library instruments it subscribes to (ADR-0020), on every method — the
+    caller cannot pass that filter in, so it cannot leave it out.
+    """
 
     @abstractmethod
     async def search(
@@ -226,6 +231,23 @@ class LedgerStore(ABC):
     async def get_assessment(
         self, tenant_id: str, assessment_id: str
     ) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def subscribe(self, *, tenant_id: str, instrument_id: str, subscribed_by: str) -> None:
+        """Tick one library instrument for a tenant (ADR-0020). Library ids
+        only — a tenant's own documents are already in its environment.
+        Idempotent: subscribing twice leaves one row."""
+
+    @abstractmethod
+    async def unsubscribe(self, *, tenant_id: str, instrument_id: str) -> None:
+        """Remove the subscription row and nothing else (ADR-0020): no store
+        is touched, so another tenant's view never changes and this tenant's
+        prior citations still resolve."""
+
+    @abstractmethod
+    async def subscribed_instruments(self, tenant_id: str) -> frozenset[str]:
+        """Library instrument ids this tenant may retrieve from. Empty for
+        `_public`, which sees the library by ownership, not subscription."""
 
 
 class ClauseStore(ABC):

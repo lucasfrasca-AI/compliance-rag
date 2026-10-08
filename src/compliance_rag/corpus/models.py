@@ -135,6 +135,16 @@ def validate_instrument_id(value: str) -> str:
     return value
 
 
+def validate_library_instrument_id(value: str) -> str:
+    """Validate an id a tenant may subscribe to (ADR-0020): a well-formed
+    instrument id with no tenant prefix. A tenant's own documents need no
+    subscription, and another tenant's are never subscribable."""
+    validate_instrument_id(value)
+    if instrument_tenant_prefix(value) is not None:
+        raise ValueError(f"only library instruments can be subscribed to, not {value!r}")
+    return value
+
+
 def instrument_tenant_prefix(value: str) -> str | None:
     """The tenant prefix of a tenant-prefixed instrument id, or `None` if
     unprefixed (or not a well-formed instrument id — callers that need

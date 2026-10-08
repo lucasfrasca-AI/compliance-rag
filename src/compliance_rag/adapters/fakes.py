@@ -34,7 +34,10 @@ from compliance_rag.corpus.models import (
     Scope,
     canonical_sha256,
     canonicalise,
+    parse_stable_id,
     sha256_hex,
+    validate_library_instrument_id,
+    validate_tenant_id,
 )
 
 
@@ -114,10 +117,16 @@ class FakeGraphStore(GraphStore):
 
 
 class FakeRetrievalStore(RetrievalStore):
-    """Token-overlap 'dense' and 'sparse' channels with a deterministic fusion."""
+    """Token-overlap 'dense' and 'sparse' channels with a deterministic fusion.
 
-    def __init__(self, chunks: tuple[Chunk, ...] = ()) -> None:
+    Reads subscriptions from `ledger` on every call, exactly as
+    `QdrantRetrievalStore` does — a library chunk is visible only to a tenant
+    subscribed to its instrument, or to `_public`, which owns it (ADR-0020).
+    """
+
+    def __init__(self, chunks: tuple[Chunk, ...] = (), *, ledger: LedgerStore) -> None:
         self._chunks = chunks
+        self._ledger = ledger
 
     @staticmethod
     def _overlap(query: str, text: str) -> float:
@@ -127,12 +136,18 @@ class FakeRetrievalStore(RetrievalStore):
             return 0.0
         return len(q & t) / len(q)
 
-    def _visible(self, chunk: Chunk, tenant_id: str, scopes: tuple[Scope, ...]) -> bool:
+    @staticmethod
+    def _visible(
+        chunk: Chunk, tenant_id: str, scopes: tuple[Scope, ...], subscribed: frozenset[str]
+    ) -> bool:
         if chunk.scope not in scopes:
             return False
-        if chunk.scope is Scope.PUBLIC:
+        if chunk.tenant_id == tenant_id:
             return True
-        return chunk.tenant_id == tenant_id
+        if chunk.scope is Scope.PUBLIC:
+            instrument_id, _, _ = parse_stable_id(chunk.clause_id)
+            return instrument_id in subscribed
+        return False
 
     async def search(
         self,
@@ -145,10 +160,11 @@ class FakeRetrievalStore(RetrievalStore):
         limit: int,
     ) -> RetrievalResult:
         allowed = set(obligation_ids)
+        subscribed = await self._ledger.subscribed_instruments(tenant_id)
         pool = [
             c
             for c in self._chunks
-            if self._visible(c, tenant_id, scopes)
+            if self._visible(c, tenant_id, scopes, subscribed)
             # D-03: Track B only ever returns chunks under Track A's obligations.
             and (not allowed or (c.obligation_id is not None and c.obligation_id in allowed))
             and as_of >= c.valid_from
@@ -206,10 +222,12 @@ class FakeRetrievalStore(RetrievalStore):
         tenant_id: str,
         as_of: dt.date,
     ) -> Candidate | None:
+        subscribed = await self._ledger.subscribed_instruments(tenant_id)
+        every_scope = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
         for c in self._chunks:
             if c.clause_id != clause_id:
                 continue
-            if c.scope is not Scope.PUBLIC and c.tenant_id != tenant_id:
+            if not self._visible(c, tenant_id, every_scope, subscribed):
                 continue
             return Candidate(
                 chunk_id=c.chunk_id,
@@ -228,6 +246,7 @@ class FakeLedgerStore(LedgerStore):
     def __init__(self) -> None:
         self._profiles: dict[str, Profile] = {}
         self._assessments: dict[tuple[str, str], dict[str, object]] = {}
+        self._subscriptions: dict[tuple[str, str], str] = {}  # (tenant, instrument) -> by
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
         return self._profiles.get(tenant_id)
@@ -256,6 +275,17 @@ class FakeLedgerStore(LedgerStore):
 
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> dict[str, object] | None:
         return self._assessments.get((tenant_id, assessment_id))
+
+    async def subscribe(self, *, tenant_id: str, instrument_id: str, subscribed_by: str) -> None:
+        validate_tenant_id(tenant_id)
+        validate_library_instrument_id(instrument_id)
+        self._subscriptions.setdefault((tenant_id, instrument_id), subscribed_by)
+
+    async def unsubscribe(self, *, tenant_id: str, instrument_id: str) -> None:
+        self._subscriptions.pop((tenant_id, instrument_id), None)
+
+    async def subscribed_instruments(self, tenant_id: str) -> frozenset[str]:
+        return frozenset(i for (t, i) in self._subscriptions if t == tenant_id)
 
 
 class FakeClauseStore(ClauseStore):

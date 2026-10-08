@@ -17,6 +17,7 @@ from compliance_rag.adapters.fakes import (
     FakeCitationVerifier,
     FakeClauseStore,
     FakeGenerator,
+    FakeLedgerStore,
     FakeReranker,
     FakeRetrievalStore,
 )
@@ -54,7 +55,7 @@ async def assessment(clause: ClauseRecord) -> AssessmentPipeline:
         tenant_id=clause.tenant_id,
     )
     retrieval = RetrievalPipeline(
-        retrieval_store=FakeRetrievalStore((chunk,)),
+        retrieval_store=FakeRetrievalStore((chunk,), ledger=FakeLedgerStore()),
         reranker=FakeReranker(),
     )
     clause_store = FakeClauseStore()

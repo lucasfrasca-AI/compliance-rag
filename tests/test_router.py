@@ -21,7 +21,7 @@ import datetime as dt
 
 import pytest
 
-from compliance_rag.adapters.fakes import FakeReranker, FakeRetrievalStore
+from compliance_rag.adapters.fakes import FakeLedgerStore, FakeReranker, FakeRetrievalStore
 from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.retrieval.router import is_clause_id_query
@@ -78,7 +78,9 @@ async def test_a_public_clause_id_query_uses_the_keyword_channel_and_skips_reran
     public_chunk: Chunk,
 ) -> None:
     reranker = FakeReranker()
-    pipeline = RetrievalPipeline(FakeRetrievalStore((public_chunk,)), reranker)
+    pipeline = RetrievalPipeline(
+        FakeRetrievalStore((public_chunk,), ledger=FakeLedgerStore()), reranker
+    )
 
     trace = await pipeline.route(PUBLIC_ID, tenant_id="_public", as_of=TODAY)
 
@@ -91,7 +93,9 @@ async def test_a_tenant_prefixed_clause_id_query_routes_exactly_like_a_public_on
     tenant_chunk: Chunk,
 ) -> None:
     reranker = FakeReranker()
-    pipeline = RetrievalPipeline(FakeRetrievalStore((tenant_chunk,)), reranker)
+    pipeline = RetrievalPipeline(
+        FakeRetrievalStore((tenant_chunk,), ledger=FakeLedgerStore()), reranker
+    )
 
     trace = await pipeline.route(TENANT_ID, tenant_id="acme", as_of=TODAY)
 
@@ -105,7 +109,9 @@ async def test_a_non_clause_id_query_runs_the_full_pipeline_and_reaches_the_rera
     public_chunk: Chunk,
 ) -> None:
     reranker = FakeReranker()
-    pipeline = RetrievalPipeline(FakeRetrievalStore((public_chunk,)), reranker)
+    pipeline = RetrievalPipeline(
+        FakeRetrievalStore((public_chunk,), ledger=FakeLedgerStore()), reranker
+    )
 
     await pipeline.route(
         "what steps must be taken to protect personal information",
@@ -118,7 +124,7 @@ async def test_a_non_clause_id_query_runs_the_full_pipeline_and_reaches_the_rera
 
 async def test_a_clause_id_query_with_no_matching_chunk_returns_an_empty_trace() -> None:
     reranker = FakeReranker()
-    pipeline = RetrievalPipeline(FakeRetrievalStore(()), reranker)
+    pipeline = RetrievalPipeline(FakeRetrievalStore((), ledger=FakeLedgerStore()), reranker)
 
     trace = await pipeline.route(PUBLIC_ID, tenant_id="_public", as_of=TODAY)
 
