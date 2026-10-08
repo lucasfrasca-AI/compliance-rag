@@ -10,6 +10,12 @@ be measured against something other than its real embedding.
 
 Stored as JSON, one base64 float32 row per text, keyed by the sha256 of the
 text: standard library only, diffable metadata, about a megabyte.
+
+The file is a snapshot: it records the exact model string, task type, SDK
+version and the date it was generated. If Google updates the model behind the
+same name, committed and production vectors diverge while the gate stays
+green — `scripts/check_embedding_drift.py` re-embeds a sample and reports
+cosine similarity against the snapshot. It reports; it never gates.
 """
 
 from __future__ import annotations
@@ -45,6 +51,11 @@ class EmbeddingCache:
     model: str
     dimensions: int
     vectors: dict[str, tuple[float, ...]]
+    generated_on: str
+    """ISO date the vectors were produced — when the snapshot was taken."""
+    task_type: str
+    sdk: str
+    """The client library and version that called the model."""
 
     @classmethod
     def load(cls, path: Path = GOLDEN_EMBEDDINGS_PATH) -> EmbeddingCache:
@@ -57,7 +68,14 @@ class EmbeddingCache:
             if len(row) != dimensions:
                 raise ValueError(f"{key}: {len(row)} dimensions, expected {dimensions}")
             vectors[key] = tuple(row)
-        return cls(model=str(raw["model"]), dimensions=dimensions, vectors=vectors)
+        return cls(
+            model=str(raw["model"]),
+            dimensions=dimensions,
+            vectors=vectors,
+            generated_on=str(raw["generated_on"]),
+            task_type=str(raw["task_type"]),
+            sdk=str(raw["sdk"]),
+        )
 
     def save(self, path: Path = GOLDEN_EMBEDDINGS_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +83,14 @@ class EmbeddingCache:
             key: base64.b64encode(array("f", vector).tobytes()).decode("ascii")
             for key, vector in sorted(self.vectors.items())
         }
-        document = {"model": self.model, "dimensions": self.dimensions, "vectors": encoded}
+        document = {
+            "model": self.model,
+            "dimensions": self.dimensions,
+            "task_type": self.task_type,
+            "sdk": self.sdk,
+            "generated_on": self.generated_on,
+            "vectors": encoded,
+        }
         path.write_text(json.dumps(document, indent=0) + "\n", encoding="utf-8")
 
     def missing(self, texts: tuple[str, ...]) -> tuple[str, ...]:

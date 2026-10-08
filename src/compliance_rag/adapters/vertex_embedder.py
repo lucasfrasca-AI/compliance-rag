@@ -35,7 +35,7 @@ from compliance_rag import telemetry
 from compliance_rag.adapters.interfaces import Embedder
 from compliance_rag.settings import Settings
 
-_TASK_TYPE = "RETRIEVAL_DOCUMENT"
+TASK_TYPE = "RETRIEVAL_DOCUMENT"
 """Vertex's task-type hint tunes the embedding for asymmetric search, with
 different optimal values for corpus text (`RETRIEVAL_DOCUMENT`) and a
 search query (`RETRIEVAL_QUERY`). The existing `Embedder` interface takes
@@ -112,7 +112,7 @@ class VertexEmbedder(Embedder):
             for index, text in enumerate(texts):
                 try:
                     embeddings = await self._model.get_embeddings_async(
-                        [TextEmbeddingInput(text=text, task_type=_TASK_TYPE)],
+                        [TextEmbeddingInput(text=text, task_type=TASK_TYPE)],
                         auto_truncate=False,
                         output_dimensionality=self._dimensions,
                     )
