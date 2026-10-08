@@ -5,7 +5,7 @@ A compliance tool for corporates: check proposals and documents against the comp
 ## Read before acting
 
 - `CONTEXT.md` — the vocabulary. Use it exactly.
-- `DECISIONS.md` — the locked decisions (D-01…D-17). Don't build around them.
+- `DECISIONS.md` — the locked decisions (D-01…D-18). Don't build around them.
 - `PHASES.md` — the current phase and its exit criteria. Work only inside it.
 - `SERVICES.md` — the hard allowlist and the billable protocol.
 - `BUILD_LOG.md` — what exists and what changed. Append, never rewrite.

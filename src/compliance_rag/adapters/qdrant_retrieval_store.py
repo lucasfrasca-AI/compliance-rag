@@ -57,9 +57,11 @@ from compliance_rag.adapters.interfaces import (
     Channel,
     Embedder,
     LedgerStore,
+    RetrievalAdmin,
     RetrievalResult,
     RetrievalStore,
 )
+from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import Chunk, Scope, epoch_days, parse_stable_id
 from compliance_rag.settings import Settings
 
@@ -68,7 +70,15 @@ SPARSE_VECTOR_NAME = "sparse"
 _SPARSE_MODEL_NAME = "Qdrant/bm25"
 _SPARSE_CACHE_DIR = ".fastembed_cache"
 
-_PAYLOAD_KEYWORD_FIELDS = ("clause_id", "obligation_id", "tenant_id", "scope", "instrument_id")
+_PAYLOAD_KEYWORD_FIELDS = (
+    "clause_id",
+    "obligation_id",
+    "tenant_id",
+    "scope",
+    "instrument_id",
+    "version_id",
+)
+_PAYLOAD_BOOL_FIELDS = ("withdrawn",)
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
 
 
@@ -122,6 +132,11 @@ async def ensure_collection(
             await client.create_payload_index(
                 collection_name, field_name=field, field_schema=models.PayloadSchemaType.INTEGER
             )
+    for field in _PAYLOAD_BOOL_FIELDS:
+        if field not in existing:
+            await client.create_payload_index(
+                collection_name, field_name=field, field_schema=models.PayloadSchemaType.BOOL
+            )
 
 
 def _chunk_point_id(chunk_id: str) -> str:
@@ -133,7 +148,7 @@ def _chunk_point_id(chunk_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"compliance-rag-chunk:{chunk_id}"))
 
 
-class QdrantRetrievalStore(RetrievalStore):
+class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
     """Track B: hybrid retrieval over chunks, filtered to Track A's IDs
     (D-03), fused with Qdrant's native RRF (D-04, D-07)."""
 
@@ -168,10 +183,9 @@ class QdrantRetrievalStore(RetrievalStore):
         )
 
     async def upsert_chunks(self, chunks: Iterable[Chunk]) -> None:
-        """Embeds and upserts chunks (#22's own "chunks embedded and upserted
-        into Qdrant"). Not part of `RetrievalStore` itself — the interface's
-        fakes are seeded in-memory with no network call at all, so a write
-        path has no shared shape to abstract over."""
+        """Embeds and upserts chunks (#22). `RetrievalAdmin`'s write path
+        (ADR-0021): a new version is upserted beside the old, never over it —
+        point ids derive from `chunk_id`, which carries the `version_id`."""
         chunk_list = list(chunks)
         if not chunk_list:
             return
@@ -188,6 +202,8 @@ class QdrantRetrievalStore(RetrievalStore):
                     "chunk_id": chunk.chunk_id,
                     "clause_id": chunk.clause_id,
                     "instrument_id": parse_stable_id(chunk.clause_id)[0],
+                    "version_id": parse_stable_id(chunk.clause_id)[1],
+                    "withdrawn": False,
                     "obligation_id": chunk.obligation_id,
                     "text": chunk.text,
                     "scope": chunk.scope.value,
@@ -255,7 +271,57 @@ class QdrantRetrievalStore(RetrievalStore):
             )
         if extra:
             must.extend(extra)
-        return models.Filter(must=must)
+        # ADR-0021: a withdrawn version is out of retrieval at every as_of.
+        # must_not, so a point upserted before the field existed still passes.
+        withdrawn = models.FieldCondition(key="withdrawn", match=models.MatchValue(value=True))
+        return models.Filter(must=must, must_not=[withdrawn])
+
+    @staticmethod
+    def _target(
+        *, instrument_id: str, tenant_id: str, version_id: str | None
+    ) -> models.FilterSelector:
+        must: list[models.Condition] = [
+            models.FieldCondition(
+                key="instrument_id", match=models.MatchValue(value=instrument_id)
+            ),
+            models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id)),
+        ]
+        if version_id is not None:
+            must.append(
+                models.FieldCondition(key="version_id", match=models.MatchValue(value=version_id))
+            )
+        return models.FilterSelector(filter=models.Filter(must=must))
+
+    @classmethod
+    def _authorized_target(cls, authorization: RemovalAuthorization) -> models.FilterSelector:
+        return cls._target(
+            instrument_id=authorization.instrument_id,
+            tenant_id=authorization.tenant_id,
+            version_id=authorization.version_id,
+        )
+
+    async def retire_version(
+        self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date
+    ) -> None:
+        await self._client.set_payload(
+            self._collection_name,
+            payload={"valid_to": epoch_days(valid_to)},
+            points=self._target(
+                instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+            ),
+        )
+
+    async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
+        await self._client.set_payload(
+            self._collection_name,
+            payload={"withdrawn": True},
+            points=self._authorized_target(authorization),
+        )
+
+    async def delete_chunks(self, authorization: RemovalAuthorization) -> None:
+        await self._client.delete(
+            self._collection_name, points_selector=self._authorized_target(authorization)
+        )
 
     @staticmethod
     def _payload_to_candidate(

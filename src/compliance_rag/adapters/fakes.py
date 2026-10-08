@@ -23,11 +23,14 @@ from compliance_rag.adapters.interfaces import (
     ManifestMetadata,
     Obligation,
     Profile,
+    RemovalAuditEntry,
     Reranker,
+    RetrievalAdmin,
     RetrievalResult,
     RetrievalStore,
     ScoredDocument,
 )
+from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import (
     Chunk,
     ClauseRecord,
@@ -116,17 +119,57 @@ class FakeGraphStore(GraphStore):
         return tuple(seen[k] for k in sorted(seen))
 
 
-class FakeRetrievalStore(RetrievalStore):
+def _version_key(chunk: Chunk) -> tuple[str, str, str]:
+    instrument_id, version_id, _ = parse_stable_id(chunk.clause_id)
+    return (chunk.tenant_id, instrument_id, version_id)
+
+
+def _authorized(chunk: Chunk, authorization: RemovalAuthorization) -> bool:
+    return chunk.tenant_id == authorization.tenant_id and chunk.clause_id.startswith(
+        authorization.stable_id_prefix
+    )
+
+
+class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
     """Token-overlap 'dense' and 'sparse' channels with a deterministic fusion.
 
     Reads subscriptions from `ledger` on every call, exactly as
     `QdrantRetrievalStore` does — a library chunk is visible only to a tenant
     subscribed to its instrument, or to `_public`, which owns it (ADR-0020).
+    A withdrawn version is invisible at every `as_of` (ADR-0021).
     """
 
     def __init__(self, chunks: tuple[Chunk, ...] = (), *, ledger: LedgerStore) -> None:
-        self._chunks = chunks
+        self._chunks = {c.chunk_id: c for c in chunks}
+        self._withdrawn: set[tuple[str, str, str]] = set()
         self._ledger = ledger
+
+    async def upsert_chunks(self, chunks: tuple[Chunk, ...]) -> None:
+        for chunk in chunks:
+            self._chunks[chunk.chunk_id] = chunk
+
+    async def retire_version(
+        self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date
+    ) -> None:
+        for chunk_id, chunk in list(self._chunks.items()):
+            if _version_key(chunk) == (tenant_id, instrument_id, version_id):
+                self._chunks[chunk_id] = chunk.model_copy(update={"valid_to": valid_to})
+
+    async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
+        self._withdrawn.update(
+            _version_key(c) for c in self._chunks.values() if _authorized(c, authorization)
+        )
+
+    async def delete_chunks(self, authorization: RemovalAuthorization) -> None:
+        for chunk_id, chunk in list(self._chunks.items()):
+            if _authorized(chunk, authorization):
+                del self._chunks[chunk_id]
+
+    @property
+    def stored_chunk_ids(self) -> frozenset[str]:
+        """Everything stored, visible or not — what tests check to prove a
+        withdrawal kept the text and a purge removed it."""
+        return frozenset(self._chunks)
 
     @staticmethod
     def _overlap(query: str, text: str) -> float:
@@ -136,11 +179,10 @@ class FakeRetrievalStore(RetrievalStore):
             return 0.0
         return len(q & t) / len(q)
 
-    @staticmethod
     def _visible(
-        chunk: Chunk, tenant_id: str, scopes: tuple[Scope, ...], subscribed: frozenset[str]
+        self, chunk: Chunk, tenant_id: str, scopes: tuple[Scope, ...], subscribed: frozenset[str]
     ) -> bool:
-        if chunk.scope not in scopes:
+        if chunk.scope not in scopes or _version_key(chunk) in self._withdrawn:
             return False
         if chunk.tenant_id == tenant_id:
             return True
@@ -163,7 +205,7 @@ class FakeRetrievalStore(RetrievalStore):
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         pool = [
             c
-            for c in self._chunks
+            for c in self._chunks.values()
             if self._visible(c, tenant_id, scopes, subscribed)
             # D-03: Track B only ever returns chunks under Track A's obligations.
             and (not allowed or (c.obligation_id is not None and c.obligation_id in allowed))
@@ -224,10 +266,12 @@ class FakeRetrievalStore(RetrievalStore):
     ) -> Candidate | None:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         every_scope = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
-        for c in self._chunks:
+        for c in self._chunks.values():
             if c.clause_id != clause_id:
                 continue
             if not self._visible(c, tenant_id, every_scope, subscribed):
+                continue
+            if not (c.valid_from <= as_of < c.valid_to):
                 continue
             return Candidate(
                 chunk_id=c.chunk_id,
@@ -247,6 +291,10 @@ class FakeLedgerStore(LedgerStore):
         self._profiles: dict[str, Profile] = {}
         self._assessments: dict[tuple[str, str], dict[str, object]] = {}
         self._subscriptions: dict[tuple[str, str], str] = {}  # (tenant, instrument) -> by
+        self._findings: list[tuple[str, tuple[str, ...]]] = []  # (tenant, cited clause_ids)
+        self.withdrawn: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version) -> by
+        self.purged: dict[tuple[str, str, str | None], tuple[str, str]] = {}  # -> (by, reason)
+        self._audit: list[RemovalAuditEntry] = []
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
         return self._profiles.get(tenant_id)
@@ -286,6 +334,44 @@ class FakeLedgerStore(LedgerStore):
 
     async def subscribed_instruments(self, tenant_id: str) -> frozenset[str]:
         return frozenset(i for (t, i) in self._subscriptions if t == tenant_id)
+
+    def seed_finding(self, tenant_id: str, *cited_clause_ids: str) -> None:
+        """Test seeding only: a finding of `tenant_id` citing these clauses.
+        Recording findings isn't on `LedgerStore` yet — `answer()` (#31) is
+        the first thing that writes one."""
+        self._findings.append((tenant_id, cited_clause_ids))
+
+    async def count_findings_citing(self, tenant_id: str, stable_id_prefix: str) -> int:
+        return sum(
+            1
+            for tenant, cited in self._findings
+            if tenant == tenant_id and any(c.startswith(stable_id_prefix) for c in cited)
+        )
+
+    async def mark_withdrawn(
+        self, *, tenant_id: str, instrument_id: str, version_id: str, withdrawn_by: str
+    ) -> None:
+        self.withdrawn[(tenant_id, instrument_id, version_id)] = withdrawn_by
+
+    async def is_withdrawn(self, *, tenant_id: str, instrument_id: str, version_id: str) -> bool:
+        return (tenant_id, instrument_id, version_id) in self.withdrawn
+
+    async def mark_purged(
+        self,
+        *,
+        tenant_id: str,
+        instrument_id: str,
+        version_id: str | None,
+        purged_by: str,
+        reason: str,
+    ) -> None:
+        self.purged[(tenant_id, instrument_id, version_id)] = (purged_by, reason)
+
+    async def record_removal_audit(self, entry: RemovalAuditEntry) -> None:
+        self._audit.append(entry)
+
+    async def removal_audit(self, tenant_id: str) -> tuple[RemovalAuditEntry, ...]:
+        return tuple(e for e in self._audit if e.tenant_id == tenant_id)
 
 
 class FakeClauseStore(ClauseStore):
@@ -339,6 +425,26 @@ class FakeClauseStore(ClauseStore):
         self, instrument_id: str, version_id: str, *, tenant_id: str
     ) -> str | None:
         return self._source_html.get((tenant_id, instrument_id, version_id))
+
+    async def purge(self, authorization: RemovalAuthorization) -> int:
+        a = authorization
+        doomed_clauses = [
+            key
+            for key in self._clauses
+            if key[0] == a.tenant_id and key[1].startswith(a.stable_id_prefix)
+        ]
+        doomed_versions = [
+            key
+            for key in self._source_html.keys() | self._manifest_metadata.keys()
+            if key[:2] == (a.tenant_id, a.instrument_id)
+            and (a.version_id is None or key[2] == a.version_id)
+        ]
+        for key in doomed_clauses:
+            del self._clauses[key]
+        for key in doomed_versions:
+            self._source_html.pop(key, None)
+            self._manifest_metadata.pop(key, None)
+        return len(doomed_clauses) + 2 * len(doomed_versions)
 
 
 class FakeReranker(Reranker):

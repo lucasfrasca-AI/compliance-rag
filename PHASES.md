@@ -91,7 +91,7 @@ Deliverables
 - Web fallback (external tier, shown after grounded answer, never blended)
 - API on Cloud Run (SSE streaming); Cloud SQL ledger; Secret Manager; Firebase Auth (single tenant, `tenant_id` fixed)
 - Frontend: chat with history, citation panel with click-to-clause (PDF.js + positions), admin panel (profile fields, policy upload/version, mapping approval queue, framework scope)
-- Library subscription UI: a tenant ticks and unticks library instruments, over the adapter operations already built and tested in Phase 1 (ADR-0020). The UI adds no enforcement of its own — the retrieval filter is the boundary.
+- Library and document lifecycle UI: subscription checkboxes over the library (ADR-0020); upload of a new policy version; withdraw; purge behind a typed confirmation that shows the findings-citing count (ADR-0021). All of it over adapter operations already built and tested in Phase 1 — the UI adds no enforcement of its own; the guardrails are in the adapter.
 - Prompt-injection controls: delimiting, schema validation, no retrieved text in query construction; adversarial test set in CI
 - Egress audit script checked into `docs/research/` proving no request-path byte leaves AU
 - Trace UI decision point: if Logs Explorer has proven insufficient for a named debugging task, write the ADR and add Phoenix (planned) — otherwise stay on Logging
