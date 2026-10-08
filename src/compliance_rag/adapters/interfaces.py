@@ -115,9 +115,16 @@ class Generation:
 
     text: str
     input_tokens: int
+    """Every input token the request was billed for, cached ones included."""
     output_tokens: int
     cached_prefix_hit: bool = False
     stop_reason: str | None = None
+    cache_read_input_tokens: int = 0
+    """Of `input_tokens`, those served from the cached prefix (D-11)."""
+    cache_creation_input_tokens: int = 0
+    """Of `input_tokens`, those written to the cache by this request."""
+    cost_usd: float = 0.0
+    """From the real token counts at the adapter's published rates."""
 
 
 class RemovalAction(StrEnum):
