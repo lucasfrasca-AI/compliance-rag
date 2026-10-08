@@ -510,7 +510,7 @@ class FakeEmbedder(Embedder):
 class FakeGenerator(Generator):
     """Echoes its inputs. Never invents a citation, because it never writes one."""
 
-    def __init__(self, reply: str = "fake reply") -> None:
+    def __init__(self, reply: str = '{"answer": "fake reply", "citations": []}') -> None:
         self._reply = reply
         self.calls: list[dict[str, object]] = []
 

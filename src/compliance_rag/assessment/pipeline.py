@@ -12,9 +12,17 @@ proves the shape of the whole loop, not only the part it can verify yet.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from compliance_rag.adapters.interfaces import CitationVerifier, ClauseStore, Generation, Generator
+from compliance_rag.assessment.draft import DraftAnswer, MalformedGeneration, parse_draft
+from compliance_rag.assessment.prompt import (
+    SYSTEM_PROMPT,
+    SourceClause,
+    policy_prefix,
+    user_prompt,
+)
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.telemetry import span
 
@@ -26,6 +34,10 @@ class Answer:
 
     retrieval: RetrievalTrace
     generation: Generation
+    unverified_draft: DraftAnswer
+    """The generation, schema-validated (#29) but **not yet verified**: its
+    citations are the model's claims, and `verified` below does not cover
+    them until the citation verifier (#30). Nothing renders this as is."""
     verified: bool
 
 
@@ -51,30 +63,45 @@ class AssessmentPipeline:
         tenant_id: str,
         as_of: dt.date,
         *,
-        system: str = "You are a compliance assistant. Answer only from the context provided.",
+        policies: Sequence[SourceClause] = (),
         max_tokens: int = 1024,
     ) -> Answer:
+        """`policies` is the tenant's policy corpus, sent as the cached prefix
+        (D-11). The retriever's query is `query` and only `query`: it is fixed
+        here, before any text is retrieved, and nothing retrieved or generated
+        flows back into it (#29's injection control). The system prompt is
+        fixed (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries
+        the rule that fenced text is data, which no caller gets to drop."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             trace = await self.retrieval.retrieve(query, tenant_id, as_of)
 
-            context = "\n\n".join(c.text for c in trace.ranked_candidates())
+            retrieved = [SourceClause(c.clause_id, c.text) for c in trace.ranked_candidates()]
             generation = await self.generator.generate(
-                system=system,
-                cached_prefix=None,
-                user=f"{context}\n\nQuestion: {query}",
+                system=SYSTEM_PROMPT,
+                cached_prefix=policy_prefix(policies),
+                user=user_prompt(query, retrieved),
                 max_tokens=max_tokens,
             )
             current.set_attribute("generation.input_tokens", generation.input_tokens)
             current.set_attribute("generation.output_tokens", generation.output_tokens)
             current.set_attribute("generation.cached_prefix_hit", generation.cached_prefix_hit)
-            # No real Generator adapter exists yet (fakes only, no billing) —
-            # 0.0 until one carries real per-token pricing.
-            current.set_attribute("generation.cost_usd", 0.0)
+            current.set_attribute(
+                "generation.cache_read_input_tokens", generation.cache_read_input_tokens
+            )
+            current.set_attribute("generation.cost_usd", generation.cost_usd)
+            try:
+                draft = parse_draft(generation.text)
+            except MalformedGeneration:
+                current.set_attribute("generation.schema_valid", False)
+                raise
+            current.set_attribute("generation.schema_valid", True)
 
             verified = await self._verify_top_candidate(trace, tenant_id)
             current.set_attribute("verifier.result", verified)
 
-            return Answer(retrieval=trace, generation=generation, verified=verified)
+            return Answer(
+                retrieval=trace, generation=generation, unverified_draft=draft, verified=verified
+            )
 
     async def _verify_top_candidate(self, trace: RetrievalTrace, tenant_id: str) -> bool:
         top = trace.top_candidate()
