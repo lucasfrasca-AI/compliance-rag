@@ -1,0 +1,30 @@
+{
+  "gated_recall_at_10": {
+    "GQ-01": 1.0,
+    "GQ-02": 1.0,
+    "GQ-03": 1.0,
+    "GQ-04": 1.0,
+    "GQ-05": 1.0,
+    "GQ-06": 1.0,
+    "GQ-07": 1.0,
+    "GQ-08": 1.0,
+    "GQ-09": 1.0,
+    "GQ-10": 1.0,
+    "GQ-11": 1.0,
+    "GQ-12": 1.0,
+    "GQ-13": 1.0,
+    "GQ-14": 1.0,
+    "GQ-15": 1.0,
+    "GQ-16": 1.0,
+    "GQ-17": 1.0,
+    "GQ-18": 0.3333333333333333,
+    "GQ-19": 1.0,
+    "GQ-20": 0.5,
+    "GQ-21": 1.0,
+    "GQ-22": 1.0,
+    "GQ-23": 0.5,
+    "GQ-24": 1.0,
+    "GQ-25": 1.0
+  },
+  "note": "Per-query gated recall@10 (fused). Written only by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py \u2014 a deliberate, reviewed change, never to make a drop pass."
+}

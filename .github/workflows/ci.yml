@@ -50,6 +50,10 @@ jobs:
     env:
       DATABASE_URL: postgresql://compliance:compliance@localhost:5432/compliance_rag
       QDRANT_URL: http://localhost:6333
+      # The recall gate (issue #28) fails rather than skips without Qdrant.
+      # It runs here, with no GCP identity at all: real gemini-embedding-001
+      # vectors come from the checked-in cache, BM25 is local, no reranker.
+      REQUIRE_RECALL_GATE: "1"
 
     steps:
       - uses: actions/checkout@v4
