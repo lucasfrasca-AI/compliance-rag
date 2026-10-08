@@ -29,6 +29,12 @@ from compliance_rag.retrieval.router import is_clause_id_query
 from compliance_rag.settings import Settings
 from compliance_rag.telemetry import span
 
+RERANK_CANDIDATES = 20
+"""Fused candidates handed to the cross-encoder (ADR-0022, revising D-04's
+"~50"). Measured on the golden set (#32): 20 keeps every recall@10 exit bar
+(cross-clause 0.896 vs 0.938 at 50) at about a third of the warm Cloud Run
+latency (6.4 s median vs 16.1 s)."""
+
 
 @dataclass(frozen=True, slots=True)
 class RetrievalTrace:
@@ -99,7 +105,7 @@ class RetrievalPipeline:
         as_of: dt.date,
         *,
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
-        limit: int = 50,
+        limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
     ) -> RetrievalTrace:
         """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank)."""
@@ -139,7 +145,7 @@ class RetrievalPipeline:
         as_of: dt.date,
         *,
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
-        limit: int = 50,
+        limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
     ) -> RetrievalTrace:
         """The router's fixed decision (`CONTEXT.md`: Router, D-04, D-12):

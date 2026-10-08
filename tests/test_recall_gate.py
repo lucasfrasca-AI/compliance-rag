@@ -215,23 +215,13 @@ def _report(results: tuple[QueryRecall, ...]) -> None:
 async def test_exact_id_and_paraphrase_meet_their_exit_bars(
     results: tuple[QueryRecall, ...],
 ) -> None:
-    """Issue #28's enforced bars: exact-ID = 1.0, paraphrase >= 0.9."""
+    """Issue #28's enforced bars on fusion: exact-ID = 1.0, paraphrase >= 0.9.
+    Cross-clause is gated on the delivered, reranked list instead
+    (`test_recall_gate_reranked.py`, ADR-0022): fusion alone measures 0.792,
+    which is what reranking is for."""
     _report(results)
     failing = below_exit_bar(results)
     assert {c: v for c, v in failing.items() if c is not Category.CROSS_CLAUSE} == {}
-
-
-@_needs_qdrant
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Measured 2026-10-08: fused cross_clause recall@10 = 0.792 against PHASES.md's "
-    "0.8 (dense alone 0.896 — RRF demotes clauses the sparse channel misses). An unmet "
-    "Phase 1 exit criterion, kept visible rather than lowered; the cross-encoder's effect "
-    "is measured in #32. strict: once this passes, the marker must come off.",
-)
-async def test_cross_clause_meets_its_exit_bar(results: tuple[QueryRecall, ...]) -> None:
-    assert Category.CROSS_CLAUSE not in below_exit_bar(results)
 
 
 @_needs_qdrant

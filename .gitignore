@@ -41,3 +41,4 @@ models/reranker-onnx/
 # fastembed's downloaded BM25 stopword files (issue #22) — fetched from
 # Hugging Face on first use, cached in CI (.github/workflows/ci.yml)
 .fastembed_cache/
+models/candidates/

@@ -111,7 +111,7 @@ jobs:
   reranker-fidelity:
     name: reranker-fidelity
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     # Converting BAAI/bge-reranker-v2-m3 to ONNX in this job was tried and
     # abandoned (BUILD_LOG.md 2026-09-28): the fp32 download (2.27GB) plus
@@ -201,7 +201,10 @@ jobs:
       # code that doesn't need that access shouldn't run holding it (issue
       # #10's standing constraint). REQUIRE_REAL_RETRIEVE turns a missing
       # Qdrant or model into a failure here instead of a silent skip.
-      - name: Re-verify fidelity, reranker service, and retrieve() end to end
+      # test_recall_gate_reranked.py is the recall gate on what retrieve()
+      # delivers — the cross-encoder over the top 20 (ADR-0022) — so the
+      # cross-clause exit bar is enforced here, where the model is.
+      - name: Re-verify fidelity, reranker service, retrieve() and reranked recall
         run: |
           rm -f "$GOOGLE_GHA_CREDS_PATH"
           env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE \
@@ -211,7 +214,8 @@ jobs:
             uv run pytest -v -rs \
               tests/test_reranker_onnx_fidelity.py \
               tests/test_reranker_service.py \
-              tests/test_retrieve_real_adapters.py
+              tests/test_retrieve_real_adapters.py \
+              tests/test_recall_gate_reranked.py
 
   trace:
     name: trace-check

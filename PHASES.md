@@ -51,10 +51,10 @@ Deliverables
 
 Exit criteria
 - recall@10 on exact-ID queries = 1.0; on paraphrase ≥ 0.9; on cross-clause ≥ 0.8 (numbers are the starting bar — revise with evidence)
-  - Measured by the gate (#28, 2026-10-08, fused): exact-ID 1.000, paraphrase 1.000, cross-clause **0.792 — not met** (dense alone 0.896). Held as a strict xfail in `tests/test_recall_gate.py`, not lowered; the cross-encoder's effect is #32's measurement. The phase does not close on this line while that marker stands
+  - Measured (2026-10-08) on what `retrieve()` delivers — the cross-encoder over the top 20 fused candidates (ADR-0022): exact-ID 1.000, paraphrase 1.000, cross-clause **0.896 — met**, enforced in CI's `reranker-fidelity` job (`tests/test_recall_gate_reranked.py`). Fusion alone measures 0.792 on cross-clause (#28); exact-ID and paraphrase are also gated on fusion, with a per-query baseline, on every build
 - Verifier pass rate 100% on the golden set, with at least one deliberately bad citation proven to block
 - Cost per query logged; projected monthly under $60 at 2,000 queries
-- Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG
+- Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG (ColBERT dropped from scope with #26; benchmarked instead: candidate count and a smaller cross-encoder)
 
 Sequencing: **nothing writes to Cloud Storage or Qdrant until #2, #3 and #4 are merged.** Those three shape `ClauseRecord` and the stable-ID grammar, so a parser run before them produces records that must be rewritten and embeddings that must be paid for twice. Order: #3 → #4 → #2 → format spike → parser → #6 → chunker → #5 → router.
 
