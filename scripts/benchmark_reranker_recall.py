@@ -22,21 +22,13 @@ import asyncio
 import json
 import os
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
-from qdrant_client import AsyncQdrantClient
-
-from compliance_rag.adapters.fakes import FakeLedgerStore
 from compliance_rag.adapters.interfaces import Reranker, ScoredDocument
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
-from compliance_rag.adapters.reranker_client import RerankerClient
-from compliance_rag.adapters.reranker_http_client import build_reranker_http_client
-from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
 from compliance_rag.eval.golden import Category, load_golden_set
-from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
     FUSED,
     RERANKED,
@@ -45,7 +37,6 @@ from compliance_rag.eval.recall import (
     by_category,
     measure_trace,
 )
-from compliance_rag.reranker_service.app import create_app
 from compliance_rag.reranker_service.model import RerankerModel
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 
@@ -107,14 +98,6 @@ async def run_arm(
 
 
 async def main() -> None:
-    client = AsyncQdrantClient(url=os.environ["QDRANT_URL"])
-    collection = f"reranker-bench-{uuid.uuid4().hex[:8]}"
-    store = QdrantRetrievalStore(
-        client,
-        collection_name=collection,
-        embedder=CachedEmbedder(EmbeddingCache.load()),
-        ledger=FakeLedgerStore(),
-    )
     candidate = os.environ.get("RERANKER_ONNX_DIR")
     model = (
         RerankerModel(onnx_path=Path(candidate) / "model.onnx", tokenizer_dir=Path(candidate))
@@ -122,44 +105,25 @@ async def main() -> None:
         else RerankerModel()
     )
     print(json.dumps({"model": candidate or "production bge-reranker-v2-m3 int8"}), flush=True)
-    app = create_app(model)
-
-    def cross_encoder() -> Timed:
-        http = build_reranker_http_client(
-            "http://localhost",
-            timeout_seconds=600,
-            transport=httpx.ASGITransport(app=app),
-        )
-        return Timed(RerankerClient(http))
-
-    try:
-        await store.ensure_ready()
-        await store.upsert_chunks(golden_chunks())
+    async with (
+        golden_store(os.environ["QDRANT_URL"], prefix="reranker-bench") as store,
+        in_process_reranker(model) as cross_encoder,
+    ):
         arms = [
             Arm("no-rerank (fused, top 50 candidates)", 50, Timed(NoRerank()), FUSED),
-            Arm("cross-encoder over top 50", 50, cross_encoder(), RERANKED),
-            Arm("cross-encoder over top 20", 20, cross_encoder(), RERANKED),
+            Arm("cross-encoder over top 50", 50, Timed(cross_encoder), RERANKED),
+            Arm("cross-encoder over top 20", 20, Timed(cross_encoder), RERANKED),
         ]
-        report: list[dict[str, object]] = []
         rankings: dict[str, list[list[str]]] = {}
         for arm in arms:
             row, ranked = await run_arm(store, arm)
-            report.append(row)
             rankings[arm.name] = ranked
             print(json.dumps(row), flush=True)
         # Determinism: the same arm twice on the same corpus.
-        _, ranked_again = await run_arm(store, Arm("repeat 50", 50, cross_encoder(), RERANKED))
-        same = sum(
-            a == b for a, b in zip(rankings["cross-encoder over top 50"], ranked_again, strict=True)
-        )
-        print(
-            json.dumps(
-                {"determinism_top50": f"{same}/{len(ranked_again)} queries ranked identically"}
-            )
-        )
-    finally:
-        await client.delete_collection(collection)
-        await client.close()
+        _, again = await run_arm(store, Arm("repeat 50", 50, Timed(cross_encoder), RERANKED))
+        first = rankings["cross-encoder over top 50"]
+        same = sum(a == b for a, b in zip(first, again, strict=True))
+        print(json.dumps({"determinism_top50": f"{same}/{len(again)} queries ranked identically"}))
 
 
 if __name__ == "__main__":

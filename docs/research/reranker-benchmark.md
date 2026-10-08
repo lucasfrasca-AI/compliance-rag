@@ -28,12 +28,12 @@ Exact-ID queries take the router's lookup and never reach a reranker (D-04), so 
 
 **Latency.** The deployed `reranker` Cloud Run service (`australia-southeast1`, 2 vCPU, `intra_op_num_threads=2`), called as `compliance-rag-runtime` (`scripts/benchmark_reranker_latency.py`).
 - **Batches:** each golden paraphrase or cross-clause query's own fused candidates, cut to 50 and to 20.
-- **Warm:** one uncounted warm-up request, then 8 queries, alternating the 50- and 20-candidate batches. With 8 samples, the maximum is the honest p95.
+- **Warm:** one uncounted warm-up request, then 8 queries, alternating the 50- and 20-candidate batches. The 8 queries are the first 8 non-exact entries (GQ-09 to GQ-16), all paraphrase. Batch cost is dominated by candidate count and length, which come from the same corpus for every category, but cross-clause batches weren't timed separately. With 8 samples, the maximum is a sample maximum, not a measured p95.
 - **Cold:** one request after 22 minutes with no traffic, beyond the service's ~17-minute idle-to-zero window. It is reported on its own, never averaged into warm.
 
 **Candidate model.** `BAAI/bge-reranker-base@2cfc18c9` (278M parameters), exported with the same optimum-ONNX and `quantize_dynamic` QInt8 recipe as production (`scripts/export_candidate_reranker.py`) and run through the identical harness and thread pinning. It was not deployed. Its Cloud Run latency is *projected* from the local ratio: v2-m3 over 20 candidates is 4.12 s locally and 6.42 s on Cloud Run, a factor of 1.56.
 
-`mxbai-rerank-base-v2` was not run. It is a Qwen2-based LLM-style reranker, not a sequence-classification cross-encoder, so the existing export path, service and chunk budget (derived from an XLM-R 512-token window) don't apply. Evaluating it would mean a new serving path, and the result below doesn't need one.
+`mxbai-rerank-base-v2` was not run. It is a Qwen2-based LLM-style reranker, not a sequence-classification cross-encoder, so the existing export path, service and chunk budget (derived from an XLM-R 512-token window) don't apply. Evaluating it means building a new serving path first. That is a gap in this benchmark, recorded rather than closed. It's worth closing only if latency, rather than quality, becomes the binding constraint.
 
 ## Results
 
@@ -49,7 +49,7 @@ Exact-ID queries take the router's lookup and never reach a reranker (D-04), so 
 
 ### Latency
 
-| configuration | warm median | warm max (≈p95, n=8) | cold | local median |
+| configuration | warm median | warm max of 8 | cold (n=1) | local median |
 |---|---|---|---|---|
 | no rerank | 0 | 0 | 0 | 0 |
 | v2-m3 over top 50 | 16.07 s | 19.10 s | 37.2 s (2026-10-06) | 9.26 s |
@@ -57,9 +57,25 @@ Exact-ID queries take the router's lookup and never reach a reranker (D-04), so 
 | base over top 50 | ~4.1 s (projected) | — | not measured | 2.62 s |
 | base over top 20 | ~1.9 s (projected) | — | not measured | 1.20 s |
 
-### Determinism
+### Top-1, and the APP 10.2 data point
 
-On real embeddings, two identical runs of v2-m3 over top 50 ranked all 25 of 25 queries identically. The run-to-run flips seen in #25's test came from fake 8-dimension vectors full of tied scores, which changed the batch the int8 model saw (BUILD_LOG 2026-10-08). With real vectors the candidate set is stable, so the batch-dependence of int8 dynamic quantization doesn't surface here. It remains a property of the model to keep in mind if ties ever become common.
+#25's test, on fake 8-dimension vectors, had the int8 model rank APP 10.2 above APP 11.2 for "what must an entity do with personal information it no longer needs?". On real embeddings that doesn't happen. For GQ-10 (the same question in other words), the top-1 is APP 11.2(b) under fusion, v2-m3 over 20 and v2-m3 over 50 alike.
+
+Top-1 within the expected clauses, over the 17 non-exact queries:
+
+| configuration | top-1 within expected |
+|---|---|
+| fusion | 10 of 17 |
+| v2-m3 over 20 | 10 of 17 |
+| v2-m3 over 50 | 9 of 17 |
+
+The cross-encoder's gain is in which clauses make the top 10, which is what the exit bars measure, not in which clause comes first.
+
+### Determinism, and what wasn't tested
+
+On real embeddings, two identical runs of v2-m3 over top 50 ranked all 25 of 25 queries identically. The run-to-run flips in #25's test came from fake vectors full of tied scores, which changed the batch the int8 model saw (BUILD_LOG 2026-10-08).
+
+This shows determinism for a fixed batch. **It does not test batch dependence:** whether a clause's score shifts when the other candidates change, as they do between 50 and 20. Int8 dynamic quantization scales activations over the whole batch, so it can. The recall numbers per configuration already include whatever effect that has, but the effect isn't isolated here.
 
 ## Reading it
 

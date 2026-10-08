@@ -25,15 +25,17 @@ Measured on the signed golden set, real `gemini-embedding-001` vectors, real
 Qdrant, recall@10 per category, against PHASES.md's exit bars (exact-ID 1.0,
 paraphrase 0.9, cross-clause 0.8):
 
-| configuration | exact | paraphrase | cross-clause | warm median / max (Cloud Run) |
+| configuration | exact | paraphrase | cross-clause | Cloud Run warm, median / max of 8 |
 |---|---|---|---|---|
 | no rerank (fusion only) | 1.0 | 1.0 | **0.792** ✗ | — |
 | v2-m3 over top 50 | 1.0 | 1.0 | 0.938 | 16.1 s / 19.1 s |
 | **v2-m3 over top 20** | 1.0 | 1.0 | **0.896** | **6.4 s / 7.7 s** |
-| bge-reranker-base over top 50 | 1.0 | **0.889** ✗ | 0.958 | ~4 s (projected) |
+| bge-reranker-base over top 50 | 1.0 | **0.889** ✗ | 0.958 | not deployed; ~4 s *projected* from local timing |
+| bge-reranker-base over top 20 | 1.0 | **0.889** ✗ | 0.896 | not deployed; ~2 s *projected* from local timing |
 
 Top 20 is the only configuration that clears every bar at a latency within
-reach. Fusion alone misses the cross-clause bar; top 50 buys 0.04 of
+reach. With 8 warm samples the maximum is a sample maximum, not a measured
+p95; cold start is a single request (28.3 s at 20 candidates). Fusion alone misses the cross-clause bar; top 50 buys 0.04 of
 cross-clause recall for ~2.5x the latency; the smaller model is fastest but
 drops a paraphrase query entirely.
 

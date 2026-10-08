@@ -26,32 +26,19 @@ import json
 import os
 import sys
 import time
-import uuid
+from urllib.parse import urlparse
 
 import httpx
-from qdrant_client import AsyncQdrantClient
 
-from compliance_rag.adapters.fakes import FakeLedgerStore
-from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
-from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
 from compliance_rag.eval.golden import Category, load_golden_set
-from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.harness import golden_store
 from compliance_rag.eval.recall import NoRerank
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 
 
 async def batches() -> list[tuple[str, tuple[str, ...]]]:
-    client = AsyncQdrantClient(url=os.environ["QDRANT_URL"])
-    collection = f"latency-bench-{uuid.uuid4().hex[:8]}"
-    store = QdrantRetrievalStore(
-        client,
-        collection_name=collection,
-        embedder=CachedEmbedder(EmbeddingCache.load()),
-        ledger=FakeLedgerStore(),
-    )
-    try:
-        await store.ensure_ready()
-        await store.upsert_chunks(golden_chunks())
+    """Every paraphrase and cross-clause query's fused top 50."""
+    async with golden_store(os.environ["QDRANT_URL"], prefix="latency-bench") as store:
         pipeline = RetrievalPipeline(store, NoRerank())
         out: list[tuple[str, tuple[str, ...]]] = []
         for q in load_golden_set().queries:
@@ -60,9 +47,17 @@ async def batches() -> list[tuple[str, tuple[str, ...]]]:
             trace = await pipeline.retrieve(q.query, q.tenant_id, q.as_of, limit=50)
             out.append((q.query, tuple(c.text for c in trace.fused)))
         return out
-    finally:
-        await client.delete_collection(collection)
-        await client.close()
+
+
+def sydney_run_url(url: str) -> str:
+    """Only an https `*.a.run.app` host with the `-ts` (australia-southeast1)
+    region code gets the bearer token — parsed, not substring-matched, so a
+    lookalike path or host can't receive it."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if parsed.scheme != "https" or not host.endswith("-ts.a.run.app"):
+        raise SystemExit("RERANKER_URL must be the australia-southeast1 Cloud Run service")
+    return url
 
 
 async def timed(http: httpx.AsyncClient, query: str, docs: tuple[str, ...]) -> float:
@@ -85,9 +80,7 @@ def stats(samples: list[float]) -> dict[str, float | int]:
 
 
 async def main(mode: str, size: int) -> None:
-    url = os.environ["RERANKER_URL"]
-    if not url.endswith(".a.run.app") or "-ts." not in url:
-        raise SystemExit("RERANKER_URL must be the australia-southeast1 Cloud Run service")
+    url = sydney_run_url(os.environ["RERANKER_URL"])
     headers = {"Authorization": f"Bearer {os.environ['RERANKER_ID_TOKEN']}"}
     work = await batches()
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=180) as http:

@@ -44,7 +44,8 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import uuid
-from collections.abc import Iterable
+from collections.abc import AsyncGenerator, Iterable
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import cast
 
@@ -176,6 +177,28 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         return cls(
             client, collection_name=settings.qdrant_collection, embedder=embedder, ledger=ledger
         )
+
+    @classmethod
+    @asynccontextmanager
+    async def ephemeral(
+        cls, url: str, *, embedder: Embedder, ledger: LedgerStore, prefix: str
+    ) -> AsyncGenerator[QdrantRetrievalStore]:
+        """A ready store on a uniquely named throwaway collection, dropped on
+        exit — for eval runs and tests against a disposable server (CI's
+        service container), never the deployed cluster's collection."""
+        client = AsyncQdrantClient(url=url)
+        store = cls(
+            client,
+            collection_name=f"{prefix}-{uuid.uuid4().hex[:8]}",
+            embedder=embedder,
+            ledger=ledger,
+        )
+        try:
+            await store.ensure_ready()
+            yield store
+        finally:
+            await client.delete_collection(store._collection_name)
+            await client.close()
 
     async def ensure_ready(self) -> None:
         await ensure_collection(
