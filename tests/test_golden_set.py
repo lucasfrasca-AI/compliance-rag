@@ -10,23 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Scope
-from compliance_rag.corpus.parser import parse_compilation
-from compliance_rag.corpus.policy_parser import parse_policy
 from compliance_rag.eval.golden import Category, GoldenSet, load_golden_set
-
-FIXTURES = Path(__file__).resolve().parents[1] / "docs" / "research" / "fixtures"
-
-# The instrument ids the golden set's policy labels use (agreed for #27; the
-# first two match tests/test_policy_parser.py).
-POLICY_INSTRUMENT_IDS = {
-    "acme-privacy-policy.md": "acme/privacy-policy",
-    "acme-vendor-cross-border-transfer-policy.md": "acme/vendor-policy",
-    "acme-data-security-retention-policy.md": "acme/data-security-policy",
-    "acme-marketing-communications-policy.md": "acme/marketing-policy",
-    "acme-access-correction-procedure.md": "acme/access-correction-procedure",
-    "acme-employee-data-handling-policy.md": "acme/employee-policy",
-}
+from compliance_rag.eval.golden_corpus import golden_clauses
 
 
 @pytest.fixture(scope="module")
@@ -36,24 +21,7 @@ def golden() -> GoldenSet:
 
 @pytest.fixture(scope="module")
 def corpus_clause_ids() -> frozenset[str]:
-    html = (FIXTURES / "privacy-act-1988-C2026C00227.excerpt.html").read_text(encoding="utf-8")
-    law = parse_compilation(
-        html,
-        instrument_id="privacy-act-1988",
-        version_id="C2026C00227",
-        tenant_id=PUBLIC_TENANT_ID,
-        scope=Scope.PUBLIC,
-    ).clauses
-    ids = {c.clause_id for c in law}
-    for filename, instrument_id in POLICY_INSTRUMENT_IDS.items():
-        text = (FIXTURES / "synthetic-policies" / filename).read_text(encoding="utf-8")
-        ids |= {
-            c.clause_id
-            for c in parse_policy(
-                text, instrument_id=instrument_id, version_id="v1", tenant_id="acme"
-            )
-        }
-    return frozenset(ids)
+    return frozenset(c.clause_id for c in golden_clauses())
 
 
 def test_every_label_resolves_against_the_parsed_fixtures(

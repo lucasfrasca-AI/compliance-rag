@@ -1,0 +1,122 @@
+{
+  "note": "Per-query recall@10 for every list. Written only by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally \u2014 a deliberate, reviewed change, never to make a drop pass.",
+  "recall_at_10": {
+    "GQ-01": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-02": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-03": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-04": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-05": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-06": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-07": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-08": {
+      "fused": 1.0,
+      "keyword": 1.0
+    },
+    "GQ-09": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-10": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 0.0
+    },
+    "GQ-11": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-12": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-13": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-14": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-15": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-16": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-17": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-18": {
+      "dense": 0.6666666666666666,
+      "fused": 0.3333333333333333,
+      "sparse": 0.3333333333333333
+    },
+    "GQ-19": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-20": {
+      "dense": 0.5,
+      "fused": 0.5,
+      "sparse": 0.5
+    },
+    "GQ-21": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 0.5
+    },
+    "GQ-22": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-23": {
+      "dense": 1.0,
+      "fused": 0.5,
+      "sparse": 0.5
+    },
+    "GQ-24": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    },
+    "GQ-25": {
+      "dense": 1.0,
+      "fused": 1.0,
+      "sparse": 1.0
+    }
+  }
+}
