@@ -56,3 +56,15 @@ def parse_draft(text: str) -> DraftAnswer:
         return DraftAnswer.model_validate_json(body)
     except ValidationError as exc:
         raise MalformedGeneration(f"generation is not a valid draft answer: {exc}") from exc
+
+
+def parse_repair(text: str) -> DraftCitation:
+    """A repair reply: exactly one `DraftCitation`, same strictness."""
+    body = text.strip()
+    fenced = _FENCED.match(body)
+    if fenced:
+        body = fenced.group("body").strip()
+    try:
+        return DraftCitation.model_validate_json(body)
+    except ValidationError as exc:
+        raise MalformedGeneration(f"repair is not a valid citation: {exc}") from exc

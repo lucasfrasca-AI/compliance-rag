@@ -127,10 +127,25 @@ class CorpusLifecycle:
                 for c in chunks
             )
         )
+        # The ledger is the record the verifier trusts (ADR-0021 mechanism
+        # 3): written alongside the payload dates, never derived from them.
+        await self._ledger.record_version(
+            tenant_id=tenant_id,
+            instrument_id=instrument_id,
+            version_id=version_id,
+            valid_from=effective_from,
+            supersedes=supersedes,
+        )
         if supersedes is not None:
             await self._retrieval.retire_version(
                 instrument_id=instrument_id,
                 tenant_id=tenant_id,
+                version_id=supersedes,
+                valid_to=effective_from,
+            )
+            await self._ledger.end_version(
+                tenant_id=tenant_id,
+                instrument_id=instrument_id,
                 version_id=supersedes,
                 valid_to=effective_from,
             )

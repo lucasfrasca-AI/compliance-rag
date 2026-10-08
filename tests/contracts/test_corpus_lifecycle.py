@@ -133,10 +133,16 @@ async def assert_corpus_lifecycle_contract(
     then = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN))
     assert all(V1 in found and V2 not in found for found in then.values()), then
 
-    # Mechanism 3 — a citation to a retired version blocks even if retrieval
-    # leaked it — is the real verifier's to prove (issue #30), against a
-    # retrieved set that does contain the retired clause. Asserting it here
-    # with only what retrieval returned would just restate mechanism 2.
+    # The ledger records the same dates, independently of the payloads — the
+    # record mechanism 3 checks. Mechanism 3 itself (a citation to a retired
+    # version blocks even when retrieval leaked it) is proven in
+    # tests/test_citation_verifier.py with a deliberately leaky store.
+    assert await ledger.version_validity(
+        tenant_id="acme", instrument_id=POLICY, version_id="v1"
+    ) == (V1_FROM, V2_FROM)
+    assert await ledger.version_validity(
+        tenant_id="acme", instrument_id=POLICY, version_id="v2"
+    ) == (V2_FROM, None)
 
     # Re-publishing an existing version would be a replace in place.
     with pytest.raises(ValueError, match="already published"):

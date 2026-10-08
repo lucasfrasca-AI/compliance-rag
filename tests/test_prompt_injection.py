@@ -33,6 +33,7 @@ from compliance_rag.assessment.prompt import (
 )
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, canonicalise
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
+from compliance_rag.verifier.citations import Verifier
 
 TENANT = "acme"
 AS_OF = dt.date(2026, 10, 1)
@@ -94,8 +95,18 @@ async def _pipeline(generator: FakeGenerator) -> tuple[AssessmentPipeline, SpyRe
     clause_store = FakeClauseStore()
     for c in clauses:
         await clause_store.put_clause(c)
+    ledger = FakeLedgerStore()
+    await ledger.record_version(
+        tenant_id=TENANT,
+        instrument_id="acme/privacy-policy",
+        version_id="v1",
+        valid_from=dt.date(2025, 1, 1),
+        supersedes=None,
+    )
     pipeline = AssessmentPipeline(
-        RetrievalPipeline(store, FakeReranker()), generator, clause_store, FakeCitationVerifier()
+        RetrievalPipeline(store, FakeReranker()),
+        generator,
+        Verifier(clause_store, ledger, FakeCitationVerifier()),
     )
     return pipeline, store
 
@@ -143,7 +154,7 @@ async def test_retrieved_text_cannot_influence_the_query_sent_to_the_retriever()
     result = await pipeline.answer(QUESTION, TENANT, AS_OF)
 
     assert canonicalise(POISON) in str(obeying.calls[0]["user"])  # it was retrieved and sent
-    assert "acme employee salaries" in result.unverified_draft.answer  # and the model obeyed
+    assert "acme employee salaries" in result.draft.answer  # and the model obeyed
     assert retrieval_calls == [QUESTION]
     assert store.queries == [QUESTION]
 

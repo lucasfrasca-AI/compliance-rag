@@ -326,6 +326,33 @@ class LedgerStore(ABC):
         version, `instrument:version:` for one (ADR-0021)."""
 
     @abstractmethod
+    async def record_version(
+        self,
+        *,
+        tenant_id: str,
+        instrument_id: str,
+        version_id: str,
+        valid_from: dt.date,
+        supersedes: str | None,
+    ) -> None:
+        """A version comes into force (ledger `instrument_version`). The
+        record the verifier checks a cited version against, independently of
+        what retrieval returned (ADR-0021 mechanism 3)."""
+
+    @abstractmethod
+    async def end_version(
+        self, *, tenant_id: str, instrument_id: str, version_id: str, valid_to: dt.date
+    ) -> None:
+        """A version stops being in force on `valid_to` (exclusive)."""
+
+    @abstractmethod
+    async def version_validity(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> tuple[dt.date, dt.date | None] | None:
+        """`(valid_from, valid_to)` — `valid_to` None while in force — or
+        `None` for a version the ledger has never recorded."""
+
+    @abstractmethod
     async def mark_withdrawn(
         self, *, tenant_id: str, instrument_id: str, version_id: str, withdrawn_by: str
     ) -> None: ...
