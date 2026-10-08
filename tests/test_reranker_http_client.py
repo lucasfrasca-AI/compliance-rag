@@ -87,12 +87,14 @@ def test_token_is_reused_across_calls_not_re_minted_every_request() -> None:
 
 
 def test_localhost_client_has_no_auth_attached() -> None:
-    client = build_reranker_http_client("http://localhost:8001")
+    client = build_reranker_http_client("http://localhost:8001", timeout_seconds=60)
     assert client.auth is None
 
 
 def test_cloud_run_client_has_id_token_auth_attached() -> None:
-    client = build_reranker_http_client(SYDNEY_HOST_URL, fetch_id_token=lambda aud: "tok")
+    client = build_reranker_http_client(
+        SYDNEY_HOST_URL, timeout_seconds=60, fetch_id_token=lambda aud: "tok"
+    )
     assert isinstance(client.auth, GoogleIDTokenAuth)
 
 
@@ -109,6 +111,7 @@ async def test_cloud_run_client_sends_the_bearer_header_on_a_real_request() -> N
 
     client = build_reranker_http_client(
         SYDNEY_HOST_URL,
+        timeout_seconds=60,
         fetch_id_token=lambda aud: "tok-xyz",
         transport=httpx.MockTransport(handler),
     )
@@ -118,4 +121,12 @@ async def test_cloud_run_client_sends_the_bearer_header_on_a_real_request() -> N
 
 def test_an_endpoint_outside_sydney_is_refused_before_any_client_is_built() -> None:
     with pytest.raises(RerankerResidencyError):
-        build_reranker_http_client(US_URL, fetch_id_token=lambda aud: "tok")
+        build_reranker_http_client(US_URL, timeout_seconds=60, fetch_id_token=lambda aud: "tok")
+
+
+def test_the_client_waits_as_long_as_a_real_rerank_takes() -> None:
+    """httpx's default 5 s would time out every real 50-candidate rerank
+    (15-37 s on Cloud Run); the timeout is explicit and comes from settings."""
+    for url in ("http://localhost:8001", SYDNEY_HOST_URL):
+        client = build_reranker_http_client(url, timeout_seconds=60, fetch_id_token=lambda aud: "t")
+        assert client.timeout.read == 60

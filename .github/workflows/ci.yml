@@ -191,15 +191,19 @@ jobs:
         if: steps.artifact-cache.outputs.cache-hit != 'true'
         run: uv run python scripts/fetch_reranker_artifact.py
 
-      # The token was only for fetching the artifact. Delete it before any
-      # test code runs: compliance-rag-ci can read the _Default log bucket,
-      # and code that doesn't need that access shouldn't run holding it
-      # (issue #10's standing constraint).
+      # The token was only for fetching the artifact. Delete it, and the
+      # OIDC request variables that could mint a fresh one, before any test
+      # code runs: compliance-rag-ci can read the _Default log bucket, and
+      # code that doesn't need that access shouldn't run holding it (issue
+      # #10's standing constraint). REQUIRE_REAL_RETRIEVE turns a missing
+      # Qdrant or model into a failure here instead of a silent skip.
       - name: Re-verify fidelity, reranker service, and retrieve() end to end
         run: |
           rm -f "$GOOGLE_GHA_CREDS_PATH"
           env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE \
               -u GOOGLE_GHA_CREDS_PATH \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              REQUIRE_REAL_RETRIEVE=1 \
             uv run pytest -v -rs \
               tests/test_reranker_onnx_fidelity.py \
               tests/test_reranker_service.py \

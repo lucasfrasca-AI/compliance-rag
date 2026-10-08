@@ -72,15 +72,24 @@ class RetrievalPipeline:
         """The real adapters behind the same `retrieve()` the fakes proved
         (issue #25). The reranker endpoint's residency is asserted when its
         client is built (`build_reranker_http_client`, D-15)."""
+        # Imported here, not at module level: these pull in qdrant-client,
+        # fastembed and the Vertex SDK, which nothing that only composes
+        # fakes (every unit test) should pay for.
         from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
         from compliance_rag.adapters.reranker_client import RerankerClient
         from compliance_rag.adapters.reranker_http_client import build_reranker_http_client
         from compliance_rag.adapters.vertex_embedder import VertexEmbedder
 
+        # Residency first: a reranker endpoint outside Sydney is refused
+        # before any cloud client is constructed (D-15).
+        reranker = RerankerClient(
+            build_reranker_http_client(
+                settings.reranker_url, timeout_seconds=settings.reranker_timeout_seconds
+            )
+        )
         store = QdrantRetrievalStore.from_settings(
             settings, embedder=VertexEmbedder.from_settings(settings), ledger=ledger
         )
-        reranker = RerankerClient(build_reranker_http_client(settings.reranker_url))
         return cls(store, reranker)
 
     async def retrieve(

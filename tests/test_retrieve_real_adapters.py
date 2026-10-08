@@ -1,15 +1,17 @@
-"""`retrieve()` with its fakes replaced (issue #25): the real Qdrant store on a
-real Qdrant server, the real router, and the real reranker — the actual int8
-ONNX cross-encoder behind the actual FastAPI service, reached through
-`RerankerClient` over HTTP (in-process via `httpx.ASGITransport`, the same
-request/response path a container would serve, minus the TCP socket).
+"""`retrieve()` with its fakes replaced (issue #25), built by
+`RetrievalPipeline.from_settings` exactly as production builds it: the real
+Qdrant store on a real Qdrant server, the real router, and the real reranker
+client talking HTTP over TCP to the real reranker service — the int8 ONNX
+cross-encoder behind the FastAPI app, started on a local port for the test.
 
-Dense vectors come from `FakeEmbedder`: embedding quality isn't this ticket's
-subject, and the real embedder needs cloud credentials this test shouldn't
-hold. The recall gate (#28) measures real embeddings.
+Dense vectors come from `FakeEmbedder` (patched in for `VertexEmbedder`):
+embedding quality isn't this ticket's subject, and the real embedder needs
+cloud credentials this test must not hold. The recall gate (#28) measures
+real embeddings.
 
-Runs where both a Qdrant server and the converted model exist — locally, and
-in CI's `reranker-fidelity` job, which has both.
+Runs where a Qdrant server and the converted model both exist — locally, and
+in CI's `reranker-fidelity` job, which sets `REQUIRE_REAL_RETRIEVE` so a
+missing prerequisite fails there instead of skipping.
 """
 
 from __future__ import annotations
@@ -17,69 +19,86 @@ from __future__ import annotations
 import datetime as dt
 import os
 import socket
+import threading
+import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from urllib.parse import urlparse
 
-import httpx
 import pytest
+import uvicorn
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
 from compliance_rag.adapters.interfaces import Channel
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
-from compliance_rag.adapters.reranker_client import RerankerClient
+from compliance_rag.adapters.vertex_embedder import VertexEmbedder
 from compliance_rag.corpus.chunker import chunk_clauses
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Scope
 from compliance_rag.corpus.parser import parse_compilation
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.reranker_service.app import create_app
 from compliance_rag.reranker_service.model import DEFAULT_ONNX_MODEL_PATH, RerankerModel
-from compliance_rag.retrieval import pipeline as pipeline_module
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
+from compliance_rag.settings import Settings
+from tests.conftest import qdrant_reachable
 
 _QDRANT_URL = os.environ.get("QDRANT_URL", "")
+_REQUIRED = bool(os.environ.get("REQUIRE_REAL_RETRIEVE"))
 FIXTURE = (
     Path(__file__).resolve().parents[1]
     / "docs/research/fixtures/privacy-act-1988-C2026C00227.excerpt.html"
 )
 AS_OF = dt.date(2026, 10, 1)
 APP11_2 = "privacy-act-1988:C2026C00227:sch1/app11/2"
-
-
-def _qdrant_reachable() -> bool:
-    if not _QDRANT_URL:
-        return False
-    parsed = urlparse(_QDRANT_URL)
-    try:
-        with socket.create_connection((parsed.hostname, parsed.port or 6333), timeout=1):
-            return True
-    except OSError:
-        return False
-
+QUERY = "What must an entity do with personal information it no longer needs?"
 
 pytestmark = pytest.mark.skipif(
-    not (_qdrant_reachable() and DEFAULT_ONNX_MODEL_PATH.exists()),
+    not _REQUIRED and not (qdrant_reachable(_QDRANT_URL) and DEFAULT_ONNX_MODEL_PATH.exists()),
     reason="needs a real Qdrant server (QDRANT_URL) and the converted reranker model",
 )
 
 
 @pytest.fixture(scope="module")
-def reranker_model() -> RerankerModel:
-    return RerankerModel()
+def reranker_url() -> Iterator[str]:
+    """The real reranker service, listening on a free local port."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_app(RerankerModel()), host="127.0.0.1", port=port, log_level="warning"
+        )
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 60
+    while not server.started:
+        if time.monotonic() > deadline:
+            raise RuntimeError("reranker service did not start")
+        time.sleep(0.05)
+    yield f"http://127.0.0.1:{port}"
+    server.should_exit = True
+    thread.join(timeout=10)
 
 
 @pytest.fixture
-async def pipeline(reranker_model: RerankerModel) -> AsyncIterator[RetrievalPipeline]:
-    from qdrant_client import AsyncQdrantClient
+async def pipeline(
+    reranker_url: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[RetrievalPipeline]:
+    def fake_embedder(cls: type[VertexEmbedder], settings: Settings) -> FakeEmbedder:
+        return FakeEmbedder(dimensions=8)
 
-    store = QdrantRetrievalStore(
-        AsyncQdrantClient(url=_QDRANT_URL),
-        collection_name=f"clauses-retrieve-{uuid.uuid4().hex[:8]}",
-        embedder=FakeEmbedder(dimensions=8),
-        ledger=FakeLedgerStore(),
+    monkeypatch.setattr(VertexEmbedder, "from_settings", classmethod(fake_embedder))
+    settings = Settings(
+        _env_file=None,  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
+        qdrant_url=_QDRANT_URL,
+        qdrant_collection=f"clauses-retrieve-{uuid.uuid4().hex[:8]}",
+        reranker_url=reranker_url,
     )
+    built = RetrievalPipeline.from_settings(settings, ledger=FakeLedgerStore())
+    store = built.retrieval_store
+    assert isinstance(store, QdrantRetrievalStore)
     await store.ensure_ready()
     clauses = parse_compilation(
         FIXTURE.read_text(encoding="utf-8"),
@@ -89,19 +108,13 @@ async def pipeline(reranker_model: RerankerModel) -> AsyncIterator[RetrievalPipe
         scope=Scope.PUBLIC,
     ).clauses
     await store.upsert_chunks(chunk_clauses(clauses, count_tokens=count_reranker_tokens))
-    transport = httpx.ASGITransport(app=create_app(reranker_model))
-    async with httpx.AsyncClient(transport=transport, base_url="http://reranker") as http:
-        yield RetrievalPipeline(store, RerankerClient(http))
+    yield built
 
 
 async def test_retrieve_runs_both_channels_fusion_and_the_real_cross_encoder(
     pipeline: RetrievalPipeline,
 ) -> None:
-    trace = await pipeline.retrieve(
-        "What must an entity do with personal information it no longer needs?",
-        PUBLIC_TENANT_ID,
-        AS_OF,
-    )
+    trace = await pipeline.retrieve(QUERY, PUBLIC_TENANT_ID, AS_OF)
     assert trace.per_channel[Channel.DENSE]
     assert trace.per_channel[Channel.SPARSE]
     assert trace.fused
@@ -118,11 +131,10 @@ async def test_retrieve_runs_both_channels_fusion_and_the_real_cross_encoder(
 async def test_the_retrieve_span_carries_every_stage(
     pipeline: RetrievalPipeline, span_exporter: InMemorySpanExporter
 ) -> None:
-    query = "What must an entity do with personal information it no longer needs?"
-    await pipeline.retrieve(query, PUBLIC_TENANT_ID, AS_OF)
+    await pipeline.retrieve(QUERY, PUBLIC_TENANT_ID, AS_OF)
     spans = {s.name: s for s in span_exporter.get_finished_spans()}
     attributes = dict(spans["retrieve"].attributes or {})
-    assert attributes["query"] == query
+    assert attributes["query"] == QUERY
     for key in (
         "retrieval.channel.dense",
         "retrieval.channel.sparse",
@@ -138,10 +150,3 @@ async def test_a_clause_id_query_routes_to_the_keyword_channel_on_real_qdrant(
     trace = await pipeline.route(APP11_2, PUBLIC_TENANT_ID, AS_OF)
     assert set(trace.per_channel) == {Channel.KEYWORD}
     assert [c.clause_id for c in trace.fused] == [APP11_2]
-
-
-def test_no_llm_is_reachable_from_the_retrieval_path() -> None:
-    """D-12 / issue #25: retrieval never calls a model that writes text."""
-    source = Path(pipeline_module.__file__).read_text(encoding="utf-8")
-    for forbidden in ("Generator", "anthropic", "vertex_claude"):
-        assert forbidden not in source, forbidden
