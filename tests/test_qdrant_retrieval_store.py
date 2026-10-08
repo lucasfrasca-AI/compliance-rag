@@ -26,15 +26,14 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import socket
 import uuid
-from urllib.parse import urlparse
 
 import pytest
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.corpus.models import Chunk, Scope
+from tests.conftest import qdrant_reachable
 
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
@@ -45,19 +44,8 @@ APP12 = "privacy-act-1988:TEST-FIXTURE-001:sch1/app12/1"
 _QDRANT_URL = os.environ.get("QDRANT_URL", "")
 
 
-def _qdrant_reachable(url: str) -> bool:
-    if not url:
-        return False
-    parsed = urlparse(url)
-    try:
-        with socket.create_connection((parsed.hostname, parsed.port or 6333), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
 pytestmark = pytest.mark.skipif(
-    not _qdrant_reachable(_QDRANT_URL),
+    not qdrant_reachable(_QDRANT_URL),
     reason="QDRANT_URL not set or not reachable — this test needs a real Qdrant server "
     "(CI's self-hosted service container, or `docker run -p 6333:6333 qdrant/qdrant`, "
     "with QDRANT_URL=http://localhost:6333 locally)",

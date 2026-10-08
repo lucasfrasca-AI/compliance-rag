@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     reranker_url: str = ""
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_max_tokens: int = 512
+    # Above the measured cold-start p95 for a 50-candidate rerank (37 s on
+    # Cloud Run, BUILD_LOG 2026-10-06) — the latency decision is #32's.
+    reranker_timeout_seconds: float = 60.0
 
     # --- Telemetry ---------------------------------------------------------
     otel_service_name: str = "compliance-rag"

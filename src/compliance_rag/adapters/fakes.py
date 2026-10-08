@@ -9,6 +9,7 @@ promise: `FakeGraphStore` rejects a traversal without a depth cap, and
 from __future__ import annotations
 
 import datetime as dt
+import zlib
 
 from compliance_rag.adapters.interfaces import (
     Candidate,
@@ -498,7 +499,9 @@ class FakeEmbedder(Embedder):
         for text in texts:
             vector = [0.0] * self._dimensions
             for token in canonicalise(text).lower().split():
-                vector[hash(token) % self._dimensions] += 1.0
+                # zlib.crc32, not hash(): str hashing is salted per process,
+                # which made these vectors differ from one run to the next.
+                vector[zlib.crc32(token.encode()) % self._dimensions] += 1.0
             norm = sum(v * v for v in vector) ** 0.5 or 1.0
             out.append(tuple(v / norm for v in vector))
         return tuple(out)

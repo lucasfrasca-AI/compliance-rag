@@ -10,7 +10,9 @@ touching an LLM, a retriever or the graph emits one).
 
 from __future__ import annotations
 
+import socket
 from collections.abc import Iterator
+from urllib.parse import urlparse
 
 import pytest
 from opentelemetry import trace
@@ -38,3 +40,16 @@ def span_exporter() -> InMemorySpanExporter:
     span's name or attributes. Already cleared before and after every test
     by `_clear_spans` above."""
     return SPAN_EXPORTER
+
+
+def qdrant_reachable(url: str) -> bool:
+    """Whether a real Qdrant server answers at `url` — the gate for every
+    test that needs one."""
+    if not url:
+        return False
+    parsed = urlparse(url)
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port or 6333), timeout=1):
+            return True
+    except OSError:
+        return False

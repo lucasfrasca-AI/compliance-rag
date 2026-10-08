@@ -101,18 +101,24 @@ class GoogleIDTokenAuth(httpx.Auth):
 def build_reranker_http_client(
     reranker_url: str,
     *,
+    timeout_seconds: float,
     fetch_id_token: Callable[[str], str] = default_fetch_id_token,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.AsyncClient:
-    """`transport` is exposed only so tests can swap in `httpx.MockTransport`
+    """`timeout_seconds` has no default on purpose: httpx's own 5 s is far
+    below a real 50-candidate rerank (15-37 s on Cloud Run, BUILD_LOG
+    2026-10-06), and silently inheriting it timed out every real call.
+    `transport` is exposed only so tests can swap in `httpx.MockTransport`
     without touching the client's private attributes; production callers
     never pass it."""
     assert_reranker_residency(reranker_url)
+    timeout = httpx.Timeout(timeout_seconds, connect=10.0)
     host = httpx.URL(reranker_url).host
     if host in _LOCAL_HOSTS:
-        return httpx.AsyncClient(base_url=reranker_url, transport=transport)
+        return httpx.AsyncClient(base_url=reranker_url, transport=transport, timeout=timeout)
     return httpx.AsyncClient(
         base_url=reranker_url,
         auth=GoogleIDTokenAuth(reranker_url, fetch_id_token),
         transport=transport,
+        timeout=timeout,
     )
