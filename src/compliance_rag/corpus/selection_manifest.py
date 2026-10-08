@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import yaml
 
-from compliance_rag.corpus.models import ClauseRecord
+from compliance_rag.corpus.models import ClauseRecord, validate_review
 
 _REQUIRED_FIELDS = ("author", "reviewed_by", "date", "prefixes")
 
@@ -33,6 +33,9 @@ class SelectionManifest:
     reviewed_by: str
     date: str
     prefixes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        validate_review(self.author, self.reviewed_by)
 
     def select(self, clauses: tuple[ClauseRecord, ...]) -> tuple[ClauseRecord, ...]:
         """Every clause whose path equals or starts with one of `prefixes`,
@@ -65,14 +68,12 @@ def parse_selection_manifest(source: str) -> SelectionManifest:
 
     Requires `author`, `reviewed_by`, `date` and `prefixes`
     (`corpus/mappings/README.md`'s convention, minus `source_clause_ids`,
-    which does not apply to a selection manifest). Unlike mapping YAML,
-    `author` and `reviewed_by` are *not* required to differ: a distinct
-    second reviewer doesn't exist yet for a solo builder, and a placeholder
-    that can never actually resolve is worse than an honest single name
-    (`corpus/mappings/README.md`: "Selection manifests: single-author
-    review"). A distinct reviewer becomes required before any corpus is
-    used for a real customer — that's a review-process change, not
-    something this parser can enforce.
+    which does not apply to a selection manifest). Review follows the one
+    rule every reviewed artefact shares (`corpus/mappings/README.md`:
+    "Review", `validate_review`): the reviewer is a person, never a model,
+    and a human may review their own file. A distinct reviewer becomes
+    required before any corpus is used for a real customer — a
+    review-process change, not something this parser can enforce.
     """
     loaded = yaml.safe_load(source)
     if not isinstance(loaded, dict):

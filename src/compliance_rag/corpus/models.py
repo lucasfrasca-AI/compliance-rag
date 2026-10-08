@@ -135,6 +135,25 @@ def validate_instrument_id(value: str) -> str:
     return value
 
 
+MODEL_AUTHOR_PREFIX = "model:"
+"""How a reviewed artefact records that a model drafted it
+(`corpus/mappings/README.md`: Review)."""
+
+
+def validate_review(author: str, reviewed_by: str) -> None:
+    """The one review rule for every artefact with `author`/`reviewed_by`
+    front matter — mapping YAML, selection manifests, the golden set
+    (`corpus/mappings/README.md`: Review). A model-drafted file needs a
+    distinct human reviewer: the human's review is the judgement D-01
+    requires. A human may review their own file, recorded as single-author
+    review. A model never reviews — which is also what makes a model author
+    need someone distinct."""
+    if reviewed_by.startswith(MODEL_AUTHOR_PREFIX):
+        raise ValueError("reviewed_by must be a person, never a model (D-01)")
+    if not author.strip():
+        raise ValueError("author must name who drafted the file")
+
+
 def validate_library_instrument_id(value: str) -> str:
     """Validate an id a tenant may subscribe to (ADR-0020): a well-formed
     instrument id with no tenant prefix. A tenant's own documents need no

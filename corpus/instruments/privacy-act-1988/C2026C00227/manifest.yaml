@@ -2,10 +2,9 @@
 # convention minus source_clause_ids — this file declares clause paths in
 # scope prospectively, it is not derived from existing clauses).
 #
-# author == reviewed_by: single-author review, the current reality for a
-# solo builder (corpus/mappings/README.md: "Selection manifests:
-# single-author review"). A distinct second reviewer is required before
-# this corpus is used for a real customer.
+# author == reviewed_by: single-author review — a human may review their own
+# file (corpus/mappings/README.md: "Review"). A distinct second reviewer is
+# required before this corpus is used for a real customer.
 author: Piero Frasca
 reviewed_by: Piero Frasca
 date: 2026-09-24
