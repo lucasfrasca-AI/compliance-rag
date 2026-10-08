@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS tenant_instrument (
     subscribed_by TEXT        NOT NULL,
     PRIMARY KEY (tenant_id, instrument_id),
     -- A tenant subscribes to library law only. Its own documents are already
-    -- in its environment; another tenant's are never reachable.
+    -- in its environment; another tenant's are never reachable. Second line
+    -- of defence behind validate_library_instrument_id() in
+    -- compliance_rag.corpus.models, which also checks the full id grammar.
     CONSTRAINT tenant_instrument_is_library CHECK (
         instrument_id <> ''
         AND instrument_id NOT LIKE '%/%'

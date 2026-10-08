@@ -47,6 +47,12 @@ tenant's are never reachable.
 
 ## Consequences
 
+- **Every real tenant starts with no library access.** Before this, every
+  tenant saw all public law; now a tenant sees none until it subscribes. That
+  includes `Settings.tenant_id`'s default `dev-tenant`. Nothing breaks today
+  only because no runtime caller retrieves as a real tenant yet — the first
+  one that does must subscribe first, or run as `_public` for library-only
+  work (the golden set's public-law queries do exactly that).
 - Proven against the real adapter on a real Qdrant server, with the same
   shared contract the in-memory fake runs: an unsubscribed tenant gets no
   library clause in the dense channel, the sparse channel, the fused list or an

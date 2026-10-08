@@ -49,6 +49,7 @@ from functools import lru_cache
 from typing import cast
 
 from fastembed import SparseTextEmbedding
+from opentelemetry import trace
 from qdrant_client import AsyncQdrantClient, models
 
 from compliance_rag.adapters.interfaces import (
@@ -215,6 +216,10 @@ class QdrantRetrievalStore(RetrievalStore):
         chunk is in force on `as_of`. Subscriptions are read here, from the
         ledger, never accepted from the caller (ADR-0020)."""
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
+        # What the tenant could see is part of why a clause didn't come back.
+        trace.get_current_span().set_attribute(
+            "retrieval.subscribed_instruments", sorted(subscribed)
+        )
         visible_to_tenant: list[models.Condition] = [
             models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id))
         ]

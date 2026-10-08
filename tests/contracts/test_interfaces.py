@@ -23,6 +23,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.interfaces import (
+    Candidate,
     Channel,
     CitationVerifier,
     ClauseStore,
@@ -49,6 +50,7 @@ LATER = dt.date(2027, 6, 1)
 LIBRARY_INSTRUMENT = "privacy-act-1988"
 APP11 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app11/1"
 APP12 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app12/1"
+LIBRARY_CHUNK_IDS = frozenset({"c1", "c2"})  # the `chunks` fixture's public-scope chunks
 
 
 @pytest.fixture
@@ -223,8 +225,13 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     hit = await store.lookup_clause("acme-policy:v3:sec2/1", tenant_id="other-corp", as_of=TODAY)
     assert hit is None
 
-    # ADR-0020: a tenant that never subscribed to an instrument can't reach
-    # its clauses through any channel — dense, sparse, fused, or keyword.
+    # ADR-0020. Positive control first: with the same probe, a subscribed
+    # tenant gets every library chunk in every channel — so the "unreachable"
+    # assertions below can't pass just because a channel never returns them.
+    reached = await _library_reach(store, tenant_id="acme")
+    assert all(found == LIBRARY_CHUNK_IDS for found in reached.values()), reached
+
+    # A tenant that never subscribed can't reach them through any channel.
     await assert_library_unreachable(store, tenant_id="other-corp")
 
     # `_public` owns every library chunk: it sees the library with no rows.
@@ -265,10 +272,10 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     assert hit.clause_id == APP11
 
 
-async def assert_library_unreachable(store: RetrievalStore, *, tenant_id: str) -> None:
-    """No library clause in either channel, the fused list, or an exact-ID
-    lookup — the four ways a chunk can reach a caller."""
-    library = {"c1", "c2"}
+async def _library_reach(store: RetrievalStore, *, tenant_id: str) -> dict[str, frozenset[str]]:
+    """Which of the `chunks` fixture's library chunks reach `tenant_id` by
+    each of the four routes a chunk can take to a caller: the dense and
+    sparse channels, the fused list, and an exact-ID lookup."""
     result = await store.search(
         "An APP entity must take steps to protect and give access to the information",
         obligation_ids=(),
@@ -277,11 +284,25 @@ async def assert_library_unreachable(store: RetrievalStore, *, tenant_id: str) -
         as_of=LATER,
         limit=10,
     )
-    assert library.isdisjoint(c.chunk_id for c in result.fused)
-    for candidates in result.per_channel.values():
-        assert library.isdisjoint(c.chunk_id for c in candidates)
-    assert await store.lookup_clause(APP11, tenant_id=tenant_id, as_of=TODAY) is None
-    assert await store.lookup_clause(APP12, tenant_id=tenant_id, as_of=LATER) is None
+
+    def library(candidates: tuple[Candidate, ...]) -> frozenset[str]:
+        return frozenset(c.chunk_id for c in candidates) & LIBRARY_CHUNK_IDS
+
+    looked_up = [
+        await store.lookup_clause(clause_id, tenant_id=tenant_id, as_of=LATER)
+        for clause_id in (APP11, APP12)
+    ]
+    return {
+        Channel.DENSE.value: library(result.per_channel.get(Channel.DENSE, ())),
+        Channel.SPARSE.value: library(result.per_channel.get(Channel.SPARSE, ())),
+        "fused": library(result.fused),
+        Channel.KEYWORD.value: frozenset(h.chunk_id for h in looked_up if h is not None),
+    }
+
+
+async def assert_library_unreachable(store: RetrievalStore, *, tenant_id: str) -> None:
+    reached = await _library_reach(store, tenant_id=tenant_id)
+    assert all(not found for found in reached.values()), reached
 
 
 async def test_retrieval_store_is_a_retrieval_store(chunks: tuple[Chunk, ...]) -> None:
