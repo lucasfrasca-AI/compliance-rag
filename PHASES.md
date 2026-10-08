@@ -51,6 +51,7 @@ Deliverables
 
 Exit criteria
 - recall@10 on exact-ID queries = 1.0; on paraphrase ≥ 0.9; on cross-clause ≥ 0.8 (numbers are the starting bar — revise with evidence)
+  - Measured by the gate (#28, 2026-10-08, fused): exact-ID 1.000, paraphrase 1.000, cross-clause **0.792 — not met** (dense alone 0.896). Held as a strict xfail in `tests/test_recall_gate.py`, not lowered; the cross-encoder's effect is #32's measurement. The phase does not close on this line while that marker stands
 - Verifier pass rate 100% on the golden set, with at least one deliberately bad citation proven to block
 - Cost per query logged; projected monthly under $60 at 2,000 queries
 - Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG

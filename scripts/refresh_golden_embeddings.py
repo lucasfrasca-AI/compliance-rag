@@ -19,14 +19,8 @@ from compliance_rag.eval.embedding_cache import (
     EmbeddingCache,
     text_key,
 )
-from compliance_rag.eval.golden import load_golden_set
-from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.golden_corpus import golden_texts
 from compliance_rag.settings import Settings
-
-
-def golden_texts() -> tuple[str, ...]:
-    texts = [c.text for c in golden_chunks()] + [q.query for q in load_golden_set().queries]
-    return tuple(dict.fromkeys(texts))
 
 
 async def main() -> None:

@@ -16,6 +16,7 @@ from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, ClauseRecord, 
 from compliance_rag.corpus.parser import parse_compilation
 from compliance_rag.corpus.policy_parser import parse_policy
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
+from compliance_rag.eval.golden import load_golden_set
 
 FIXTURES = Path(__file__).resolve().parents[3] / "docs" / "research" / "fixtures"
 LAW_FIXTURE = FIXTURES / "privacy-act-1988-C2026C00227.excerpt.html"
@@ -58,3 +59,9 @@ def golden_clauses() -> tuple[ClauseRecord, ...]:
 
 def golden_chunks() -> tuple[Chunk, ...]:
     return chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
+
+
+def golden_texts() -> tuple[str, ...]:
+    """Every text the recall gate embeds: each chunk, then each query, once."""
+    texts = [c.text for c in golden_chunks()] + [q.query for q in load_golden_set().queries]
+    return tuple(dict.fromkeys(texts))

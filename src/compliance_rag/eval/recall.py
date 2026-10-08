@@ -14,6 +14,7 @@ is the "no-rerank" arm of the reranker benchmark (#32).
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,11 +102,16 @@ async def measure(
     return tuple(results)
 
 
-def by_category(results: Iterable[QueryRecall]) -> dict[Category, dict[str, float]]:
-    """Mean recall per category, per list."""
+def _grouped(results: Iterable[QueryRecall]) -> dict[Category, list[QueryRecall]]:
     grouped: dict[Category, list[QueryRecall]] = {}
     for result in results:
         grouped.setdefault(result.category, []).append(result)
+    return grouped
+
+
+def by_category(results: Iterable[QueryRecall]) -> dict[Category, dict[str, float]]:
+    """Mean recall per category, per list."""
+    grouped = _grouped(results)
     summary: dict[Category, dict[str, float]] = {}
     for category, members in grouped.items():
         lists = sorted({name for m in members for name in m.by_list})
@@ -119,36 +125,53 @@ def by_category(results: Iterable[QueryRecall]) -> dict[Category, dict[str, floa
 
 def below_exit_bar(results: Iterable[QueryRecall]) -> dict[Category, float]:
     """Categories whose gated recall@k is under PHASES.md's bar, with the value."""
-    grouped: dict[Category, list[float]] = {}
-    for result in results:
-        grouped.setdefault(result.category, []).append(result.gated)
-    means = {c: sum(v) / len(v) for c, v in grouped.items()}
+    means = {c: sum(m.gated for m in ms) / len(ms) for c, ms in _grouped(results).items()}
     return {c: mean for c, mean in means.items() if mean < EXIT_BARS[c]}
 
 
+Baseline = Mapping[str, Mapping[str, float]]
+"""query id -> list name -> recall@k, for every list but `reranked` (which,
+under `NoRerank`, is fusion again)."""
+
+_TOLERANCE = 1e-9
+
+
 def regressions(
-    results: Iterable[QueryRecall], baseline: Mapping[str, float]
+    results: Iterable[QueryRecall], baseline: Baseline
 ) -> dict[str, tuple[float, float]]:
-    """Queries whose gated recall dropped below the checked-in baseline:
-    query id -> (baseline, now). A query absent from the baseline is new, not
-    a regression."""
+    """Every list of every query whose recall@k fell below its checked-in
+    baseline, as `"GQ-18/dense" -> (baseline, now)` — a dense or sparse
+    collapse that fusion happens to mask still fails. A query absent from the
+    baseline is new, not a regression; `test_the_baseline_covers_every_golden_query`
+    stops one being dropped from it."""
+    dropped: dict[str, tuple[float, float]] = {}
+    for result in results:
+        for name, before in baseline.get(result.query_id, {}).items():
+            now = result.by_list.get(name, 0.0)
+            if now < before - _TOLERANCE:
+                dropped[f"{result.query_id}/{name}"] = (before, now)
+    return dropped
+
+
+def load_baseline(path: Path = RECALL_BASELINE_PATH) -> dict[str, dict[str, float]]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
     return {
-        r.query_id: (baseline[r.query_id], r.gated)
-        for r in results
-        if r.query_id in baseline and r.gated < baseline[r.query_id]
+        str(query_id): {str(name): float(v) for name, v in lists.items()}
+        for query_id, lists in raw["recall_at_10"].items()
     }
 
 
-def load_baseline(path: Path = RECALL_BASELINE_PATH) -> dict[str, float]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    return {str(k): float(v) for k, v in raw["gated_recall_at_10"].items()}
-
-
 def write_baseline(results: Iterable[QueryRecall], path: Path = RECALL_BASELINE_PATH) -> None:
+    """Only a person updates the baseline, locally, as a reviewed diff: never
+    in CI, where it would let a drop rewrite the bar it is measured against."""
+    if os.environ.get("CI"):
+        raise RuntimeError("the recall baseline is never rewritten in CI")
     document = {
-        "note": "Per-query gated recall@10 (fused). Written only by "
-        "UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py — "
+        "note": "Per-query recall@10 for every list. Written only by "
+        "UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally — "
         "a deliberate, reviewed change, never to make a drop pass.",
-        "gated_recall_at_10": {r.query_id: r.gated for r in results},
+        "recall_at_10": {
+            r.query_id: {n: v for n, v in r.by_list.items() if n != RERANKED} for r in results
+        },
     }
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")

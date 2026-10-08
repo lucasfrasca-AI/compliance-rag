@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import subprocess
+import sys
 import uuid
 from collections.abc import AsyncIterator
 
@@ -26,7 +28,7 @@ from compliance_rag.adapters.interfaces import Candidate, Channel
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingCacheMiss
 from compliance_rag.eval.golden import Category, GoldenQuery, GoldenSet, load_golden_set
-from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.golden_corpus import golden_chunks, golden_texts
 from compliance_rag.eval.recall import (
     EXIT_BARS,
     FUSED,
@@ -86,8 +88,49 @@ def test_a_drop_names_the_query_that_regressed() -> None:
         QueryRecall("GQ-18", Category.CROSS_CLAUSE, {FUSED: 2 / 3}),
         QueryRecall("GQ-26", Category.PARAPHRASE, {FUSED: 0.0}),  # new, not in baseline
     )
-    baseline = {"GQ-09": 1.0, "GQ-18": 1.0}
-    assert regressions(now, baseline) == {"GQ-18": (1.0, 2 / 3)}
+    baseline = {"GQ-09": {FUSED: 1.0}, "GQ-18": {FUSED: 1.0}}
+    assert regressions(now, baseline) == {"GQ-18/fused": (1.0, 2 / 3)}
+
+
+def test_a_channel_collapse_fails_even_when_fusion_hides_it() -> None:
+    now = (QueryRecall("GQ-09", Category.PARAPHRASE, {"dense": 0.0, FUSED: 1.0}),)
+    baseline = {"GQ-09": {"dense": 1.0, FUSED: 1.0}}
+    assert regressions(now, baseline) == {"GQ-09/dense": (1.0, 0.0)}
+
+
+def test_the_baseline_is_never_rewritten_in_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CI", "true")
+    with pytest.raises(RuntimeError, match="never rewritten in CI"):
+        write_baseline(())
+
+
+def test_the_gate_cannot_reach_a_language_model() -> None:
+    """D-12 / issue #28: everything the gate composes, imported and run in a
+    fresh interpreter — no LLM SDK or generator module is ever loaded."""
+    program = """
+import asyncio, sys
+import compliance_rag.adapters.qdrant_retrieval_store
+from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
+from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
+from compliance_rag.eval.golden import load_golden_set
+from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.recall import NoRerank, measure
+from compliance_rag.retrieval.pipeline import RetrievalPipeline
+
+CachedEmbedder(EmbeddingCache.load())
+store = FakeRetrievalStore(golden_chunks(), ledger=FakeLedgerStore())
+asyncio.run(measure(RetrievalPipeline(store, NoRerank()), load_golden_set()))
+llm = ("anthropic", "vertexai.generative")
+loaded = [
+    m for m in sys.modules
+    if m.startswith(llm) or (m.startswith("compliance_rag") and "generator" in m)
+]
+assert not loaded, loaded
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", program], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
 
 
 def test_a_category_under_its_bar_is_reported_with_its_value() -> None:
@@ -111,10 +154,13 @@ def test_every_golden_text_has_a_real_cached_vector() -> None:
     fails here, naming the text, before the gate measures anything stale."""
     cache = EmbeddingCache.load()
     assert (cache.model, cache.dimensions) == ("gemini-embedding-001", 1536)
-    texts = tuple(c.text for c in golden_chunks()) + tuple(
-        q.query for q in load_golden_set().queries
-    )
-    assert cache.missing(texts) == ()
+    assert cache.missing(golden_texts()) == ()
+
+
+def test_the_baseline_covers_every_golden_query() -> None:
+    """A query missing from the baseline is treated as new, so it would
+    escape the regression check — every signed query must be in it."""
+    assert set(load_baseline()) == {q.id for q in load_golden_set().queries}
 
 
 async def test_the_cached_embedder_refuses_text_it_has_never_seen() -> None:
@@ -167,8 +213,6 @@ async def test_exact_id_and_paraphrase_meet_their_exit_bars(
 ) -> None:
     """Issue #28's enforced bars: exact-ID = 1.0, paraphrase >= 0.9."""
     _report(results)
-    if os.environ.get("UPDATE_RECALL_BASELINE"):
-        write_baseline(results)
     failing = below_exit_bar(results)
     assert {c: v for c, v in failing.items() if c is not Category.CROSS_CLAUSE} == {}
 
@@ -176,6 +220,7 @@ async def test_exact_id_and_paraphrase_meet_their_exit_bars(
 @_needs_qdrant
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="Measured 2026-10-08: fused cross_clause recall@10 = 0.792 against PHASES.md's "
     "0.8 (dense alone 0.896 — RRF demotes clauses the sparse channel misses). An unmet "
     "Phase 1 exit criterion, kept visible rather than lowered; the cross-encoder's effect "
@@ -187,5 +232,8 @@ async def test_cross_clause_meets_its_exit_bar(results: tuple[QueryRecall, ...])
 
 @_needs_qdrant
 async def test_no_query_regressed_below_its_baseline(results: tuple[QueryRecall, ...]) -> None:
-    """Every category, cross_clause included: a drop fails by query id."""
+    """Every category, cross_clause included, every list: a drop fails by
+    query id and list."""
+    if os.environ.get("UPDATE_RECALL_BASELINE"):
+        write_baseline(results)
     assert regressions(results, load_baseline()) == {}
