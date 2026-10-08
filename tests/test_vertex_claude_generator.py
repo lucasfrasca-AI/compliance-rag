@@ -9,8 +9,11 @@ import pytest
 from anthropic.types import Message, MessageParam, TextBlock, TextBlockParam, Usage
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from compliance_rag.adapters import vertex_claude_generator as module
-from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator, cost_usd
+from compliance_rag.adapters.vertex_claude_generator import (
+    GeneratorResidencyError,
+    VertexClaudeGenerator,
+    price_usd,
+)
 from compliance_rag.settings import Settings
 
 PREFIX = (
@@ -81,7 +84,7 @@ async def test_cost_comes_from_the_real_token_counts() -> None:
     hit = await _generate(FakeMessages(cache_read=5000))
     expected = 1.10 * (120 * 3.00 + 5000 * 0.30 + 40 * 15.00) / 1_000_000
     assert abs(hit.cost_usd - expected) < 1e-12
-    assert hit.cost_usd == cost_usd(uncached_input=120, cache_write=0, cache_read=5000, output=40)
+    assert hit.cost_usd == price_usd(uncached_input=120, cache_write=0, cache_read=5000, output=40)
     miss = await _generate(FakeMessages(cache_write=5000))
     assert miss.cost_usd > hit.cost_usd
 
@@ -97,7 +100,23 @@ async def test_the_span_carries_tokens_cache_and_cost_but_no_prompt_text(
     assert attributes["generator.input_tokens"] == 5120
     cost = attributes["generator.cost_usd"]
     assert isinstance(cost, float) and cost > 0
-    assert not any("Policy." in str(v) or v == "q" for v in attributes.values())
+    assert attributes["generator.prefix_not_cached"] is False
+    assert str(attributes["generator.price_table"]).endswith("-unverified")
+    # Prompt text never reaches the span: neither the system text, the
+    # cached policy prefix nor the user turn.
+    rendered = " ".join(str(v) for v in attributes.values())
+    assert "Policy." not in rendered and "sys" not in rendered.split()
+
+
+async def test_a_prefix_the_api_did_not_cache_is_flagged(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """Below the model's minimum cacheable length the API neither writes nor
+    reads the cache, and says nothing. The span must."""
+    generation = await _generate(FakeMessages())
+    assert not generation.cached_prefix_hit
+    (generate_span,) = [s for s in span_exporter.get_finished_spans() if s.name.startswith("gen")]
+    assert (generate_span.attributes or {})["generator.prefix_not_cached"] is True
 
 
 def test_a_generator_with_no_model_is_refused() -> None:
@@ -123,4 +142,11 @@ def test_the_real_client_is_built_for_sydney_only(monkeypatch: pytest.MonkeyPatc
     )
     VertexClaudeGenerator.from_settings(settings)
     assert built == {"region": "australia-southeast1", "project_id": "p"}
-    assert module.REGION == "australia-southeast1"
+
+
+def test_a_non_sydney_region_is_refused_even_past_settings_validation() -> None:
+    """`Settings` already refuses another region; this is the second lock,
+    for a Settings built without validation."""
+    settings = Settings.model_construct(gcp_region="global", vertex_claude_model="claude-test")
+    with pytest.raises(GeneratorResidencyError):
+        VertexClaudeGenerator.from_settings(settings)

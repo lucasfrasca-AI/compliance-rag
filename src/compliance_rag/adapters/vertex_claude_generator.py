@@ -34,9 +34,12 @@ _OUTPUT_USD = 15.00 / 1_000_000
 _CACHE_WRITE_USD = 3.75 / 1_000_000  # 5-minute ephemeral cache write: 1.25x input
 _CACHE_READ_USD = 0.30 / 1_000_000  # cache hit: 0.1x input
 _REGIONAL_PREMIUM = 1.10
+PRICE_TABLE = "sonnet-list-regional-2026-10-08-unverified"
+"""Names the rates above on every span, so a cost figure carries its own
+provenance; `-unverified` comes off once checked against a real invoice line."""
 
 
-def cost_usd(*, uncached_input: int, cache_write: int, cache_read: int, output: int) -> float:
+def price_usd(*, uncached_input: int, cache_write: int, cache_read: int, output: int) -> float:
     return _REGIONAL_PREMIUM * (
         uncached_input * _INPUT_USD
         + cache_write * _CACHE_WRITE_USD
@@ -105,7 +108,7 @@ class VertexClaudeGenerator(Generator):
             usage = message.usage
             cache_read = usage.cache_read_input_tokens or 0
             cache_write = usage.cache_creation_input_tokens or 0
-            cost = cost_usd(
+            cost = price_usd(
                 uncached_input=usage.input_tokens,
                 cache_write=cache_write,
                 cache_read=cache_read,
@@ -127,5 +130,13 @@ class VertexClaudeGenerator(Generator):
             current.set_attribute("generator.cache_creation_input_tokens", cache_write)
             current.set_attribute("generator.cached_prefix_hit", generation.cached_prefix_hit)
             current.set_attribute("generator.cost_usd", cost)
+            current.set_attribute("generator.price_table", PRICE_TABLE)
+            # A prefix below the model's minimum cacheable length is neither
+            # written nor read — silently. Flag it, or D-11 would look healthy
+            # on the trace while every request paid full price for the prefix.
+            current.set_attribute(
+                "generator.prefix_not_cached",
+                bool(cached_prefix) and not (cache_read or cache_write),
+            )
             current.set_attribute("generator.stop_reason", message.stop_reason or "")
             return generation

@@ -34,9 +34,10 @@ class Answer:
 
     retrieval: RetrievalTrace
     generation: Generation
-    draft: DraftAnswer
-    """The generation, schema-validated (#29). Its citations are claims the
-    verifier checks, not text shown to anyone."""
+    unverified_draft: DraftAnswer
+    """The generation, schema-validated (#29) but **not yet verified**: its
+    citations are the model's claims, and `verified` below does not cover
+    them until the citation verifier (#30). Nothing renders this as is."""
     verified: bool
 
 
@@ -68,7 +69,9 @@ class AssessmentPipeline:
         """`policies` is the tenant's policy corpus, sent as the cached prefix
         (D-11). The retriever's query is `query` and only `query`: it is fixed
         here, before any text is retrieved, and nothing retrieved or generated
-        flows back into it (#29's injection control)."""
+        flows back into it (#29's injection control). The system prompt is
+        fixed (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries
+        the rule that fenced text is data, which no caller gets to drop."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             trace = await self.retrieval.retrieve(query, tenant_id, as_of)
 
@@ -96,7 +99,9 @@ class AssessmentPipeline:
             verified = await self._verify_top_candidate(trace, tenant_id)
             current.set_attribute("verifier.result", verified)
 
-            return Answer(retrieval=trace, generation=generation, draft=draft, verified=verified)
+            return Answer(
+                retrieval=trace, generation=generation, unverified_draft=draft, verified=verified
+            )
 
     async def _verify_top_candidate(self, trace: RetrievalTrace, tenant_id: str) -> bool:
         top = trace.top_candidate()
