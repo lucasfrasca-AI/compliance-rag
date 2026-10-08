@@ -1,12 +1,13 @@
-"""`answer()`: retrieve, generate, verify — composed, not reimplemented (issue #16).
+"""`answer()`: retrieve, generate, verify — composed, not reimplemented
+(issues #16, #29, #30).
 
-The generator never authors a citation (D-02, CLAUDE.md), so this tracer
-bullet verifies the top reranked candidate's own chunk text against its
-clause's canonical text — a real, deterministic check this pipeline can make
-today, rather than inventing a stand-in for the structured-citation
-extraction a future ticket adds once the generator's output is schema-
-validated. `generation` is still produced and returned in full: `answer()`
-proves the shape of the whole loop, not only the part it can verify yet.
+The generator never authors a citation (D-02). It returns a schema-validated
+draft whose citations are claims — a clause id and a quote — and every claim
+is checked by the verifier (`verifier/citations.py`) before anything reaches a
+user. What a user is shown for a citation is the clause's canonical text from
+`ClauseStore`, never the model's words. A quote that didn't match is repaired
+on its own — one targeted regeneration of that citation, never the whole
+answer — and anything still failing is blocked.
 """
 
 from __future__ import annotations
@@ -15,47 +16,65 @@ import datetime as dt
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from compliance_rag.adapters.interfaces import CitationVerifier, ClauseStore, Generation, Generator
-from compliance_rag.assessment.draft import DraftAnswer, MalformedGeneration, parse_draft
+from compliance_rag.adapters.interfaces import Generation, Generator
+from compliance_rag.assessment.draft import (
+    DraftAnswer,
+    MalformedGeneration,
+    parse_draft,
+    parse_repair,
+)
 from compliance_rag.assessment.prompt import (
+    REPAIR_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     SourceClause,
     policy_prefix,
+    repair_prompt,
     user_prompt,
 )
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.telemetry import span
+from compliance_rag.verifier.citations import CheckedCitation, Verifier
+
+REPAIR_MAX_TOKENS = 512
 
 
 @dataclass(frozen=True, slots=True)
 class Answer:
-    """`retrieve()` and `answer()` end to end, on one hand-written clause
-    (issue #16)."""
-
     retrieval: RetrievalTrace
     generation: Generation
+    repairs: tuple[Generation, ...]
+    """One per repaired citation — cost per query sums these with `generation`."""
     unverified_draft: DraftAnswer
-    """The generation, schema-validated (#29) but **not yet verified**: its
-    citations are the model's claims, and `verified` below does not cover
-    them until the citation verifier (#30). Nothing renders this as is."""
-    verified: bool
+    """The model's schema-validated draft — **unverified**: its citations are
+    claims, and its prose is not tied to them. Only `citations` below have
+    been verified; nothing renders this as is."""
+    citations: tuple[CheckedCitation, ...]
+    """Verified citations, each carrying the canonical clause to show."""
+    blocked: tuple[CheckedCitation, ...]
+    """Citations that failed verification (after any repair) — never shown."""
+
+    @property
+    def verified(self) -> bool:
+        """At least one citation, and every citation verified. An answer with
+        no citations — "the clauses don't cover this" — is never verified:
+        there is nothing to have checked."""
+        return bool(self.citations) and not self.blocked
+
+    @property
+    def cost_usd(self) -> float:
+        return self.generation.cost_usd + sum(r.cost_usd for r in self.repairs)
 
 
 class AssessmentPipeline:
-    """Composes one `RetrievalPipeline`, one `Generator`, one `ClauseStore`
-    and one `CitationVerifier` (D-08)."""
+    """Composes one `RetrievalPipeline`, one `Generator` and one `Verifier`
+    (D-08)."""
 
     def __init__(
-        self,
-        retrieval: RetrievalPipeline,
-        generator: Generator,
-        clause_store: ClauseStore,
-        citation_verifier: CitationVerifier,
+        self, retrieval: RetrievalPipeline, generator: Generator, verifier: Verifier
     ) -> None:
         self.retrieval = retrieval
         self.generator = generator
-        self.clause_store = clause_store
-        self.citation_verifier = citation_verifier
+        self.verifier = verifier
 
     async def answer(
         self,
@@ -69,9 +88,10 @@ class AssessmentPipeline:
         """`policies` is the tenant's policy corpus, sent as the cached prefix
         (D-11). The retriever's query is `query` and only `query`: it is fixed
         here, before any text is retrieved, and nothing retrieved or generated
-        flows back into it (#29's injection control). The system prompt is
-        fixed (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries
-        the rule that fenced text is data, which no caller gets to drop."""
+        flows back into it (#29's injection control) — repair included, which
+        re-reads one clause and never retrieves. The system prompt is fixed
+        (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries the
+        rule that fenced text is data, which no caller gets to drop."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             trace = await self.retrieval.retrieve(query, tenant_id, as_of)
 
@@ -88,7 +108,9 @@ class AssessmentPipeline:
             current.set_attribute(
                 "generation.cache_read_input_tokens", generation.cache_read_input_tokens
             )
-            current.set_attribute("generation.cost_usd", generation.cost_usd)
+            # verifier.result is on the span for every request: False unless
+            # verification completes and passes, whatever raises on the way.
+            current.set_attribute("verifier.result", False)
             try:
                 draft = parse_draft(generation.text)
             except MalformedGeneration:
@@ -96,23 +118,61 @@ class AssessmentPipeline:
                 raise
             current.set_attribute("generation.schema_valid", True)
 
-            verified = await self._verify_top_candidate(trace, tenant_id)
-            current.set_attribute("verifier.result", verified)
-
-            return Answer(
-                retrieval=trace, generation=generation, unverified_draft=draft, verified=verified
+            # The context is what this request showed the model: the retrieved
+            # set plus the cached policy set. Nothing else is citable.
+            context = frozenset(c.clause_id for c in retrieved) | frozenset(
+                p.clause_id for p in policies
             )
+            checked = await self.verifier.check_all(draft.citations, context=context, as_of=as_of)
+            repairs: list[Generation] = []
+            final: list[CheckedCitation] = []
+            for check in checked:
+                if check.outcome.repairable and check.clause is not None:
+                    check, repair = await self._repair(check, context=context, as_of=as_of)
+                    repairs.append(repair)
+                final.append(check)
 
-    async def _verify_top_candidate(self, trace: RetrievalTrace, tenant_id: str) -> bool:
-        top = trace.top_candidate()
-        if top is None:
-            return False
-        clause = await self.clause_store.get_clause(top.clause_id, tenant_id=tenant_id)
-        if clause is None:
-            return False
-        return await self.citation_verifier.verify(
-            top.clause_id,
-            top.text,
-            clauses=(clause,),
-            canonicalisation_version=clause.canonicalisation_version,
-        )
+            result = Answer(
+                retrieval=trace,
+                generation=generation,
+                repairs=tuple(repairs),
+                unverified_draft=draft,
+                citations=tuple(c for c in final if c.verified),
+                blocked=tuple(c for c in final if not c.verified),
+            )
+            current.set_attribute("verifier.result", result.verified)
+            current.set_attribute(
+                "verifier.outcomes", [f"{c.citation.clause_id}:{c.outcome.value}" for c in final]
+            )
+            current.set_attribute("verifier.repairs", len(repairs))
+            current.set_attribute("generation.cost_usd", result.cost_usd)
+            return result
+
+    async def _repair(
+        self, failed: CheckedCitation, *, context: frozenset[str], as_of: dt.date
+    ) -> tuple[CheckedCitation, Generation]:
+        """One targeted regeneration of one citation, re-verified. A repair
+        that changes the clause id, or isn't valid JSON, leaves the original
+        failure standing."""
+        if failed.clause is None:
+            raise ValueError("only a citation whose clause was read can be repaired")
+        clause = SourceClause(failed.clause.clause_id, failed.clause.canonical_text)
+        with span("answer.repair", **{"repair.clause_id": clause.clause_id}) as current:
+            generation = await self.generator.generate(
+                system=REPAIR_SYSTEM_PROMPT,
+                cached_prefix=None,
+                user=repair_prompt(clause, failed.citation.quote),
+                max_tokens=REPAIR_MAX_TOKENS,
+            )
+            current.set_attribute("generation.input_tokens", generation.input_tokens)
+            current.set_attribute("generation.output_tokens", generation.output_tokens)
+            current.set_attribute("generation.cost_usd", generation.cost_usd)
+            outcome = failed
+            try:
+                repaired = parse_repair(generation.text)
+            except MalformedGeneration:
+                repaired = None
+            if repaired is not None and repaired.clause_id == failed.citation.clause_id:
+                outcome = await self.verifier.check(repaired, context=context, as_of=as_of)
+            current.set_attribute("repair.outcome", outcome.outcome.value)
+            return outcome, generation

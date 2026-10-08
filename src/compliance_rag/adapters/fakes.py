@@ -14,7 +14,6 @@ import zlib
 from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
-    CitationVerifier,
     ClauseStore,
     Embedder,
     Generation,
@@ -43,6 +42,7 @@ from compliance_rag.corpus.models import (
     validate_library_instrument_id,
     validate_tenant_id,
 )
+from compliance_rag.verifier.citations import CanonicalCitationVerifier
 
 
 class FakeGraphStore(GraphStore):
@@ -302,6 +302,7 @@ class FakeLedgerStore(LedgerStore):
         self._subscriptions: dict[tuple[str, str], str] = {}  # (tenant, instrument) -> by
         self._findings: list[tuple[str, tuple[str, ...]]] = []  # (tenant, cited clause_ids)
         self.withdrawn: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version) -> by
+        self._versions: dict[tuple[str, str, str], tuple[dt.date, dt.date | None]] = {}
         self.purged: dict[tuple[str, str, str | None], tuple[str, str]] = {}  # -> (by, reason)
         self._audit: list[RemovalAuditEntry] = []
 
@@ -356,6 +357,34 @@ class FakeLedgerStore(LedgerStore):
             for tenant, cited in self._findings
             if tenant == tenant_id and any(c.startswith(stable_id_prefix) for c in cited)
         )
+
+    async def record_version(
+        self,
+        *,
+        tenant_id: str,
+        instrument_id: str,
+        version_id: str,
+        valid_from: dt.date,
+        supersedes: str | None,
+    ) -> None:
+        key = (tenant_id, instrument_id, version_id)
+        if key in self._versions:
+            # Re-recording would reset valid_to and silently un-retire it.
+            raise ValueError(f"{instrument_id}:{version_id} is already recorded for {tenant_id}")
+        self._versions[key] = (valid_from, None)
+
+    async def end_version(
+        self, *, tenant_id: str, instrument_id: str, version_id: str, valid_to: dt.date
+    ) -> None:
+        key = (tenant_id, instrument_id, version_id)
+        if key not in self._versions:
+            raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
+        self._versions[key] = (self._versions[key][0], valid_to)
+
+    async def version_validity(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> tuple[dt.date, dt.date | None] | None:
+        return self._versions.get((tenant_id, instrument_id, version_id))
 
     async def mark_withdrawn(
         self, *, tenant_id: str, instrument_id: str, version_id: str, withdrawn_by: str
@@ -539,33 +568,7 @@ class FakeGenerator(Generator):
         )
 
 
-class FakeCitationVerifier(CitationVerifier):
-    """The real comparison: canonical quote must be a substring of canonical text.
-
-    Raises rather than comparing when the citation's `canonicalisation_version`
-    doesn't match the clause's (issue #2) — text canonicalised under different
-    rules is never comparable, however textually similar it looks.
-    """
-
-    async def verify(
-        self,
-        clause_id: str,
-        quoted_text: str,
-        *,
-        clauses: tuple[ClauseRecord, ...],
-        canonicalisation_version: int,
-    ) -> bool:
-        quote = canonicalise(quoted_text)
-        if not quote:
-            return False
-        for clause in clauses:
-            if clause.clause_id != clause_id:
-                continue
-            if canonicalisation_version != clause.canonicalisation_version:
-                raise ValueError(
-                    f"cannot verify a canonicalisation v{canonicalisation_version} citation "
-                    f"against clause {clause_id!r}, canonicalised under "
-                    f"v{clause.canonicalisation_version}"
-                )
-            return quote in clause.canonical_text
-        return False
+class FakeCitationVerifier(CanonicalCitationVerifier):
+    """The real comparison: it does no I/O, so the fake *is* the real one —
+    one implementation of the check that decides whether a citation is
+    accepted, not two that can drift."""

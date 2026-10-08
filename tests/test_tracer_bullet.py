@@ -8,6 +8,7 @@ test locks down (`retrieve()` -> rerank -> generate -> verify).
 from __future__ import annotations
 
 import datetime as dt
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,6 +26,7 @@ from compliance_rag.adapters.interfaces import Candidate, Channel, ScoredDocumen
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.verifier.citations import Verifier
 
 TENANT_ID = "acme"
 AS_OF = dt.date(2026, 1, 1)
@@ -35,7 +37,7 @@ QUERY = "reasonable steps information misuse"
 def clause() -> ClauseRecord:
     """The one hand-written clause the whole tracer bullet runs on."""
     return ClauseRecord.build(
-        instrument_id="privacy-act-1988",
+        instrument_id="acme/privacy-policy",
         version_id="TEST-FIXTURE-001",
         clause_path="sch1/app11/1",
         text="An APP entity must take such steps as are reasonable in the circumstances "
@@ -60,11 +62,26 @@ async def assessment(clause: ClauseRecord) -> AssessmentPipeline:
     )
     clause_store = FakeClauseStore()
     await clause_store.put_clause(clause)
+    ledger = FakeLedgerStore()
+    await ledger.record_version(
+        tenant_id=TENANT_ID,
+        instrument_id=clause.instrument_id,
+        version_id=clause.version_id,
+        valid_from=dt.date(2025, 1, 1),
+        supersedes=None,
+    )
+    reply = json.dumps(
+        {
+            "answer": "Take reasonable steps to protect it.",
+            "citations": [
+                {"clause_id": clause.clause_id, "quote": "reasonable in the circumstances"}
+            ],
+        }
+    )
     return AssessmentPipeline(
         retrieval=retrieval,
-        generator=FakeGenerator(),
-        clause_store=clause_store,
-        citation_verifier=FakeCitationVerifier(),
+        generator=FakeGenerator(reply=reply),
+        verifier=Verifier(clause_store, ledger, FakeCitationVerifier()),
     )
 
 
@@ -127,8 +144,6 @@ async def test_answer_runs_with_fakes_only(assessment: AssessmentPipeline) -> No
         assessment.retrieval.retrieval_store,
         assessment.retrieval.reranker,
         assessment.generator,
-        assessment.clause_store,
-        assessment.citation_verifier,
     ):
         assert type(adapter).__name__.startswith("Fake")
 
