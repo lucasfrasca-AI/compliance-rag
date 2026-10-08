@@ -44,9 +44,10 @@ class Answer:
     generation: Generation
     repairs: tuple[Generation, ...]
     """One per repaired citation — cost per query sums these with `generation`."""
-    draft: DraftAnswer
-    """The model's schema-validated draft. Its citations are claims; only
-    `citations` below have been verified."""
+    unverified_draft: DraftAnswer
+    """The model's schema-validated draft — **unverified**: its citations are
+    claims, and its prose is not tied to them. Only `citations` below have
+    been verified; nothing renders this as is."""
     citations: tuple[CheckedCitation, ...]
     """Verified citations, each carrying the canonical clause to show."""
     blocked: tuple[CheckedCitation, ...]
@@ -54,7 +55,9 @@ class Answer:
 
     @property
     def verified(self) -> bool:
-        """At least one citation, and every citation verified."""
+        """At least one citation, and every citation verified. An answer with
+        no citations — "the clauses don't cover this" — is never verified:
+        there is nothing to have checked."""
         return bool(self.citations) and not self.blocked
 
     @property
@@ -105,11 +108,13 @@ class AssessmentPipeline:
             current.set_attribute(
                 "generation.cache_read_input_tokens", generation.cache_read_input_tokens
             )
+            # verifier.result is on the span for every request: False unless
+            # verification completes and passes, whatever raises on the way.
+            current.set_attribute("verifier.result", False)
             try:
                 draft = parse_draft(generation.text)
             except MalformedGeneration:
                 current.set_attribute("generation.schema_valid", False)
-                current.set_attribute("verifier.result", False)
                 raise
             current.set_attribute("generation.schema_valid", True)
 
@@ -131,7 +136,7 @@ class AssessmentPipeline:
                 retrieval=trace,
                 generation=generation,
                 repairs=tuple(repairs),
-                draft=draft,
+                unverified_draft=draft,
                 citations=tuple(c for c in final if c.verified),
                 blocked=tuple(c for c in final if not c.verified),
             )
@@ -152,16 +157,22 @@ class AssessmentPipeline:
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
         clause = SourceClause(failed.clause.clause_id, failed.clause.canonical_text)
-        generation = await self.generator.generate(
-            system=REPAIR_SYSTEM_PROMPT,
-            cached_prefix=None,
-            user=repair_prompt(clause, failed.citation.quote),
-            max_tokens=REPAIR_MAX_TOKENS,
-        )
-        try:
-            repaired = parse_repair(generation.text)
-        except MalformedGeneration:
-            return failed, generation
-        if repaired.clause_id != failed.citation.clause_id:
-            return failed, generation
-        return await self.verifier.check(repaired, context=context, as_of=as_of), generation
+        with span("answer.repair", **{"repair.clause_id": clause.clause_id}) as current:
+            generation = await self.generator.generate(
+                system=REPAIR_SYSTEM_PROMPT,
+                cached_prefix=None,
+                user=repair_prompt(clause, failed.citation.quote),
+                max_tokens=REPAIR_MAX_TOKENS,
+            )
+            current.set_attribute("generation.input_tokens", generation.input_tokens)
+            current.set_attribute("generation.output_tokens", generation.output_tokens)
+            current.set_attribute("generation.cost_usd", generation.cost_usd)
+            outcome = failed
+            try:
+                repaired = parse_repair(generation.text)
+            except MalformedGeneration:
+                repaired = None
+            if repaired is not None and repaired.clause_id == failed.citation.clause_id:
+                outcome = await self.verifier.check(repaired, context=context, as_of=as_of)
+            current.set_attribute("repair.outcome", outcome.outcome.value)
+            return outcome, generation

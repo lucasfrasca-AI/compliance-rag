@@ -19,8 +19,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from compliance_rag.corpus.models import (
-    PUBLIC_TENANT_ID,
-    instrument_tenant_prefix,
+    instrument_owner,
     parse_stable_id,
     validate_review,
     validate_tenant_segment,
@@ -58,7 +57,7 @@ class GoldenQuery(BaseModel):
             instrument_id, _, _ = parse_stable_id(clause_id)
             # One retrieve() is scoped to one tenant's environment (ADR-0020):
             # `_public` sees library law, a tenant sees its own documents here.
-            owner = instrument_tenant_prefix(instrument_id) or PUBLIC_TENANT_ID
+            owner = instrument_owner(instrument_id)
             if owner != self.tenant_id:
                 raise ValueError(
                     f"{self.id}: {clause_id!r} is not in {self.tenant_id!r}'s environment"

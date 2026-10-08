@@ -175,6 +175,12 @@ def instrument_tenant_prefix(value: str) -> str | None:
     return match.group("tenant")
 
 
+def instrument_owner(instrument_id: str) -> str:
+    """The tenant an instrument's clauses are stored under: its prefix, or
+    `_public` for an unprefixed library instrument (ADR-0020)."""
+    return instrument_tenant_prefix(instrument_id) or PUBLIC_TENANT_ID
+
+
 class Scope(StrEnum):
     """Which corpus partition a record belongs to (`CONTEXT.md`, D-14)."""
 

@@ -486,6 +486,11 @@ class Generator(ABC):
         """Generate with a cached prompt prefix for the tenant policy corpus (D-11)."""
 
 
+class CanonicalisationVersionMismatch(ValueError):
+    """A citation and a clause canonicalised under different versions — never
+    comparable, however similar the text looks (issue #2)."""
+
+
 class CitationVerifier(ABC):
     """Deterministic check that a citation matches canonical text (D-02)."""
 

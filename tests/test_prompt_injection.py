@@ -154,7 +154,7 @@ async def test_retrieved_text_cannot_influence_the_query_sent_to_the_retriever()
     result = await pipeline.answer(QUESTION, TENANT, AS_OF)
 
     assert canonicalise(POISON) in str(obeying.calls[0]["user"])  # it was retrieved and sent
-    assert "acme employee salaries" in result.draft.answer  # and the model obeyed
+    assert "acme employee salaries" in result.unverified_draft.answer  # and the model obeyed
     assert retrieval_calls == [QUESTION]
     assert store.queries == [QUESTION]
 

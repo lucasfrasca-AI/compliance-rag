@@ -137,15 +137,18 @@ class CorpusLifecycle:
             supersedes=supersedes,
         )
         if supersedes is not None:
-            await self._retrieval.retire_version(
-                instrument_id=instrument_id,
-                tenant_id=tenant_id,
-                version_id=supersedes,
-                valid_to=effective_from,
-            )
+            # Ledger first: a crash between the two leaves the verifier
+            # blocking a version retrieval still returns (fails closed), never
+            # accepting one retrieval has already retired.
             await self._ledger.end_version(
                 tenant_id=tenant_id,
                 instrument_id=instrument_id,
+                version_id=supersedes,
+                valid_to=effective_from,
+            )
+            await self._retrieval.retire_version(
+                instrument_id=instrument_id,
+                tenant_id=tenant_id,
                 version_id=supersedes,
                 valid_to=effective_from,
             )

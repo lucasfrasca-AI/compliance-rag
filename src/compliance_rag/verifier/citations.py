@@ -29,14 +29,18 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from compliance_rag.adapters.interfaces import CitationVerifier, ClauseStore, LedgerStore
+from compliance_rag.adapters.interfaces import (
+    CanonicalisationVersionMismatch,
+    CitationVerifier,
+    ClauseStore,
+    LedgerStore,
+)
 from compliance_rag.assessment.draft import DraftCitation
 from compliance_rag.corpus.models import (
     CANONICALISATION_VERSION,
-    PUBLIC_TENANT_ID,
     ClauseRecord,
     canonicalise,
-    instrument_tenant_prefix,
+    instrument_owner,
     parse_stable_id,
 )
 
@@ -88,19 +92,13 @@ class CanonicalCitationVerifier(CitationVerifier):
             if clause.clause_id != clause_id:
                 continue
             if canonicalisation_version != clause.canonicalisation_version:
-                raise ValueError(
+                raise CanonicalisationVersionMismatch(
                     f"cannot verify a canonicalisation v{canonicalisation_version} citation "
                     f"against {clause_id!r}, canonicalised under "
                     f"v{clause.canonicalisation_version}"
                 )
             return quote in clause.canonical_text
         return False
-
-
-def owner_of(instrument_id: str) -> str:
-    """The tenant a clause is stored under: its prefix, or `_public` for
-    library law (ADR-0020)."""
-    return instrument_tenant_prefix(instrument_id) or PUBLIC_TENANT_ID
 
 
 class Verifier:
@@ -120,7 +118,7 @@ class Verifier:
         if citation.clause_id not in context:
             return CheckedCitation(citation, Outcome.NOT_IN_CONTEXT)
         instrument_id, version_id, _ = parse_stable_id(citation.clause_id)
-        owner = owner_of(instrument_id)
+        owner = instrument_owner(instrument_id)
 
         validity = await self._ledger.version_validity(
             tenant_id=owner, instrument_id=instrument_id, version_id=version_id
@@ -138,6 +136,9 @@ class Verifier:
         clause = await self._clause_store.get_clause(citation.clause_id, tenant_id=owner)
         if clause is None:
             return CheckedCitation(citation, Outcome.CLAUSE_MISSING)
+        # The quote is canonicalised now, under the current version; a clause
+        # stored under an older one is not re-canonicalised to fit — it
+        # blocks until re-ingested (`CONTEXT.md`: Canonicalisation version).
         try:
             matches = await self._comparator.verify(
                 citation.clause_id,
@@ -145,7 +146,7 @@ class Verifier:
                 clauses=(clause,),
                 canonicalisation_version=CANONICALISATION_VERSION,
             )
-        except ValueError:
+        except CanonicalisationVersionMismatch:
             return CheckedCitation(citation, Outcome.CANONICALISATION_MISMATCH, clause)
         return CheckedCitation(
             citation, Outcome.VERIFIED if matches else Outcome.QUOTE_MISMATCH, clause
