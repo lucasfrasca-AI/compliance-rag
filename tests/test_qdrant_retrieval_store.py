@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from compliance_rag.adapters.fakes import FakeEmbedder
+from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.corpus.models import Chunk, Scope
 
@@ -65,7 +65,16 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-async def store() -> QdrantRetrievalStore:
+def ledger() -> FakeLedgerStore:
+    """Subscriptions are the ledger's; this test is about the retrieval
+    store's enforcement of them, so the in-memory ledger stands in (there is
+    no Postgres `LedgerStore` adapter yet — the subscription DDL itself is
+    proven against real Postgres in `tests/test_ledger_schema.py`)."""
+    return FakeLedgerStore()
+
+
+@pytest.fixture
+async def store(ledger: FakeLedgerStore) -> QdrantRetrievalStore:
     """A fresh, uniquely-named collection per test run — never reused, so
     tests can't see each other's data and there is nothing to reset between
     runs."""
@@ -75,7 +84,7 @@ async def store() -> QdrantRetrievalStore:
     collection_name = f"clauses-contract-test-{uuid.uuid4().hex[:8]}"
     embedder = FakeEmbedder(dimensions=8)
     retrieval_store = QdrantRetrievalStore(
-        client, collection_name=collection_name, embedder=embedder
+        client, collection_name=collection_name, embedder=embedder, ledger=ledger
     )
     await retrieval_store.ensure_ready()
     await retrieval_store.upsert_chunks(
@@ -106,11 +115,38 @@ async def store() -> QdrantRetrievalStore:
 
 
 async def test_qdrant_retrieval_store_satisfies_the_shared_contract(
-    store: QdrantRetrievalStore,
+    store: QdrantRetrievalStore, ledger: FakeLedgerStore
 ) -> None:
     from tests.contracts.test_interfaces import assert_retrieval_store_contract
 
-    await assert_retrieval_store_contract(store)
+    await assert_retrieval_store_contract(store, ledger)
+
+
+async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
+    ledger: FakeLedgerStore,
+) -> None:
+    """A collection that predates the `instrument_id` index (ADR-0020) gets
+    it on the next `ensure_ready`, without being re-created or emptied."""
+    from qdrant_client import AsyncQdrantClient, models
+
+    client = AsyncQdrantClient(url=_QDRANT_URL)
+    name = f"clauses-legacy-{uuid.uuid4().hex[:8]}"
+    await client.create_collection(
+        name,
+        vectors_config={"dense": models.VectorParams(size=8, distance=models.Distance.COSINE)},
+        sparse_vectors_config={"sparse": models.SparseVectorParams()},
+    )
+    await client.upsert(
+        name,
+        points=[models.PointStruct(id=1, vector={"dense": [0.1] * 8}, payload={"keep": True})],
+    )
+    store = QdrantRetrievalStore(
+        client, collection_name=name, embedder=FakeEmbedder(dimensions=8), ledger=ledger
+    )
+    await store.ensure_ready()
+    info = await client.get_collection(name)
+    assert "instrument_id" in info.payload_schema
+    assert info.points_count == 1
 
 
 async def test_bitemporal_filter_is_one_unconditional_range_both_sides(

@@ -215,6 +215,61 @@ def test_finding_citations_check_rejects_an_invalid_version(
         _insert_finding(conn, "acme", "finding-1", assessment_id, citations)
 
 
+def _subscribe(
+    conn: psycopg.Connection[tuple[object, ...]], tenant_id: str, instrument_id: str
+) -> None:
+    conn.execute(
+        "INSERT INTO tenant_instrument (tenant_id, instrument_id, subscribed_by) "
+        "VALUES (%s, %s, %s)",
+        (tenant_id, instrument_id, "user-1"),
+    )
+
+
+def test_tenant_instrument_records_a_subscription(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """db/ledger/0004_tenant_instrument.sql, proven — not inferred from reading it."""
+    _insert_tenant(conn, "acme")
+    _subscribe(conn, "acme", "privacy-act-1988")
+    row = conn.execute(
+        "SELECT subscribed_by, subscribed_at IS NOT NULL FROM tenant_instrument "
+        "WHERE tenant_id = %s AND instrument_id = %s",
+        ("acme", "privacy-act-1988"),
+    ).fetchone()
+    assert row == ("user-1", True)
+
+
+@pytest.mark.parametrize(
+    "instrument_id",
+    ["acme/privacy-policy", "privacy-act-1988:C2026C00227", ""],
+    ids=["tenant-prefixed", "stable-id-not-instrument-id", "empty"],
+)
+def test_tenant_instrument_accepts_library_ids_only(
+    conn: psycopg.Connection[tuple[object, ...]], instrument_id: str
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _subscribe(conn, "acme", instrument_id)
+
+
+def test_tenant_instrument_requires_a_real_tenant(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """`_public` can't be a `tenant` row (0002), so it can never hold a
+    subscription row either — it sees the library by ownership instead."""
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        _subscribe(conn, "_public", "privacy-act-1988")
+
+
+def test_tenant_instrument_is_one_row_per_tenant_and_instrument(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    _subscribe(conn, "acme", "privacy-act-1988")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        _subscribe(conn, "acme", "privacy-act-1988")
+
+
 def test_finding_citations_check_allows_a_citation_carrying_the_version(
     conn: psycopg.Connection[tuple[object, ...]], assessment_id: str
 ) -> None:

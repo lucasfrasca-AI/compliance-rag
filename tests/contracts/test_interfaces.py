@@ -46,8 +46,9 @@ from compliance_rag.corpus.models import (
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
 
-APP11 = "privacy-act-1988:TEST-FIXTURE-001:sch1/app11/1"
-APP12 = "privacy-act-1988:TEST-FIXTURE-001:sch1/app12/1"
+LIBRARY_INSTRUMENT = "privacy-act-1988"
+APP11 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app11/1"
+APP12 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app12/1"
 
 
 @pytest.fixture
@@ -150,16 +151,19 @@ async def test_crosswalks_respect_the_depth_cap(graph: FakeGraphStore) -> None:
 # --------------------------------------------------------------------------
 
 
-async def assert_retrieval_store_contract(store: RetrievalStore) -> None:
+async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerStore) -> None:
     """The `RetrievalStore` contract itself, against a store already seeded
-    with the `chunks` fixture's three records (D-08). Shared by
-    `FakeRetrievalStore` here and by `QdrantRetrievalStore` against a real,
-    self-hosted, CI-only Qdrant server (`tests/test_qdrant_retrieval_store.py`,
-    issue #22) — one definition of the contract, not two independently
-    written tests that could silently diverge, same reasoning as
-    `assert_reranker_contract` below.
+    with the `chunks` fixture's three records and reading subscriptions from
+    `ledger` (D-08). Shared by `FakeRetrievalStore` here and by
+    `QdrantRetrievalStore` against a real, self-hosted, CI-only Qdrant server
+    (`tests/test_qdrant_retrieval_store.py`, issue #22) — one definition of
+    the contract, not two independently written tests that could silently
+    diverge, same reasoning as `assert_reranker_contract` below.
     """
     assert isinstance(store, RetrievalStore)
+    await ledger.subscribe(
+        tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT, subscribed_by="contract-test"
+    )
 
     # D-03: filtered to Track A's obligation IDs, whatever the text similarity.
     result = await store.search(
@@ -219,15 +223,76 @@ async def assert_retrieval_store_contract(store: RetrievalStore) -> None:
     hit = await store.lookup_clause("acme-policy:v3:sec2/1", tenant_id="other-corp", as_of=TODAY)
     assert hit is None
 
+    # ADR-0020: a tenant that never subscribed to an instrument can't reach
+    # its clauses through any channel — dense, sparse, fused, or keyword.
+    await assert_library_unreachable(store, tenant_id="other-corp")
+
+    # `_public` owns every library chunk: it sees the library with no rows.
+    result = await store.search(
+        "steps to protect the information",
+        obligation_ids=(),
+        tenant_id="_public",
+        scopes=(Scope.PUBLIC,),
+        as_of=TODAY,
+        limit=10,
+    )
+    assert "c1" in {c.chunk_id for c in result.fused}
+
+    # Unsubscribe removes the row and nothing else: acme loses the library
+    # through every channel but keeps its own documents...
+    await ledger.unsubscribe(tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT)
+    await assert_library_unreachable(store, tenant_id="acme")
+    own = await store.search(
+        "retains customer records",
+        obligation_ids=(),
+        tenant_id="acme",
+        scopes=(Scope.PUBLIC, Scope.TENANT),
+        as_of=TODAY,
+        limit=10,
+    )
+    assert "c3" in {c.chunk_id for c in own.fused}
+    # ...and another tenant's view of the shared library is untouched.
+    still_public = await store.lookup_clause(APP11, tenant_id="_public", as_of=TODAY)
+    assert still_public is not None
+
+    # Resubscribing is another row, with nothing re-upserted: the same
+    # stored points become visible again.
+    await ledger.subscribe(
+        tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT, subscribed_by="contract-test"
+    )
+    hit = await store.lookup_clause(APP11, tenant_id="acme", as_of=TODAY)
+    assert hit is not None
+    assert hit.clause_id == APP11
+
+
+async def assert_library_unreachable(store: RetrievalStore, *, tenant_id: str) -> None:
+    """No library clause in either channel, the fused list, or an exact-ID
+    lookup — the four ways a chunk can reach a caller."""
+    library = {"c1", "c2"}
+    result = await store.search(
+        "An APP entity must take steps to protect and give access to the information",
+        obligation_ids=(),
+        tenant_id=tenant_id,
+        scopes=(Scope.PUBLIC, Scope.TENANT),
+        as_of=LATER,
+        limit=10,
+    )
+    assert library.isdisjoint(c.chunk_id for c in result.fused)
+    for candidates in result.per_channel.values():
+        assert library.isdisjoint(c.chunk_id for c in candidates)
+    assert await store.lookup_clause(APP11, tenant_id=tenant_id, as_of=TODAY) is None
+    assert await store.lookup_clause(APP12, tenant_id=tenant_id, as_of=LATER) is None
+
 
 async def test_retrieval_store_is_a_retrieval_store(chunks: tuple[Chunk, ...]) -> None:
-    assert isinstance(FakeRetrievalStore(chunks), RetrievalStore)
+    assert isinstance(FakeRetrievalStore(chunks, ledger=FakeLedgerStore()), RetrievalStore)
 
 
 async def test_fake_retrieval_store_satisfies_the_shared_contract(
     chunks: tuple[Chunk, ...],
 ) -> None:
-    await assert_retrieval_store_contract(FakeRetrievalStore(chunks))
+    ledger = FakeLedgerStore()
+    await assert_retrieval_store_contract(FakeRetrievalStore(chunks, ledger=ledger), ledger)
 
 
 # --------------------------------------------------------------------------
@@ -265,6 +330,41 @@ async def test_assessment_records_versions_and_trace_id() -> None:
     assert row["as_of"] == TODAY
     assert row["trace_id"] == "0" * 32
     assert await ledger.get_assessment("other-corp", "a1") is None
+
+
+async def test_subscriptions_are_per_tenant_and_idempotent() -> None:
+    ledger = FakeLedgerStore()
+    await ledger.subscribe(tenant_id="acme", instrument_id="privacy-act-1988", subscribed_by="u1")
+    await ledger.subscribe(tenant_id="acme", instrument_id="privacy-act-1988", subscribed_by="u2")
+    assert await ledger.subscribed_instruments("acme") == frozenset({"privacy-act-1988"})
+    assert await ledger.subscribed_instruments("other-corp") == frozenset()
+
+
+async def test_unsubscribe_removes_only_that_row() -> None:
+    ledger = FakeLedgerStore()
+    for tenant in ("acme", "other-corp"):
+        await ledger.subscribe(
+            tenant_id=tenant, instrument_id="privacy-act-1988", subscribed_by="u"
+        )
+    await ledger.subscribe(tenant_id="acme", instrument_id="iso-27001", subscribed_by="u")
+    await ledger.unsubscribe(tenant_id="acme", instrument_id="privacy-act-1988")
+    assert await ledger.subscribed_instruments("acme") == frozenset({"iso-27001"})
+    assert await ledger.subscribed_instruments("other-corp") == frozenset({"privacy-act-1988"})
+    await ledger.unsubscribe(tenant_id="acme", instrument_id="never-subscribed")  # no-op
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "instrument_id"),
+    [("acme", "acme/privacy-policy"), ("acme", "beta/privacy-policy"), ("_public", "gdpr")],
+    ids=["own-document", "other-tenants-document", "reserved-tenant"],
+)
+async def test_only_a_real_tenant_can_subscribe_and_only_to_library_law(
+    tenant_id: str, instrument_id: str
+) -> None:
+    with pytest.raises(ValueError):
+        await FakeLedgerStore().subscribe(
+            tenant_id=tenant_id, instrument_id=instrument_id, subscribed_by="u"
+        )
 
 
 # --------------------------------------------------------------------------

@@ -30,6 +30,13 @@ talks to the client calls it unconditionally. There is no public method on
 this class that accepts a caller-supplied filter or exposes the raw client —
 a query that forgets tenant/scope/as_of is not a possible call, not merely a
 discouraged one.
+
+Subscriptions (ADR-0020) are enforced the same way: `_build_filter` reads the
+tenant's subscribed library instruments from the ledger itself on every call,
+so a library chunk is visible only to a tenant subscribed to its
+`instrument_id` (its own payload field — Qdrant can't filter on a substring of
+`clause_id`), or to `_public`, which owns every library chunk. Nothing the
+caller passes can widen that.
 """
 
 from __future__ import annotations
@@ -48,10 +55,11 @@ from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
     Embedder,
+    LedgerStore,
     RetrievalResult,
     RetrievalStore,
 )
-from compliance_rag.corpus.models import Chunk, Scope, epoch_days
+from compliance_rag.corpus.models import Chunk, Scope, epoch_days, parse_stable_id
 from compliance_rag.settings import Settings
 
 DENSE_VECTOR_NAME = "dense"
@@ -59,7 +67,7 @@ SPARSE_VECTOR_NAME = "sparse"
 _SPARSE_MODEL_NAME = "Qdrant/bm25"
 _SPARSE_CACHE_DIR = ".fastembed_cache"
 
-_PAYLOAD_KEYWORD_FIELDS = ("clause_id", "obligation_id", "tenant_id", "scope")
+_PAYLOAD_KEYWORD_FIELDS = ("clause_id", "obligation_id", "tenant_id", "scope", "instrument_id")
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
 
 
@@ -82,27 +90,37 @@ async def ensure_collection(
     client: AsyncQdrantClient, collection_name: str, *, dense_dims: int
 ) -> None:
     """Idempotent bootstrap: create the collection with its dense+sparse
-    vector config and every payload index #22 asks for, unless it already
-    exists. Safe to call on every process start (production) and once per
-    test run (CI's throwaway self-hosted container) — never re-creates an
-    existing collection, so it never discards real data."""
+    vector config unless it already exists, then create any payload index
+    it's missing. Safe to call on every process start (production) and once
+    per test run (CI's throwaway self-hosted container) — never re-creates
+    an existing collection, so it never discards real data, but a collection
+    created before an index was added (`instrument_id`, ADR-0020) still gets
+    it. Points upserted before a field existed don't carry it and must be
+    re-upserted; upsert is idempotent on the deterministic point id."""
     if await client.collection_exists(collection_name):
-        return
-    await client.create_collection(
-        collection_name,
-        vectors_config={
-            DENSE_VECTOR_NAME: models.VectorParams(size=dense_dims, distance=models.Distance.COSINE)
-        },
-        sparse_vectors_config={SPARSE_VECTOR_NAME: models.SparseVectorParams()},
-    )
+        info = await client.get_collection(collection_name)
+        existing = set(info.payload_schema)
+    else:
+        await client.create_collection(
+            collection_name,
+            vectors_config={
+                DENSE_VECTOR_NAME: models.VectorParams(
+                    size=dense_dims, distance=models.Distance.COSINE
+                )
+            },
+            sparse_vectors_config={SPARSE_VECTOR_NAME: models.SparseVectorParams()},
+        )
+        existing = set[str]()
     for field in _PAYLOAD_KEYWORD_FIELDS:
-        await client.create_payload_index(
-            collection_name, field_name=field, field_schema=models.PayloadSchemaType.KEYWORD
-        )
+        if field not in existing:
+            await client.create_payload_index(
+                collection_name, field_name=field, field_schema=models.PayloadSchemaType.KEYWORD
+            )
     for field in _PAYLOAD_INTEGER_FIELDS:
-        await client.create_payload_index(
-            collection_name, field_name=field, field_schema=models.PayloadSchemaType.INTEGER
-        )
+        if field not in existing:
+            await client.create_payload_index(
+                collection_name, field_name=field, field_schema=models.PayloadSchemaType.INTEGER
+            )
 
 
 def _chunk_point_id(chunk_id: str) -> str:
@@ -119,19 +137,29 @@ class QdrantRetrievalStore(RetrievalStore):
     (D-03), fused with Qdrant's native RRF (D-04, D-07)."""
 
     def __init__(
-        self, client: AsyncQdrantClient, *, collection_name: str, embedder: Embedder
+        self,
+        client: AsyncQdrantClient,
+        *,
+        collection_name: str,
+        embedder: Embedder,
+        ledger: LedgerStore,
     ) -> None:
         self._client = client
         self._collection_name = collection_name
         self._embedder = embedder
+        self._ledger = ledger
 
     @classmethod
-    def from_settings(cls, settings: Settings, *, embedder: Embedder) -> QdrantRetrievalStore:
+    def from_settings(
+        cls, settings: Settings, *, embedder: Embedder, ledger: LedgerStore
+    ) -> QdrantRetrievalStore:
         client = AsyncQdrantClient(
             url=settings.qdrant_url or None,
             api_key=settings.qdrant_api_key.get_secret_value() or None,
         )
-        return cls(client, collection_name=settings.qdrant_collection, embedder=embedder)
+        return cls(
+            client, collection_name=settings.qdrant_collection, embedder=embedder, ledger=ledger
+        )
 
     async def ensure_ready(self) -> None:
         await ensure_collection(
@@ -158,6 +186,7 @@ class QdrantRetrievalStore(RetrievalStore):
                 payload={
                     "chunk_id": chunk.chunk_id,
                     "clause_id": chunk.clause_id,
+                    "instrument_id": parse_stable_id(chunk.clause_id)[0],
                     "obligation_id": chunk.obligation_id,
                     "text": chunk.text,
                     "scope": chunk.scope.value,
@@ -170,7 +199,7 @@ class QdrantRetrievalStore(RetrievalStore):
         ]
         await self._client.upsert(self._collection_name, points=points)
 
-    def _build_filter(
+    async def _build_filter(
         self,
         *,
         tenant_id: str,
@@ -181,22 +210,34 @@ class QdrantRetrievalStore(RetrievalStore):
     ) -> models.Filter:
         """The *only* place a `Filter` is built (module docstring). Mirrors
         `FakeRetrievalStore._visible()` exactly, as native Qdrant conditions:
-        scope must be one of `scopes`, AND (scope is public OR tenant_id
-        matches), AND the chunk is in force on `as_of`."""
+        scope must be one of `scopes`, AND (the tenant owns the chunk OR it
+        is library law in an instrument the tenant subscribes to), AND the
+        chunk is in force on `as_of`. Subscriptions are read here, from the
+        ledger, never accepted from the caller (ADR-0020)."""
+        subscribed = await self._ledger.subscribed_instruments(tenant_id)
+        visible_to_tenant: list[models.Condition] = [
+            models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id))
+        ]
+        if subscribed:
+            # An empty MatchAny is not "match nothing" in every Qdrant
+            # version, so with no subscriptions the branch is omitted outright.
+            visible_to_tenant.append(
+                models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="scope", match=models.MatchValue(value=Scope.PUBLIC.value)
+                        ),
+                        models.FieldCondition(
+                            key="instrument_id", match=models.MatchAny(any=sorted(subscribed))
+                        ),
+                    ]
+                )
+            )
         must: list[models.Condition] = [
             models.FieldCondition(
                 key="scope", match=models.MatchAny(any=[s.value for s in scopes])
             ),
-            models.Filter(
-                should=[
-                    models.FieldCondition(
-                        key="scope", match=models.MatchValue(value=Scope.PUBLIC.value)
-                    ),
-                    models.FieldCondition(
-                        key="tenant_id", match=models.MatchValue(value=tenant_id)
-                    ),
-                ]
-            ),
+            models.Filter(should=visible_to_tenant),
             models.FieldCondition(key="valid_from", range=models.Range(lte=epoch_days(as_of))),
             models.FieldCondition(key="valid_to", range=models.Range(gt=epoch_days(as_of))),
         ]
@@ -235,7 +276,7 @@ class QdrantRetrievalStore(RetrievalStore):
         as_of: dt.date,
         limit: int,
     ) -> RetrievalResult:
-        query_filter = self._build_filter(
+        query_filter = await self._build_filter(
             tenant_id=tenant_id, scopes=scopes, as_of=as_of, obligation_ids=obligation_ids
         )
         (dense_vector,) = await self._embedder.embed((query,))
@@ -307,7 +348,7 @@ class QdrantRetrievalStore(RetrievalStore):
         tenant_id: str,
         as_of: dt.date,
     ) -> Candidate | None:
-        scroll_filter = self._build_filter(
+        scroll_filter = await self._build_filter(
             tenant_id=tenant_id,
             scopes=(Scope.PUBLIC, Scope.TENANT, Scope.USER),
             as_of=as_of,
