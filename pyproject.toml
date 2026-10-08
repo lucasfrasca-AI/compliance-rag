@@ -83,13 +83,13 @@ ignore = ["ANN401"]  # Any is allowed where a comment justifies it (CLAUDE.md)
 
 [tool.pyright]
 include = ["src", "tests", "scripts"]
-# export_reranker_onnx.py imports torch/optimum, only resolvable with the
+# export_reranker_onnx.py and export_candidate_reranker.py import torch/optimum, only resolvable with the
 # `export` dependency group installed (`uv sync --group export`) — never
 # present in the main `ci` job, whose `uv run pyright` would otherwise fail
 # on an unresolvable import in a file it has no way to satisfy. Nothing else
 # in `scripts/` or `tests/` imports from it, so type-checking it for real is
 # a local, manual step after `uv sync --group export --dev`.
-exclude = ["scripts/export_reranker_onnx.py"]
+exclude = ["scripts/export_reranker_onnx.py", "scripts/export_candidate_reranker.py"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false

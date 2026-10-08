@@ -18,17 +18,15 @@ import datetime as dt
 import os
 import subprocess
 import sys
-import uuid
 from collections.abc import AsyncIterator
 
 import pytest
 
-from compliance_rag.adapters.fakes import FakeLedgerStore
 from compliance_rag.adapters.interfaces import Candidate, Channel
-from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingCacheMiss
 from compliance_rag.eval.golden import Category, GoldenQuery, GoldenSet, load_golden_set
-from compliance_rag.eval.golden_corpus import golden_chunks, golden_texts
+from compliance_rag.eval.golden_corpus import golden_texts
+from compliance_rag.eval.harness import golden_store
 from compliance_rag.eval.recall import (
     EXIT_BARS,
     FUSED,
@@ -114,6 +112,7 @@ from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
 from compliance_rag.eval.golden import load_golden_set
 from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import NoRerank, measure
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 
@@ -182,23 +181,8 @@ def golden() -> GoldenSet:
 
 @pytest.fixture
 async def results(golden: GoldenSet) -> AsyncIterator[tuple[QueryRecall, ...]]:
-    from qdrant_client import AsyncQdrantClient
-
-    client = AsyncQdrantClient(url=_QDRANT_URL)
-    collection = f"recall-gate-{uuid.uuid4().hex[:8]}"
-    store = QdrantRetrievalStore(
-        client,
-        collection_name=collection,
-        embedder=CachedEmbedder(EmbeddingCache.load()),
-        ledger=FakeLedgerStore(),
-    )
-    try:
-        await store.ensure_ready()
-        await store.upsert_chunks(golden_chunks())
+    async with golden_store(_QDRANT_URL, prefix="recall-gate") as store:
         yield await measure(RetrievalPipeline(store, NoRerank()), golden)
-    finally:
-        await client.delete_collection(collection)
-        await client.close()
 
 
 def _report(results: tuple[QueryRecall, ...]) -> None:
@@ -215,23 +199,13 @@ def _report(results: tuple[QueryRecall, ...]) -> None:
 async def test_exact_id_and_paraphrase_meet_their_exit_bars(
     results: tuple[QueryRecall, ...],
 ) -> None:
-    """Issue #28's enforced bars: exact-ID = 1.0, paraphrase >= 0.9."""
+    """Issue #28's enforced bars on fusion: exact-ID = 1.0, paraphrase >= 0.9.
+    Cross-clause is gated on the delivered, reranked list instead
+    (`test_recall_gate_reranked.py`, ADR-0022): fusion alone measures 0.792,
+    which is what reranking is for."""
     _report(results)
     failing = below_exit_bar(results)
     assert {c: v for c, v in failing.items() if c is not Category.CROSS_CLAUSE} == {}
-
-
-@_needs_qdrant
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Measured 2026-10-08: fused cross_clause recall@10 = 0.792 against PHASES.md's "
-    "0.8 (dense alone 0.896 — RRF demotes clauses the sparse channel misses). An unmet "
-    "Phase 1 exit criterion, kept visible rather than lowered; the cross-encoder's effect "
-    "is measured in #32. strict: once this passes, the marker must come off.",
-)
-async def test_cross_clause_meets_its_exit_bar(results: tuple[QueryRecall, ...]) -> None:
-    assert Category.CROSS_CLAUSE not in below_exit_bar(results)
 
 
 @_needs_qdrant
