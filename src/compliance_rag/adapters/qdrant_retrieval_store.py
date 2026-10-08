@@ -311,6 +311,16 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             ),
         )
 
+    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
+        result = await self._client.count(
+            self._collection_name,
+            count_filter=self._target(
+                instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+            ).filter,
+            exact=True,
+        )
+        return result.count > 0
+
     async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
         await self._client.set_payload(
             self._collection_name,

@@ -32,6 +32,7 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.adapters.removal_authorization import (
     RemovalAuthorization,
     _issue,  # pyright: ignore[reportPrivateUsage] — the one sanctioned issuer
+    stable_id_prefix,
 )
 from compliance_rag.corpus.models import (
     NO_END_DATE,
@@ -57,8 +58,24 @@ class RemovalPreview:
     findings_citing: int
 
 
-def _prefix(instrument_id: str, version_id: str | None) -> str:
-    return f"{instrument_id}:" if version_id is None else f"{instrument_id}:{version_id}:"
+def _check_payload(
+    chunks: tuple[Chunk, ...],
+    clauses: tuple[ClauseRecord, ...],
+    *,
+    instrument_id: str,
+    tenant_id: str,
+    version_id: str,
+) -> None:
+    """Every chunk and clause belongs to exactly this version of this
+    tenant's instrument — checked before any store is touched."""
+    target = (instrument_id, version_id, tenant_id)
+    for chunk in chunks:
+        chunk_instrument, chunk_version, _ = parse_stable_id(chunk.clause_id)
+        if (chunk_instrument, chunk_version, chunk.tenant_id) != target:
+            raise ValueError(f"chunk {chunk.chunk_id!r} is not in {instrument_id}:{version_id}")
+    for clause in clauses:
+        if (clause.instrument_id, clause.version_id, clause.tenant_id) != target:
+            raise ValueError(f"clause {clause.clause_id!r} is not in {instrument_id}:{version_id}")
 
 
 def _tenant_owns(tenant_id: str, instrument_id: str) -> bool:
@@ -92,19 +109,18 @@ class CorpusLifecycle:
         """Upsert a new version's chunks, in force from `effective_from`, and
         retire `supersedes` from the same date. The old chunks stay where
         they are — that is what keeps an issued assessment verifiable."""
-        for chunk in chunks:
-            chunk_instrument, chunk_version, _ = parse_stable_id(chunk.clause_id)
-            if (chunk_instrument, chunk_version, chunk.tenant_id) != (
-                instrument_id,
-                version_id,
-                tenant_id,
-            ):
-                raise ValueError(
-                    f"chunk {chunk.chunk_id!r} is not in {instrument_id}:{version_id} "
-                    f"for tenant {tenant_id!r}"
-                )
+        _check_payload(
+            chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        )
         if supersedes == version_id:
             raise ValueError("a version cannot supersede itself — that is replace-in-place")
+        if await self._retrieval.version_exists(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        ):
+            raise ValueError(
+                f"{instrument_id}:{version_id} is already published; a new upload is a new "
+                "version_id, and changing this one in place is replace_in_place"
+            )
         await self._retrieval.upsert_chunks(
             tuple(
                 c.model_copy(update={"valid_from": effective_from, "valid_to": NO_END_DATE})
@@ -127,7 +143,7 @@ class CorpusLifecycle:
             instrument_id=instrument_id,
             version_id=version_id,
             findings_citing=await self._ledger.count_findings_citing(
-                tenant_id, _prefix(instrument_id, version_id)
+                tenant_id, stable_id_prefix(instrument_id, version_id)
             ),
         )
 
@@ -170,7 +186,7 @@ class CorpusLifecycle:
         what `preview_removal` returns now — a finding cited in between
         forces a fresh look."""
         count = await self._ledger.count_findings_citing(
-            tenant_id, _prefix(instrument_id, version_id)
+            tenant_id, stable_id_prefix(instrument_id, version_id)
         )
         authorization = await self._authorize(
             RemovalAction.PURGE,
@@ -210,8 +226,13 @@ class CorpusLifecycle:
         chunks are swapped under the same `version_id`. Prior citations to
         this version may stop verifying — hence the same findings
         acknowledgement as purge. Never for library law."""
+        if not chunks or not clauses:
+            raise ValueError("replace_in_place needs the full replacement: chunks and clauses")
+        _check_payload(
+            chunks, clauses, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        )
         count = await self._ledger.count_findings_citing(
-            tenant_id, _prefix(instrument_id, version_id)
+            tenant_id, stable_id_prefix(instrument_id, version_id)
         )
         withdrawn = await self._ledger.is_withdrawn(
             tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id

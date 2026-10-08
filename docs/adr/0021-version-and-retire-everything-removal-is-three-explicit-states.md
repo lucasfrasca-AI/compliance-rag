@@ -36,9 +36,14 @@ discipline:
    reranked output. At an `as_of` before the retirement, v1 is the one returned
    — the positive control that keeps the negative from passing vacuously.
 3. **The verifier.** Citations are compared by `clause_id`, which includes
-   `version_id`. A citation to a retired version names a clause that isn't in
-   the retrieved set, so it fails and blocks — even if retrieval somehow
-   leaked it.
+   `version_id`, so a citation to a retired version names a different clause
+   than one to its successor. For this to hold *even if retrieval leaked the
+   retired clause*, the verifier must check, independently of the retrieved
+   set, that the cited version is in force at the request's `as_of` and not
+   withdrawn. That check belongs to the real verifier (issue #30) and is an
+   acceptance criterion there, proven with a deliberately leaked clause. It is
+   **not** proven by this change: asserting it here with only the clauses
+   retrieval returned would just restate mechanism 2.
 
 Deletion offers none of the third property: once the text is gone, there is
 nothing to verify an old citation against, so an issued report silently stops
@@ -75,8 +80,16 @@ bypass them. The adapter:
 
 The store-level deletes that a purge drives (Qdrant points, Cloud Storage
 objects) take a `RemovalAuthorization` that only the lifecycle adapter issues,
-after those checks. Calling them any other way is a deliberate, visible
-bypass, not an accident.
+after those checks. That makes a bypass deliberate and visible — it means
+importing a private issuer under a type-checker suppression — not impossible;
+nothing inside one Python process is. Publishing over an existing version is
+refused for the same reason: it would be a replace in place without the
+guardrails.
+
+"Library law" is decided by the instrument id, not the `scope` field: a
+tenant-owned instrument is exactly one whose id carries that tenant's prefix
+(CONTEXT.md: Instrument id), so the two are equivalent under the id scheme, and
+the id is what every removal call names.
 
 **Replace in place** (same `version_id`, old points deleted) exists only as an
 explicit "typo fix, not a policy change" path. It applies the same guardrails
@@ -97,6 +110,9 @@ it would re-upsert its chunks and silently put it back into retrieval.
   the undo for a mistaken purge. Whether "purge" should mean "gone immediately"
   is a decision about the bucket's policy, not about this code, and is left
   open deliberately.
+- `publish_version` writes Qdrant only; recording the new `instrument_version`
+  row and its `supersedes` in the ledger lands with the Postgres
+  `LedgerStore` adapter (issue #69).
 - There is no Postgres `LedgerStore` adapter yet. The findings count, the
   withdrawn and purged markers and the audit table are implemented on the
   interface and the in-memory fake; their DDL (`db/ledger/0005`) is proven
@@ -104,8 +120,10 @@ it would re-upsert its chunks and silently put it back into retrieval.
   (`count_findings_citing`) so the exact query the guardrail runs is proven
   there now, not first written inside a future adapter.
 - Proven against the real adapter on real Qdrant by one shared contract that
-  the fakes also run: version-and-retire (mechanisms 2 and 3), every refusal,
-  withdraw keeping the points, purge removing only its target, replace-in-place.
+  the fakes also run: version-and-retire (mechanism 2), re-publishing an
+  existing version refused, every refusal, withdraw keeping the points, purge
+  removing only its target, a malformed replacement refused before anything is
+  touched, replace-in-place.
   "Stored" is read straight off the collection with the raw client, so it is
   Qdrant's actual points, not what the adapter chooses to show. Two filter
   mutants — no `withdrawn` exclusion, no `valid_to` bound — each fail it.

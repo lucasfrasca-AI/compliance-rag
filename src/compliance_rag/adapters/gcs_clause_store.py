@@ -204,7 +204,7 @@ class GCSClauseStore(ClauseStore):
         blob = self._bucket.blob(self._source_html_key(instrument_id, version_id))
         return await asyncio.to_thread(_download_text_or_none, blob)
 
-    async def purge(self, authorization: RemovalAuthorization) -> int:
+    async def purge(self, authorization: RemovalAuthorization) -> None:
         """Every generation under the target's prefix, live and noncurrent:
         `list_blobs(versions=True)` yields one blob per generation and
         `Blob.delete()` deletes that blob's own generation. The bucket's
@@ -214,10 +214,8 @@ class GCSClauseStore(ClauseStore):
             f"{a.instrument_id}/" if a.version_id is None else f"{a.instrument_id}/{a.version_id}/"
         )
 
-        def delete_all() -> int:
-            blobs = list(self._bucket.list_blobs(prefix=prefix, versions=True))
-            for blob in blobs:
+        def delete_all() -> None:
+            for blob in list(self._bucket.list_blobs(prefix=prefix, versions=True)):
                 blob.delete()
-            return len(blobs)
 
-        return await asyncio.to_thread(delete_all)
+        await asyncio.to_thread(delete_all)

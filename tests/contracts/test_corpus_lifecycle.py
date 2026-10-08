@@ -38,6 +38,7 @@ NOW = dt.date(2026, 10, 8)
 BETWEEN = dt.date(2026, 1, 1)
 V1_FROM = dt.date(2025, 1, 1)
 V2_FROM = dt.date(2026, 6, 1)
+AFTER_V2 = dt.date(2026, 7, 1)
 
 POLICY = "acme/retention-policy"
 V1 = f"{POLICY}:v1:3/1"
@@ -132,20 +133,21 @@ async def assert_corpus_lifecycle_contract(
     then = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN))
     assert all(V1 in found and V2 not in found for found in then.values()), then
 
-    # Mechanism 3: a citation to the retired version names a clause outside
-    # the retrieved set, so it fails — even though v1's text is still stored.
-    retrieved = await pipeline.retrieve(QUERY, "acme", NOW)
-    records: list[ClauseRecord] = []
-    for candidate in retrieved.ranked_candidates():
-        record = await clauses.get_clause(candidate.clause_id, tenant_id="acme")
-        if record is not None:
-            records.append(record)
-    assert not await verifier.verify(
-        V1, V1_TEXT, clauses=tuple(records), canonicalisation_version=CANONICALISATION_VERSION
-    )
-    assert await verifier.verify(
-        V2, V2_TEXT, clauses=tuple(records), canonicalisation_version=CANONICALISATION_VERSION
-    )
+    # Mechanism 3 — a citation to a retired version blocks even if retrieval
+    # leaked it — is the real verifier's to prove (issue #30), against a
+    # retrieved set that does contain the retired clause. Asserting it here
+    # with only what retrieval returned would just restate mechanism 2.
+
+    # Re-publishing an existing version would be a replace in place.
+    with pytest.raises(ValueError, match="already published"):
+        await lifecycle.publish_version(
+            (_chunk(v2),),
+            instrument_id=POLICY,
+            tenant_id="acme",
+            version_id="v2",
+            effective_from=V2_FROM,
+            supersedes="v1",
+        )
 
     # --- Library law and other tenants' documents are refused, audited. ---
     refusals = [
@@ -207,7 +209,7 @@ async def assert_corpus_lifecycle_contract(
         actor="u1",
         reason="superseded by board resolution",
     )
-    for as_of in (NOW, BETWEEN):
+    for as_of in (NOW, AFTER_V2):  # both on or after v2 took effect
         found = _routes(await pipeline.retrieve(QUERY, "acme", as_of))
         assert all(V2 not in ids for ids in found.values()), found
     assert await store.lookup_clause(V2, tenant_id="acme", as_of=NOW) is None
@@ -217,7 +219,7 @@ async def assert_corpus_lifecycle_contract(
     assert await verifier.verify(
         V2, V2_TEXT, clauses=(still_stored,), canonicalisation_version=CANONICALISATION_VERSION
     )
-    assert ledger.withdrawn[("acme", POLICY, "v2")] == "u1"
+    assert await ledger.is_withdrawn(tenant_id="acme", instrument_id=POLICY, version_id="v2")
     with pytest.raises(RemovalRefused, match="withdrawn"):
         await lifecycle.replace_in_place(
             (_chunk(v2),),
@@ -293,6 +295,28 @@ async def assert_corpus_lifecycle_contract(
         effective_from=V1_FROM,
         supersedes=None,
     )
+    # A malformed replacement is refused before anything is touched: the
+    # target would otherwise be deleted with nothing put back.
+    malformed = [
+        ((), ()),
+        ((_chunk(fixed),), (v2,)),  # a clause from another instrument
+    ]
+    for bad_chunks, bad_clauses in malformed:
+        with pytest.raises(ValueError):
+            await lifecycle.replace_in_place(
+                bad_chunks,
+                bad_clauses,
+                tenant_id="acme",
+                instrument_id=HANDBOOK,
+                version_id="v1",
+                source_html="<p>handbook</p>",
+                actor="u1",
+                reason="typo",
+                acknowledged_findings_citing=0,
+            )
+    assert typo.clause_id in await stored_chunk_ids()
+    assert await clauses.get_clause(typo.clause_id, tenant_id="acme") is not None
+
     await lifecycle.replace_in_place(
         (_chunk(fixed),),
         (fixed,),
@@ -360,3 +384,55 @@ async def test_a_version_cannot_supersede_itself() -> None:
             effective_from=V1_FROM,
             supersedes="v1",
         )
+
+
+async def assert_clause_store_purge_contract(clauses: ClauseStore) -> None:
+    """`ClauseStore.purge`, shared by `FakeClauseStore` here and
+    `GCSClauseStore` (over a versioned in-memory bucket) in
+    `tests/test_gcs_clause_store.py`: the target goes, everything else stays —
+    including an instrument whose id merely starts the same way."""
+    from compliance_rag.adapters.removal_authorization import (
+        _issue,  # pyright: ignore[reportPrivateUsage] — the store's half of the contract
+    )
+
+    def tenant_clause(instrument_id: str, version_id: str) -> ClauseRecord:
+        return _clause(
+            f"{instrument_id}:{version_id}:3/1", f"{instrument_id} {version_id}", tenant_id="acme"
+        )
+
+    near_miss = f"{POLICY}-archive"
+    for instrument_id, version_id in ((POLICY, "v1"), (POLICY, "v2"), (near_miss, "v1")):
+        await clauses.put_clause(tenant_clause(instrument_id, version_id))
+        await clauses.put_manifest(
+            instrument_id,
+            version_id,
+            tenant_id="acme",
+            canonicalisation_version=CANONICALISATION_VERSION,
+            source_html="<p/>",
+        )
+
+    async def present(instrument_id: str, version_id: str) -> bool:
+        return (
+            await clauses.get_clause(f"{instrument_id}:{version_id}:3/1", tenant_id="acme")
+            is not None
+            or await clauses.get_source_html(instrument_id, version_id, tenant_id="acme")
+            is not None
+            or bool(await clauses.get_manifest(instrument_id, version_id, tenant_id="acme"))
+        )
+
+    await clauses.purge(
+        _issue(tenant_id="acme", instrument_id=POLICY, version_id="v1", audit_id="a")
+    )
+    assert not await present(POLICY, "v1")
+    assert await present(POLICY, "v2")
+    assert await present(near_miss, "v1")
+
+    await clauses.purge(
+        _issue(tenant_id="acme", instrument_id=POLICY, version_id=None, audit_id="b")
+    )
+    assert not await present(POLICY, "v2")
+    assert await present(near_miss, "v1")
+
+
+async def test_fake_clause_store_satisfies_the_purge_contract() -> None:
+    await assert_clause_store_purge_contract(FakeClauseStore())

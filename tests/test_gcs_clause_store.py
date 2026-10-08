@@ -278,16 +278,24 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_purge_deletes_every_generation_under_the_target_and_nothing_else() -> None:
+async def test_gcs_clause_store_satisfies_the_purge_contract() -> None:
+    from tests.contracts.test_corpus_lifecycle import assert_clause_store_purge_contract
+
+    await assert_clause_store_purge_contract(GCSClauseStore(_FakeBucket()))
+
+
+async def test_purge_deletes_noncurrent_generations_too() -> None:
+    """The versioned bucket keeps every overwrite as a noncurrent generation;
+    purge must take those as well, not just the live objects."""
     from compliance_rag.adapters.removal_authorization import (
-        _issue,  # pyright: ignore[reportPrivateUsage] — testing the store's half of the contract
+        _issue,  # pyright: ignore[reportPrivateUsage] — the store's half of the contract
     )
     from compliance_rag.corpus.models import Scope
 
-    def tenant_clause(instrument_id: str, version_id: str, text: str) -> ClauseRecord:
+    def clause(text: str) -> ClauseRecord:
         return ClauseRecord.build(
-            instrument_id=instrument_id,
-            version_id=version_id,
+            instrument_id="acme/retention-policy",
+            version_id="v1",
             clause_path="3/1",
             text=text,
             scope=Scope.TENANT,
@@ -296,24 +304,15 @@ async def test_purge_deletes_every_generation_under_the_target_and_nothing_else(
 
     bucket = _FakeBucket()
     store = GCSClauseStore(bucket)
-    await store.put_clause(tenant_clause("acme/retention-policy", "v1", "seven years"))
-    await store.put_clause(
-        tenant_clause("acme/retention-policy", "v1", "seven years, then destroyed")
-    )
-    await store.put_clause(tenant_clause("acme/retention-policy", "v2", "five years"))
-    await store.put_clause(
-        tenant_clause("acme/retention-policy-archive", "v1", "a near-miss prefix")
-    )
+    await store.put_clause(clause("seven years"))
+    await store.put_clause(clause("seven years, then destroyed"))
     assert any(n.startswith("acme/retention-policy/v1/") for n, _, _ in bucket.noncurrent)
 
-    deleted = await store.purge(
+    await store.purge(
         _issue(
-            tenant_id="acme", instrument_id="acme/retention-policy", version_id="v1", audit_id="a1"
+            tenant_id="acme", instrument_id="acme/retention-policy", version_id="v1", audit_id="a"
         )
     )
 
-    assert deleted > 0
     remaining = list(bucket.objects) + [n for n, _, _ in bucket.noncurrent]
     assert not [n for n in remaining if n.startswith("acme/retention-policy/v1/")]
-    assert "acme/retention-policy/v2/clauses/3/1.json" in bucket.objects
-    assert "acme/retention-policy-archive/v1/clauses/3/1.json" in bucket.objects

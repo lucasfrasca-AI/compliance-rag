@@ -248,6 +248,11 @@ class RetrievalAdmin(ABC):
     async def upsert_chunks(self, chunks: tuple[Chunk, ...]) -> None: ...
 
     @abstractmethod
+    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
+        """Whether any chunk of this version is stored, visible or not —
+        publishing over an existing version would be a replace in place."""
+
+    @abstractmethod
     async def retire_version(
         self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date
     ) -> None:
@@ -334,7 +339,8 @@ class LedgerStore(ABC):
         reason: str,
     ) -> None:
         """The ledger keeps the version row with a purged marker; nothing
-        about who, when and why is ever deleted (ADR-0021)."""
+        about who, when and why is ever deleted (ADR-0021). `version_id`
+        None marks every version row of the instrument."""
 
     @abstractmethod
     async def record_removal_audit(self, entry: RemovalAuditEntry) -> None: ...
@@ -401,10 +407,9 @@ class ClauseStore(ABC):
         version, or `None` if none has been stored yet."""
 
     @abstractmethod
-    async def purge(self, authorization: RemovalAuthorization) -> int:
+    async def purge(self, authorization: RemovalAuthorization) -> None:
         """Delete every stored object under the target — clauses, source,
-        manifest, and every noncurrent version of each — returning how many
-        were deleted (ADR-0021)."""
+        manifest, and every noncurrent version of each (ADR-0021)."""
 
 
 class Reranker(ABC):

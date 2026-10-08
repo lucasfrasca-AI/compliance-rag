@@ -141,12 +141,20 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
 
     def __init__(self, chunks: tuple[Chunk, ...] = (), *, ledger: LedgerStore) -> None:
         self._chunks = {c.chunk_id: c for c in chunks}
-        self._withdrawn: set[tuple[str, str, str]] = set()
+        # Per stored chunk, like Qdrant's per-point payload flag: a chunk
+        # upserted after the withdrawal is not withdrawn.
+        self._withdrawn: set[str] = set()
         self._ledger = ledger
 
     async def upsert_chunks(self, chunks: tuple[Chunk, ...]) -> None:
         for chunk in chunks:
             self._chunks[chunk.chunk_id] = chunk
+            self._withdrawn.discard(chunk.chunk_id)
+
+    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
+        return any(
+            _version_key(c) == (tenant_id, instrument_id, version_id) for c in self._chunks.values()
+        )
 
     async def retire_version(
         self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date
@@ -157,7 +165,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
 
     async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
         self._withdrawn.update(
-            _version_key(c) for c in self._chunks.values() if _authorized(c, authorization)
+            c.chunk_id for c in self._chunks.values() if _authorized(c, authorization)
         )
 
     async def delete_chunks(self, authorization: RemovalAuthorization) -> None:
@@ -182,7 +190,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
     def _visible(
         self, chunk: Chunk, tenant_id: str, scopes: tuple[Scope, ...], subscribed: frozenset[str]
     ) -> bool:
-        if chunk.scope not in scopes or _version_key(chunk) in self._withdrawn:
+        if chunk.scope not in scopes or chunk.chunk_id in self._withdrawn:
             return False
         if chunk.tenant_id == tenant_id:
             return True
@@ -426,7 +434,7 @@ class FakeClauseStore(ClauseStore):
     ) -> str | None:
         return self._source_html.get((tenant_id, instrument_id, version_id))
 
-    async def purge(self, authorization: RemovalAuthorization) -> int:
+    async def purge(self, authorization: RemovalAuthorization) -> None:
         a = authorization
         doomed_clauses = [
             key
@@ -444,7 +452,6 @@ class FakeClauseStore(ClauseStore):
         for key in doomed_versions:
             self._source_html.pop(key, None)
             self._manifest_metadata.pop(key, None)
-        return len(doomed_clauses) + 2 * len(doomed_versions)
 
 
 class FakeReranker(Reranker):

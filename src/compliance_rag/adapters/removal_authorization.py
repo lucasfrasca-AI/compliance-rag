@@ -4,10 +4,13 @@ Purge and replace-in-place guardrails — refuse library law, show the count of
 findings citing the target before acting, audit every outcome — live in
 `CorpusLifecycle`, the one adapter that issues a `RemovalAuthorization`. The
 store-level operations that actually delete or withdraw (`RetrievalAdmin`,
-`ClauseStore.purge`) take one and act only on the target it names, so there is
-no way to reach them without passing those checks except by deliberately
-importing `_issue` — which `CorpusLifecycle` alone does, under a visible
-`reportPrivateUsage` suppression.
+`ClauseStore.purge`) take one and act only on the target it names.
+
+This makes bypassing the guardrails deliberate and visible, not impossible —
+nothing in one Python process is. Reaching a store-level delete without them
+means importing `_issue` (or `_ISSUER`) under a `reportPrivateUsage`
+suppression: `CorpusLifecycle` does, and so does the store's own purge test,
+which is exercising the store's half of the contract.
 """
 
 from __future__ import annotations
@@ -49,10 +52,15 @@ class RemovalAuthorization:
 
     @property
     def stable_id_prefix(self) -> str:
-        """The prefix every clause id under this target starts with."""
-        if self.version_id is None:
-            return f"{self.instrument_id}:"
-        return f"{self.instrument_id}:{self.version_id}:"
+        return stable_id_prefix(self.instrument_id, self.version_id)
+
+
+def stable_id_prefix(instrument_id: str, version_id: str | None) -> str:
+    """What every clause id under one instrument (`version_id` None) or one
+    instrument version starts with."""
+    if version_id is None:
+        return f"{instrument_id}:"
+    return f"{instrument_id}:{version_id}:"
 
 
 def _issue(  # pyright: ignore[reportUnusedFunction] — called only by CorpusLifecycle
