@@ -1,9 +1,11 @@
 # Golden set (CONTEXT.md: Golden set; issue #27).
 #
-# DRAFT — NOT YET A LABEL. Every expected_clause_ids value below was proposed by
-# the author named in `author`. It becomes a label only when the person named in
-# `reviewed_by` has corrected it and signed off by setting `date`. Their
-# correction is the human judgement D-01 requires; this draft is a proposal.
+# Query text and the first proposal for every expected_clause_ids value were
+# drafted by the model named in `author`. The labels are the reviewer's: each
+# was checked against the clause text and approved by the person named in
+# `reviewed_by` on `date`. That review is the human judgement D-01 requires;
+# the model's draft was only a proposal. A model-drafted file needs a distinct
+# human reviewer (corpus/mappings/README.md: Review).
 #
 # One file, file-level front matter, matching corpus/mappings/README.md.
 # tenant_id carries scope: `_public` sees the whole library by ownership
@@ -11,9 +13,9 @@
 # here. A single retrieve() never crosses that boundary, so no cross_clause
 # entry spans both.
 
-author: "Claude Opus 5.5 — query text drafted for issue #27; every expected_clause_ids value is a DRAFT until reviewed_by signs off"
-reviewed_by: "PENDING — the human reviewer, same identity convention as corpus/instruments manifest.yaml"
-date: "PENDING — the date the reviewer corrects and signs off, not the draft date"
+author: "model: Claude Opus 5.5 — query text and proposed labels drafted for issue #27"
+reviewed_by: "Piero Frasca"
+date: "2026-10-08"
 
 queries:
   # ---- exact_id: the router's keyword channel, end to end ------------------

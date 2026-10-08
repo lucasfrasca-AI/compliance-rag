@@ -68,10 +68,9 @@ def test_a_missing_required_field_fails_loudly(missing_field: str) -> None:
 
 
 def test_author_and_reviewed_by_may_be_the_same_person() -> None:
-    """Unlike mapping YAML, a selection manifest doesn't require a distinct
-    second reviewer — a solo builder has no one else to name
-    (`corpus/mappings/README.md`: "Selection manifests: single-author
-    review"). A placeholder that can never resolve would be worse than an
+    """Single-author review: a human may review their own file — a solo
+    builder has no one else to name (`corpus/mappings/README.md`:
+    "Review"). A placeholder that can never resolve would be worse than an
     honest single name."""
     source = """
 author: jane.doe@example.com
@@ -168,3 +167,20 @@ def test_select_result_is_sorted_by_clause_path() -> None:
     clauses = (_clause("sch1/app12/1"), _clause("sch1/app11/1"))
     selected = manifest.select(clauses)
     assert [c.clause_path for c in selected] == ["sch1/app11/1", "sch1/app12/1"]
+
+
+def test_a_model_may_draft_a_manifest_but_never_review_one() -> None:
+    """`corpus/mappings/README.md`: Review — the same rule as the golden set."""
+    SelectionManifest(
+        author="model: Claude Opus 5.5",
+        reviewed_by="Piero Frasca",
+        date="2026-10-08",
+        prefixes=("s6/",),
+    )
+    with pytest.raises(ValueError, match="never a model"):
+        SelectionManifest(
+            author="Piero Frasca",
+            reviewed_by="model: Claude Opus 5.5",
+            date="2026-10-08",
+            prefixes=("s6/",),
+        )

@@ -72,11 +72,12 @@ def test_every_category_is_represented(golden: GoldenSet) -> None:
     assert {q.category for q in golden.queries} == set(Category)
 
 
-def test_an_unsigned_golden_set_says_so(golden: GoldenSet) -> None:
-    """Until the reviewer signs, the file is a proposal, and must not read
-    as a label set (D-01)."""
-    if not golden.is_signed_off:
-        assert "DRAFT" in golden.author
+def test_the_labels_are_signed_by_a_person_not_the_drafting_model(golden: GoldenSet) -> None:
+    """D-01: the model drafted, a person reviewed. The recall gate (#28)
+    refuses an unsigned file, so this is what makes these labels count."""
+    assert golden.is_signed_off
+    assert golden.author.startswith("model:")
+    assert not golden.reviewed_by.startswith("model:")
 
 
 @pytest.mark.parametrize(
@@ -122,10 +123,18 @@ def test_the_schema_refuses_a_malformed_entry(entry: dict[str, object], problem:
         GoldenSet.model_validate(document)
 
 
-def test_the_reviewer_must_differ_from_the_author(golden: GoldenSet) -> None:
+def _document(**front_matter: str) -> dict[str, object]:
     raw = yaml.safe_load(
         Path(__file__).resolve().parents[1].joinpath("corpus/golden/queries.yaml").read_text()
     )
-    raw["reviewed_by"] = raw["author"]
-    with pytest.raises(ValueError, match="must differ"):
-        GoldenSet.model_validate(raw)
+    return raw | front_matter
+
+
+def test_a_model_never_reviews_its_own_or_any_draft() -> None:
+    with pytest.raises(ValueError, match="never a model"):
+        GoldenSet.model_validate(_document(reviewed_by="model: Claude Opus 5.5"))
+
+
+def test_a_signed_file_carries_a_real_review_date() -> None:
+    with pytest.raises(ValueError):
+        GoldenSet.model_validate(_document(date="last week"))

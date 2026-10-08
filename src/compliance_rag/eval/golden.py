@@ -22,6 +22,7 @@ from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     instrument_tenant_prefix,
     parse_stable_id,
+    validate_review,
     validate_tenant_segment,
 )
 
@@ -80,12 +81,13 @@ class GoldenSet(BaseModel):
     queries: tuple[GoldenQuery, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _ids_unique_and_reviewer_distinct(self) -> GoldenSet:
+    def _ids_unique_and_reviewed_by_a_person(self) -> GoldenSet:
         ids = [q.id for q in self.queries]
         if len(ids) != len(set(ids)):
             raise ValueError("golden query ids must be unique")
-        if self.reviewed_by == self.author:
-            raise ValueError("reviewed_by must differ from author (mapping YAML convention)")
+        validate_review(self.author, self.reviewed_by)
+        if self.is_signed_off:
+            dt.date.fromisoformat(self.date)  # a signed file carries the real review date
         return self
 
     @property
