@@ -122,6 +122,32 @@ async def test_qdrant_retrieval_store_satisfies_the_shared_contract(
     await assert_retrieval_store_contract(store, ledger)
 
 
+async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedgerStore) -> None:
+    """ADR-0021 against the real adapter. "Stored" is read straight off the
+    collection through the raw client, ignoring every filter — so "withdrawn
+    but retained" and "purged" are about Qdrant's actual points, not about
+    what the adapter chooses to show."""
+    from qdrant_client import AsyncQdrantClient
+
+    from compliance_rag.adapters.fakes import FakeClauseStore
+    from tests.contracts.test_corpus_lifecycle import assert_corpus_lifecycle_contract
+
+    client = AsyncQdrantClient(url=_QDRANT_URL)
+    name = f"clauses-lifecycle-{uuid.uuid4().hex[:8]}"
+    store = QdrantRetrievalStore(
+        client, collection_name=name, embedder=FakeEmbedder(dimensions=8), ledger=ledger
+    )
+    await store.ensure_ready()
+
+    async def stored_chunk_ids() -> frozenset[str]:
+        points, _ = await client.scroll(name, limit=1000, with_payload=True)
+        return frozenset(str((p.payload or {})["chunk_id"]) for p in points)
+
+    await assert_corpus_lifecycle_contract(
+        store, store, ledger, FakeClauseStore(), stored_chunk_ids
+    )
+
+
 async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
     ledger: FakeLedgerStore,
 ) -> None:

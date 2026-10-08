@@ -36,12 +36,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterable
 from typing import Any, Protocol, cast
 
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
 from compliance_rag.adapters.interfaces import ClauseStore, ManifestMetadata
+from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import (
     ClauseRecord,
     canonical_sha256,
@@ -53,10 +55,12 @@ from compliance_rag.corpus.models import (
 class _BlobLike(Protocol):
     def upload_from_string(self, data: str, content_type: str | None = None) -> None: ...
     def download_as_text(self) -> str: ...
+    def delete(self) -> None: ...
 
 
 class _BucketLike(Protocol):
     def blob(self, name: str, /) -> _BlobLike: ...
+    def list_blobs(self, *, prefix: str, versions: bool) -> Iterable[_BlobLike]: ...
 
 
 def _download_text_or_none(blob: _BlobLike) -> str | None:
@@ -199,3 +203,19 @@ class GCSClauseStore(ClauseStore):
     ) -> str | None:
         blob = self._bucket.blob(self._source_html_key(instrument_id, version_id))
         return await asyncio.to_thread(_download_text_or_none, blob)
+
+    async def purge(self, authorization: RemovalAuthorization) -> None:
+        """Every generation under the target's prefix, live and noncurrent:
+        `list_blobs(versions=True)` yields one blob per generation and
+        `Blob.delete()` deletes that blob's own generation. The bucket's
+        soft-delete retention still applies after this (ADR-0021)."""
+        a = authorization
+        prefix = (
+            f"{a.instrument_id}/" if a.version_id is None else f"{a.instrument_id}/{a.version_id}/"
+        )
+
+        def delete_all() -> None:
+            for blob in list(self._bucket.list_blobs(prefix=prefix, versions=True)):
+                blob.delete()
+
+        await asyncio.to_thread(delete_all)

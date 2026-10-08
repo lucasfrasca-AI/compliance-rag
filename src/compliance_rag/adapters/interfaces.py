@@ -18,7 +18,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from compliance_rag.corpus.models import ClauseRecord, Scope, validate_tenant_id
+from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, validate_tenant_id
 
 # --------------------------------------------------------------------------
 # Shared value objects
@@ -119,6 +120,38 @@ class Generation:
     stop_reason: str | None = None
 
 
+class RemovalAction(StrEnum):
+    """The removal operations that are audited (ADR-0021). Unsubscribe isn't
+    one: it touches no store (ADR-0020)."""
+
+    WITHDRAW = "withdraw"
+    PURGE = "purge"
+    REPLACE_IN_PLACE = "replace_in_place"
+
+
+class RemovalOutcome(StrEnum):
+    REFUSED = "refused"
+    AUTHORIZED = "authorized"
+    """Written before any store is touched, so a crash mid-removal still
+    leaves a trace."""
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class RemovalAuditEntry:
+    audit_id: str
+    tenant_id: str
+    instrument_id: str
+    version_id: str | None
+    action: RemovalAction
+    outcome: RemovalOutcome
+    actor: str
+    reason: str
+    findings_citing: int | None
+    detail: str = ""
+
+
 @dataclass(frozen=True, slots=True)
 class ManifestMetadata:
     """The version-level fields of a `manifest.json` that aren't a
@@ -205,6 +238,36 @@ class RetrievalStore(ABC):
         """Exact clause-ID lookup. The router sends ID queries here (D-12)."""
 
 
+class RetrievalAdmin(ABC):
+    """The write side of a retrieval store (ADR-0021): never replace in
+    place, never delete on update. A new version is upserted next to the old
+    one and the old one is retired with `valid_to`; withdrawal and deletion
+    need a `RemovalAuthorization`, which only `CorpusLifecycle` issues."""
+
+    @abstractmethod
+    async def upsert_chunks(self, chunks: tuple[Chunk, ...]) -> None: ...
+
+    @abstractmethod
+    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
+        """Whether any chunk of this version is stored, visible or not —
+        publishing over an existing version would be a replace in place."""
+
+    @abstractmethod
+    async def retire_version(
+        self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date
+    ) -> None:
+        """Set `valid_to` on every chunk of this version. Nothing is removed."""
+
+    @abstractmethod
+    async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
+        """Exclude the target from retrieval at every `as_of`, keeping its
+        text and vectors so prior citations still verify."""
+
+    @abstractmethod
+    async def delete_chunks(self, authorization: RemovalAuthorization) -> None:
+        """Actually delete the target's chunks."""
+
+
 class LedgerStore(ABC):
     """Postgres. The one non-derivable store (D-09)."""
 
@@ -248,6 +311,42 @@ class LedgerStore(ABC):
     async def subscribed_instruments(self, tenant_id: str) -> frozenset[str]:
         """Library instrument ids this tenant may retrieve from. Empty for
         `_public`, which sees the library by ownership, not subscription."""
+
+    @abstractmethod
+    async def count_findings_citing(self, tenant_id: str, stable_id_prefix: str) -> int:
+        """Findings of this tenant with at least one citation whose
+        `clause_id` starts with `stable_id_prefix` — `instrument:` for every
+        version, `instrument:version:` for one (ADR-0021)."""
+
+    @abstractmethod
+    async def mark_withdrawn(
+        self, *, tenant_id: str, instrument_id: str, version_id: str, withdrawn_by: str
+    ) -> None: ...
+
+    @abstractmethod
+    async def is_withdrawn(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> bool: ...
+
+    @abstractmethod
+    async def mark_purged(
+        self,
+        *,
+        tenant_id: str,
+        instrument_id: str,
+        version_id: str | None,
+        purged_by: str,
+        reason: str,
+    ) -> None:
+        """The ledger keeps the version row with a purged marker; nothing
+        about who, when and why is ever deleted (ADR-0021). `version_id`
+        None marks every version row of the instrument."""
+
+    @abstractmethod
+    async def record_removal_audit(self, entry: RemovalAuditEntry) -> None: ...
+
+    @abstractmethod
+    async def removal_audit(self, tenant_id: str) -> tuple[RemovalAuditEntry, ...]: ...
 
 
 class ClauseStore(ABC):
@@ -306,6 +405,11 @@ class ClauseStore(ABC):
     ) -> str | None:
         """The exact HTML last stored by `put_manifest` for this instrument
         version, or `None` if none has been stored yet."""
+
+    @abstractmethod
+    async def purge(self, authorization: RemovalAuthorization) -> None:
+        """Delete every stored object under the target — clauses, source,
+        manifest, and every noncurrent version of each (ADR-0021)."""
 
 
 class Reranker(ABC):

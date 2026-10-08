@@ -25,28 +25,60 @@ VERSION_ID = "C2026C00227"
 
 
 class _FakeBlob:
-    def __init__(self, objects: dict[str, str], name: str) -> None:
-        self._objects = objects
+    def __init__(self, bucket: _FakeBucket, name: str, generation: int | None = None) -> None:
+        self._bucket = bucket
         self.name = name
+        self.generation = generation
 
     def upload_from_string(self, data: str, content_type: str | None = None) -> None:
-        self._objects[self.name] = data
+        self._bucket.write(self.name, data)
 
     def download_as_text(self) -> str:
         try:
-            return self._objects[self.name]
+            return self._bucket.objects[self.name]
         except KeyError:
             raise NotFound(self.name) from None
 
+    def delete(self) -> None:
+        self._bucket.delete(self.name, self.generation)
+
 
 class _FakeBucket:
-    """Just enough of `storage.Bucket` for `GCSClauseStore` to talk to."""
+    """Just enough of a *versioned* `storage.Bucket` for `GCSClauseStore`:
+    an overwrite keeps the previous content as a noncurrent generation, and
+    `list_blobs(versions=True)` yields one blob per generation, as the real
+    bucket (versioning enabled, `SERVICES.md`) does."""
 
     def __init__(self) -> None:
         self.objects: dict[str, str] = {}
+        self.noncurrent: list[tuple[str, int, str]] = []
+        self._live_generation: dict[str, int] = {}
+        self._next_generation = 1
+
+    def write(self, name: str, data: str) -> None:
+        if name in self.objects:
+            self.noncurrent.append((name, self._live_generation[name], self.objects[name]))
+        self.objects[name] = data
+        self._live_generation[name] = self._next_generation
+        self._next_generation += 1
+
+    def delete(self, name: str, generation: int | None) -> None:
+        if generation is None or self._live_generation.get(name) == generation:
+            self.objects.pop(name, None)
+            self._live_generation.pop(name, None)
+        self.noncurrent = [g for g in self.noncurrent if (g[0], g[1]) != (name, generation)]
 
     def blob(self, name: str) -> _FakeBlob:
-        return _FakeBlob(self.objects, name)
+        return _FakeBlob(self, name)
+
+    def list_blobs(self, *, prefix: str, versions: bool) -> list[_FakeBlob]:
+        live = [
+            _FakeBlob(self, n, self._live_generation[n])
+            for n in self.objects
+            if n.startswith(prefix)
+        ]
+        old = [_FakeBlob(self, n, g) for (n, g, _) in self.noncurrent if n.startswith(prefix)]
+        return live + (old if versions else [])
 
 
 def _clause(clause_path: str, text: str = "some clause text") -> ClauseRecord:
@@ -239,3 +271,48 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("GCSClauseStore tests must not touch a real storage.Client")
 
     monkeypatch.setattr(storage_module, "Client", _fail)
+
+
+# --------------------------------------------------------------------------
+# purge (ADR-0021)
+# --------------------------------------------------------------------------
+
+
+async def test_gcs_clause_store_satisfies_the_purge_contract() -> None:
+    from tests.contracts.test_corpus_lifecycle import assert_clause_store_purge_contract
+
+    await assert_clause_store_purge_contract(GCSClauseStore(_FakeBucket()))
+
+
+async def test_purge_deletes_noncurrent_generations_too() -> None:
+    """The versioned bucket keeps every overwrite as a noncurrent generation;
+    purge must take those as well, not just the live objects."""
+    from compliance_rag.adapters.removal_authorization import (
+        _issue,  # pyright: ignore[reportPrivateUsage] — the store's half of the contract
+    )
+    from compliance_rag.corpus.models import Scope
+
+    def clause(text: str) -> ClauseRecord:
+        return ClauseRecord.build(
+            instrument_id="acme/retention-policy",
+            version_id="v1",
+            clause_path="3/1",
+            text=text,
+            scope=Scope.TENANT,
+            tenant_id="acme",
+        )
+
+    bucket = _FakeBucket()
+    store = GCSClauseStore(bucket)
+    await store.put_clause(clause("seven years"))
+    await store.put_clause(clause("seven years, then destroyed"))
+    assert any(n.startswith("acme/retention-policy/v1/") for n, _, _ in bucket.noncurrent)
+
+    await store.purge(
+        _issue(
+            tenant_id="acme", instrument_id="acme/retention-policy", version_id="v1", audit_id="a"
+        )
+    )
+
+    remaining = list(bucket.objects) + [n for n, _, _ in bucket.noncurrent]
+    assert not [n for n in remaining if n.startswith("acme/retention-policy/v1/")]

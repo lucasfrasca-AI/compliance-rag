@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 from collections.abc import Iterator
+from typing import LiteralString
 
 import psycopg
 import pytest
@@ -286,3 +287,107 @@ def test_finding_citations_check_allows_a_citation_carrying_the_version(
             }
         ],
     )  # must not raise
+
+
+# --------------------------------------------------------------------------
+# db/ledger/0005_version_removal.sql (ADR-0021)
+# --------------------------------------------------------------------------
+
+
+def _seed_version(
+    conn: psycopg.Connection[tuple[object, ...]], tenant_id: str, instrument_id: str
+) -> None:
+    _insert_tenant(conn, tenant_id)
+    conn.execute(
+        "INSERT INTO instrument (tenant_id, instrument_id, title, jurisdiction, scope) "
+        "VALUES (%s, %s, %s, %s, 'tenant')",
+        (tenant_id, instrument_id, "Retention policy", "AU"),
+    )
+    conn.execute(
+        "INSERT INTO instrument_version "
+        "(tenant_id, instrument_id, version_id, title, status, valid_from) "
+        "VALUES (%s, %s, 'v1', 'v1', 'in_force', %s)",
+        (tenant_id, instrument_id, dt.date(2025, 1, 1)),
+    )
+
+
+def test_withdrawn_and_purged_markers_keep_the_version_row(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _seed_version(conn, "acme", "acme/retention-policy")
+    conn.execute(
+        "UPDATE instrument_version SET withdrawn_at = now(), withdrawn_by = 'u1', "
+        "purged_at = now(), purged_by = 'u1', purge_reason = 'legal hold lifted' "
+        "WHERE tenant_id = 'acme' AND instrument_id = 'acme/retention-policy'"
+    )
+    row = conn.execute(
+        "SELECT withdrawn_by, purged_by, purge_reason FROM instrument_version "
+        "WHERE tenant_id = 'acme' AND instrument_id = 'acme/retention-policy'"
+    ).fetchone()
+    assert row == ("u1", "u1", "legal hold lifted")
+
+
+def test_a_removal_marker_records_who_when_and_why_together(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _seed_version(conn, "acme", "acme/retention-policy")
+    incomplete: tuple[LiteralString, ...] = (
+        "UPDATE instrument_version SET withdrawn_at = now() WHERE tenant_id = 'acme'",
+        "UPDATE instrument_version SET purged_at = now(), purged_by = 'u1' "
+        "WHERE tenant_id = 'acme'",
+        "UPDATE instrument_version SET purged_by = 'u1', purge_reason = 'r' "
+        "WHERE tenant_id = 'acme'",
+    )
+    for statement in incomplete:
+        with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+            conn.execute(statement)
+
+
+def test_removal_audit_records_a_refusal_for_a_non_tenant(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """No FK to `tenant`: a refused request naming `_public` must still be auditable."""
+    conn.execute(
+        "INSERT INTO corpus_removal_audit "
+        "(audit_id, tenant_id, instrument_id, action, outcome, actor, reason) "
+        "VALUES ('a1', '_public', 'privacy-act-1988', 'purge', 'refused', 'admin', 'typo')"
+    )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO corpus_removal_audit "
+            "(audit_id, tenant_id, instrument_id, action, outcome, actor, reason) "
+            "VALUES ('a2', 'acme', 'acme/x', 'delete', 'completed', 'u1', 'r')"
+        )
+
+
+def test_count_findings_citing_matches_by_stable_id_prefix(
+    conn: psycopg.Connection[tuple[object, ...]], assessment_id: str
+) -> None:
+    def cite(finding_id: str, *clause_ids: str) -> None:
+        _insert_finding(
+            conn,
+            "acme",
+            finding_id,
+            assessment_id,
+            [
+                {"clause_id": c, "quoted_text": "t", "canonicalisation_version": 2}
+                for c in clause_ids
+            ],
+        )
+
+    cite("f1", "acme/retention_policy:v1:3/1")
+    cite("f2", "acme/retention_policy:v1:3/2", "acme/retention_policy:v2:3/1")
+    cite("f3", "acme/retention_policy:v2:3/1")
+    cite("f4", "acme/retentionXpolicy:v1:3/1")  # '_' must not act as a LIKE wildcard
+
+    def count(prefix: str) -> object:
+        row = conn.execute("SELECT count_findings_citing('acme', %s)", (prefix,)).fetchone()
+        assert row is not None
+        return row[0]
+
+    assert count("acme/retention_policy:v1:") == 2
+    assert count("acme/retention_policy:v2:") == 2
+    assert count("acme/retention_policy:") == 3
+    assert conn.execute(
+        "SELECT count_findings_citing('other-corp', 'acme/retention_policy:')"
+    ).fetchone() == (0,)
