@@ -1,0 +1,197 @@
+# Golden set (CONTEXT.md: Golden set; issue #27).
+#
+# DRAFT — NOT YET A LABEL. Every expected_clause_ids value below was proposed by
+# the author named in `author`. It becomes a label only when the person named in
+# `reviewed_by` has corrected it and signed off by setting `date`. Their
+# correction is the human judgement D-01 requires; this draft is a proposal.
+#
+# One file, file-level front matter, matching corpus/mappings/README.md.
+# tenant_id carries scope: `_public` sees the whole library by ownership
+# (ADR-0020); `acme` sees only its own documents, since it subscribes to nothing
+# here. A single retrieve() never crosses that boundary, so no cross_clause
+# entry spans both.
+
+author: "Claude Opus 5.5 — query text drafted for issue #27; every expected_clause_ids value is a DRAFT until reviewed_by signs off"
+reviewed_by: "PENDING — the human reviewer, same identity convention as corpus/instruments manifest.yaml"
+date: "PENDING — the date the reviewer corrects and signs off, not the draft date"
+
+queries:
+  # ---- exact_id: the router's keyword channel, end to end ------------------
+  - id: GQ-01
+    category: exact_id
+    query: "privacy-act-1988:C2026C00227:sch1/app11/1"
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/1]
+  - id: GQ-02
+    category: exact_id
+    query: "privacy-act-1988:C2026C00227:sch1/app11/1/a"
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/1/a]
+  - id: GQ-03
+    category: exact_id
+    query: "privacy-act-1988:C2026C00227:sch1/app11/2"
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/2]
+  - id: GQ-04
+    category: exact_id
+    query: "privacy-act-1988:C2026C00227:sch1/app10/1"
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app10/1]
+  - id: GQ-05
+    category: exact_id
+    query: "privacy-act-1988:C2026C00227:s6c/1"
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:s6c/1]
+  - id: GQ-06
+    category: exact_id
+    query: "privacy-act-1988:C2026C00227:s6/1/agency"
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:s6/1/agency]
+  - id: GQ-07
+    category: exact_id
+    query: "acme/privacy-policy:v1:3/2"
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids: [acme/privacy-policy:v1:3/2]
+  - id: GQ-08
+    category: exact_id
+    query: "acme/vendor-policy:v1:2/1"
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids: [acme/vendor-policy:v1:2/1]
+
+  # ---- paraphrase: one clause, said differently ----------------------------
+  - id: GQ-09
+    category: paraphrase
+    query: What must a company do to keep personal data safe from being misused or lost?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/1/a]
+  - id: GQ-10
+    category: paraphrase
+    query: If we no longer need someone's personal details, what are we supposed to do with them?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/2]
+  - id: GQ-11
+    category: paraphrase
+    query: Does information we collect about customers need to stay accurate and up to date?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app10/1]
+  - id: GQ-12
+    category: paraphrase
+    query: What makes a business small enough to be exempt from counting as an organisation under the Act?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:s6c/1]
+  - id: GQ-13
+    category: paraphrase
+    query: How does unauthorised access or disclosure of personal information need to be guarded against?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/1/b]
+  - id: GQ-14
+    category: paraphrase
+    query: Do the technical and organisational security measures apply to both the protection and the retention duties under APP 11?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/3]
+  - id: GQ-15
+    category: paraphrase
+    query: Who at Acme do I contact if I'm unhappy with how my personal information was handled?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids: [acme/privacy-policy:v1:1/2]
+  - id: GQ-16
+    category: paraphrase
+    query: Can Acme use my purchase history to send me promotional emails without asking first?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids: [acme/privacy-policy:v1:3/2]
+  - id: GQ-17
+    category: paraphrase
+    query: How long does Acme keep a customer's account details after I close my account?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids: [acme/data-security-policy:v1:3/1]
+
+  # ---- cross_clause: several clauses jointly relevant, one scope -----------
+  - id: GQ-18
+    category: cross_clause
+    query: What are all the specific ways personal information must be protected under APP 11.1?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app11/1
+      - privacy-act-1988:C2026C00227:sch1/app11/1/a
+      - privacy-act-1988:C2026C00227:sch1/app11/1/b
+  - id: GQ-19
+    category: cross_clause
+    query: What's the difference between what APP 10 requires at collection versus at use or disclosure?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app10/1
+      - privacy-act-1988:C2026C00227:sch1/app10/2
+  - id: GQ-20
+    category: cross_clause
+    query: Who counts as an "agency" versus a "State or Territory authority" under the Act?
+    tenant_id: _public
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - privacy-act-1988:C2026C00227:s6/1/agency
+      - privacy-act-1988:C2026C00227:s6c/3
+  - id: GQ-21
+    category: cross_clause
+    query: What does our Data Security and Retention Policy say about keeping customer information safe, covering both encryption and who can access it?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - acme/data-security-policy:v1:1/1
+      - acme/data-security-policy:v1:2/1
+  - id: GQ-22
+    category: cross_clause
+    query: What are our retention rules for customer accounts versus payment card details?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - acme/data-security-policy:v1:3/1
+      - acme/data-security-policy:v1:3/2
+  - id: GQ-23
+    category: cross_clause
+    query: How does Acme handle a customer's request to see their data compared to a request to fix it?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - acme/access-correction-procedure:v1:2/1
+      - acme/access-correction-procedure:v1:3/1
+  - id: GQ-24
+    category: cross_clause
+    query: Can Acme use a customer's details for marketing without getting their consent first?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - acme/privacy-policy:v1:3/2
+      - acme/marketing-policy:v1:1/1
+    notes: >
+      The contradicting pair docs/research/synthetic-policy-set.md documents
+      (D1 §3.2 opt-in vs D5 §1.1 opt-out). Both must surface for a reader to see
+      the conflict.
+  - id: GQ-25
+    category: cross_clause
+    query: Are our overseas vendor arrangements properly assessed against the Australian Privacy Principles?
+    tenant_id: acme
+    as_of: 2026-10-01
+    expected_clause_ids:
+      - acme/privacy-policy:v1:4/1
+      - acme/vendor-policy:v1:2/1
+    notes: >
+      The second documented conflict (D1 §4.1's "reasonable steps" vs D4 §2.1
+      naming a vendor with no APP-equivalent law and §2.2 waiving assessment).
