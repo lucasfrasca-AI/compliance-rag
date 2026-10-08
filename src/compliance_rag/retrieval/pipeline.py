@@ -5,6 +5,10 @@ this tracer bullet proves the retrieve -> rerank -> generate -> verify shape
 end to end (Loop B, `CONTEXT.md`), not the full loop. `obligation_ids` is
 always passed empty to `RetrievalStore.search`, which is D-03's "no filter"
 case, not a bypass of it.
+
+`RetrievalPipeline.from_settings` is the real composition (issue #25): the
+Qdrant store, the Vertex embedder and the reranker client, with no LLM
+anywhere in the path.
 """
 
 from __future__ import annotations
@@ -15,12 +19,14 @@ from dataclasses import dataclass
 from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
+    LedgerStore,
     Reranker,
     RetrievalStore,
     ScoredDocument,
 )
 from compliance_rag.corpus.models import Scope
 from compliance_rag.retrieval.router import is_clause_id_query
+from compliance_rag.settings import Settings
 from compliance_rag.telemetry import span
 
 
@@ -60,6 +66,22 @@ class RetrievalPipeline:
     def __init__(self, retrieval_store: RetrievalStore, reranker: Reranker) -> None:
         self.retrieval_store = retrieval_store
         self.reranker = reranker
+
+    @classmethod
+    def from_settings(cls, settings: Settings, *, ledger: LedgerStore) -> RetrievalPipeline:
+        """The real adapters behind the same `retrieve()` the fakes proved
+        (issue #25). The reranker endpoint's residency is asserted when its
+        client is built (`build_reranker_http_client`, D-15)."""
+        from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
+        from compliance_rag.adapters.reranker_client import RerankerClient
+        from compliance_rag.adapters.reranker_http_client import build_reranker_http_client
+        from compliance_rag.adapters.vertex_embedder import VertexEmbedder
+
+        store = QdrantRetrievalStore.from_settings(
+            settings, embedder=VertexEmbedder.from_settings(settings), ledger=ledger
+        )
+        reranker = RerankerClient(build_reranker_http_client(settings.reranker_url))
+        return cls(store, reranker)
 
     async def retrieve(
         self,

@@ -130,6 +130,17 @@ jobs:
       id-token: write # mint the OIDC token for Workload Identity Federation
       contents: read
 
+    # The one job with the converted model, so retrieve() end to end — real
+    # Qdrant, real router, real cross-encoder (issue #25) — runs here too.
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.19.1
+        ports:
+          - 6333:6333
+
+    env:
+      QDRANT_URL: http://localhost:6333
+
     steps:
       - uses: actions/checkout@v4
 
@@ -143,6 +154,12 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync --dev
+
+      - name: Cache the fastembed BM25 model
+        uses: actions/cache@v4
+        with:
+          path: .fastembed_cache
+          key: fastembed-qdrant-bm25-v1
 
       # Same account as the `trace` job, scoped separately: compliance-rag-ci
       # otherwise holds only logging.* roles (SERVICES.md: Workload Identity
@@ -174,8 +191,19 @@ jobs:
         if: steps.artifact-cache.outputs.cache-hit != 'true'
         run: uv run python scripts/fetch_reranker_artifact.py
 
-      - name: Re-verify fp32-vs-int8 fidelity + reranker service tests
-        run: uv run pytest tests/test_reranker_onnx_fidelity.py tests/test_reranker_service.py -v
+      # The token was only for fetching the artifact. Delete it before any
+      # test code runs: compliance-rag-ci can read the _Default log bucket,
+      # and code that doesn't need that access shouldn't run holding it
+      # (issue #10's standing constraint).
+      - name: Re-verify fidelity, reranker service, and retrieve() end to end
+        run: |
+          rm -f "$GOOGLE_GHA_CREDS_PATH"
+          env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE \
+              -u GOOGLE_GHA_CREDS_PATH \
+            uv run pytest -v -rs \
+              tests/test_reranker_onnx_fidelity.py \
+              tests/test_reranker_service.py \
+              tests/test_retrieve_real_adapters.py
 
   trace:
     name: trace-check
