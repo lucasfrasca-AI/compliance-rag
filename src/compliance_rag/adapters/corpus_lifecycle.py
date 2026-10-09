@@ -21,6 +21,10 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+from compliance_rag.adapters.generation_residency import (
+    assert_upload_allowed,
+    validate_generation_region,
+)
 from compliance_rag.adapters.interfaces import (
     ClauseStore,
     LedgerStore,
@@ -89,8 +93,13 @@ class CorpusLifecycle:
         ledger: LedgerStore,
         retrieval: RetrievalAdmin,
         clauses: ClauseStore,
+        generation_region: str,
         new_audit_id: Callable[[], str] = lambda: uuid.uuid4().hex,
     ) -> None:
+        """`generation_region` is where answers about this corpus are
+        generated: while it is offshore, real tenant data is refused at the
+        door (ADR-0023). Required, so no caller forgets it."""
+        self._generation_region = validate_generation_region(generation_region)
         self._ledger = ledger
         self._retrieval = retrieval
         self._clauses = clauses
@@ -112,6 +121,7 @@ class CorpusLifecycle:
         _check_payload(
             chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
+        assert_upload_allowed(chunks, generation_region=self._generation_region)
         if supersedes == version_id:
             raise ValueError("a version cannot supersede itself — that is replace-in-place")
         if await self._retrieval.version_exists(
@@ -249,6 +259,7 @@ class CorpusLifecycle:
         _check_payload(
             chunks, clauses, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
+        assert_upload_allowed(chunks, generation_region=self._generation_region)
         count = await self._ledger.count_findings_citing(
             tenant_id, stable_id_prefix(instrument_id, version_id)
         )

@@ -152,6 +152,9 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
             self._chunks[chunk.chunk_id] = chunk
             self._withdrawn.discard(chunk.chunk_id)
 
+    async def holds_real_tenant_data(self) -> bool:
+        return any(c.scope is Scope.TENANT and not c.synthetic for c in self._chunks.values())
+
     async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
         return any(
             _version_key(c) == (tenant_id, instrument_id, version_id) for c in self._chunks.values()

@@ -79,7 +79,7 @@ _PAYLOAD_KEYWORD_FIELDS = (
     "instrument_id",
     "version_id",
 )
-_PAYLOAD_BOOL_FIELDS = ("withdrawn",)
+_PAYLOAD_BOOL_FIELDS = ("withdrawn", "synthetic")
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
 
 
@@ -227,6 +227,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     "instrument_id": parse_stable_id(chunk.clause_id)[0],
                     "version_id": parse_stable_id(chunk.clause_id)[1],
                     "withdrawn": False,
+                    "synthetic": chunk.synthetic,
                     "obligation_id": chunk.obligation_id,
                     "text": chunk.text,
                     "scope": chunk.scope.value,
@@ -333,6 +334,25 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                 instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
             ),
         )
+
+    async def holds_real_tenant_data(self) -> bool:
+        # must_not synthetic=true, not must synthetic=false: a point written
+        # before the field existed has no `synthetic` key and counts as real.
+        result = await self._client.count(
+            self._collection_name,
+            count_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="scope", match=models.MatchValue(value=Scope.TENANT.value)
+                    )
+                ],
+                must_not=[
+                    models.FieldCondition(key="synthetic", match=models.MatchValue(value=True))
+                ],
+            ),
+            exact=True,
+        )
+        return result.count > 0
 
     async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
         result = await self._client.count(

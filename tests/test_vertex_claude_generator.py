@@ -9,11 +9,10 @@ import pytest
 from anthropic.types import Message, MessageParam, TextBlock, TextBlockParam, Usage
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from compliance_rag.adapters.vertex_claude_generator import (
-    GeneratorResidencyError,
-    VertexClaudeGenerator,
-    price_usd,
-)
+from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
+from compliance_rag.adapters.generation_residency import GenerationResidencyError
+from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator, price_usd
+from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.settings import Settings
 
 PREFIX = (
@@ -54,7 +53,7 @@ class FakeMessages:
 
 
 async def _generate(messages: FakeMessages, prefix: str | None = PREFIX) -> Any:  # Any: Generation
-    generator = VertexClaudeGenerator(messages, model="claude-test")
+    generator = VertexClaudeGenerator(messages, model="claude-test", region="asia-southeast1")
     return await generator.generate(system="sys", cached_prefix=prefix, user="q", max_tokens=64)
 
 
@@ -101,7 +100,8 @@ async def test_the_span_carries_tokens_cache_and_cost_but_no_prompt_text(
     cost = attributes["generator.cost_usd"]
     assert isinstance(cost, float) and cost > 0
     assert attributes["generator.prefix_not_cached"] is False
-    assert str(attributes["generator.price_table"]).endswith("-unverified")
+    assert str(attributes["generator.price_table"]).startswith("claude-sonnet-4-6-vertex-regional")
+    assert attributes["generator.region"] == "asia-southeast1"
     # Prompt text never reaches the span: neither the system text, the
     # cached policy prefix nor the user turn.
     rendered = " ".join(str(v) for v in attributes.values())
@@ -121,10 +121,19 @@ async def test_a_prefix_the_api_did_not_cache_is_flagged(
 
 def test_a_generator_with_no_model_is_refused() -> None:
     with pytest.raises(ValueError, match="VERTEX_CLAUDE_MODEL"):
-        VertexClaudeGenerator(FakeMessages(), model="")
+        VertexClaudeGenerator(FakeMessages(), model="", region="asia-southeast1")
 
 
-def test_the_real_client_is_built_for_sydney_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def _settings(region: str = "asia-southeast1") -> Settings:
+    return Settings(
+        _env_file=None,  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
+        gcp_project_id="p",
+        vertex_claude_model="claude-test",
+        vertex_claude_region=region,
+    )
+
+
+def _patch_client(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:  # Any: constructor kwargs
     built: dict[str, Any] = {}  # Any: constructor kwargs
 
     class Client:
@@ -135,18 +144,56 @@ def test_the_real_client_is_built_for_sydney_only(monkeypatch: pytest.MonkeyPatc
     import anthropic.lib.vertex
 
     monkeypatch.setattr(anthropic.lib.vertex, "AsyncAnthropicVertex", Client)
-    settings = Settings(
-        _env_file=None,  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
-        gcp_project_id="p",
-        vertex_claude_model="claude-test",
-    )
-    VertexClaudeGenerator.from_settings(settings)
-    assert built == {"region": "australia-southeast1", "project_id": "p"}
+    return built
 
 
-def test_a_non_sydney_region_is_refused_even_past_settings_validation() -> None:
-    """`Settings` already refuses another region; this is the second lock,
-    for a Settings built without validation."""
-    settings = Settings.model_construct(gcp_region="global", vertex_claude_model="claude-test")
-    with pytest.raises(GeneratorResidencyError):
-        VertexClaudeGenerator.from_settings(settings)
+def _corpus(*chunks: Chunk) -> FakeRetrievalStore:
+    return FakeRetrievalStore(chunks, ledger=FakeLedgerStore())
+
+
+LAW = Chunk(chunk_id="law", clause_id="privacy-act-1988:C1:s6/1", text="law")
+SYNTHETIC = Chunk(
+    chunk_id="syn",
+    clause_id="acme/privacy-policy:v1:1/1",
+    text="invented",
+    scope=Scope.TENANT,
+    tenant_id="acme",
+    synthetic=True,
+)
+REAL = SYNTHETIC.model_copy(update={"chunk_id": "real", "synthetic": False})
+
+
+async def test_singapore_is_allowed_while_the_corpus_is_law_and_synthetic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = _patch_client(monkeypatch)
+    await VertexClaudeGenerator.create(_settings(), corpus=_corpus(LAW, SYNTHETIC))
+    assert built == {"region": "asia-southeast1", "project_id": "p"}
+
+
+async def test_singapore_is_refused_once_any_real_tenant_data_is_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0023's gate: one real (unmarked) tenant chunk closes offshore
+    generation, and no client is ever built."""
+    built = _patch_client(monkeypatch)
+    with pytest.raises(GenerationResidencyError, match="real"):
+        await VertexClaudeGenerator.create(_settings(), corpus=_corpus(LAW, SYNTHETIC, REAL))
+    assert built == {}
+
+
+async def test_sydney_generation_is_allowed_with_real_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate is about offshore generation, not real data as such."""
+    built = _patch_client(monkeypatch)
+    await VertexClaudeGenerator.create(_settings("australia-southeast1"), corpus=_corpus(LAW, REAL))
+    assert built["region"] == "australia-southeast1"
+
+
+@pytest.mark.parametrize("region", ["global", "us-east5", "europe-west1", "us"])
+def test_the_global_endpoint_and_every_other_region_are_refused(region: str) -> None:
+    with pytest.raises(ValueError, match="never `global`"):
+        _settings(region)
+    with pytest.raises(GenerationResidencyError):
+        VertexClaudeGenerator(FakeMessages(), model="claude-test", region=region)

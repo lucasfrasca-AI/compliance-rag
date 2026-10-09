@@ -44,7 +44,7 @@ Deliverables
 - Router: clause-ID regex → keyword lookup, skip rerank; else hybrid → rerank
 - **Reranker service** on Cloud Run (`australia-southeast1`): FastAPI + ONNX Runtime, `POST /rerank {query, documents[]}` → scores; models benchmarked: `BAAI/bge-reranker-v2-m3` (default), `mixedbread-ai/mxbai-rerank-base-v2`, `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - **ColBERT rescoring** in Qdrant (multivector, HNSW off) as the A/B; Vertex Ranking API adapter kept for CI only, hard-gated to `TENANT_ID == dev-tenant`
-- Generator adapter (Claude on Vertex) with structured output; prompt caching on the system prefix
+- Generator adapter (Claude on Vertex — `claude-sonnet-4-6` at `asia-southeast1` during build, ADR-0023) with structured output; prompt caching on the system prefix
 - **Citation verifier**: canonical-form comparison against Cloud Storage; fail → targeted repair
 - **Eval harness**: 25 labelled queries to start (exact ID, paraphrase, cross-clause) — enough to catch a regression, expanded when a real failure shows a gap rather than padded to a count; recall@k per channel and fused; verifier pass rate; runs in CI as a regression gate
 - ISO 27001 Annex A **control IDs only** (`A.8.3`), each with our own one-line descriptor. Not ISO's titles: a title like "Information access restriction" is ISO's authored wording, not a fact, and reproducing all 93 is arguably substantial reproduction of a paid standard. An ID is a reference; our gloss is our text. A crosswalk targets the ID, so nothing is lost functionally. Real titles are something a licensed customer supplies. This is a flagged legal risk, not legal advice — if the titles are wanted, get a written view first
@@ -123,4 +123,4 @@ Unlocks: Cloud Scheduler, Cloud Workflows.
 
 ## Phase 5 — Hardening (outside build budget; decisions only)
 
-Residency move for the graph (Aura Pro in AU — Qdrant is already in Sydney), trace UI (Phoenix on Cloud Run, or self-hosted Langfuse if prompt management is ever needed), real multi-tenancy (RLS, per-tenant labels, scope filters enforced in adapters), SSO via OIDC/SAML. Each is an ADR before it is a task.
+**AU-resident generation**: Claude on Vertex is not served from Sydney (ADR-0023); generation runs in `asia-southeast1` during build, gated to public law plus synthetic data. Before the first real customer document, generation must move to Sydney — today that means `gemini-3.5-flash` on Single Zone Provisioned Throughput, **~$2.2–3k/month**, a real pricing fact about this market that a first customer has to fund, plus a new `Generator` adapter and its own ADR. Residency move for the graph (Aura Pro in AU — Qdrant is already in Sydney), trace UI (Phoenix on Cloud Run, or self-hosted Langfuse if prompt management is ever needed), real multi-tenancy (RLS, per-tenant labels, scope filters enforced in adapters), SSO via OIDC/SAML. Each is an ADR before it is a task.

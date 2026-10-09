@@ -1,4 +1,7 @@
-"""`Generator` over Claude on Vertex AI, in `australia-southeast1` (issue #29).
+"""`Generator` over Claude on Vertex AI (issue #29), in `asia-southeast1` during
+the build phase (ADR-0023): Claude is not served from `australia-southeast1`.
+`create` refuses to build a client offshore once the corpus holds real tenant
+data (`adapters/generation_residency.py`).
 
 The tenant policy corpus rides as a cached prompt prefix (D-11): it is the
 last system block and carries `cache_control`, so every request for the same
@@ -21,22 +24,27 @@ from typing import Protocol
 from anthropic.types import Message, MessageParam, TextBlock, TextBlockParam
 
 from compliance_rag import telemetry
-from compliance_rag.adapters.interfaces import Generation, Generator
-from compliance_rag.settings import REGION, Settings
+from compliance_rag.adapters.generation_residency import (
+    assert_generation_allowed,
+    validate_generation_region,
+)
+from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
+from compliance_rag.settings import Settings
 
-# Sonnet-class list prices per token, USD (2026-10-08). Vertex's regional
-# endpoints are priced at a premium over its global endpoint; this repo only
-# ever uses the regional one (D-07). Re-verify against the Vertex AI pricing
-# page before trusting a projection built on these — they are constants, and
-# pricing pages change without telling them.
+# `claude-sonnet-4-6` per-token prices, USD: Google's list rates times the 10%
+# premium regional endpoints carry over the global one — this repo only ever
+# uses a regional endpoint. Checked against the Vertex AI pricing page's
+# regional table on 2026-10-09: input $3.30, output $16.50, 5-minute cache
+# write $4.13, cache hit $0.33 per 1M tokens. Constants: re-check when the
+# model or the page changes.
 _INPUT_USD = 3.00 / 1_000_000
 _OUTPUT_USD = 15.00 / 1_000_000
 _CACHE_WRITE_USD = 3.75 / 1_000_000  # 5-minute ephemeral cache write: 1.25x input
 _CACHE_READ_USD = 0.30 / 1_000_000  # cache hit: 0.1x input
 _REGIONAL_PREMIUM = 1.10
-PRICE_TABLE = "sonnet-list-regional-2026-10-08-unverified"
+PRICE_TABLE = "claude-sonnet-4-6-vertex-regional-2026-10-09"
 """Names the rates above on every span, so a cost figure carries its own
-provenance; `-unverified` comes off once checked against a real invoice line."""
+provenance (checked against Google's published page, not yet an invoice)."""
 
 
 def price_usd(*, uncached_input: int, cache_write: int, cache_read: int, output: int) -> float:
@@ -59,28 +67,29 @@ class _MessagesLike(Protocol):
     ) -> Message: ...
 
 
-class GeneratorResidencyError(ValueError):
-    """Claude on Vertex outside `australia-southeast1` (D-07)."""
-
-
 class VertexClaudeGenerator(Generator):
-    def __init__(self, messages: _MessagesLike, *, model: str) -> None:
+    def __init__(self, messages: _MessagesLike, *, model: str, region: str) -> None:
         if not model:
             raise ValueError("no Claude model configured (VERTEX_CLAUDE_MODEL)")
         self._messages = messages
         self._model = model
+        self._region = validate_generation_region(region)
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> VertexClaudeGenerator:
-        """The one place a real Vertex client is built. The region is
-        asserted here as well as in `Settings`: a `global` or US endpoint
-        would move prompts — tenant policy text — out of Australia."""
-        if settings.gcp_region != REGION:
-            raise GeneratorResidencyError(f"Claude on Vertex must run in {REGION}")
+    async def create(cls, settings: Settings, *, corpus: RetrievalAdmin) -> VertexClaudeGenerator:
+        """The one place a real Vertex client is built — after the residency
+        gate (ADR-0023). The region is re-validated here as well as in
+        `Settings` (`global` and anything but Sydney/Singapore refused), and
+        an offshore region is refused outright while `corpus` holds any real
+        tenant data. Async because the gate asks the store."""
+        region = validate_generation_region(settings.vertex_claude_region)
+        assert_generation_allowed(
+            generation_region=region, holds_real_tenant_data=await corpus.holds_real_tenant_data()
+        )
         from anthropic.lib.vertex import AsyncAnthropicVertex  # only the real path needs it
 
-        client = AsyncAnthropicVertex(region=REGION, project_id=settings.gcp_project_id)
-        return cls(client.messages, model=settings.vertex_claude_model)
+        client = AsyncAnthropicVertex(region=region, project_id=settings.gcp_project_id)
+        return cls(client.messages, model=settings.vertex_claude_model, region=region)
 
     async def generate(
         self,
@@ -97,7 +106,11 @@ class VertexClaudeGenerator(Generator):
             )
         with telemetry.span(
             "generator.generate",
-            **{"generator.model": self._model, "generator.cached_prefix_sent": bool(cached_prefix)},
+            **{
+                "generator.model": self._model,
+                "generator.region": self._region,
+                "generator.cached_prefix_sent": bool(cached_prefix),
+            },
         ) as current:
             message = await self._messages.create(
                 model=self._model,

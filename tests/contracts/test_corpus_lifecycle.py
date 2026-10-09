@@ -33,8 +33,10 @@ from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.chunker import chunk_clause
 from compliance_rag.corpus.models import CANONICALISATION_VERSION, Chunk, ClauseRecord, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
 
 NOW = dt.date(2026, 10, 8)
+GENERATION_REGION = BUILD_PHASE_OFFSHORE_REGION  # the build phase's setting
 BETWEEN = dt.date(2026, 1, 1)
 V1_FROM = dt.date(2025, 1, 1)
 V2_FROM = dt.date(2026, 6, 1)
@@ -68,7 +70,10 @@ V2_TEXT = "Customer account records are retained for five years after closure."
 
 
 def _chunk(record: ClauseRecord) -> Chunk:
-    return chunk_clause(record, count_tokens=lambda text: len(text.split()))
+    # The contract's Acme documents are invented: marked synthetic, as the
+    # build-phase residency gate requires of any tenant upload (ADR-0023).
+    chunk = chunk_clause(record, count_tokens=lambda text: len(text.split()))
+    return chunk.model_copy(update={"synthetic": True})
 
 
 def _routes(trace: RetrievalTrace) -> dict[str, frozenset[str]]:
@@ -90,7 +95,9 @@ async def assert_corpus_lifecycle_contract(
     clauses: ClauseStore,
     stored_chunk_ids: Callable[[], Awaitable[frozenset[str]]],
 ) -> None:
-    lifecycle = CorpusLifecycle(ledger=ledger, retrieval=admin, clauses=clauses)
+    lifecycle = CorpusLifecycle(
+        ledger=ledger, retrieval=admin, clauses=clauses, generation_region=GENERATION_REGION
+    )
     pipeline = RetrievalPipeline(store, FakeReranker())
     verifier = FakeCitationVerifier()
 
@@ -360,7 +367,10 @@ async def test_a_removal_that_fails_midway_is_audited_as_failed() -> None:
             raise RuntimeError("qdrant unavailable")
 
     lifecycle = CorpusLifecycle(
-        ledger=ledger, retrieval=BrokenStore(ledger=ledger), clauses=FakeClauseStore()
+        ledger=ledger,
+        retrieval=BrokenStore(ledger=ledger),
+        clauses=FakeClauseStore(),
+        generation_region=GENERATION_REGION,
     )
     with pytest.raises(RuntimeError, match="qdrant unavailable"):
         await lifecycle.purge(
@@ -379,7 +389,10 @@ async def test_a_removal_that_fails_midway_is_audited_as_failed() -> None:
 async def test_a_version_cannot_supersede_itself() -> None:
     ledger = FakeLedgerStore()
     lifecycle = CorpusLifecycle(
-        ledger=ledger, retrieval=FakeRetrievalStore(ledger=ledger), clauses=FakeClauseStore()
+        ledger=ledger,
+        retrieval=FakeRetrievalStore(ledger=ledger),
+        clauses=FakeClauseStore(),
+        generation_region=GENERATION_REGION,
     )
     with pytest.raises(ValueError, match="replace-in-place"):
         await lifecycle.publish_version(

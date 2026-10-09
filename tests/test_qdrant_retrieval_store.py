@@ -31,7 +31,10 @@ import uuid
 import pytest
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
-from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
+from compliance_rag.adapters.qdrant_retrieval_store import (
+    QdrantRetrievalStore,
+    _chunk_point_id,  # pyright: ignore[reportPrivateUsage] — addresses one point directly
+)
 from compliance_rag.corpus.models import Chunk, Scope
 from tests.conftest import qdrant_reachable
 
@@ -200,3 +203,44 @@ async def test_bitemporal_filter_is_one_unconditional_range_both_sides(
     )
     assert any(c.chunk_id == "c4" for c in before_expiry.fused)
     assert all(c.chunk_id != "c4" for c in after_expiry.fused)
+
+
+async def test_the_residency_gate_query_on_real_qdrant() -> None:
+    """ADR-0023's gate asks the store whether it holds real tenant data. On
+    real Qdrant: law and synthetic tenant chunks don't count, an unmarked
+    tenant chunk does, and so does a point stored before the `synthetic`
+    field existed — the filter is must_not synthetic=true, fail closed."""
+    from qdrant_client import AsyncQdrantClient
+
+    def tenant(chunk_id: str, *, synthetic: bool) -> Chunk:
+        return Chunk(
+            chunk_id=chunk_id,
+            clause_id=f"acme/p:v1:{chunk_id}",
+            text="Acme keeps records.",
+            scope=Scope.TENANT,
+            tenant_id="acme",
+            synthetic=synthetic,
+        )
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="gate"
+    ) as store:
+        await store.upsert_chunks(
+            (Chunk(chunk_id="law", clause_id=APP11, text="law"), tenant("s1", synthetic=True))
+        )
+        assert not await store.holds_real_tenant_data()
+
+        # A legacy point: written synthetic, then the field removed as if it
+        # predated the flag. It must count as real.
+        await store.upsert_chunks((tenant("s2", synthetic=True),))
+        client = AsyncQdrantClient(url=_QDRANT_URL)
+        collection = store._collection_name  # pyright: ignore[reportPrivateUsage]
+        await client.delete_payload(collection, keys=["synthetic"], points=[_chunk_point_id("s2")])
+        await client.close()
+        assert await store.holds_real_tenant_data()
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="gate"
+    ) as store:
+        await store.upsert_chunks((tenant("r1", synthetic=False),))
+        assert await store.holds_real_tenant_data()
