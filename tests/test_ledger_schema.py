@@ -216,9 +216,19 @@ def test_finding_citations_check_rejects_an_invalid_version(
         _insert_finding(conn, "acme", "finding-1", assessment_id, citations)
 
 
+def _library_instrument(conn: psycopg.Connection[tuple[object, ...]], instrument_id: str) -> None:
+    conn.execute(
+        "INSERT INTO instrument (tenant_id, instrument_id, title, jurisdiction) "
+        "VALUES ('_public', %s, %s, 'AU') ON CONFLICT DO NOTHING",
+        (instrument_id, instrument_id),
+    )
+
+
 def _subscribe(
     conn: psycopg.Connection[tuple[object, ...]], tenant_id: str, instrument_id: str
 ) -> None:
+    if instrument_id and "/" not in instrument_id and ":" not in instrument_id:
+        _library_instrument(conn, instrument_id)  # 0006: a subscription names a held instrument
     conn.execute(
         "INSERT INTO tenant_instrument (tenant_id, instrument_id, subscribed_by) "
         "VALUES (%s, %s, %s)",
@@ -253,13 +263,81 @@ def test_tenant_instrument_accepts_library_ids_only(
         _subscribe(conn, "acme", instrument_id)
 
 
-def test_tenant_instrument_requires_a_real_tenant(
+def test_the_library_never_subscribes(
     conn: psycopg.Connection[tuple[object, ...]],
 ) -> None:
-    """`_public` can't be a `tenant` row (0002), so it can never hold a
-    subscription row either — it sees the library by ownership instead."""
-    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+    """`_public` is a tenant row since 0006, but it sees the library by
+    ownership (ADR-0020) — it can never hold a subscription."""
+    with pytest.raises(psycopg.errors.CheckViolation):
         _subscribe(conn, "_public", "privacy-act-1988")
+
+
+def test_a_subscriber_must_be_a_real_tenant(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        _subscribe(conn, "nobody", "privacy-act-1988")
+
+
+# ---- 0006: the library owner (issue #67, ADR-0025) -------------------------
+
+
+def test_a_public_law_instrument_and_its_versions_can_be_recorded(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _library_instrument(conn, "privacy-act-1988")
+    for version, valid_from, valid_to in (
+        ("C2025C00100", "2025-01-01", "2026-01-01"),
+        ("C2026C00227", "2026-01-01", None),
+    ):
+        conn.execute(
+            "INSERT INTO instrument_version "
+            "(tenant_id, instrument_id, version_id, title, status, valid_from, valid_to) "
+            "VALUES ('_public', 'privacy-act-1988', %s, 'Privacy Act 1988', 'in_force', %s, %s)",
+            (version, valid_from, valid_to),
+        )
+    count = conn.execute(
+        "SELECT count(*) FROM instrument_version WHERE tenant_id = '_public'"
+    ).fetchone()
+    assert count == (2,)
+
+
+def test_the_library_owner_is_one_seeded_row(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    rows = conn.execute("SELECT tenant_id FROM tenant WHERE is_library").fetchall()
+    assert rows == [("_public",)]
+
+
+@pytest.mark.parametrize("is_library", [False, True], ids=["plain", "claiming-library"])
+def test_no_company_can_register_as_public(
+    conn: psycopg.Connection[tuple[object, ...]], is_library: bool
+) -> None:
+    """Either the CHECK (not flagged) or the seeded row's primary key (flagged)
+    refuses it — there is no way in."""
+    with pytest.raises((psycopg.errors.CheckViolation, psycopg.errors.UniqueViolation)):
+        conn.execute(
+            "INSERT INTO tenant (tenant_id, name, is_library) VALUES ('_public', 'Evil', %s)",
+            (is_library,),
+        )
+
+
+def test_no_other_tenant_can_be_the_library(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("INSERT INTO tenant (tenant_id, name, is_library) VALUES ('evil', 'E', true)")
+
+
+def test_a_subscription_must_name_an_instrument_the_library_holds(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "INSERT INTO tenant_instrument (tenant_id, instrument_id, subscribed_by) "
+            "VALUES ('acme', 'spam-act-2003', 'u1')"
+        )
 
 
 def test_tenant_instrument_is_one_row_per_tenant_and_instrument(
