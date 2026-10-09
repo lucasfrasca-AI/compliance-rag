@@ -54,7 +54,7 @@ class FakeMessages:
 
 async def _generate(messages: FakeMessages, prefix: str | None = PREFIX) -> Any:  # Any: Generation
     generator = VertexClaudeGenerator(
-        messages, model="claude-test", region="asia-southeast1", corpus=_corpus(LAW, SYNTHETIC)
+        messages, model="claude-test", region="us", corpus=_corpus(LAW, SYNTHETIC)
     )
     return await generator.generate(system="sys", cached_prefix=prefix, user="q", max_tokens=64)
 
@@ -83,7 +83,8 @@ async def test_a_cache_hit_is_read_from_the_response_not_assumed() -> None:
 
 async def test_cost_comes_from_the_real_token_counts() -> None:
     hit = await _generate(FakeMessages(cache_read=5000))
-    expected = 1.10 * (120 * 3.00 + 5000 * 0.30 + 40 * 15.00) / 1_000_000
+    # Sonnet 5, US multi-region: $2.20 in, $0.22 cache hit, $11.00 out per 1M.
+    expected = (120 * 2.20 + 5000 * 0.22 + 40 * 11.00) / 1_000_000
     assert abs(hit.cost_usd - expected) < 1e-12
     assert hit.cost_usd == price_usd(uncached_input=120, cache_write=0, cache_read=5000, output=40)
     miss = await _generate(FakeMessages(cache_write=5000))
@@ -102,8 +103,10 @@ async def test_the_span_carries_tokens_cache_and_cost_but_no_prompt_text(
     cost = attributes["generator.cost_usd"]
     assert isinstance(cost, float) and cost > 0
     assert attributes["generator.prefix_not_cached"] is False
-    assert str(attributes["generator.price_table"]).startswith("claude-sonnet-4-6-vertex-regional")
-    assert attributes["generator.region"] == "asia-southeast1"
+    assert str(attributes["generator.price_table"]).startswith(
+        "claude-sonnet-5-vertex-us-multi-region"
+    )
+    assert attributes["generator.region"] == "us"
     # Prompt text never reaches the span: neither the system text, the
     # cached policy prefix nor the user turn.
     rendered = " ".join(str(v) for v in attributes.values())
@@ -123,10 +126,10 @@ async def test_a_prefix_the_api_did_not_cache_is_flagged(
 
 def test_a_generator_with_no_model_is_refused() -> None:
     with pytest.raises(ValueError, match="VERTEX_CLAUDE_MODEL"):
-        VertexClaudeGenerator(FakeMessages(), model="", region="asia-southeast1", corpus=_corpus())
+        VertexClaudeGenerator(FakeMessages(), model="", region="us", corpus=_corpus())
 
 
-def _settings(region: str = "asia-southeast1") -> Settings:
+def _settings(region: str = "us") -> Settings:
     return Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
         gcp_project_id="p",
@@ -165,15 +168,15 @@ SYNTHETIC = Chunk(
 REAL = SYNTHETIC.model_copy(update={"chunk_id": "real", "synthetic": False})
 
 
-async def test_singapore_is_allowed_while_the_corpus_is_law_and_synthetic(
+async def test_the_us_endpoint_is_allowed_while_the_corpus_is_law_and_synthetic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     built = _patch_client(monkeypatch)
     await VertexClaudeGenerator.create(_settings(), corpus=_corpus(LAW, SYNTHETIC))
-    assert built == {"region": "asia-southeast1", "project_id": "p"}
+    assert built == {"region": "us", "project_id": "p"}
 
 
-async def test_singapore_is_refused_once_any_real_tenant_data_is_stored(
+async def test_the_us_endpoint_is_refused_once_any_real_tenant_data_is_stored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ADR-0023's gate: one real (unmarked) tenant chunk closes offshore
@@ -193,7 +196,9 @@ async def test_sydney_generation_is_allowed_with_real_data(
     assert built["region"] == "australia-southeast1"
 
 
-@pytest.mark.parametrize("region", ["global", "us-east5", "europe-west1", "us"])
+@pytest.mark.parametrize(
+    "region", ["global", "asia-southeast1", "us-east5", "eu", "europe-west1", "us-central1"]
+)
 def test_the_global_endpoint_and_every_other_region_are_refused(region: str) -> None:
     with pytest.raises(ValueError, match="never `global`"):
         _settings(region)
@@ -207,9 +212,7 @@ async def test_real_data_written_after_startup_stops_the_next_offshore_request()
     request leaves Australia, and no request is sent."""
     corpus = _corpus(LAW, SYNTHETIC)
     messages = FakeMessages()
-    generator = VertexClaudeGenerator(
-        messages, model="claude-test", region="asia-southeast1", corpus=corpus
-    )
+    generator = VertexClaudeGenerator(messages, model="claude-test", region="us", corpus=corpus)
     await generator.generate(system="s", cached_prefix=None, user="q", max_tokens=8)
     await corpus.upsert_chunks((REAL,))  # straight to the store, no lifecycle
     with pytest.raises(GenerationResidencyError):
@@ -218,6 +221,6 @@ async def test_real_data_written_after_startup_stops_the_next_offshore_request()
 
 
 def test_the_generation_region_defaults_to_sydney() -> None:
-    """Fail closed: Singapore must be chosen explicitly."""
+    """Fail closed: the US endpoint must be chosen explicitly."""
     settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
     assert settings.vertex_claude_region == "australia-southeast1"

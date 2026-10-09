@@ -1,6 +1,6 @@
 # Compliance RAG
 
-A compliance tool for corporates: check proposals and documents against the company's own policies and against law and frameworks, with every citation verbatim, versioned and clickable to the clause. Hybrid graph RAG on GCP `australia-southeast1`: Qdrant (dense + BM25 + RRF), Neo4j (Cypher, bitemporal), a self-hosted cross-encoder reranker on Cloud Run, Claude on Vertex (generation runs in `asia-southeast1` during the build phase only, gated to public law plus synthetic data — Claude is not served from Sydney; ADR-0023).
+A compliance tool for corporates: check proposals and documents against the company's own policies and against law and frameworks, with every citation verbatim, versioned and clickable to the clause. Hybrid graph RAG on GCP `australia-southeast1`: Qdrant (dense + BM25 + RRF), Neo4j (Cypher, bitemporal), a self-hosted cross-encoder reranker on Cloud Run, Claude on Vertex (generation runs on `claude-sonnet-5` at the US multi-region endpoint during the build phase only, gated to public law plus synthetic data — Claude is not served from Sydney; ADR-0023, ADR-0024).
 
 ## Read before acting
 

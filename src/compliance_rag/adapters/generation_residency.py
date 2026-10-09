@@ -3,7 +3,7 @@ moment it would matter (ADR-0023, D-16).
 
 Claude on Vertex is not served from `australia-southeast1`. During the build
 phase — while the corpus is public law plus synthetic data — generation runs
-in `asia-southeast1`, the nearest region that serves it. Everything else
+on `claude-sonnet-5` at the US multi-region endpoint (`us`, ADR-0024). Everything else
 (stores, telemetry) stays in Sydney unconditionally.
 
 The exception is closed by a gate, not a note, at both ends:
@@ -36,8 +36,8 @@ class GenerationResidencyError(RuntimeError):
 
 
 def validate_generation_region(region: str) -> str:
-    """Only Sydney, or Singapore during the build phase. `global` and every
-    other region are refused outright."""
+    """Only Sydney, or the US multi-region during the build phase. `global`
+    and every other region are refused outright."""
     if region not in GENERATION_REGIONS:
         raise GenerationResidencyError(
             f"generation region {region!r} refused: only {sorted(GENERATION_REGIONS)} "
