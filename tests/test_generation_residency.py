@@ -80,7 +80,7 @@ def test_an_unmarked_chunk_counts_as_real() -> None:
 
 
 @pytest.mark.parametrize(
-    "region", ["global", "asia-southeast1", "us-central1", "eu", "asia-northeast1", ""]
+    "region", ["global", "US", " us", "asia-southeast1", "us-central1", "eu", "asia-northeast1", ""]
 )
 def test_no_other_generation_region_is_accepted(region: str) -> None:
     with pytest.raises(GenerationResidencyError):

@@ -93,7 +93,7 @@ class VertexClaudeGenerator(Generator):
     async def create(cls, settings: Settings, *, corpus: RetrievalAdmin) -> VertexClaudeGenerator:
         """The one place a real Vertex client is built — after the residency
         gate (ADR-0023). The region is re-validated here as well as in
-        `Settings` (`global` and anything but Sydney/Singapore refused), and
+        `Settings` (`global` and anything but Sydney or the US multi-region refused), and
         an offshore region is refused outright while `corpus` holds any real
         tenant data. Async because the gate asks the store."""
         region = validate_generation_region(settings.vertex_claude_region)

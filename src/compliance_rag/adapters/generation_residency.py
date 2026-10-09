@@ -41,7 +41,7 @@ def validate_generation_region(region: str) -> str:
     if region not in GENERATION_REGIONS:
         raise GenerationResidencyError(
             f"generation region {region!r} refused: only {sorted(GENERATION_REGIONS)} "
-            "are allowed, and never the global endpoint (ADR-0023)"
+            "are allowed, and never the global endpoint (ADR-0023, ADR-0024)"
         )
     return region
 

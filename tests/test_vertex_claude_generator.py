@@ -197,7 +197,8 @@ async def test_sydney_generation_is_allowed_with_real_data(
 
 
 @pytest.mark.parametrize(
-    "region", ["global", "asia-southeast1", "us-east5", "eu", "europe-west1", "us-central1"]
+    "region",
+    ["global", "US", " us", "asia-southeast1", "us-east5", "eu", "europe-west1", "us-central1"],
 )
 def test_the_global_endpoint_and_every_other_region_are_refused(region: str) -> None:
     with pytest.raises(ValueError, match="never `global`"):
