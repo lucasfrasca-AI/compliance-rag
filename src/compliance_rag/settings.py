@@ -13,7 +13,16 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REGION = "australia-southeast1"
-"""Every query-time byte stays here (D-07, D-15, D-16)."""
+"""Every store, every telemetry sink, and every query-time byte except
+build-phase generation stays here (D-07, D-15, D-16, ADR-0023)."""
+
+BUILD_PHASE_OFFSHORE_REGION = "asia-southeast1"
+"""Singapore: the nearest region with a regional Claude endpoint
+(`claude-sonnet-4-6`, Google's model page, checked 2026-10-09). Allowed for
+generation only, and only while the corpus is public law plus synthetic data
+— `adapters/generation_residency.py` enforces that (ADR-0023)."""
+
+GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 
 
 class Settings(BaseSettings):
@@ -38,6 +47,9 @@ class Settings(BaseSettings):
 
     # --- Vertex ------------------------------------------------------------
     vertex_claude_model: str = ""
+    vertex_claude_region: str = REGION
+    """Sydney by default — fail closed. The build phase opts into Singapore
+    explicitly (`VERTEX_CLAUDE_REGION=asia-southeast1`, ADR-0023)."""
     vertex_embedding_model: str = "gemini-embedding-001"
     vertex_embedding_dims: int = 1536
     vertex_ranking_model: str = "semantic-ranker-default"
@@ -81,6 +93,16 @@ class Settings(BaseSettings):
     def _region_is_sydney(cls, v: str) -> str:
         if v != REGION:
             raise ValueError(f"gcp_region must be {REGION} (D-07); got {v!r}")
+        return v
+
+    @field_validator("vertex_claude_region")
+    @classmethod
+    def _generation_region(cls, v: str) -> str:
+        if v not in GENERATION_REGIONS:
+            raise ValueError(
+                f"vertex_claude_region must be one of {sorted(GENERATION_REGIONS)} — never "
+                f"`global` or any other region (ADR-0023); got {v!r}"
+            )
         return v
 
     @field_validator("vertex_embedding_dims")

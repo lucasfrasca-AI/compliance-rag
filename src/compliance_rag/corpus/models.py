@@ -506,6 +506,10 @@ class Chunk(BaseModel):
     tenant_id: TenantSegment = PUBLIC_TENANT_ID
     valid_from: dt.date = dt.date.min
     valid_to: dt.date = NO_END_DATE
+    synthetic: bool = False
+    """Invented test data, not a customer's document (ADR-0023). Defaults to
+    False on purpose: an unmarked tenant chunk counts as real customer data,
+    which closes the offshore-generation gate."""
 
     @field_validator("clause_id")
     @classmethod

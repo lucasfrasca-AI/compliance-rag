@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import zlib
 
+from compliance_rag.adapters.generation_residency import is_real_tenant_data
 from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
@@ -151,6 +152,9 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         for chunk in chunks:
             self._chunks[chunk.chunk_id] = chunk
             self._withdrawn.discard(chunk.chunk_id)
+
+    async def holds_real_tenant_data(self) -> bool:
+        return any(is_real_tenant_data(c) for c in self._chunks.values())
 
     async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
         return any(

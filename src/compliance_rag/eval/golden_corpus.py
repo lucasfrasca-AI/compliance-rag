@@ -58,7 +58,13 @@ def golden_clauses() -> tuple[ClauseRecord, ...]:
 
 
 def golden_chunks() -> tuple[Chunk, ...]:
-    return chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
+    """The six Acme policies are invented (docs/research/synthetic-policy-set.md),
+    so their chunks are marked synthetic — the build-phase residency gate
+    (ADR-0023) counts any unmarked tenant chunk as real customer data."""
+    chunks = chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
+    return tuple(
+        c.model_copy(update={"synthetic": True}) if c.scope is Scope.TENANT else c for c in chunks
+    )
 
 
 def golden_texts() -> tuple[str, ...]:
