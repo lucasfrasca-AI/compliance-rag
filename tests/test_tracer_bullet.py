@@ -82,6 +82,7 @@ async def assessment(clause: ClauseRecord) -> AssessmentPipeline:
         retrieval=retrieval,
         generator=FakeGenerator(reply=reply),
         verifier=Verifier(clause_store, ledger, FakeCitationVerifier()),
+        ledger=ledger,
     )
 
 

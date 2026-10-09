@@ -103,3 +103,38 @@ cannot go green until it lands. The conversion itself remains verified
 correct and reproducible locally (identical fp32/int8 scores and preserved
 rank order across every local run; the actual Docker image was built and
 run, and answered `POST /rerank` correctly against a live container).
+
+## Model-swap consequences (added 2026-10-10)
+
+The residency decision (ADR-0023) will force a model swap before the first real customer document: Claude isn't served from Sydney, and the Sydney-resident option is `gemini-3.5-flash` on Provisioned Throughput (~$2.2–3k/month). This section sets out what each kind of swap costs, so that's decided before the swap is forced.
+
+### What stays untouched, because of D-08
+
+Generation sits behind one interface, `Generator.generate(system, cached_prefix, user, max_tokens) -> Generation`. Nothing upstream or downstream knows which model answered:
+
+- **Retrieval:** `retrieve()` and `route()`, the Qdrant store, the embedder, the reranker, and the recall gates (#28, the reranked gate).
+- **Prompt building** (`assessment/prompt.py`): the fenced, verbatim clause blocks, the hash-derived boundaries, and the fixed system prompt. It is plain text, and nothing in it is specific to one vendor.
+- **Draft parsing** (`assessment/draft.py`): strict JSON into `DraftAnswer`.
+- **Verification** (`verifier/citations.py`): context membership, ledger-checked versions, and canonical-text comparison through `ClauseStore`. The verifier never sees the model, which is the point of D-02.
+- **Composition:** `answer()`, repair orchestration, spans, and the residency gate (`adapters/generation_residency.py`). The gate keys on region and data, not on the model.
+
+### Claude → Claude (for example Sonnet 4.6 → a later Sonnet)
+
+- **Configuration:** change `VERTEX_CLAUDE_MODEL`, and check the new model's regional endpoints on Google's model page first. Sonnet 5 has no `asia-southeast1` endpoint.
+- **Prices:** update the constants in `vertex_claude_generator.py` and its `PRICE_TABLE` label from Google's regional pricing table.
+- **Re-run:** the live answer evaluation over the golden set (verifier pass rate, schema-valid rate, measured cost per query); the live injection probes; and the cache-hit check, because minimum cacheable prefix lengths differ by model.
+- **No code change** is expected. The adapter's contract (system blocks with `cache_control`, usage fields for cache read and write) is the same across Claude models on Vertex.
+
+### Claude → Gemini (for example `gemini-3.5-flash` in Sydney)
+
+- **New adapter.** A `Generator` implementation on the Vertex Gemini SDK, with its own residency assertion and its own `from_settings` or `create`. The existing gate applies unchanged. The Claude adapter stays, so switching back is a configuration change.
+- **A different caching shape.**
+  - **Today, with Claude:** the cached prefix is resent on every request and marked with `cache_control`. Cache writes cost extra and reads are cheap.
+  - **With Gemini:** caching is either implicit (automatic prefix reuse; usage reports cached tokens) or explicit (a separately created cached-content resource, billed for storage per token-hour, with its own lifecycle).
+  - **What this changes:** `Generation.cache_creation_input_tokens` has no Gemini equivalent. The `generator.prefix_not_cached` flag needs Gemini's semantics, and the D-11 "cached prefix" contract needs re-reading against whichever caching mode is chosen.
+- **Re-validate structured output.** Gemini can enforce a `response_schema` natively. Decide whether to use it, or keep the JSON-in-text contract and strict `parse_draft`. Either way, re-measure the schema-valid rate live.
+- **Re-validate the injection controls.** The structural control (the retriever's query is fixed before retrieval) is model-independent and proven with fakes. The behavioural half (does the model treat fenced text as data, and does it copy quotes verbatim) has to be probed live again. A model that paraphrases quotes shows up as more repairs and more blocked citations.
+- **New cost model.**
+  - **Billing:** per-token pricing is replaced by the Provisioned Throughput commitment. Cost per query becomes the monthly commitment divided by volume, plus nothing per token up to the throughput reserved. The span's `generator.cost_usd` needs a different meaning, or a separate amortised figure.
+  - **Volume:** the 2,000-queries-a-month projection no longer drives the bill; the GSU minimum does.
+- **Also re-run:** the golden-set answer evaluation and the verifier pass rate; a check of the latency budget; and the ADR the swap itself needs (D-07, SERVICES.md).

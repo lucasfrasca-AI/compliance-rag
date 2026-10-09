@@ -107,6 +107,7 @@ async def _pipeline(generator: FakeGenerator) -> tuple[AssessmentPipeline, SpyRe
         RetrievalPipeline(store, FakeReranker()),
         generator,
         Verifier(clause_store, ledger, FakeCitationVerifier()),
+        ledger,
     )
     return pipeline, store
 

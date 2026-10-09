@@ -13,10 +13,11 @@ answer — and anything still failing is blocked.
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from compliance_rag.adapters.interfaces import Generation, Generator
+from compliance_rag.adapters.interfaces import Generation, Generator, LedgerStore, UsageRecord
 from compliance_rag.assessment.draft import (
     DraftAnswer,
     MalformedGeneration,
@@ -32,7 +33,7 @@ from compliance_rag.assessment.prompt import (
     user_prompt,
 )
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
-from compliance_rag.telemetry import span
+from compliance_rag.telemetry import current_trace_id, span
 from compliance_rag.verifier.citations import CheckedCitation, Verifier
 
 REPAIR_MAX_TOKENS = 512
@@ -52,6 +53,8 @@ class Answer:
     """Verified citations, each carrying the canonical clause to show."""
     blocked: tuple[CheckedCitation, ...]
     """Citations that failed verification (after any repair) — never shown."""
+    trace_id: str
+    """The request's trace: on every ledger row it produced (#31)."""
 
     @property
     def verified(self) -> bool:
@@ -70,11 +73,32 @@ class AssessmentPipeline:
     (D-08)."""
 
     def __init__(
-        self, retrieval: RetrievalPipeline, generator: Generator, verifier: Verifier
+        self,
+        retrieval: RetrievalPipeline,
+        generator: Generator,
+        verifier: Verifier,
+        ledger: LedgerStore,
     ) -> None:
         self.retrieval = retrieval
         self.generator = generator
         self.verifier = verifier
+        self.ledger = ledger
+
+    async def _record_usage(self, tenant_id: str, generation: Generation) -> None:
+        """One ledger `usage` row per generation call — the answer and each
+        repair — from real token counts, keyed to the request's trace."""
+        await self.ledger.record_usage(
+            UsageRecord(
+                tenant_id=tenant_id,
+                usage_id=uuid.uuid4().hex,
+                trace_id=current_trace_id(),
+                model=generation.model,
+                input_tokens=generation.input_tokens,
+                output_tokens=generation.output_tokens,
+                cached_prefix_hit=generation.cached_prefix_hit,
+                cost_usd=generation.cost_usd,
+            )
+        )
 
     async def answer(
         self,
@@ -102,6 +126,7 @@ class AssessmentPipeline:
                 user=user_prompt(query, retrieved),
                 max_tokens=max_tokens,
             )
+            await self._record_usage(tenant_id, generation)
             current.set_attribute("generation.input_tokens", generation.input_tokens)
             current.set_attribute("generation.output_tokens", generation.output_tokens)
             current.set_attribute("generation.cached_prefix_hit", generation.cached_prefix_hit)
@@ -129,6 +154,7 @@ class AssessmentPipeline:
             for check in checked:
                 if check.outcome.repairable and check.clause is not None:
                     check, repair = await self._repair(check, context=context, as_of=as_of)
+                    await self._record_usage(tenant_id, repair)
                     repairs.append(repair)
                 final.append(check)
 
@@ -139,6 +165,7 @@ class AssessmentPipeline:
                 unverified_draft=draft,
                 citations=tuple(c for c in final if c.verified),
                 blocked=tuple(c for c in final if not c.verified),
+                trace_id=current_trace_id(),
             )
             current.set_attribute("verifier.result", result.verified)
             current.set_attribute(
