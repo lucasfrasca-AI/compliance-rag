@@ -85,3 +85,12 @@ def test_no_other_generation_region_is_accepted(region: str) -> None:
         validate_generation_region(region)
     with pytest.raises(GenerationResidencyError):
         _lifecycle(region)
+
+
+def test_the_golden_corpus_marks_every_tenant_chunk_synthetic() -> None:
+    """The six Acme policies are invented; if this marking were dropped, the
+    recall gate's corpus would close offshore generation for everyone."""
+    from compliance_rag.eval.golden_corpus import golden_chunks
+
+    tenant = [c for c in golden_chunks() if c.scope is Scope.TENANT]
+    assert tenant and all(c.synthetic for c in tenant)

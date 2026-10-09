@@ -47,7 +47,9 @@ class Settings(BaseSettings):
 
     # --- Vertex ------------------------------------------------------------
     vertex_claude_model: str = ""
-    vertex_claude_region: str = BUILD_PHASE_OFFSHORE_REGION
+    vertex_claude_region: str = REGION
+    """Sydney by default — fail closed. The build phase opts into Singapore
+    explicitly (`VERTEX_CLAUDE_REGION=asia-southeast1`, ADR-0023)."""
     vertex_embedding_model: str = "gemini-embedding-001"
     vertex_embedding_dims: int = 1536
     vertex_ranking_model: str = "semantic-ranker-default"

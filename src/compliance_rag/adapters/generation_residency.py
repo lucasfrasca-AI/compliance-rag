@@ -8,9 +8,11 @@ in `asia-southeast1`, the nearest region that serves it. Everything else
 
 The exception is closed by a gate, not a note, at both ends:
 
-- **Startup.** `assert_generation_allowed` refuses an offshore generation
-  region if the retrieval store holds any tenant-scoped chunk not marked
-  synthetic. `VertexClaudeGenerator.create` calls it before building a client.
+- **Startup and every request.** `assert_generation_allowed` refuses an
+  offshore generation region if the retrieval store holds any tenant-scoped
+  chunk not marked synthetic. `VertexClaudeGenerator` asks before building a
+  client and again before every offshore request, so data written later — by
+  another process, or a path that skips `CorpusLifecycle` — still closes it.
 - **Ingest.** `assert_upload_allowed` refuses to store a tenant-scoped chunk
   that is not marked synthetic while generation is offshore, so the first
   real policy upload fails loudly instead of being sent offshore on its first

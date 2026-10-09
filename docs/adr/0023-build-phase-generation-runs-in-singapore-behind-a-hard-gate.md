@@ -56,14 +56,31 @@ The exception is closed by a gate in code, not by a note:
   or `asia-southeast1` and nothing else. The `global` endpoint and every
   other region are refused when `Settings` loads, and again when the
   generator is built.
-- **Startup.** `VertexClaudeGenerator.create` refuses an offshore region if
-  the retrieval store holds any tenant-scoped chunk not marked `synthetic`.
+- **Startup and every request.** Offshore, `VertexClaudeGenerator` refuses
+  if the retrieval store holds any tenant-scoped chunk not marked
+  `synthetic`. It asks when the client is built and again before every
+  request, so data written later still stops the next request before it
+  leaves Australia. That covers another process, or a path that skips
+  `CorpusLifecycle`. The store is a required constructor argument.
 - **Ingest.** `CorpusLifecycle` refuses to store a tenant-scoped,
   non-synthetic chunk while generation is offshore. The first real policy
   upload fails loudly at the door; it is never generated on offshore.
 - **Fail closed.** `Chunk.synthetic` defaults to `False`. An unmarked tenant
   chunk, or a stored point that predates the flag, counts as real customer
-  data and closes the gate.
+  data and closes the gate. `vertex_claude_region` defaults to Sydney; the
+  build phase opts into Singapore explicitly.
+
+The marker sits on **chunks, not instruments**, on purpose. The gate asks the
+store generation actually reads from, so it holds whichever path wrote the
+data. An instrument-level flag in the ledger would describe intent; the chunk
+flag describes what is stored. A half-marked instrument reads as real and
+fails closed.
+
+`synthetic` is **self-attested**: whoever ingests a document declares it.
+That's acceptable while the only tenant data is the six fixtures in
+`docs/research/synthetic-policies/`. It is not a control against a careless
+or hostile ingester, and it has to be replaced with something stronger
+before any external party can upload.
 
 ## Consequences
 
@@ -74,7 +91,10 @@ The exception is closed by a gate in code, not by a note:
   still has to be validated live against Sonnet 4.6.
 - **Pricing is checked against the published page.** Sonnet 4.6 regional
   rates are $3.30 input, $16.50 output, $4.13 for a 5-minute cache write and
-  $0.33 for a cache hit, per 1M tokens (the global list price plus 10%).
+  $0.33 for a cache hit, per 1M tokens: the global list price plus 10%, from
+  the regional table on the
+  [Vertex AI pricing page](https://cloud.google.com/vertex-ai/generative-ai/pricing),
+  2026-10-09.
 - **AU-resident generation is a real cost of this market, not a later
   surprise.** It is about $2.2–3k a month through Provisioned Throughput.
   That is what a first real customer has to fund, and it is recorded in

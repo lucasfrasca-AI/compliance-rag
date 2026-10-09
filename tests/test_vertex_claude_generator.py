@@ -53,7 +53,9 @@ class FakeMessages:
 
 
 async def _generate(messages: FakeMessages, prefix: str | None = PREFIX) -> Any:  # Any: Generation
-    generator = VertexClaudeGenerator(messages, model="claude-test", region="asia-southeast1")
+    generator = VertexClaudeGenerator(
+        messages, model="claude-test", region="asia-southeast1", corpus=_corpus(LAW, SYNTHETIC)
+    )
     return await generator.generate(system="sys", cached_prefix=prefix, user="q", max_tokens=64)
 
 
@@ -121,7 +123,7 @@ async def test_a_prefix_the_api_did_not_cache_is_flagged(
 
 def test_a_generator_with_no_model_is_refused() -> None:
     with pytest.raises(ValueError, match="VERTEX_CLAUDE_MODEL"):
-        VertexClaudeGenerator(FakeMessages(), model="", region="asia-southeast1")
+        VertexClaudeGenerator(FakeMessages(), model="", region="asia-southeast1", corpus=_corpus())
 
 
 def _settings(region: str = "asia-southeast1") -> Settings:
@@ -196,4 +198,26 @@ def test_the_global_endpoint_and_every_other_region_are_refused(region: str) -> 
     with pytest.raises(ValueError, match="never `global`"):
         _settings(region)
     with pytest.raises(GenerationResidencyError):
-        VertexClaudeGenerator(FakeMessages(), model="claude-test", region=region)
+        VertexClaudeGenerator(FakeMessages(), model="claude-test", region=region, corpus=_corpus())
+
+
+async def test_real_data_written_after_startup_stops_the_next_offshore_request() -> None:
+    """Startup isn't the only check: data stored later — by another process,
+    or a path that skips CorpusLifecycle — closes the gate before the next
+    request leaves Australia, and no request is sent."""
+    corpus = _corpus(LAW, SYNTHETIC)
+    messages = FakeMessages()
+    generator = VertexClaudeGenerator(
+        messages, model="claude-test", region="asia-southeast1", corpus=corpus
+    )
+    await generator.generate(system="s", cached_prefix=None, user="q", max_tokens=8)
+    await corpus.upsert_chunks((REAL,))  # straight to the store, no lifecycle
+    with pytest.raises(GenerationResidencyError):
+        await generator.generate(system="s", cached_prefix=None, user="q", max_tokens=8)
+    assert len(messages.calls) == 1
+
+
+def test_the_generation_region_defaults_to_sydney() -> None:
+    """Fail closed: Singapore must be chosen explicitly."""
+    settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
+    assert settings.vertex_claude_region == "australia-southeast1"

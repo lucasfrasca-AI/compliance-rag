@@ -26,6 +26,7 @@ from anthropic.types import Message, MessageParam, TextBlock, TextBlockParam
 from compliance_rag import telemetry
 from compliance_rag.adapters.generation_residency import (
     assert_generation_allowed,
+    is_offshore,
     validate_generation_region,
 )
 from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
@@ -68,12 +69,26 @@ class _MessagesLike(Protocol):
 
 
 class VertexClaudeGenerator(Generator):
-    def __init__(self, messages: _MessagesLike, *, model: str, region: str) -> None:
+    def __init__(
+        self, messages: _MessagesLike, *, model: str, region: str, corpus: RetrievalAdmin
+    ) -> None:
+        """`corpus` is required, not optional: offshore, the gate is asked
+        again before every request (`_assert_still_allowed`), so no way of
+        constructing the generator — and no data written after it started,
+        by any process or path — gets real tenant text sent offshore."""
         if not model:
             raise ValueError("no Claude model configured (VERTEX_CLAUDE_MODEL)")
         self._messages = messages
         self._model = model
         self._region = validate_generation_region(region)
+        self._corpus = corpus
+
+    async def _assert_still_allowed(self) -> None:
+        if is_offshore(self._region):
+            assert_generation_allowed(
+                generation_region=self._region,
+                holds_real_tenant_data=await self._corpus.holds_real_tenant_data(),
+            )
 
     @classmethod
     async def create(cls, settings: Settings, *, corpus: RetrievalAdmin) -> VertexClaudeGenerator:
@@ -83,13 +98,17 @@ class VertexClaudeGenerator(Generator):
         an offshore region is refused outright while `corpus` holds any real
         tenant data. Async because the gate asks the store."""
         region = validate_generation_region(settings.vertex_claude_region)
-        assert_generation_allowed(
-            generation_region=region, holds_real_tenant_data=await corpus.holds_real_tenant_data()
-        )
+        if is_offshore(region):
+            assert_generation_allowed(
+                generation_region=region,
+                holds_real_tenant_data=await corpus.holds_real_tenant_data(),
+            )
         from anthropic.lib.vertex import AsyncAnthropicVertex  # only the real path needs it
 
         client = AsyncAnthropicVertex(region=region, project_id=settings.gcp_project_id)
-        return cls(client.messages, model=settings.vertex_claude_model, region=region)
+        return cls(
+            client.messages, model=settings.vertex_claude_model, region=region, corpus=corpus
+        )
 
     async def generate(
         self,
@@ -99,6 +118,7 @@ class VertexClaudeGenerator(Generator):
         user: str,
         max_tokens: int,
     ) -> Generation:
+        await self._assert_still_allowed()
         blocks: list[TextBlockParam] = [{"type": "text", "text": system}]
         if cached_prefix:
             blocks.append(
