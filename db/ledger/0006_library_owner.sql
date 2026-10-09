@@ -35,11 +35,20 @@ ON CONFLICT (tenant_id) DO NOTHING;
 -- of `tenant_instrument` on its own. It sees the library by ownership and
 -- never subscribes (ADR-0020); say so directly.
 ALTER TABLE tenant_instrument
+    DROP CONSTRAINT IF EXISTS tenant_instrument_subscriber_is_not_the_library;
+ALTER TABLE tenant_instrument
     ADD CONSTRAINT tenant_instrument_subscriber_is_not_the_library
     CHECK (tenant_id <> '_public');
 
+-- library_tenant_id exists only to make the composite FK below possible: it is
+-- always '_public', so the FK reads "instrument_id is an instrument the library
+-- holds". ON DELETE NO ACTION (the default): a library instrument with
+-- subscribers can't be deleted out from under them — and law is never deleted
+-- anyway (ADR-0021).
 ALTER TABLE tenant_instrument
     ADD COLUMN IF NOT EXISTS library_tenant_id TEXT GENERATED ALWAYS AS ('_public') STORED;
+ALTER TABLE tenant_instrument
+    DROP CONSTRAINT IF EXISTS tenant_instrument_library_instrument_fk;
 ALTER TABLE tenant_instrument
     ADD CONSTRAINT tenant_instrument_library_instrument_fk
     FOREIGN KEY (library_tenant_id, instrument_id) REFERENCES instrument (tenant_id, instrument_id);
