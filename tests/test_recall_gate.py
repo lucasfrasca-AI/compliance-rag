@@ -155,7 +155,7 @@ def test_every_golden_text_has_a_real_cached_vector() -> None:
     assert (cache.model, cache.dimensions) == ("gemini-embedding-001", 1536)
     # A snapshot says what it is a snapshot of (scripts/check_embedding_drift.py).
     assert cache.task_type == "RETRIEVAL_DOCUMENT"
-    assert cache.sdk.startswith("google-cloud-aiplatform ")
+    assert cache.sdk.startswith("google-genai ")
     dt.date.fromisoformat(cache.generated_on)
     assert cache.missing(golden_texts()) == ()
 
