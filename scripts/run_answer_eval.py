@@ -1,6 +1,6 @@
 """`answer()` over the whole golden set, live (issue #31): real Qdrant, real
 cached `gemini-embedding-001` vectors, the int8 cross-encoder over the top 20,
-**live Claude on Vertex** (`claude-sonnet-4-6` at `asia-southeast1` — build
+**live Claude on Vertex** (`claude-sonnet-5` at the US multi-region — build
 phase, ADR-0023; the residency gate runs before the client exists), and the
 real verifier against the golden canonical text and a ledger with every
 golden version recorded.
@@ -12,8 +12,8 @@ the recorded drafts on every build with no LLM. Tenant `acme` queries carry
 its six (synthetic) policies as the cached prefix and run consecutively, so
 cache hits are measured, not assumed.
 
-    QDRANT_URL=http://localhost:6333 VERTEX_CLAUDE_MODEL=claude-sonnet-4-6 \\
-    VERTEX_CLAUDE_REGION=asia-southeast1 uv run python scripts/run_answer_eval.py
+    QDRANT_URL=http://localhost:6333 VERTEX_CLAUDE_MODEL=claude-sonnet-5 \\
+    VERTEX_CLAUDE_REGION=us uv run python scripts/run_answer_eval.py
 
 `--injection` instead runs live prompt-injection probes: a poisoned synthetic
 clause is added to the corpus and questions that retrieve it are asked.

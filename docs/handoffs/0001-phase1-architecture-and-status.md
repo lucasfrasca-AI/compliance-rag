@@ -106,7 +106,7 @@ run, and answered `POST /rerank` correctly against a live container).
 
 ## Model-swap consequences (added 2026-10-10)
 
-The residency decision (ADR-0023) will force a model swap before the first real customer document: Claude isn't served from Sydney, and the Sydney-resident option is `gemini-3.5-flash` on Provisioned Throughput (~$2.2–3k/month). This section sets out what each kind of swap costs, so that's decided before the swap is forced.
+The residency decision will force a model swap before the first real customer document. Claude isn't served from Sydney. Build-phase generation runs on `claude-sonnet-5` at the US multi-region endpoint, behind the ADR-0023 gate (ADR-0024). The AU-resident options are `gemini-3.5-flash` on GCP Provisioned Throughput (~$2.2–3k/month), or Claude through AWS Bedrock's AU geo inference profile on pay-per-token pricing (PHASES.md Phase 5). This section sets out what each kind of swap costs, so that's decided before the swap is forced.
 
 ### What stays untouched, because of D-08
 
@@ -118,9 +118,9 @@ Generation sits behind one interface, `Generator.generate(system, cached_prefix,
 - **Verification** (`verifier/citations.py`): context membership, ledger-checked versions, and canonical-text comparison through `ClauseStore`. The verifier never sees the model, which is the point of D-02.
 - **Composition:** `answer()`, repair orchestration, spans, and the residency gate (`adapters/generation_residency.py`). The gate keys on region and data, not on the model.
 
-### Claude → Claude (for example Sonnet 4.6 → a later Sonnet)
+### Claude → Claude (for example Sonnet 5 → a later Sonnet, or Vertex → Bedrock AU)
 
-- **Configuration:** change `VERTEX_CLAUDE_MODEL`, and check the new model's regional endpoints on Google's model page first. Sonnet 5 has no `asia-southeast1` endpoint.
+- **Configuration:** change `VERTEX_CLAUDE_MODEL`, and check the new model's endpoints on Google's model page first; availability differs by model. Sonnet 5 has no Sydney or Singapore endpoint, only `us`, `eu` and `global`. Of those, only `us` is allowed here, and `global` never is. Moving to Bedrock AU is the same prompt contract on a new adapter: the Anthropic Messages API is shared, but the client, auth, region list and prices differ.
 - **Prices:** update the constants in `vertex_claude_generator.py` and its `PRICE_TABLE` label from Google's regional pricing table.
 - **Re-run:** the live answer evaluation over the golden set (verifier pass rate, schema-valid rate, measured cost per query); the live injection probes; and the cache-hit check, because minimum cacheable prefix lengths differ by model.
 - **No code change** is expected. The adapter's contract (system blocks with `cache_control`, usage fields for cache read and write) is the same across Claude models on Vertex.
