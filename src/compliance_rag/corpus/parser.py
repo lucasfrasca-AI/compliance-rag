@@ -51,17 +51,25 @@ from compliance_rag.corpus.models import (
 _P_BLOCK_RE = re.compile(r"<p\b[^>]*>.*?</p>", re.DOTALL)
 _P_OPEN_TAG_RE = re.compile(r"<p\b[^>]*>", re.DOTALL)
 _CLASS_RE = re.compile(r'class="([^"]*)"')
-_SPAN_RE = re.compile(r"<span\b[^>]*>(.*?)</span>", re.DOTALL)
+_SPAN_WITH_ATTRS_RE = re.compile(r"<span\b([^>]*)>(.*?)</span>", re.DOTALL)
 _ANY_TAG_RE = re.compile(r"<[^>]+>")
 
-# Leading-token patterns, one per class, per the spike's documented forms.
-_SUBSECTION_PAREN_RE = re.compile(r"^\((\d+)\)\s*")
-_SUBSECTION_DOT_RE = re.compile(r"^\d+\.(\d+)\s*")
+# Leading-token patterns, one per class, per the spike's documented forms —
+# plus inserted provisions, which take a letter suffix rather than renumbering
+# their neighbours: subsection (1A), subclause 11.1A, subparagraph (iia) or
+# (ivaa) (issue #97). Tokens are lowercased into the clause path (`s6e/1a`).
+_SUBSECTION_PAREN_RE = re.compile(r"^\((\d+[A-Z]*)\)\s*")
+_SUBSECTION_DOT_RE = re.compile(r"^\d+\.(\d+[A-Z]*)\s*")
 _PARAGRAPH_RE = re.compile(r"^\(([a-z]+)\)\s*")
-_PARAGRAPHSUB_RE = re.compile(r"^\(([ivx]+)\)\s*")
+_PARAGRAPHSUB_RE = re.compile(r"^\(([ivx]+[a-z]*)\)\s*")
 _PARAGRAPHSUB_SUB_RE = re.compile(r"^\(([A-Z])\)\s*")
 
-_APP_TITLE_MARKER = "Australian Privacy Principle"
+_APP_HEADING_RE = re.compile(r"^(\w+) Australian Privacy Principle (\w+)\b")
+"""An APP's own heading: "11 Australian Privacy Principle 11—security of ...",
+its number repeated. Main-body sections that merely mention the APPs — s6A
+"Breach of an Australian Privacy Principle", s14 "Australian Privacy
+Principles", s15 "APP entities must comply with ..." — are not APPs, and
+filing them under `sch1/` put s15 at `sch1/app15` (issue #97)."""
 
 
 def _strip_tags(fragment: str) -> str:
@@ -101,14 +109,29 @@ def _scan_blocks(source: str) -> list[_Block]:
 
 
 def _definition_term(block: _Block) -> tuple[str, str]:
-    """The defined term (first `<span>`) and the remaining body text, for a
-    `Definition` block — `CONTEXT.md`'s Definition entry requires capturing
-    the term itself, not just the paragraph."""
-    spans = _SPAN_RE.findall(block.inner_html)
+    """The defined term and the remaining body text, for a `Definition` block
+    — `CONTEXT.md`'s Definition entry requires capturing the term itself, not
+    just the paragraph.
+
+    The term is the run of leading bold spans, not the first span: Word splits
+    a term at a non-breaking hyphen or space into several bold spans
+    (`de` / `&#x2011;` / `identified`, `de` / `&#xa0;` / `facto` / ...), and
+    taking only the first gave "de-identified" and "de facto partner" the
+    same slug (issue #97)."""
+    spans = _SPAN_WITH_ATTRS_RE.findall(block.inner_html)
     if not spans:
         return "", block.inner_text
-    term = _normalise_ws(html_module.unescape(_strip_tags(spans[0])))
-    body = _normalise_ws(html_module.unescape(_strip_tags("".join(spans[1:]))))
+    term_parts: list[str] = []
+    for attrs, inner in spans:
+        if "font-weight:bold" not in attrs.replace(" ", ""):
+            break
+        term_parts.append(inner)
+    if not term_parts:
+        term_parts, rest = [spans[0][1]], spans[1:]
+    else:
+        rest = spans[len(term_parts) :]
+    term = _normalise_ws(html_module.unescape(_strip_tags("".join(term_parts))))
+    body = _normalise_ws(html_module.unescape(_strip_tags("".join(i for _, i in rest))))
     return term, body
 
 
@@ -168,7 +191,8 @@ def _strip_leading_token(text: str, pattern: re.Pattern[str]) -> tuple[str, str]
 
 def _section_prefix(title_text: str, sectno: str, current_schedule: str | None) -> str:
     local_number = sectno.strip().lower()
-    if _APP_TITLE_MARKER in title_text:
+    heading = _APP_HEADING_RE.match(title_text)
+    if heading is not None and heading.group(1) == heading.group(2):
         schedule = current_schedule or "1"
         return f"sch{schedule}/app{local_number}"
     local = f"s{local_number}"
@@ -224,7 +248,9 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             token, rest = _strip_leading_token(block.inner_text, _SUBSECTION_PAREN_RE)
             if not token:
                 token, rest = _strip_leading_token(block.inner_text, _SUBSECTION_DOT_RE)
-            current_subsection = _SubsectionNode(token=token, text_parts=[rest], block_index=index)
+            current_subsection = _SubsectionNode(
+                token=token.lower(), text_parts=[rest], block_index=index
+            )
             current_section.subsections.append(current_subsection)
             current_definition = current_paragraph = current_paragraphsub = None
             continue
@@ -254,6 +280,13 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
 
         if cls == "paragraph":
             token, rest = _strip_leading_token(block.inner_text, _PARAGRAPH_RE)
+            if not token and current_paragraph is not None:
+                # A tokenless paragraph block continues the open paragraph:
+                # s6FA(a)'s closing "that is also personal information;", or
+                # s26WG(h)'s text between its subparagraphs (ii) and (iii),
+                # which still number on under (h) (issue #97).
+                current_paragraph.text = f"{current_paragraph.text} {rest}".strip()
+                continue
             node = _ParagraphNode(token=token, text=rest, block_index=index)
             parent = (
                 current_definition.children
@@ -334,7 +367,10 @@ def _emit_paragraph(node: _ParagraphNode, *, parent_path: str, ctx: _EmitContext
 def _emit_subsection(
     subsection: _SubsectionNode, *, section_prefix: str, ctx: _EmitContext
 ) -> None:
-    subsection_path = f"{section_prefix}/{subsection.token}"
+    # An unnumbered subsection — a section that is one sentence, like s15
+    # ("An APP entity must not do an act...") or s1's short title — is the
+    # section itself: its clause path is the section's (issue #97).
+    subsection_path = f"{section_prefix}/{subsection.token}" if subsection.token else section_prefix
     definitions = [c for c in subsection.children if isinstance(c, _DefinitionNode)]
     bare_paragraphs = [c for c in subsection.children if isinstance(c, _ParagraphNode)]
     singleton = len(definitions) <= 1
@@ -412,6 +448,15 @@ def parse_compilation(
     for section in sections:
         for subsection in section.subsections:
             _emit_subsection(subsection, section_prefix=section.prefix, ctx=ctx)
+
+    seen: set[str] = set()
+    duplicates = sorted(
+        {c.clause_id for c in ctx.clauses if c.clause_id in seen or seen.add(c.clause_id)}
+    )
+    if duplicates:
+        # Two provisions on one path would make a citation ambiguous — the
+        # stable ID is what the verifier looks up (CONTEXT.md: Instrument id).
+        raise ValueError(f"{len(duplicates)} clause path(s) produced twice: {duplicates[:5]}")
 
     annotated = source
     for block_index in sorted(ctx.anchors, reverse=True):
