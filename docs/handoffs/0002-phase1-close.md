@@ -121,12 +121,28 @@ Cold start is about 22 s of container boot and model load on top of the warm tim
 
 ## Open issues
 
-- **#29 and #31:** the live criteria only; both need the quota.
-- **#12:** ISO 27001 Annex A control IDs with our own descriptors. A Phase 1 deliverable, not started.
-- **#73:** the Vertex SDK `TextEmbeddingModel` removal.
-- **#78:** the `synthetic` marker is self-attested. It must become operator-controlled before any external upload.
+*Updated 2026-10-10, later the same day, after a second run (PRs #85, #86, #90–#92, #94).*
+
+- **#29 and #31:** only the live criteria remain. Both wait on US multi-region Claude quota, which the human has requested. `.env` is now set to `claude-sonnet-5` / `us`.
+- **#12:** ISO 27001 Annex A control IDs with our own descriptors. This is a Phase 1 deliverable, not started; it waits on the human's control-ID list.
+- **#78 (Phase 3 blocker):**
+  - **Done:** the `synthetic` flag is now operator-controlled at the write path (ADR-0026, PR #90).
+  - **Still owed:** the API-level test, once Phase 3's upload API exists.
+- **#93:** the Phase 2 design session, covering condition valid time, APPLIES_TO targets, controls, corrections versus D-05 immutability, where policy mappings live, and status/date agreement. The graph loader validates these shapes and refuses to load them until the session settles them.
 - **#8:** the Phase 1 parent.
-- **Phase 2's first task** (PHASES.md): confirm the Neo4j Aura Free instance still exists. It paused once already (BUILD_LOG 2026-10-01).
+- **#73: closed.** The embedder is on `google-genai`. The snapshot was regenerated, and all 137 vectors are byte-identical.
+
+## Phase 2 scaffolding (started early, at the human's instruction)
+
+Merged:
+- **#87:** a Neo4j adapter that applies the schema idempotently, plus a Neo4j 5.26.31 Community container in CI. Writes are immutable and bitemporal; a retire takes the node's write lock before reading.
+- **#88:** a query builder that requires `as_of` and a depth cap, and applies the bitemporal check to every node on a path. A built query is sealed against tampering. Amendments are one atomic transaction.
+- **#89:** graph loaders, which go through a new `GraphAdmin` interface.
+  - **Loaded:** corpus structure, obligations, obligation `SUPERSEDES`, and obligation crosswalks.
+  - **Not loaded:** anything in #93's scope.
+  - **Policy mappings:** never written to the graph (D-09).
+
+**Aura Free:** on 2026-10-10 the hostname `compliance-rag-neo` did not resolve, though DNS works otherwise. So the instance is paused or deleted. Resuming or recreating it is a console step for the human. Nothing built so far needs it, because every graph test runs against the local or CI container.
 
 ## Residency and the decision that's coming
 
