@@ -3,12 +3,18 @@
 // Bitemporal properties on every node (D-05):
 //
 //   valid_from  : date       when the node's content became true in the world
-//   valid_to    : date|null  when it stopped being true; null means still true
+//   valid_to    : date       when it stopped being true; never null — an
+//                            open-ended node carries the NO_END_DATE sentinel
+//                            (9999-12-31, CONTEXT.md: Bitemporal), so "in force
+//                            on as_of" is always valid_from <= as_of < valid_to
 //   status      : string     'in_force' | 'not_yet_commenced' | 'repealed'
-//   recorded_at : datetime   when we learned it
+//   recorded_at : datetime   when we learned it (set by the writer)
 //
 // Nodes are immutable. An amendment creates a new version node, a SUPERSEDES
-// edge to the old, and sets valid_to on the old. Nothing is deleted or mutated.
+// edge to the old, and sets valid_to on the old — once, from NO_END_DATE to a
+// date. Nothing else is deleted or mutated (adapters/neo4j_graph.py enforces it).
+//
+// Applied by Neo4jGraph.apply_schema, one statement at a time, idempotently.
 //
 // Every traversal takes as_of and a path-depth cap, enforced by the query
 // builder (D-05). An unscoped query is a test failure.
@@ -46,9 +52,11 @@ CREATE CONSTRAINT sector_stable_id IF NOT EXISTS
 FOR (n:Sector) REQUIRE n.stable_id IS UNIQUE;
 
 // --- existence of the bitemporal properties ---------------------------------
-// Property-existence constraints are an Enterprise/Aura feature. On a tier that
-// rejects them, the loader enforces the same invariant and the graph eval fails
-// loudly on a node missing valid_from or status.
+// Property-existence constraints are an Enterprise/Aura feature. Community
+// (the CI service container) refuses them; apply_schema reports each refused
+// statement by name rather than failing or skipping silently, and the writer
+// (Neo4jGraph.put_node) enforces the same invariant on every edition: no node
+// is written without valid_from, valid_to, status and recorded_at.
 
 CREATE CONSTRAINT obligation_valid_from IF NOT EXISTS
 FOR (n:Obligation) REQUIRE n.valid_from IS NOT NULL;
