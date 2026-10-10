@@ -16,6 +16,7 @@ from compliance_rag.adapters.generation_residency import (
     validate_generation_region,
 )
 from compliance_rag.corpus.models import Chunk, Scope
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 
 POLICY = "acme/retention-policy"
 
@@ -31,12 +32,20 @@ def _chunk(*, synthetic: bool, scope: Scope = Scope.TENANT) -> Chunk:
     )
 
 
+REGISTERED = SyntheticRegistry.of((_chunk(synthetic=False),), source="this test's fixture")
+"""The operator has registered this one invented policy as synthetic (#78)."""
+
+
 def _lifecycle(region: str) -> tuple[CorpusLifecycle, FakeRetrievalStore]:
     ledger = FakeLedgerStore()
     store = FakeRetrievalStore(ledger=ledger)
     return (
         CorpusLifecycle(
-            ledger=ledger, retrieval=store, clauses=FakeClauseStore(), generation_region=region
+            ledger=ledger,
+            retrieval=store,
+            clauses=FakeClauseStore(),
+            generation_region=region,
+            synthetic_registry=REGISTERED,
         ),
         store,
     )
@@ -53,24 +62,28 @@ async def _publish(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
     )
 
 
+def _real_chunk() -> Chunk:
+    return _chunk(synthetic=False).model_copy(update={"text": "Acme keeps payroll for 7 years."})
+
+
 async def test_the_first_real_policy_upload_fails_while_generation_is_offshore() -> None:
     lifecycle, store = _lifecycle("us")
     with pytest.raises(GenerationResidencyError, match="real tenant chunk"):
-        await _publish(lifecycle, _chunk(synthetic=False))
+        await _publish(lifecycle, _real_chunk())
     assert not await store.holds_real_tenant_data()  # refused before any write
     assert store.stored_chunk_ids == frozenset()
 
 
-async def test_a_synthetic_policy_is_accepted_while_generation_is_offshore() -> None:
+async def test_a_registered_synthetic_policy_is_accepted_while_generation_is_offshore() -> None:
     lifecycle, store = _lifecycle("us")
-    await _publish(lifecycle, _chunk(synthetic=True))
+    await _publish(lifecycle, _chunk(synthetic=False))  # synthetic because registered
     assert store.stored_chunk_ids == frozenset({f"{POLICY}:v1:1/1"})
     assert not await store.holds_real_tenant_data()
 
 
 async def test_a_real_policy_is_accepted_once_generation_is_in_sydney() -> None:
     lifecycle, store = _lifecycle("australia-southeast1")
-    await _publish(lifecycle, _chunk(synthetic=False))
+    await _publish(lifecycle, _real_chunk())
     assert await store.holds_real_tenant_data()
 
 

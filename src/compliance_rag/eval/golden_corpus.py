@@ -16,6 +16,7 @@ from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, ClauseRecord, 
 from compliance_rag.corpus.parser import parse_compilation
 from compliance_rag.corpus.policy_parser import parse_policy
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.golden import load_golden_set
 
 FIXTURES = Path(__file__).resolve().parents[3] / "docs" / "research" / "fixtures"
@@ -57,14 +58,27 @@ def golden_clauses() -> tuple[ClauseRecord, ...]:
     return (*law, *policies)
 
 
+def _all_chunks() -> tuple[Chunk, ...]:
+    return chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
+
+
+def synthetic_fixture_chunks() -> tuple[Chunk, ...]:
+    """The six Acme policies' chunks, unmarked — what the operator registers
+    as synthetic (`scripts/register_synthetic_fixtures.py`, issue #78)."""
+    return tuple(c for c in _all_chunks() if c.scope is Scope.TENANT)
+
+
+def synthetic_fixture_clauses() -> tuple[ClauseRecord, ...]:
+    """The six Acme policies' clauses, registered alongside their chunks."""
+    return tuple(c for c in golden_clauses() if c.scope is Scope.TENANT)
+
+
 def golden_chunks() -> tuple[Chunk, ...]:
-    """The six Acme policies are invented (docs/research/synthetic-policy-set.md),
-    so their chunks are marked synthetic — the build-phase residency gate
-    (ADR-0023) counts any unmarked tenant chunk as real customer data."""
-    chunks = chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
-    return tuple(
-        c.model_copy(update={"synthetic": True}) if c.scope is Scope.TENANT else c for c in chunks
-    )
+    """The six Acme policies are invented (docs/research/synthetic-policy-set.md).
+    Their `synthetic` flag comes from the operator's registry, exactly as the
+    write path derives it (issue #78) — the build-phase residency gate
+    (ADR-0023) counts any unregistered tenant chunk as real customer data."""
+    return SyntheticRegistry.load().mark(_all_chunks())
 
 
 def golden_texts() -> tuple[str, ...]:
