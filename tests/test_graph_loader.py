@@ -17,7 +17,14 @@ import pytest
 import yaml
 
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
-from compliance_rag.adapters.neo4j_graph import GraphCounts, Neo4jGraph
+from compliance_rag.adapters.graph_schema import (
+    Bitemporal,
+    GraphCounts,
+    GraphWriteRefused,
+    NodeRef,
+    Status,
+)
+from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.corpus.models import ClauseRecord, Scope
 from compliance_rag.graph.loader import (
     DESIGN_SESSION_QUESTIONS,
@@ -26,7 +33,6 @@ from compliance_rag.graph.loader import (
 )
 from compliance_rag.graph.mappings import (
     MappingError,
-    MappingSet,
     load_mapping_file,
     load_mapping_set,
 )
@@ -42,6 +48,17 @@ SINCE = dt.date(2000, 1, 1)
 
 def _fixture() -> dict[str, Any]:  # Any: YAML
     return yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
+
+
+def _readme_document() -> dict[str, Any]:  # Any: YAML
+    """Every YAML example in the README, joined into one document."""
+    blocks = re.findall(r"```yaml\n(.*?)```", README.read_text(encoding="utf-8"), re.S)
+    document: dict[str, Any] = {}  # Any: YAML
+    for block in blocks:
+        parsed = yaml.safe_load(block)
+        if isinstance(parsed, dict):
+            document |= parsed
+    return document
 
 
 def _write(tmp_path: Path, document: dict[str, Any], name: str = "m.yaml") -> Path:  # Any: YAML
@@ -79,12 +96,7 @@ def test_the_fixture_validates() -> None:
 def test_the_readme_documented_shapes_validate(tmp_path: Path) -> None:
     """The README is the spec for mapping YAML: its examples, joined into
     one file, must validate — so the loader and the README can't drift."""
-    blocks = re.findall(r"```yaml\n(.*?)```", README.read_text(encoding="utf-8"), re.S)
-    document: dict[str, Any] = {}  # Any: YAML
-    for block in blocks:
-        parsed = yaml.safe_load(block)
-        if isinstance(parsed, dict):
-            document |= parsed
+    document = _readme_document()
     mappings = load_mapping_set([_write(tmp_path, document)])
     assert mappings.obligations and mappings.conditions and mappings.crosswalks
 
@@ -179,12 +191,7 @@ async def test_ontology_the_design_session_owns_is_refused_by_name(tmp_path: Pat
     """Conditions, applies_to and controls need decisions this ticket doesn't
     make; the README's own example carries all three and is refused, naming
     each question, before the graph is touched."""
-    blocks = re.findall(r"```yaml\n(.*?)```", README.read_text(encoding="utf-8"), re.S)
-    document: dict[str, Any] = {}  # Any: YAML
-    for block in blocks:
-        parsed = yaml.safe_load(block)
-        if isinstance(parsed, dict):
-            document |= parsed
+    document = _readme_document()
     mappings = load_mapping_set([_write(tmp_path, document)])
     with pytest.raises(MappingError) as refused:
         await load_mappings(None, mappings)  # pyright: ignore[reportArgumentType] — refused before use
@@ -273,8 +280,8 @@ async def _corpus(graph: Neo4jGraph) -> None:
 async def test_mappings_load_idempotently(graph: Neo4jGraph) -> None:
     await _corpus(graph)
     mappings = load_mapping_set([FIXTURE])
-    first = await load_mappings(graph, mappings)
-    again = await load_mappings(graph, mappings)
+    first = await load_mappings(graph, mappings, today=SEP)
+    again = await load_mappings(graph, mappings, today=SEP)
     assert (first.nodes_created, first.edges_created) == (3, 2)  # SUPERSEDES + CROSSWALKS_TO
     assert (again.nodes_created, again.edges_created) == (0, 0)
     assert again.counts == await graph.counts() == GraphCounts(4 + 3, 3 + 2)
@@ -283,7 +290,7 @@ async def test_mappings_load_idempotently(graph: Neo4jGraph) -> None:
 @needs_neo4j
 async def test_a_superseded_obligation_is_retired_not_deleted(graph: Neo4jGraph) -> None:
     await _corpus(graph)
-    await load_mappings(graph, load_mapping_set([FIXTURE]))
+    await load_mappings(graph, load_mapping_set([FIXTURE]), today=SEP)
 
     def obligation(as_of: dt.date) -> GraphQuery:
         return GraphQuery(as_of=as_of, max_depth=1).start("Obligation")
@@ -306,7 +313,7 @@ async def test_a_proposed_policy_mapping_never_reaches_the_graph(graph: Neo4jGra
     or approved — is validated and reported, never written: it can't be
     traversed because it isn't there."""
     await _corpus(graph)
-    report = await load_mappings(graph, load_mapping_set([FIXTURE]))
+    report = await load_mappings(graph, load_mapping_set([FIXTURE]), today=SEP)
     assert report.not_loaded == ("MAP-TEST-1",)
     rows = await cypher(
         graph,
@@ -327,10 +334,126 @@ async def test_an_obligation_about_a_missing_clause_is_refused_before_any_write(
     document["source_clause_ids"].append("test-act:v1:s9/1")
     document["obligations"][2]["clause_id"] = "test-act:v1:s9/1"
     with pytest.raises(MappingError, match="not in the graph"):
-        await load_mappings(graph, load_mapping_set([_write(tmp_path, document)]))
+        await load_mappings(graph, load_mapping_set([_write(tmp_path, document)]), today=SEP)
     assert await graph.counts() == before
 
 
-def test_mapping_set_is_the_only_input() -> None:
-    """`load_mappings` takes a validated `MappingSet`, never raw YAML."""
-    assert load_mappings.__annotations__["mappings"] in ("MappingSet", MappingSet)
+# ---- review findings ----------------------------------------------------------
+
+
+def test_one_obligation_has_one_successor(tmp_path: Path) -> None:
+    document = _fixture()
+    twin = dict(document["obligations"][1], id="OB-TEST-1C")
+    document["obligations"].append(twin)
+    with pytest.raises(MappingError, match="superseded by both"):
+        load_mapping_set([_write(tmp_path, document)])
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("policy_clause_id", "acme-policy-without-segments", "policy_clause_id"),
+        ("approved_by", "model: a model", "never a model"),
+    ],
+)
+def test_policy_mapping_fields_are_checked(
+    tmp_path: Path, key: str, value: str, message: str
+) -> None:
+    document = _fixture()
+    mapping = document["policy_mappings"][0]
+    mapping[key] = value
+    if key == "approved_by":
+        mapping |= {"status": "approved", "approved_date": "2026-10-10"}
+    with pytest.raises(MappingError, match=message):
+        load_mapping_file(_write(tmp_path, document))
+
+
+def test_an_in_condition_may_list_numbers(tmp_path: Path) -> None:
+    document = _fixture() | {
+        "conditions": [
+            {
+                "id": "COND-T",
+                "kind": "turnover",
+                "description": "d",
+                "profile_field": "size_band",
+                "operator": "in",
+                "value": [1, 2, 3],
+                "unassessable_reason": "r",
+            }
+        ]
+    }
+    assert load_mapping_file(_write(tmp_path, document)).conditions[0].value == (1, 2, 3)
+
+
+async def test_a_mistyped_crosswalk_obligation_is_named_as_unknown(tmp_path: Path) -> None:
+    document = _fixture()
+    document["crosswalks"][0]["to"] = "OB-TEST-TYPO"
+    with pytest.raises(MappingError, match="unknown obligation OB-TEST-TYPO"):
+        await load_mappings(None, load_mapping_set([_write(tmp_path, document)]))  # pyright: ignore[reportArgumentType] — refused before use
+
+
+@needs_neo4j
+async def test_a_correction_in_place_is_refused_before_any_write(
+    graph: Neo4jGraph,
+    tmp_path: Path,
+) -> None:
+    """README: "correcting a mapping edits the existing entry". Once loaded,
+    that would mutate a node (D-05) — refused before anything is written,
+    not halfway through (#93 decides how corrections work)."""
+    await _corpus(graph)
+    await load_mappings(graph, load_mapping_set([FIXTURE]), today=SEP)
+    before = await graph.counts()
+    document = _fixture()
+    document["obligations"][2]["summary"] = "Destroy the invented records promptly."
+    document["obligations"].append(
+        {
+            "id": "OB-TEST-0",  # sorts first: would be written before the refusal
+            "clause_id": "test-act:v1:s2/1",
+            "summary": "A new one.",
+            "status": "in_force",
+            "valid_from": "2026-01-01",
+            "valid_to": None,
+        }
+    )
+    with pytest.raises(MappingError, match="OB-TEST-2 is already loaded"):
+        await load_mappings(graph, load_mapping_set([_write(tmp_path, document)]), today=SEP)
+    assert await graph.counts() == before
+
+
+@needs_neo4j
+async def test_an_obligation_may_not_outlive_its_clause(graph: Neo4jGraph) -> None:
+    """v1's clauses are retired when v2 supersedes them in June; an open-ended
+    obligation on a v1 clause would then point at law no longer in force."""
+    await _corpus(graph)
+    await load_instrument_version(graph, V2, instrument_since=SINCE, effective=JUN, supersedes="v1")
+    with pytest.raises(MappingError, match="end the obligation with its clause"):
+        await load_mappings(graph, load_mapping_set([FIXTURE]), today=SEP)
+    assert await graph.counts() == GraphCounts(7, 7)
+
+
+@needs_neo4j
+async def test_superseding_a_version_not_in_force_writes_nothing(graph: Neo4jGraph) -> None:
+    await _corpus(graph)
+    before = await graph.counts()
+    with pytest.raises(ValueError, match="nothing to supersede"):
+        await load_instrument_version(
+            graph, V2, instrument_since=SINCE, effective=JUN, supersedes="v9"
+        )
+    assert await graph.counts() == before
+
+
+@needs_neo4j
+async def test_a_refused_supersession_leaves_the_old_clauses_in_force(graph: Neo4jGraph) -> None:
+    """The old version and its clauses are retired inside `amend`'s one
+    transaction: if the new version is refused, none of them is retired."""
+    await _corpus(graph)
+    await graph.put_node(
+        NodeRef("InstrumentVersion", "test-act:v2"),
+        Bitemporal(valid_from=SEP, status=Status.IN_FORCE),  # clashes with effective=JUN
+    )
+    with pytest.raises(GraphWriteRefused, match="immutable"):
+        await load_instrument_version(
+            graph, V2, instrument_since=SINCE, effective=JUN, supersedes="v1"
+        )
+    in_force = sorted(str(r.node["stable_id"]) for r in await graph.read(_clauses_at(SEP).build()))
+    assert in_force == ["test-act:v1:s1/1", "test-act:v1:s2/1"]

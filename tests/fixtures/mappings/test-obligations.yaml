@@ -1,7 +1,7 @@
 # TEST FIXTURE — invented for the loader tests (issue #89). Not law, not a
 # mapping of any real instrument, and never loaded from corpus/mappings/.
 author: "model: Claude Opus 5.5 — loader test fixture"
-reviewed_by: fixture-reviewer@example.invalid
+reviewed_by: test-fixture (not a review — invented data)
 date: 2026-10-10
 source_clause_ids:
   - test-act:v1:s1/1

@@ -15,9 +15,19 @@ from __future__ import annotations
 
 import datetime as dt
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from compliance_rag.adapters.graph_query import BuiltQuery
+from compliance_rag.adapters.graph_schema import (
+    Bitemporal,
+    GraphCounts,
+    GraphRow,
+    NodeRef,
+    Scalar,
+    Status,
+)
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, validate_tenant_id
 
@@ -229,6 +239,58 @@ class GraphStore(ABC):
         max_depth: int,
     ) -> tuple[Obligation, ...]:
         """Obligations reachable by `CROSSWALKS_TO` within `max_depth` hops."""
+
+
+class GraphAdmin(ABC):
+    """Writes to the persisted graph, and builder-built reads (Phase 2).
+
+    The loaders (`graph/loader.py`) talk to this, never to the Neo4j adapter.
+    Every write keeps D-05: nodes immutable except `valid_to`, set once;
+    identical re-writes are no-ops. Every read is a `BuiltQuery`, so it
+    carries `as_of` and a depth cap.
+    """
+
+    @abstractmethod
+    async def put_node(
+        self, node: NodeRef, bitemporal: Bitemporal, properties: Mapping[str, Scalar] | None = None
+    ) -> bool:
+        """True if created, False if an identical node existed."""
+
+    @abstractmethod
+    async def put_edge(
+        self,
+        edge_type: str,
+        source: NodeRef,
+        target: NodeRef,
+        properties: Mapping[str, Scalar] | None = None,
+    ) -> bool:
+        """True if created, False if an identical edge existed."""
+
+    @abstractmethod
+    async def retire_node(self, node: NodeRef, *, valid_to: dt.date) -> None:
+        """Set `valid_to` once, from the open sentinel."""
+
+    @abstractmethod
+    async def amend(
+        self,
+        *,
+        old: NodeRef,
+        new: NodeRef,
+        effective: dt.date,
+        status: Status,
+        properties: Mapping[str, Scalar] | None = None,
+        retire_with: tuple[NodeRef, ...] = (),
+    ) -> None:
+        """New node, `SUPERSEDES`, old retired — and `retire_with` retired on
+        the same date — in one transaction."""
+
+    @abstractmethod
+    async def read(self, query: BuiltQuery) -> tuple[GraphRow, ...]:
+        """Run one builder-built query."""
+
+    @abstractmethod
+    async def counts(self) -> GraphCounts:
+        """Whole-graph node and edge totals."""
 
 
 class RetrievalStore(ABC):

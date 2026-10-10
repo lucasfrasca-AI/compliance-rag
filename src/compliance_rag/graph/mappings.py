@@ -22,17 +22,17 @@ from typing import Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from compliance_rag.corpus.models import NO_END_DATE, parse_stable_id, validate_review
+from compliance_rag.adapters.graph_schema import Status
+from compliance_rag.corpus.models import (
+    MODEL_AUTHOR_PREFIX,
+    NO_END_DATE,
+    parse_stable_id,
+    validate_review,
+)
 
 
 class MappingError(ValueError):
     """A mapping file that must not reach the graph."""
-
-
-class ObligationStatus(StrEnum):
-    IN_FORCE = "in_force"
-    NOT_YET_COMMENCED = "not_yet_commenced"
-    REPEALED = "repealed"
 
 
 class ConditionKind(StrEnum):
@@ -93,7 +93,7 @@ class Obligation(_Strict):
     id: str
     clause_id: str
     summary: str
-    status: ObligationStatus
+    status: Status
     valid_from: dt.date
     valid_to: dt.date | None = None
     applies_to: AppliesTo = AppliesTo()
@@ -126,12 +126,12 @@ class Condition(_Strict):
     description: str
     profile_field: str
     operator: Operator
-    value: str | int | float | bool | tuple[str, ...]
+    value: str | int | float | bool | tuple[str | int | float, ...]
     unassessable_reason: str
 
 
 class Crosswalk(_Strict):
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = _Strict.model_config | ConfigDict(populate_by_name=True)
 
     source: str = Field(alias="from")
     target: str = Field(alias="to")
@@ -149,8 +149,16 @@ class PolicyMapping(_Strict):
     approved_by: str | None = None
     approved_date: dt.date | None = None
 
+    @field_validator("policy_clause_id")
+    @classmethod
+    def _policy_stable_id(cls, v: str) -> str:
+        parse_stable_id(v)
+        return v
+
     @model_validator(mode="after")
     def _approval(self) -> Self:
+        if self.approved_by and self.approved_by.startswith(MODEL_AUTHOR_PREFIX):
+            raise ValueError(f"{self.id}: approved_by must be a person, never a model (D-01)")
         approved = self.status is PolicyMappingStatus.APPROVED
         if approved and not (self.approved_by and self.approved_date):
             raise ValueError(f"{self.id}: approved needs approved_by and approved_date")
@@ -210,6 +218,10 @@ class MappingSet(_Strict):
         return tuple(o for f in self.files for o in f.obligations)
 
     @property
+    def obligations_by_id(self) -> dict[str, Obligation]:
+        return {o.id: o for o in self.obligations}
+
+    @property
     def conditions(self) -> tuple[Condition, ...]:
         return tuple(c for f in self.files for c in f.conditions)
 
@@ -226,12 +238,19 @@ class MappingSet(_Strict):
         obligation_ids = _unique("obligation", (o.id for o in self.obligations))
         condition_ids = _unique("condition", (c.id for c in self.conditions))
         _unique("policy mapping", (m.id for m in self.policy_mappings))
-        by_id = {o.id: o for o in self.obligations}
+        by_id = self.obligations_by_id
+        successors: dict[str, str] = {}
         for obligation in self.obligations:
             for condition in obligation.requires.conditions:
                 if condition not in condition_ids:
                     raise ValueError(f"{obligation.id}: requires unknown condition {condition}")
             if obligation.supersedes is not None:
+                earlier = successors.setdefault(obligation.supersedes, obligation.id)
+                if earlier != obligation.id:
+                    raise ValueError(
+                        f"{obligation.supersedes} is superseded by both {earlier} and "
+                        f"{obligation.id}: one obligation has one successor"
+                    )
                 old = by_id.get(obligation.supersedes)
                 if old is None:
                     raise ValueError(
@@ -240,7 +259,7 @@ class MappingSet(_Strict):
                 if old.valid_until != obligation.valid_from:
                     raise ValueError(
                         f"{obligation.id} starts {obligation.valid_from} but "
-                        f"{old.id} ends {old.valid_to}: a supersession leaves no gap or overlap"
+                        f"{old.id} ends {old.valid_until}: a supersession leaves no gap or overlap"
                     )
         for mapping in self.policy_mappings:
             if mapping.obligation_id not in obligation_ids:

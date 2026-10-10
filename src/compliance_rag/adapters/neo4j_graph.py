@@ -30,7 +30,6 @@ import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import LiteralString, cast
 
@@ -49,10 +48,17 @@ from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
     EDGE_TYPES,
     PERSISTED_LABELS,
+    Bitemporal,
+    GraphCounts,
+    GraphRow,
     GraphWriteRefused,
+    NodeRef,
+    Scalar,
+    Status,
     checked_edge_type,
     checked_label,
 )
+from compliance_rag.adapters.interfaces import GraphAdmin
 from compliance_rag.corpus.models import NO_END_DATE
 from compliance_rag.settings import Settings
 
@@ -67,42 +73,6 @@ reported as an edition limit rather than raised."""
 
 _PROPERTY_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
 
-Scalar = str | int | float | bool | dt.date | tuple[str, ...]
-"""What a node or edge property may hold: Neo4j stores these natively."""
-
-
-class Status(StrEnum):
-    IN_FORCE = "in_force"
-    NOT_YET_COMMENCED = "not_yet_commenced"
-    REPEALED = "repealed"
-
-
-@dataclass(frozen=True, slots=True)
-class NodeRef:
-    """One node, by label and stable ID — the label checked against the schema."""
-
-    label: str
-    stable_id: str
-
-    def __post_init__(self) -> None:
-        checked_label(self.label)
-
-
-@dataclass(frozen=True, slots=True)
-class Bitemporal:
-    """Valid time for one node. `recorded_at` (transaction time) is not
-    here: the writer stamps it, so no caller can backdate what we learned."""
-
-    valid_from: dt.date
-    status: Status
-    valid_to: dt.date = NO_END_DATE
-
-    def __post_init__(self) -> None:
-        if self.valid_to <= self.valid_from:
-            raise GraphWriteRefused(
-                f"valid_to {self.valid_to} is not after valid_from {self.valid_from}"
-            )
-
 
 @dataclass(frozen=True, slots=True)
 class SchemaReport:
@@ -111,21 +81,6 @@ class SchemaReport:
     unsupported: tuple[str, ...]
     """Constraint names this edition refuses (property existence on
     Community). The writer enforces the same invariant instead."""
-
-
-@dataclass(frozen=True, slots=True)
-class GraphRow:
-    """One result of a builder-built read: the path's last node, with its
-    properties as stored, and the stable IDs along the path."""
-
-    node: Mapping[str, object]
-    path: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class GraphCounts:
-    nodes: int
-    edges: int
 
 
 def schema_statements(path: Path = SCHEMA_PATH) -> tuple[str, ...]:
@@ -210,7 +165,7 @@ def _refuse_if_changed(
         )
 
 
-class Neo4jGraph:
+class Neo4jGraph(GraphAdmin):
     def __init__(
         self,
         driver: AsyncDriver,
@@ -434,6 +389,7 @@ class Neo4jGraph:
         effective: dt.date,
         status: Status,
         properties: Mapping[str, Scalar] | None = None,
+        retire_with: tuple[NodeRef, ...] = (),
     ) -> None:
         """D-05's amendment, in one transaction: `new` is written in force
         from `effective`, `new -SUPERSEDES-> old`, and `old` is retired on
@@ -450,6 +406,8 @@ class Neo4jGraph:
 
         async def work(tx: AsyncManagedTransaction) -> None:
             await self._retire(tx, old, effective)
+            for node in retire_with:
+                await self._retire(tx, node, effective)
             created, stored = await self._merge_node(tx, new, props)
             if not created:
                 _refuse_if_changed(new, stored, props)
