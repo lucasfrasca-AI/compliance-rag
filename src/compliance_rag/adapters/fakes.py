@@ -33,6 +33,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import (
+    PUBLIC_TENANT_ID,
     Chunk,
     ClauseRecord,
     Scope,
@@ -393,7 +394,21 @@ class FakeLedgerStore(LedgerStore):
     async def mark_withdrawn(
         self, *, tenant_id: str, instrument_id: str, version_id: str, withdrawn_by: str
     ) -> None:
-        self.withdrawn[(tenant_id, instrument_id, version_id)] = withdrawn_by
+        self._require_removable(tenant_id, instrument_id, version_id, "withdrawn")
+        self.withdrawn.setdefault((tenant_id, instrument_id, version_id), withdrawn_by)
+
+    def _require_removable(
+        self, tenant_id: str, instrument_id: str, version_id: str | None, what: str
+    ) -> None:
+        """Parity with Postgres: library law is refused, and only a recorded
+        version (or an instrument with one) can carry a marker."""
+        if tenant_id == PUBLIC_TENANT_ID:
+            raise ValueError(f"library law is never {what} (ADR-0021)")
+        if not any(
+            (t, i) == (tenant_id, instrument_id) and (version_id is None or v == version_id)
+            for (t, i, v) in self._versions
+        ):
+            raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
 
     async def is_withdrawn(self, *, tenant_id: str, instrument_id: str, version_id: str) -> bool:
         return (tenant_id, instrument_id, version_id) in self.withdrawn
@@ -407,6 +422,7 @@ class FakeLedgerStore(LedgerStore):
         purged_by: str,
         reason: str,
     ) -> None:
+        self._require_removable(tenant_id, instrument_id, version_id, "purged")
         self.purged[(tenant_id, instrument_id, version_id)] = (purged_by, reason)
 
     async def purge_marker(

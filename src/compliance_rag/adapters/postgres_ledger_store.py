@@ -42,6 +42,13 @@ from compliance_rag.settings import Settings
 _PROFILE_LISTS = ("jurisdictions", "sectors", "actor_roles", "data_categories", "regulators")
 
 
+def _refuse_library(tenant_id: str, what: str) -> None:
+    """Library law is unsubscribed from, never withdrawn or purged (ADR-0021);
+    the database's CHECK would refuse it too, as a raw constraint error."""
+    if tenant_id == PUBLIC_TENANT_ID:
+        raise ValueError(f"library law is never {what} (ADR-0021)")
+
+
 class PostgresLedgerStore(LedgerStore):
     def __init__(self, dsn: str) -> None:
         if not dsn:
@@ -230,8 +237,11 @@ class PostgresLedgerStore(LedgerStore):
     async def mark_withdrawn(
         self, *, tenant_id: str, instrument_id: str, version_id: str, withdrawn_by: str
     ) -> None:
+        """Idempotent: a second withdrawal keeps the first one's who and when."""
+        _refuse_library(tenant_id, "withdrawn")
         updated = await self._execute(
-            "UPDATE instrument_version SET withdrawn_at = now(), withdrawn_by = %s "
+            "UPDATE instrument_version SET withdrawn_at = COALESCE(withdrawn_at, now()), "
+            "withdrawn_by = COALESCE(withdrawn_by, %s) "
             "WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s",
             (withdrawn_by, tenant_id, instrument_id, version_id),
         )
@@ -255,13 +265,17 @@ class PostgresLedgerStore(LedgerStore):
         purged_by: str,
         reason: str,
     ) -> None:
-        """`version_id` None marks every version row of the instrument."""
-        await self._execute(
+        """`version_id` None marks every version row of the instrument. Nothing
+        recorded to mark is a `KeyError`, as for `mark_withdrawn`."""
+        _refuse_library(tenant_id, "purged")
+        updated = await self._execute(
             "UPDATE instrument_version SET purged_at = now(), purged_by = %s, purge_reason = %s "
             "WHERE tenant_id = %s AND instrument_id = %s "
             "AND (%s::text IS NULL OR version_id = %s)",
             (purged_by, reason, tenant_id, instrument_id, version_id, version_id),
         )
+        if updated == 0:
+            raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
 
     async def purge_marker(
         self, *, tenant_id: str, instrument_id: str, version_id: str
@@ -300,7 +314,7 @@ class PostgresLedgerStore(LedgerStore):
         rows = await self._fetchall(
             "SELECT audit_id, tenant_id, instrument_id, version_id, action, outcome, actor, "
             "reason, findings_citing, detail FROM corpus_removal_audit "
-            "WHERE tenant_id = %s ORDER BY recorded_at, audit_id",
+            "WHERE tenant_id = %s ORDER BY seq",
             (tenant_id,),
         )
         return tuple(

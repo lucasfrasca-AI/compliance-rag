@@ -47,9 +47,12 @@ _LEDGER_TABLES = (
 
 @pytest.fixture
 async def ledger() -> AsyncIterator[PostgresLedgerStore]:
-    host = urlparse(DATABASE_URL).hostname
-    if host not in {"localhost", "127.0.0.1"}:
-        raise RuntimeError(f"refusing to truncate a ledger on {host!r}: tests run on localhost")
+    url = urlparse(DATABASE_URL)
+    if url.hostname not in {"localhost", "127.0.0.1"} or url.path != "/compliance_rag":
+        raise RuntimeError(
+            f"refusing to truncate {url.hostname}{url.path}: only the local/CI "
+            "test ledger (localhost/compliance_rag) is ever emptied"
+        )
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         await conn.execute(f"TRUNCATE {_LEDGER_TABLES} CASCADE")
         await conn.execute(

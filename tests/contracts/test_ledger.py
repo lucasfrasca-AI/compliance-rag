@@ -128,6 +128,15 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     await ledger.mark_purged(
         tenant_id="acme", instrument_id=POLICY, version_id="v1", purged_by="u1", reason="hold"
     )
+    await ledger.mark_withdrawn(  # idempotent: the first withdrawal stands
+        tenant_id="acme", instrument_id=POLICY, version_id="v1", withdrawn_by="someone-else"
+    )
+    assert await ledger.is_withdrawn(tenant_id="acme", instrument_id=POLICY, version_id="v1")
+    for remove in (ledger.mark_withdrawn, ledger.mark_purged):
+        with pytest.raises(KeyError):  # nothing recorded to mark
+            await _remove(remove, "acme", POLICY, "v9")
+        with pytest.raises(ValueError, match="library law"):
+            await _remove(remove, "_public", LAW, "v1")
     marker = ledger.purge_marker
     assert await marker(tenant_id="acme", instrument_id=POLICY, version_id="v1") == ("u1", "hold")
     assert await marker(tenant_id="acme", instrument_id=POLICY, version_id="v2") is None
@@ -154,6 +163,16 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     ]
     assert trail[0].findings_citing == 2 and trail[0].version_id is None
     assert await ledger.removal_audit("other-corp") == ()
+
+
+async def _remove(
+    method: Callable[..., Awaitable[None]], tenant_id: str, instrument_id: str, version_id: str
+) -> None:
+    kwargs = {"tenant_id": tenant_id, "instrument_id": instrument_id, "version_id": version_id}
+    if method.__name__ == "mark_withdrawn":
+        await method(**kwargs, withdrawn_by="u")
+    else:
+        await method(**kwargs, purged_by="u", reason="r")
 
 
 async def test_the_fake_ledger_satisfies_the_contract() -> None:
