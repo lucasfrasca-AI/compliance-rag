@@ -134,8 +134,11 @@ async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedger
         points, _ = await client.scroll(name, limit=1000, with_payload=True)
         return frozenset(str((p.payload or {})["chunk_id"]) for p in points)
 
+    async def seed(tenant_id: str, clause_id: str) -> None:
+        ledger.seed_finding(tenant_id, clause_id)
+
     await assert_corpus_lifecycle_contract(
-        store, store, ledger, FakeClauseStore(), stored_chunk_ids
+        store, store, ledger, FakeClauseStore(), stored_chunk_ids, seed
     )
 
 

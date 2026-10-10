@@ -409,6 +409,13 @@ class FakeLedgerStore(LedgerStore):
     ) -> None:
         self.purged[(tenant_id, instrument_id, version_id)] = (purged_by, reason)
 
+    async def purge_marker(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> tuple[str, str] | None:
+        return self.purged.get((tenant_id, instrument_id, version_id)) or self.purged.get(
+            (tenant_id, instrument_id, None)
+        )
+
     async def record_removal_audit(self, entry: RemovalAuditEntry) -> None:
         self._audit.append(entry)
 
