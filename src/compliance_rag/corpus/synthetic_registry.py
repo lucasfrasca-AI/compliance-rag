@@ -19,8 +19,9 @@ it.
 
 `CorpusLifecycle` (the write path) derives every chunk's `synthetic` flag from
 the registry, refuses a chunk that claims to be synthetic without being
-registered, and counts an unregistered tenant clause as real data. Content that is byte-for-byte a registered fixture under the same
-tenant is synthetic whoever uploads it; anything else is real.
+registered, and counts an unregistered tenant clause as real data. Content
+that is byte-for-byte a registered fixture under the same tenant is synthetic
+whoever uploads it; anything else is real.
 """
 
 from __future__ import annotations
