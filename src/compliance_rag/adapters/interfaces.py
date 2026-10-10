@@ -383,6 +383,13 @@ class LedgerStore(ABC):
         None marks every version row of the instrument."""
 
     @abstractmethod
+    async def purge_marker(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> tuple[str, str] | None:
+        """`(purged_by, reason)` if this version was purged — by itself or as
+        part of its whole instrument — else None."""
+
+    @abstractmethod
     async def record_removal_audit(self, entry: RemovalAuditEntry) -> None: ...
 
     @abstractmethod

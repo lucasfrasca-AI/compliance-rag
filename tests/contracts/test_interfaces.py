@@ -85,6 +85,12 @@ def graph() -> FakeGraphStore:
 
 @pytest.fixture
 def chunks() -> tuple[Chunk, ...]:
+    return contract_chunks()
+
+
+def contract_chunks() -> tuple[Chunk, ...]:
+    """The retrieval contract's seed records — a plain function as well as
+    the `chunks` fixture, so other backends' tests can seed the same set."""
     return (
         Chunk(
             chunk_id="c1",
