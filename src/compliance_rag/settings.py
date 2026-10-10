@@ -16,11 +16,12 @@ REGION = "australia-southeast1"
 """Every store, every telemetry sink, and every query-time byte except
 build-phase generation stays here (D-07, D-15, D-16, ADR-0023)."""
 
-BUILD_PHASE_OFFSHORE_REGION = "asia-southeast1"
-"""Singapore: the nearest region with a regional Claude endpoint
-(`claude-sonnet-4-6`, Google's model page, checked 2026-10-09). Allowed for
-generation only, and only while the corpus is public law plus synthetic data
-— `adapters/generation_residency.py` enforces that (ADR-0023)."""
+BUILD_PHASE_OFFSHORE_REGION = "us"
+"""The US multi-region endpoint (`aiplatform.us.rep.googleapis.com`), where
+`claude-sonnet-5` is served and enabled for this project (ADR-0024; it has no
+Sydney or Singapore endpoint). Allowed for generation only, and only while
+the corpus is public law plus synthetic data —
+`adapters/generation_residency.py` enforces that (ADR-0023)."""
 
 GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 
@@ -48,8 +49,8 @@ class Settings(BaseSettings):
     # --- Vertex ------------------------------------------------------------
     vertex_claude_model: str = ""
     vertex_claude_region: str = REGION
-    """Sydney by default — fail closed. The build phase opts into Singapore
-    explicitly (`VERTEX_CLAUDE_REGION=asia-southeast1`, ADR-0023)."""
+    """Sydney by default — fail closed. The build phase opts into the US
+    multi-region explicitly (`VERTEX_CLAUDE_REGION=us`, ADR-0024)."""
     vertex_embedding_model: str = "gemini-embedding-001"
     vertex_embedding_dims: int = 1536
     vertex_ranking_model: str = "semantic-ranker-default"
