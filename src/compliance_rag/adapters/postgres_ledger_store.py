@@ -31,6 +31,7 @@ from compliance_rag.adapters.interfaces import (
     RemovalAction,
     RemovalAuditEntry,
     RemovalOutcome,
+    UsageRecord,
 )
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -142,6 +143,44 @@ class PostgresLedgerStore(LedgerStore):
             "as_of": row[2],
             "trace_id": row[3],
         }
+
+    # ---- usage (#31) ----------------------------------------------------------
+
+    async def record_usage(self, usage: UsageRecord) -> None:
+        await self._execute(
+            "INSERT INTO usage (tenant_id, usage_id, trace_id, model, input_tokens, "
+            "output_tokens, cached_prefix_hit, cost_usd) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                usage.tenant_id,
+                usage.usage_id,
+                usage.trace_id,
+                usage.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cached_prefix_hit,
+                usage.cost_usd,
+            ),
+        )
+
+    async def usage(self, tenant_id: str) -> tuple[UsageRecord, ...]:
+        rows = await self._fetchall(
+            "SELECT usage_id, trace_id, model, input_tokens, output_tokens, cached_prefix_hit, "
+            "cost_usd FROM usage WHERE tenant_id = %s ORDER BY created_at, usage_id",
+            (tenant_id,),
+        )
+        return tuple(
+            UsageRecord(
+                tenant_id=tenant_id,
+                usage_id=str(r[0]),
+                trace_id=str(r[1]),
+                model=str(r[2]),
+                input_tokens=int(r[3]),
+                output_tokens=int(r[4]),
+                cached_prefix_hit=bool(r[5]),
+                cost_usd=float(r[6]),
+            )
+            for r in rows
+        )
 
     # ---- subscriptions (ADR-0020) -------------------------------------------
 
