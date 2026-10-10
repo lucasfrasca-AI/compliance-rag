@@ -24,6 +24,8 @@ from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
     ClauseStore,
+    LedgerStore,
+    Profile,
     RemovalAction,
     RemovalOutcome,
     RetrievalAdmin,
@@ -91,10 +93,24 @@ def _routes(trace: RetrievalTrace) -> dict[str, frozenset[str]]:
 async def assert_corpus_lifecycle_contract(
     store: RetrievalStore,
     admin: RetrievalAdmin,
-    ledger: FakeLedgerStore,
+    ledger: LedgerStore,
     clauses: ClauseStore,
     stored_chunk_ids: Callable[[], Awaitable[frozenset[str]]],
+    seed_finding: Callable[[str, str], Awaitable[None]],
 ) -> None:
+    """`seed_finding(tenant_id, clause_id)` records one finding citing that
+    clause — each backend supplies it, since `LedgerStore` has no finding
+    writer yet. Tenants and the library instrument are registered through
+    the interface first, as a database-backed ledger requires."""
+    for tenant in ("acme", "beta"):
+        await ledger.put_profile(Profile(tenant))
+    await ledger.record_version(
+        tenant_id="_public",
+        instrument_id=LAW,
+        version_id="C2026C00227",
+        valid_from=dt.date(2000, 1, 1),
+        supersedes=None,
+    )
     lifecycle = CorpusLifecycle(
         ledger=ledger, retrieval=admin, clauses=clauses, generation_region=GENERATION_REGION
     )
@@ -247,7 +263,7 @@ async def assert_corpus_lifecycle_contract(
         )
 
     # --- Purge: the findings count is shown first and must be acknowledged.
-    ledger.seed_finding("acme", V1)
+    await seed_finding("acme", V1)
     preview = await lifecycle.preview_removal(
         tenant_id="acme", instrument_id=POLICY, version_id="v1"
     )
@@ -280,7 +296,10 @@ async def assert_corpus_lifecycle_contract(
     assert await clauses.get_clause(V2, tenant_id="acme") is not None
     gone = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN))
     assert all(V1 not in ids for ids in gone.values()), gone
-    assert ledger.purged[("acme", POLICY, "v1")] == ("u1", "legal hold lifted")
+    assert await ledger.purge_marker(tenant_id="acme", instrument_id=POLICY, version_id="v1") == (
+        "u1",
+        "legal hold lifted",
+    )
     purge_trail = [
         e.outcome
         for e in await ledger.removal_audit("acme")
@@ -356,7 +375,10 @@ async def test_fakes_satisfy_the_corpus_lifecycle_contract() -> None:
     async def stored() -> frozenset[str]:
         return store.stored_chunk_ids
 
-    await assert_corpus_lifecycle_contract(store, store, ledger, FakeClauseStore(), stored)
+    async def seed(tenant_id: str, clause_id: str) -> None:
+        ledger.seed_finding(tenant_id, clause_id)
+
+    await assert_corpus_lifecycle_contract(store, store, ledger, FakeClauseStore(), stored, seed)
 
 
 async def test_a_removal_that_fails_midway_is_audited_as_failed() -> None:
