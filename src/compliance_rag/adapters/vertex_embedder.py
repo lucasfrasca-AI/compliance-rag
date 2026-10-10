@@ -67,8 +67,8 @@ class VertexEmbedder(Embedder):
     """Dense vectors from `gemini-embedding-001` (`SERVICES.md`: Vertex AI
     Embeddings, 1536 dims)."""
 
-    def __init__(self, models: _EmbedContentLike, *, model_name: str, dimensions: int) -> None:
-        self._models = models
+    def __init__(self, embed_api: _EmbedContentLike, *, model_name: str, dimensions: int) -> None:
+        self._embed_api = embed_api
         self._model_name = model_name
         self._dimensions = dimensions
 
@@ -113,26 +113,25 @@ class VertexEmbedder(Embedder):
             total_tokens = 0
             for index, text in enumerate(texts):
                 try:
-                    response = await self._models.embed_content(
+                    response = await self._embed_api.embed_content(
                         model=self._model_name, contents=[text], config=config
                     )
                 except APIError as exc:
                     raise ValueError(f"text {index}: rejected by the embedder — {exc}") from exc
                 embeddings = response.embeddings or []
-                if len(embeddings) != 1 or not embeddings[0].values:
+                if len(embeddings) != 1:
                     raise ValueError(f"text {index}: expected one embedding, got {len(embeddings)}")
-                embedding = embeddings[0]
-                statistics = embedding.statistics
-                if statistics is not None and statistics.truncated:
-                    raise ValueError(f"text {index}: truncated by the embedder")
-                if len(embedding.values or ()) != self._dimensions:
+                values = embeddings[0].values or []
+                statistics = embeddings[0].statistics
+                if statistics is not None:
+                    if statistics.truncated:
+                        raise ValueError(f"text {index}: truncated by the embedder")
+                    total_tokens += int(statistics.token_count or 0)
+                if len(values) != self._dimensions:
                     raise ValueError(
-                        f"text {index}: {len(embedding.values or ())} dimensions, "
-                        f"expected {self._dimensions}"
+                        f"text {index}: {len(values)} dimensions, expected {self._dimensions}"
                     )
-                vectors.append(tuple(embedding.values or ()))
-                if statistics is not None and statistics.token_count is not None:
-                    total_tokens += int(statistics.token_count)
+                vectors.append(tuple(values))
 
             current_span.set_attribute("embedder.total_tokens", total_tokens)
             current_span.set_attribute(

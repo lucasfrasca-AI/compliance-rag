@@ -48,6 +48,7 @@ class _FakeModels:
     raise_on_call: int | None = None  # 0-indexed call number to fail, if any
     truncate_on_call: int | None = None
     dimensions: int = DIMENSIONS
+    embeddings_per_call: int = 1
 
     async def embed_content(
         self, *, model: str, contents: list[str], config: types.EmbedContentConfig
@@ -62,7 +63,8 @@ class _FakeModels:
             )
         assert len(contents) == 1, "gemini-embedding-001 accepts exactly one text per call"
         return types.EmbedContentResponse(
-            embeddings=[
+            embeddings=self.embeddings_per_call
+            * [
                 types.ContentEmbedding(
                     values=[0.1] * self.dimensions,
                     statistics=types.ContentEmbeddingStatistics(
@@ -164,4 +166,13 @@ async def test_a_vector_of_the_wrong_dimension_is_refused() -> None:
         _FakeModels(dimensions=768), model_name=MODEL_NAME, dimensions=DIMENSIONS
     )
     with pytest.raises(ValueError, match="768 dimensions, expected 1536"):
+        await embedder.embed(("text",))
+
+
+@pytest.mark.parametrize("count", [0, 2])
+async def test_a_response_without_exactly_one_embedding_is_refused(count: int) -> None:
+    embedder = VertexEmbedder(
+        _FakeModels(embeddings_per_call=count), model_name=MODEL_NAME, dimensions=DIMENSIONS
+    )
+    with pytest.raises(ValueError, match=f"expected one embedding, got {count}"):
         await embedder.embed(("text",))
