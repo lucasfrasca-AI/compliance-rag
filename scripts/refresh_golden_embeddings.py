@@ -34,7 +34,7 @@ async def main() -> None:
         vectors={text_key(t): v for t, v in zip(texts, vectors, strict=True)},
         generated_on=dt.date.today().isoformat(),
         task_type=TASK_TYPE,
-        sdk=f"google-cloud-aiplatform {version('google-cloud-aiplatform')}",
+        sdk=f"google-genai {version('google-genai')}",
     ).save()
     print(f"{len(texts)} texts embedded -> {GOLDEN_EMBEDDINGS_PATH}")
 

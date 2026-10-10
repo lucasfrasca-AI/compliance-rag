@@ -1,27 +1,21 @@
-"""`VertexEmbedder` (issue #13): the `Embedder` seam backed by Vertex AI's
-`gemini-embedding-001`.
+"""`VertexEmbedder` (issues #13, #73): the `Embedder` seam backed by Vertex
+AI's `gemini-embedding-001` through the `google-genai` SDK.
 
-Against a tiny stand-in for `vertexai.language_models.TextEmbeddingModel` —
-the same two methods (`get_embeddings_async`) the adapter actually calls —
-so these tests exercise the adapter's own batching, truncation-handling and
-telemetry without a real (billable) API call. `VertexEmbedder.from_settings`,
-the one place that actually constructs a real Vertex client, is deliberately
-never exercised here.
+Against a tiny stand-in for `client.aio.models` — the one method
+(`embed_content`) the adapter actually calls, with the SDK's real request and
+response types — so these tests exercise the adapter's own batching,
+truncation-handling and telemetry without a real (billable) API call.
+`VertexEmbedder.from_settings`, the one place that constructs a real client,
+is deliberately never exercised here.
 
-Two real, verified findings from the Vertex SDK shape this adapter, not
-assumptions:
+Two real, verified findings shape this adapter, not assumptions:
 
-- `gemini-embedding-001` accepts exactly one text per `predict` call — the
-  SDK's own `get_embeddings`/`get_embeddings_async` signature takes a list,
-  but multiple independent projects (langchain.js #8490, mem0 #6189) hit the
-  same bug trusting the documented "up to 250 inputs" figure, which turns
-  out to be true for older embedding models but not this one. `embed()`
+- `gemini-embedding-001` accepts exactly one text per request on Vertex —
+  multiple independent projects (langchain.js #8490, mem0 #6189) hit the
+  same bug trusting the documented "up to 250 inputs" figure. `embed()`
   loops one text per call rather than batching them into one request.
-- `get_embeddings`/`get_embeddings_async` default to `auto_truncate=True`
-  (silent truncation) — `_prepare_text_embedding_request`'s source shows
-  `autoTruncate` is passed straight through as a request parameter, so
-  passing `auto_truncate=False` moves "reject an over-long input" from a
-  silent server-side truncation to a request the server itself refuses.
+- Vertex defaults to `auto_truncate=True` (silent truncation); passing
+  `auto_truncate=False` makes the server refuse an over-long input instead.
 """
 
 from __future__ import annotations
@@ -29,12 +23,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pytest
-from google.api_core.exceptions import InvalidArgument
+from google.genai import types
+from google.genai.errors import ClientError
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from vertexai.language_models import TextEmbedding, TextEmbeddingInput
 
 from compliance_rag.adapters.interfaces import Embedder
-from compliance_rag.adapters.vertex_embedder import VertexEmbedder
+from compliance_rag.adapters.vertex_embedder import TASK_TYPE, VertexEmbedder
 
 DIMENSIONS = 1536
 # Deliberately not "gemini-embedding-001" (Settings' own default) — proves
@@ -44,60 +38,54 @@ MODEL_NAME = "test-fixture-embedding-model"
 
 
 @dataclass
-class _FakeVertexModel:
-    """Stands in for `TextEmbeddingModel`: one call per text, real
-    signature, real return shape — no network."""
+class _FakeModels:
+    """Stands in for `client.aio.models`: one call per text, real signature,
+    real return shape — no network."""
 
-    calls: list[list[TextEmbeddingInput]] = field(default_factory=list[list[TextEmbeddingInput]])
-    kwargs_seen: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
+    calls: list[list[str]] = field(default_factory=list[list[str]])
+    configs: list[types.EmbedContentConfig] = field(default_factory=list[types.EmbedContentConfig])
+    models: list[str] = field(default_factory=list[str])
     raise_on_call: int | None = None  # 0-indexed call number to fail, if any
+    truncate_on_call: int | None = None
+    dimensions: int = DIMENSIONS
 
-    async def get_embeddings_async(
-        self,
-        texts: list[TextEmbeddingInput],
-        *,
-        auto_truncate: bool,
-        output_dimensionality: int | None,
-    ) -> list[TextEmbedding]:
+    async def embed_content(
+        self, *, model: str, contents: list[str], config: types.EmbedContentConfig
+    ) -> types.EmbedContentResponse:
         call_index = len(self.calls)
-        self.calls.append(texts)
-        self.kwargs_seen.append(
-            {"auto_truncate": auto_truncate, "output_dimensionality": output_dimensionality}
-        )
+        self.calls.append(contents)
+        self.configs.append(config)
+        self.models.append(model)
         if call_index == self.raise_on_call:
-            raise InvalidArgument("input is longer than the maximum length")
-        assert len(texts) == 1, "gemini-embedding-001 accepts exactly one text per call"
-        token_count = max(1, len(texts[0].text.split()))
-        return [
-            TextEmbedding(
-                values=[0.1] * (output_dimensionality or DIMENSIONS),
-                statistics=_Statistics(token_count=token_count, truncated=False),
+            raise ClientError(
+                400, {"error": {"message": "input is longer than the maximum length"}}
             )
-        ]
-
-
-def _Statistics(*, token_count: int, truncated: bool):
-    # TextEmbeddingStatistics isn't exported from vertexai.language_models'
-    # public surface (confirmed: absent from dir(vertexai.language_models)),
-    # even though TextEmbedding.statistics's own type annotation names it —
-    # the private submodule is the only path to constructing one.
-    from vertexai.language_models._language_models import TextEmbeddingStatistics
-
-    return TextEmbeddingStatistics(token_count=token_count, truncated=truncated)
+        assert len(contents) == 1, "gemini-embedding-001 accepts exactly one text per call"
+        return types.EmbedContentResponse(
+            embeddings=[
+                types.ContentEmbedding(
+                    values=[0.1] * self.dimensions,
+                    statistics=types.ContentEmbeddingStatistics(
+                        token_count=max(1, len(contents[0].split())),
+                        truncated=call_index == self.truncate_on_call,
+                    ),
+                )
+            ]
+        )
 
 
 def test_vertex_embedder_is_an_embedder() -> None:
-    embedder = VertexEmbedder(_FakeVertexModel(), model_name=MODEL_NAME, dimensions=DIMENSIONS)
+    embedder = VertexEmbedder(_FakeModels(), model_name=MODEL_NAME, dimensions=DIMENSIONS)
     assert isinstance(embedder, Embedder)
 
 
 def test_dimensions_property_reports_configured_value() -> None:
-    embedder = VertexEmbedder(_FakeVertexModel(), model_name=MODEL_NAME, dimensions=DIMENSIONS)
+    embedder = VertexEmbedder(_FakeModels(), model_name=MODEL_NAME, dimensions=DIMENSIONS)
     assert embedder.dimensions == DIMENSIONS
 
 
 async def test_embed_returns_one_vector_per_text_in_order() -> None:
-    model = _FakeVertexModel()
+    model = _FakeModels()
     embedder = VertexEmbedder(model, model_name=MODEL_NAME, dimensions=DIMENSIONS)
     vectors = await embedder.embed(("first text", "second text"))
     assert len(vectors) == 2
@@ -108,7 +96,7 @@ async def test_embed_calls_the_model_once_per_text_not_once_for_the_whole_batch(
     """The real, verified constraint: gemini-embedding-001 takes one input
     per call. A single call carrying the whole batch would either error or
     silently embed only the first text against the model's real API."""
-    model = _FakeVertexModel()
+    model = _FakeModels()
     embedder = VertexEmbedder(model, model_name=MODEL_NAME, dimensions=DIMENSIONS)
     await embedder.embed(("a", "b", "c"))
     assert len(model.calls) == 3
@@ -116,17 +104,19 @@ async def test_embed_calls_the_model_once_per_text_not_once_for_the_whole_batch(
 
 
 async def test_embed_disables_auto_truncate_on_every_call() -> None:
-    model = _FakeVertexModel()
+    model = _FakeModels()
     embedder = VertexEmbedder(model, model_name=MODEL_NAME, dimensions=DIMENSIONS)
-    await embedder.embed(("text",))
-    assert model.kwargs_seen[0]["auto_truncate"] is False
+    await embedder.embed(("text", "more"))
+    assert [c.auto_truncate for c in model.configs] == [False, False]
 
 
 async def test_embed_passes_the_configured_output_dimensionality() -> None:
-    model = _FakeVertexModel()
+    model = _FakeModels()
     embedder = VertexEmbedder(model, model_name=MODEL_NAME, dimensions=DIMENSIONS)
     await embedder.embed(("text",))
-    assert model.kwargs_seen[0]["output_dimensionality"] == DIMENSIONS
+    assert model.configs[0].output_dimensionality == DIMENSIONS
+    assert model.configs[0].task_type == TASK_TYPE
+    assert model.models == [MODEL_NAME]
 
 
 async def test_an_over_long_input_fails_loudly_naming_its_position_not_silently_truncated() -> None:
@@ -135,7 +125,7 @@ async def test_an_over_long_input_fails_loudly_naming_its_position_not_silently_
     API refuse rather than truncate (see module docstring); this proves
     the adapter surfaces that refusal as a clear error naming which input
     in the batch it was, not a bare re-raise of the SDK's own exception."""
-    model = _FakeVertexModel(raise_on_call=1)
+    model = _FakeModels(raise_on_call=1)
     embedder = VertexEmbedder(model, model_name=MODEL_NAME, dimensions=DIMENSIONS)
     with pytest.raises(ValueError, match=r"text 1\b"):
         await embedder.embed(("short", "way too long" * 10_000, "short again"))
@@ -144,7 +134,7 @@ async def test_an_over_long_input_fails_loudly_naming_its_position_not_silently_
 async def test_embed_emits_a_span_with_token_count_and_cost(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    model = _FakeVertexModel()
+    model = _FakeModels()
     embedder = VertexEmbedder(model, model_name=MODEL_NAME, dimensions=DIMENSIONS)
     await embedder.embed(("one two three", "four five"))  # 3 + 2 words -> 3 + 2 tokens (stub)
 
@@ -157,3 +147,21 @@ async def test_embed_emits_a_span_with_token_count_and_cost(
     cost = attrs.get("embedder.total_cost_usd")
     assert isinstance(cost, float)
     assert cost > 0
+
+
+async def test_a_server_side_truncation_fails_rather_than_returning_a_vector() -> None:
+    """If the server ever truncates despite `auto_truncate=False`, the vector
+    would be for text it never read — refused, naming the position."""
+    embedder = VertexEmbedder(
+        _FakeModels(truncate_on_call=0), model_name=MODEL_NAME, dimensions=DIMENSIONS
+    )
+    with pytest.raises(ValueError, match=r"text 0: truncated"):
+        await embedder.embed(("text",))
+
+
+async def test_a_vector_of_the_wrong_dimension_is_refused() -> None:
+    embedder = VertexEmbedder(
+        _FakeModels(dimensions=768), model_name=MODEL_NAME, dimensions=DIMENSIONS
+    )
+    with pytest.raises(ValueError, match="768 dimensions, expected 1536"):
+        await embedder.embed(("text",))
