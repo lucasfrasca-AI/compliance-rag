@@ -35,14 +35,17 @@ Never: configure any telemetry, log or error endpoint outside `australia-southea
 - Every ticket PR's body uses a closing keyword (`Closes #N`) for the ticket it completes — a merge that doesn't close its issue leaves the tracker lying about what's done, and a future session can waste real time re-planning already-finished work. This includes a ticket whose acceptance criteria a PR satisfies incidentally, not just the one the PR is titled for (#24's routing logic shipped inside #5's PR, referencing only #5 — `Closes #N` goes on both when that happens, not just the one in the title). At each phase gate, reconcile the open-issue list against what's actually merged into `main` (`gh issue list --state open` cross-checked against merged PRs, not either one trusted alone) — this has now hidden fully completed work twice (nine tickets in one audit, #24 separately).
 - When something in the plan turns out wrong, say so in chat and open an issue; don't silently route around it.
 
-### Merge protocol (effective 2026-09-30 — replaces the earlier lane/risk-chaining rules)
+### Merge protocol (effective 2026-10-10 — replaces the 2026-09-30 risk-class rules)
 
-Every open ticket is one of two risk classes. A ticket not yet classified defaults to high risk. Branch protection requires `ci` on `main`, so the merge gate is mechanical, not a per-PR human review step.
+Claude opens, reviews and merges its own PR for every ticket. There are no risk classes and no human merge step: branch protection requires `ci` on `main`, so the gate is mechanical. Open the PR, run the two-axis review, wait for every check to go green, merge it (`gh pr merge N --merge`) and continue straight to the next ticket. Batch the summaries and report at the end of a run, not a running narration per PR.
 
-- **Low/Medium risk** — everything not named below. Open the PR, wait for every check to go green, then merge it yourself (`gh pr merge N --merge`) and continue straight to the next ticket — don't stop for the human. Batch the summaries and report what merged at the end of a run, not a running narration per PR.
-- **High risk** — currently #23, #27, #29, #30, #31, plus anything, regardless of this list, that is billable, changes a schema, or touches the citation path. PR only: stop and wait for the human to merge.
+Changes to docs, ADRs, `CONTEXT.md`, `DECISIONS.md`, `SERVICES.md` or `PHASES.md` are not stop conditions: write the ADR and report it at the end. Nor is "shall I continue" or confirming a merge.
 
-**Stop immediately, regardless of class**, when: CI is red twice in a row on the same PR; a billable approval line would be needed; a decision would change `CONTEXT.md`, `DECISIONS.md`, `PHASES.md` or `SERVICES.md`; or a ticket's acceptance criteria are ambiguous or contradict the spec.
+**Stop only** for:
+- a new billable resource that needs an approval line in `.claude/billable-approvals.txt`;
+- a console-only step the human has to take (quota, model enablement, account settings);
+- CI red twice in a row on the same PR;
+- a decision that genuinely can't be made from the spec.
 
 Every PR still carries: the acceptance-criteria-to-test-name table, `Closes #N` for every ticket it completes (including one it completes incidentally — see the tracker rule above), confirmation that Postgres-dependent tests actually ran in CI (passed, not skipped), and the two-axis code review.
 
