@@ -1,5 +1,6 @@
-"""`Generator` over Claude on Vertex AI (issue #29), in `asia-southeast1` during
-the build phase (ADR-0023): Claude is not served from `australia-southeast1`.
+"""`Generator` over Claude on Vertex AI (issue #29): `claude-sonnet-5` at the US
+multi-region endpoint during the build phase (ADR-0023, ADR-0024) — Claude is
+not served from `australia-southeast1`.
 `create` refuses to build a client offshore once the corpus holds real tenant
 data (`adapters/generation_residency.py`).
 
@@ -32,24 +33,22 @@ from compliance_rag.adapters.generation_residency import (
 from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
 from compliance_rag.settings import Settings
 
-# `claude-sonnet-4-6` per-token prices, USD: Google's list rates times the 10%
-# premium regional endpoints carry over the global one — this repo only ever
-# uses a regional endpoint. Checked against the Vertex AI pricing page's
-# regional table on 2026-10-09: input $3.30, output $16.50, 5-minute cache
-# write $4.13, cache hit $0.33 per 1M tokens. Constants: re-check when the
-# model or the page changes.
-_INPUT_USD = 3.00 / 1_000_000
-_OUTPUT_USD = 15.00 / 1_000_000
-_CACHE_WRITE_USD = 3.75 / 1_000_000  # 5-minute ephemeral cache write: 1.25x input
-_CACHE_READ_USD = 0.30 / 1_000_000  # cache hit: 0.1x input
-_REGIONAL_PREMIUM = 1.10
-PRICE_TABLE = "claude-sonnet-4-6-vertex-regional-2026-10-09"
+# `claude-sonnet-5` per-token prices, USD, at the US multi-region endpoint —
+# the "US Multi-Region" tab of the Vertex AI pricing page's Anthropic table,
+# checked 2026-10-10: input $2.20, output $11.00, 5-minute cache write $2.75,
+# cache hit $0.22 per 1M tokens (10% over the global tab's $2.00/$10.00).
+# Constants: re-check when the model, endpoint or page changes.
+_INPUT_USD = 2.20 / 1_000_000
+_OUTPUT_USD = 11.00 / 1_000_000
+_CACHE_WRITE_USD = 2.75 / 1_000_000  # 5-minute ephemeral cache write
+_CACHE_READ_USD = 0.22 / 1_000_000  # cache hit
+PRICE_TABLE = "claude-sonnet-5-vertex-us-multi-region-2026-10-10"
 """Names the rates above on every span, so a cost figure carries its own
 provenance (checked against Google's published page, not yet an invoice)."""
 
 
 def price_usd(*, uncached_input: int, cache_write: int, cache_read: int, output: int) -> float:
-    return _REGIONAL_PREMIUM * (
+    return (
         uncached_input * _INPUT_USD
         + cache_write * _CACHE_WRITE_USD
         + cache_read * _CACHE_READ_USD
@@ -94,7 +93,7 @@ class VertexClaudeGenerator(Generator):
     async def create(cls, settings: Settings, *, corpus: RetrievalAdmin) -> VertexClaudeGenerator:
         """The one place a real Vertex client is built — after the residency
         gate (ADR-0023). The region is re-validated here as well as in
-        `Settings` (`global` and anything but Sydney/Singapore refused), and
+        `Settings` (`global` and anything but Sydney or the US multi-region refused), and
         an offshore region is refused outright while `corpus` holds any real
         tenant data. Async because the gate asks the store."""
         region = validate_generation_region(settings.vertex_claude_region)
