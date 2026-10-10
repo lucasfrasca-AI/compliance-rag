@@ -1,6 +1,6 @@
 """The build-phase residency gate on ingest (ADR-0023): while generation runs
 offshore, a real tenant upload fails loudly at the door instead of being sent
-to Singapore on its first question. Both ways, through the real write path
+outside Australia on its first question. Both ways, through the real write path
 (`CorpusLifecycle`)."""
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ async def _publish(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
 
 
 async def test_the_first_real_policy_upload_fails_while_generation_is_offshore() -> None:
-    lifecycle, store = _lifecycle("asia-southeast1")
+    lifecycle, store = _lifecycle("us")
     with pytest.raises(GenerationResidencyError, match="real tenant chunk"):
         await _publish(lifecycle, _chunk(synthetic=False))
     assert not await store.holds_real_tenant_data()  # refused before any write
@@ -62,7 +62,7 @@ async def test_the_first_real_policy_upload_fails_while_generation_is_offshore()
 
 
 async def test_a_synthetic_policy_is_accepted_while_generation_is_offshore() -> None:
-    lifecycle, store = _lifecycle("asia-southeast1")
+    lifecycle, store = _lifecycle("us")
     await _publish(lifecycle, _chunk(synthetic=True))
     assert store.stored_chunk_ids == frozenset({f"{POLICY}:v1:1/1"})
     assert not await store.holds_real_tenant_data()
@@ -79,7 +79,9 @@ def test_an_unmarked_chunk_counts_as_real() -> None:
     assert Chunk(chunk_id="c", clause_id="acme/p:v1:1", text="t").synthetic is False
 
 
-@pytest.mark.parametrize("region", ["global", "us-central1", "asia-northeast1", ""])
+@pytest.mark.parametrize(
+    "region", ["global", "US", " us", "asia-southeast1", "us-central1", "eu", "asia-northeast1", ""]
+)
 def test_no_other_generation_region_is_accepted(region: str) -> None:
     with pytest.raises(GenerationResidencyError):
         validate_generation_region(region)
