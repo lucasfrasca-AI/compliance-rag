@@ -83,7 +83,16 @@ async def ingest_compilation(
     Idempotent on stable ID: re-running with the same `source_html` and
     `selection` re-writes identical content, which `ClauseStore`
     implementations must treat as a no-op in effect (same bytes, same key).
+
+    Library law only: a tenant document is written through `CorpusLifecycle`,
+    where the residency gate and the synthetic registry apply (ADR-0023,
+    ADR-0026) — this path checks neither.
     """
+    if scope is not Scope.PUBLIC:
+        raise ValueError(
+            "compilation ingest writes library law only; tenant documents go through "
+            "CorpusLifecycle (ADR-0026)"
+        )
     parsed = parse_compilation(
         source_html,
         instrument_id=instrument_id,
