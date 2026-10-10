@@ -10,6 +10,7 @@ chunk's flag is whatever the registry says, whatever the caller sent.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from pathlib import Path
 
 import pytest
@@ -17,12 +18,17 @@ import pytest
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.generation_residency import GenerationResidencyError
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
+from compliance_rag.corpus.ingest import ingest_compilation
+from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, parse_stable_id
 from compliance_rag.corpus.synthetic_registry import (
     SyntheticClaimRefused,
     SyntheticRegistry,
 )
-from compliance_rag.eval.golden_corpus import golden_chunks, synthetic_fixture_chunks
+from compliance_rag.eval.golden_corpus import (
+    golden_chunks,
+    synthetic_fixture_chunks,
+    synthetic_fixture_clauses,
+)
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
 
 
@@ -46,7 +52,7 @@ def _lifecycle() -> tuple[CorpusLifecycle, FakeRetrievalStore]:
         retrieval=store,
         clauses=FakeClauseStore(),
         generation_region=BUILD_PHASE_OFFSHORE_REGION,
-        synthetic=SyntheticRegistry.load(),
+        synthetic_registry=SyntheticRegistry.load(),
     )
     return lifecycle, store
 
@@ -54,7 +60,7 @@ def _lifecycle() -> tuple[CorpusLifecycle, FakeRetrievalStore]:
 async def _upload(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
     await lifecycle.publish_version(
         (chunk,),
-        instrument_id=chunk.clause_id.split(":")[0],
+        instrument_id=parse_stable_id(chunk.clause_id)[0],
         tenant_id=chunk.tenant_id,
         version_id="v2",
         effective_from=dt.date(2026, 10, 1),
@@ -126,7 +132,9 @@ async def test_an_unclaimed_unregistered_upload_is_real_and_closes_the_gate() ->
 def test_the_registry_matches_the_fixtures() -> None:
     """Editing a fixture, the parser or the chunker without re-registering
     (scripts/register_synthetic_fixtures.py, by PR) fails here."""
-    expected = SyntheticRegistry.of(synthetic_fixture_chunks(), source="")
+    expected = SyntheticRegistry.of(
+        synthetic_fixture_chunks(), synthetic_fixture_clauses(), source=""
+    )
     assert SyntheticRegistry.load().keys == expected.keys
 
 
@@ -141,3 +149,95 @@ def test_the_registry_round_trips(tmp_path: Path) -> None:
     assert SyntheticRegistry.load(tmp_path / "r.json") == SyntheticRegistry(
         keys=frozenset(registry.keys), source="s"
     )
+
+
+async def test_registered_chunks_cannot_carry_real_clauses_through_replace_in_place() -> None:
+    """Clause text reaches the generator by itself (a repair prompt carries the
+    clause's canonical text), so registered chunks paired with an unregistered
+    clause are a real upload: refused offshore, before any write."""
+    lifecycle, _ = _lifecycle()
+    fixture = synthetic_fixture_chunks()[0]
+    disguise = _chunk(fixture.text, synthetic=False)
+    await _upload(lifecycle, disguise)
+    real_clause = ClauseRecord.build(
+        instrument_id="acme/privacy-policy",
+        version_id="v2",
+        clause_path="1/1",
+        text="Acme sells customer lists to partners each quarter.",
+        scope=Scope.TENANT,
+        tenant_id="acme",
+    )
+    with pytest.raises(GenerationResidencyError, match="acme/privacy-policy:v2:1/1"):
+        await lifecycle.replace_in_place(
+            (disguise,),
+            (real_clause,),
+            tenant_id="acme",
+            instrument_id="acme/privacy-policy",
+            version_id="v2",
+            source_html="<p/>",
+            actor="u1",
+            reason="typo",
+            acknowledged_findings_citing=0,
+        )
+
+
+async def test_registered_clauses_pass_replace_in_place() -> None:
+    lifecycle, store = _lifecycle()
+    clause = synthetic_fixture_clauses()[0]
+    chunk = next(c for c in synthetic_fixture_chunks() if c.clause_id == clause.clause_id)
+    instrument, version, _ = parse_stable_id(clause.clause_id)
+    await lifecycle.publish_version(
+        (chunk,),
+        instrument_id=instrument,
+        tenant_id="acme",
+        version_id=version,
+        effective_from=dt.date(2026, 10, 1),
+        supersedes=None,
+    )
+    await lifecycle.replace_in_place(
+        (chunk,),
+        (clause,),
+        tenant_id="acme",
+        instrument_id=instrument,
+        version_id=version,
+        source_html="<p/>",
+        actor="u1",
+        reason="typo",
+        acknowledged_findings_citing=0,
+    )
+    assert not await store.holds_real_tenant_data()
+
+
+WRITERS = {
+    "src/compliance_rag/adapters/corpus_lifecycle.py",  # the write path: registry + gate
+    "src/compliance_rag/corpus/ingest.py",  # library law only (refuses tenant scope)
+    "src/compliance_rag/eval/harness.py",  # operator: the golden corpus
+    "src/compliance_rag/eval/live.py",  # operator: live eval and injection probes
+}
+
+
+def test_only_known_paths_write_to_the_corpus_stores() -> None:
+    """The stores take `synthetic` as given, so a new caller of
+    `upsert_chunks` or `put_clause` — a Phase 3 upload handler writing
+    directly — would bypass the registry. Adding one fails here until it is
+    reviewed and either routed through `CorpusLifecycle` or listed."""
+    root = Path(__file__).resolve().parents[1]
+    callers = {
+        str(path.relative_to(root))
+        for path in (root / "src").rglob("*.py")
+        if re.search(r"\.(upsert_chunks|put_clause)\(", path.read_text(encoding="utf-8"))
+    }
+    assert callers == WRITERS
+
+
+async def test_compilation_ingest_refuses_a_tenant_document() -> None:
+    with pytest.raises(ValueError, match="library law only"):
+        await ingest_compilation(
+            "<html/>",
+            instrument_id="acme/policy",
+            version_id="v1",
+            tenant_id="acme",
+            scope=Scope.TENANT,
+            selection=None,  # pyright: ignore[reportArgumentType] — refused before use
+            store=FakeClauseStore(),
+        )

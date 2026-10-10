@@ -95,17 +95,17 @@ class CorpusLifecycle:
         retrieval: RetrievalAdmin,
         clauses: ClauseStore,
         generation_region: str,
-        synthetic: SyntheticRegistry,
+        synthetic_registry: SyntheticRegistry,
         new_audit_id: Callable[[], str] = lambda: uuid.uuid4().hex,
     ) -> None:
         """`generation_region` is where answers about this corpus are
         generated: while it is offshore, real tenant data is refused at the
-        door (ADR-0023). `synthetic` is the operator's registry of synthetic
+        door (ADR-0023). `synthetic_registry` is the operator's registry of synthetic
         content: every chunk's `synthetic` flag is derived from it, never
         taken from the caller (issue #78). Both required, so no caller
         forgets them."""
         self._generation_region = validate_generation_region(generation_region)
-        self._synthetic = synthetic
+        self._synthetic_registry = synthetic_registry
         self._ledger = ledger
         self._retrieval = retrieval
         self._clauses = clauses
@@ -127,7 +127,7 @@ class CorpusLifecycle:
         _check_payload(
             chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
-        chunks = self._synthetic.mark(chunks)
+        chunks = self._synthetic_registry.mark(chunks)
         assert_upload_allowed(chunks, generation_region=self._generation_region)
         if supersedes == version_id:
             raise ValueError("a version cannot supersede itself — that is replace-in-place")
@@ -266,8 +266,12 @@ class CorpusLifecycle:
         _check_payload(
             chunks, clauses, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
-        chunks = self._synthetic.mark(chunks)
-        assert_upload_allowed(chunks, generation_region=self._generation_region)
+        chunks = self._synthetic_registry.mark(chunks)
+        assert_upload_allowed(
+            chunks,
+            generation_region=self._generation_region,
+            real_clause_ids=self._synthetic_registry.real_clauses(clauses),
+        )
         count = await self._ledger.count_findings_citing(
             tenant_id, stable_id_prefix(instrument_id, version_id)
         )

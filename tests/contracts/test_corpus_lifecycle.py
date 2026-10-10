@@ -124,7 +124,7 @@ async def assert_corpus_lifecycle_contract(
         retrieval=admin,
         clauses=clauses,
         generation_region=GENERATION_REGION,
-        synthetic=SYNTHETIC,
+        synthetic_registry=SYNTHETIC,
     )
     pipeline = RetrievalPipeline(store, FakeReranker())
     verifier = FakeCitationVerifier()
@@ -405,7 +405,7 @@ async def test_a_removal_that_fails_midway_is_audited_as_failed() -> None:
         retrieval=BrokenStore(ledger=ledger),
         clauses=FakeClauseStore(),
         generation_region=GENERATION_REGION,
-        synthetic=SYNTHETIC,
+        synthetic_registry=SYNTHETIC,
     )
     with pytest.raises(RuntimeError, match="qdrant unavailable"):
         await lifecycle.purge(
@@ -428,7 +428,7 @@ async def test_a_version_cannot_supersede_itself() -> None:
         retrieval=FakeRetrievalStore(ledger=ledger),
         clauses=FakeClauseStore(),
         generation_region=GENERATION_REGION,
-        synthetic=SYNTHETIC,
+        synthetic_registry=SYNTHETIC,
     )
     with pytest.raises(ValueError, match="replace-in-place"):
         await lifecycle.publish_version(

@@ -1,5 +1,5 @@
 """Register the synthetic policy fixtures as synthetic — the operator path
-(issue #78). Writes `corpus/synthetic/registry.json`: one hash per chunk of
+(issue #78). Writes `corpus/synthetic/registry.json`: one hash per chunk and clause of
 the six Acme fixtures in `docs/research/fixtures/synthetic-policies/`, over
 the owning tenant and the chunk's exact text.
 
@@ -16,15 +16,15 @@ until the registry matches.
 from __future__ import annotations
 
 from compliance_rag.corpus.synthetic_registry import SYNTHETIC_REGISTRY_PATH, SyntheticRegistry
-from compliance_rag.eval.golden_corpus import synthetic_fixture_chunks
+from compliance_rag.eval.golden_corpus import synthetic_fixture_chunks, synthetic_fixture_clauses
 
 SOURCE = "docs/research/fixtures/synthetic-policies/ (six Acme policies, tenant acme, v1)"
 
 
 def main() -> None:
-    chunks = synthetic_fixture_chunks()
-    SyntheticRegistry.of(chunks, source=SOURCE).save()
-    print(f"{len(chunks)} synthetic chunks registered -> {SYNTHETIC_REGISTRY_PATH}")
+    chunks, clauses = synthetic_fixture_chunks(), synthetic_fixture_clauses()
+    SyntheticRegistry.of(chunks, clauses, source=SOURCE).save()
+    print(f"{len(chunks)} chunks, {len(clauses)} clauses registered -> {SYNTHETIC_REGISTRY_PATH}")
 
 
 if __name__ == "__main__":

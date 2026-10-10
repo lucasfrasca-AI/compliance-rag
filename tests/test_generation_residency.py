@@ -45,7 +45,7 @@ def _lifecycle(region: str) -> tuple[CorpusLifecycle, FakeRetrievalStore]:
             retrieval=store,
             clauses=FakeClauseStore(),
             generation_region=region,
-            synthetic=REGISTERED,
+            synthetic_registry=REGISTERED,
         ),
         store,
     )

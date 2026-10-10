@@ -24,8 +24,12 @@ There were three options:
 ## Decision
 
 **A checked-in registry of content hashes**, `corpus/synthetic/registry.json`:
-- **What it holds:** sha256 over the owning tenant and each synthetic chunk's
-  exact text.
+- **What it holds:** sha256 over the owning tenant and the exact text of each
+  synthetic chunk and each synthetic clause (its canonical text). Clauses are
+  registered because clause text reaches the generator by itself: a repair
+  prompt carries a clause's canonical text. Registered chunks paired with an
+  unregistered clause on replace-in-place are therefore real data, and refused
+  offshore.
 - **Who writes it:** only `scripts/register_synthetic_fixtures.py`, from
   `docs/research/fixtures/synthetic-policies/`. It changes only by PR, like
   `corpus/mappings/`.
@@ -36,6 +40,10 @@ There were three options:
   refused rather than silently downgraded, so the attempt is visible.
 - **How the key binds:** to the tenant as well as the words. The same text
   under another tenant is that tenant's real data.
+- **The other writers are fenced.** Compilation ingest (`corpus/ingest.py`)
+  now refuses a tenant document outright; it writes library law only. A test
+  lists every module in `src/` that calls `upsert_chunks` or `put_clause`, so
+  a new writer that bypasses the lifecycle fails CI until it is reviewed.
 
 ## Consequences
 
@@ -48,4 +56,8 @@ There were three options:
   accept a `synthetic` field, and must reach the stores only through
   `CorpusLifecycle`. The store adapters (`upsert_chunks`) still take the flag
   as given, as they must for operator scripts such as the golden-set harness
-  and the injection probes. #78 stays open for that test.
+  and the injection probes; the writer-list test is what keeps that list
+  closed. #78 stays open for the API-level test.
+- The registry is read from the source tree. A deploy that doesn't ship
+  `corpus/synthetic/` fails at startup, which is closed, not open; the Phase 3
+  container must include it.

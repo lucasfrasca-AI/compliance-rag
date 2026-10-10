@@ -55,10 +55,15 @@ def is_real_tenant_data(chunk: Chunk) -> bool:
     return chunk.scope is Scope.TENANT and not chunk.synthetic
 
 
-def assert_upload_allowed(chunks: Iterable[Chunk], *, generation_region: str) -> None:
+def assert_upload_allowed(
+    chunks: Iterable[Chunk], *, generation_region: str, real_clause_ids: Iterable[str] = ()
+) -> None:
+    """`real_clause_ids`: tenant clauses written alongside the chunks that the
+    synthetic registry doesn't vouch for (ADR-0026) — real data as much as an
+    unmarked chunk is."""
     if not is_offshore(generation_region):
         return
-    real = [c.chunk_id for c in chunks if is_real_tenant_data(c)]
+    real = [c.chunk_id for c in chunks if is_real_tenant_data(c)] + list(real_clause_ids)
     if real:
         raise GenerationResidencyError(
             f"refusing to store {len(real)} real tenant chunk(s) (first: {real[0]!r}) while "

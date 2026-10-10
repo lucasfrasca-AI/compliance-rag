@@ -58,11 +58,19 @@ def golden_clauses() -> tuple[ClauseRecord, ...]:
     return (*law, *policies)
 
 
+def _all_chunks() -> tuple[Chunk, ...]:
+    return chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
+
+
 def synthetic_fixture_chunks() -> tuple[Chunk, ...]:
     """The six Acme policies' chunks, unmarked — what the operator registers
     as synthetic (`scripts/register_synthetic_fixtures.py`, issue #78)."""
-    chunks = chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
-    return tuple(c for c in chunks if c.scope is Scope.TENANT)
+    return tuple(c for c in _all_chunks() if c.scope is Scope.TENANT)
+
+
+def synthetic_fixture_clauses() -> tuple[ClauseRecord, ...]:
+    """The six Acme policies' clauses, registered alongside their chunks."""
+    return tuple(c for c in golden_clauses() if c.scope is Scope.TENANT)
 
 
 def golden_chunks() -> tuple[Chunk, ...]:
@@ -70,8 +78,7 @@ def golden_chunks() -> tuple[Chunk, ...]:
     Their `synthetic` flag comes from the operator's registry, exactly as the
     write path derives it (issue #78) — the build-phase residency gate
     (ADR-0023) counts any unregistered tenant chunk as real customer data."""
-    chunks = chunk_clauses(golden_clauses(), count_tokens=count_reranker_tokens)
-    return SyntheticRegistry.load().mark(chunks)
+    return SyntheticRegistry.load().mark(_all_chunks())
 
 
 def golden_texts() -> tuple[str, ...]:

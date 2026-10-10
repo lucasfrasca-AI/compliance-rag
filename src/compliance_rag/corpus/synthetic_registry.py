@@ -7,15 +7,19 @@ would make that gate self-attested: a careless or hostile ingester could mark
 a real policy synthetic and send it offshore. So the flag is not an input.
 
 The registry is a checked-in file, `corpus/synthetic/registry.json`, listing
-one hash per synthetic chunk: sha256 over the owning tenant and the chunk's
-exact text. It is written only by `scripts/register_synthetic_fixtures.py`
-from the fixtures under `docs/research/fixtures/synthetic-policies/`, and
-changes only by PR — like `corpus/mappings/`, an operator path. An upload
-request has no way to add to it.
+one hash per synthetic chunk and per synthetic clause: sha256 over the owning
+tenant and the exact text (a clause's canonical text). Clauses are registered
+too because clause text reaches the generator on its own — a repair prompt
+carries the clause's canonical text — so an upload pairing registered chunks
+with unregistered clauses is real data. It is written only by
+`scripts/register_synthetic_fixtures.py` from the fixtures under
+`docs/research/fixtures/synthetic-policies/`, and changes only by PR — like
+`corpus/mappings/`, an operator path. An upload request has no way to add to
+it.
 
 `CorpusLifecycle` (the write path) derives every chunk's `synthetic` flag from
-the registry and refuses a chunk that claims to be synthetic without being
-registered. Content that is byte-for-byte a registered fixture under the same
+the registry, refuses a chunk that claims to be synthetic without being
+registered, and counts an unregistered tenant clause as real data. Content that is byte-for-byte a registered fixture under the same
 tenant is synthetic whoever uploads it; anything else is real.
 """
 
@@ -28,7 +32,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from pathlib import Path
 
-from compliance_rag.corpus.models import Chunk
+from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 
 SYNTHETIC_REGISTRY_PATH = (
     Path(__file__).resolve().parents[3] / "corpus" / "synthetic" / "registry.json"
@@ -57,11 +61,13 @@ class SyntheticRegistry:
         return cls(keys=frozenset(str(k) for k in raw["keys"]), source=str(raw["source"]))
 
     @classmethod
-    def of(cls, chunks: Iterable[Chunk], *, source: str) -> SyntheticRegistry:
-        """Built by the operator script from fixture chunks — not an upload path."""
-        return cls(
-            keys=frozenset(synthetic_key(c.tenant_id, c.text) for c in chunks), source=source
-        )
+    def of(
+        cls, chunks: Iterable[Chunk], clauses: Iterable[ClauseRecord] = (), *, source: str
+    ) -> SyntheticRegistry:
+        """Built by the operator script from fixtures — not an upload path."""
+        keys = {synthetic_key(c.tenant_id, c.text) for c in chunks}
+        keys |= {synthetic_key(c.tenant_id, c.canonical_text) for c in clauses}
+        return cls(keys=frozenset(keys), source=source)
 
     def save(self, path: Path = SYNTHETIC_REGISTRY_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,17 +77,28 @@ class SyntheticRegistry:
     def vouches_for(self, chunk: Chunk) -> bool:
         return synthetic_key(chunk.tenant_id, chunk.text) in self.keys
 
+    def real_clauses(self, clauses: Iterable[ClauseRecord]) -> tuple[str, ...]:
+        """Ids of tenant clauses the registry doesn't vouch for — real data."""
+        return tuple(
+            c.clause_id
+            for c in clauses
+            if c.scope is Scope.TENANT
+            and synthetic_key(c.tenant_id, c.canonical_text) not in self.keys
+        )
+
     def mark(self, chunks: tuple[Chunk, ...]) -> tuple[Chunk, ...]:
         """Every chunk's `synthetic` flag, as the registry decides it.
 
         A chunk claiming synthetic that the registry doesn't vouch for is
         refused outright — downgrading it silently to real would hide that
         someone tried."""
-        claimed = [c.chunk_id for c in chunks if c.synthetic and not self.vouches_for(c)]
+        vouched = [self.vouches_for(c) for c in chunks]
+        pairs = list(zip(chunks, vouched, strict=True))
+        claimed = [c.chunk_id for c, ok in pairs if c.synthetic and not ok]
         if claimed:
             raise SyntheticClaimRefused(
                 f"{len(claimed)} chunk(s) marked synthetic but not in the operator's synthetic "
                 f"registry (first: {claimed[0]!r}). An upload cannot mark its own content "
                 "synthetic; only scripts/register_synthetic_fixtures.py can, by PR (issue #78)"
             )
-        return tuple(c.model_copy(update={"synthetic": self.vouches_for(c)}) for c in chunks)
+        return tuple(c.model_copy(update={"synthetic": ok}) for c, ok in pairs)
