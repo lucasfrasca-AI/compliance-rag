@@ -46,6 +46,24 @@ jobs:
         image: qdrant/qdrant:v1.19.1
         ports:
           - 6333:6333
+      # neo4j: the graph tests (issue #87) run against a real, ephemeral
+      # Community server — never Aura, which holds public law only (D-09)
+      # and whose credentials no workflow carries. Community refuses
+      # property-existence constraints; the adapter reports them by name and
+      # the writer enforces the same invariant. Pinned to the version tested
+      # locally; heap capped so it sits beside Postgres and Qdrant.
+      neo4j:
+        image: neo4j:5.26.31-community
+        env:
+          NEO4J_AUTH: neo4j/testpassword
+          NEO4J_server_memory_heap_max__size: 512m
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd="cypher-shell -u neo4j -p testpassword 'RETURN 1'"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=20
 
     env:
       DATABASE_URL: postgresql://compliance:compliance@localhost:5432/compliance_rag
@@ -54,6 +72,9 @@ jobs:
       # It runs here, with no GCP identity at all: real gemini-embedding-001
       # vectors come from the checked-in cache, BM25 is local, no reranker.
       REQUIRE_RECALL_GATE: "1"
+      # The graph tests fail rather than skip without the Neo4j container.
+      NEO4J_TEST_URI: bolt://localhost:7687
+      REQUIRE_NEO4J: "1"
 
     steps:
       - uses: actions/checkout@v4
