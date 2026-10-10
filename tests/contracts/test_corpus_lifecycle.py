@@ -34,6 +34,7 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.chunker import chunk_clause
 from compliance_rag.corpus.models import CANONICALISATION_VERSION, Chunk, ClauseRecord, Scope
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry, synthetic_key
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
 
@@ -71,11 +72,18 @@ V1_TEXT = "Customer account records are retained for seven years after closure."
 V2_TEXT = "Customer account records are retained for five years after closure."
 
 
+INVENTED: set[str] = set()
+"""The contract's registry of synthetic content (issue #78): every chunk the
+contract builds is invented, so each is registered as it is made. The
+lifecycle derives the `synthetic` flag from it, as the build-phase residency
+gate requires of any tenant upload (ADR-0023)."""
+SYNTHETIC = SyntheticRegistry(keys=INVENTED, source="the lifecycle contract's invented documents")
+
+
 def _chunk(record: ClauseRecord) -> Chunk:
-    # The contract's Acme documents are invented: marked synthetic, as the
-    # build-phase residency gate requires of any tenant upload (ADR-0023).
     chunk = chunk_clause(record, count_tokens=lambda text: len(text.split()))
-    return chunk.model_copy(update={"synthetic": True})
+    INVENTED.add(synthetic_key(chunk.tenant_id, chunk.text))
+    return chunk
 
 
 def _routes(trace: RetrievalTrace) -> dict[str, frozenset[str]]:
@@ -112,7 +120,11 @@ async def assert_corpus_lifecycle_contract(
         supersedes=None,
     )
     lifecycle = CorpusLifecycle(
-        ledger=ledger, retrieval=admin, clauses=clauses, generation_region=GENERATION_REGION
+        ledger=ledger,
+        retrieval=admin,
+        clauses=clauses,
+        generation_region=GENERATION_REGION,
+        synthetic=SYNTHETIC,
     )
     pipeline = RetrievalPipeline(store, FakeReranker())
     verifier = FakeCitationVerifier()
@@ -393,6 +405,7 @@ async def test_a_removal_that_fails_midway_is_audited_as_failed() -> None:
         retrieval=BrokenStore(ledger=ledger),
         clauses=FakeClauseStore(),
         generation_region=GENERATION_REGION,
+        synthetic=SYNTHETIC,
     )
     with pytest.raises(RuntimeError, match="qdrant unavailable"):
         await lifecycle.purge(
@@ -415,6 +428,7 @@ async def test_a_version_cannot_supersede_itself() -> None:
         retrieval=FakeRetrievalStore(ledger=ledger),
         clauses=FakeClauseStore(),
         generation_region=GENERATION_REGION,
+        synthetic=SYNTHETIC,
     )
     with pytest.raises(ValueError, match="replace-in-place"):
         await lifecycle.publish_version(

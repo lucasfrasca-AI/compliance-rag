@@ -94,6 +94,7 @@ Deliverables
 - Frontend: chat with history, citation panel with click-to-clause (PDF.js + positions), admin panel (profile fields, policy upload/version, mapping approval queue, framework scope)
 - Library and document lifecycle UI: subscription checkboxes over the library (ADR-0020); upload of a new policy version; withdraw; purge behind a typed confirmation that shows the findings-citing count (ADR-0021). All of it over adapter operations already built and tested in Phase 1 — the UI adds no enforcement of its own; the guardrails are in the adapter.
 - Prompt-injection controls: delimiting, schema validation, no retrieved text in query construction; adversarial test set in CI
+- **Blocker before any external upload (#78, ADR-0026):** the upload API takes no `synthetic` field and writes only through `CorpusLifecycle`, which derives the flag from the operator's registry; a test proves an API upload cannot mark its own content synthetic
 - Egress audit script checked into `docs/research/` proving no request-path byte leaves AU
 - Trace UI decision point: if Logs Explorer has proven insufficient for a named debugging task, write the ADR and add Phoenix (planned) — otherwise stay on Logging
 
