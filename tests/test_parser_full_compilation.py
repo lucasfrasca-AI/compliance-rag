@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -54,23 +55,80 @@ def test_a_section_that_mentions_the_apps_is_not_an_app(
     assert apps == {"app11"}
 
 
+VERBATIM = {
+    "s6d/4/a": (
+        "carries on a business that has had an annual turnover of more than $3,000,000 for "
+        "a financial year that has ended after the later of the following:"
+    ),
+    "s6d/4/b": (
+        "provides a health service to another individual and holds any health information "
+        "except in an employee record; or"
+    ),
+    "s6d/4/c": (
+        "discloses personal information about another individual to anyone else for a "
+        "benefit, service or advantage; or"
+    ),
+    "s6d/4/d": (
+        "provides a benefit, service or advantage to collect personal information about "
+        "another individual from anyone else; or"
+    ),
+    "s6d/4/e": (
+        "is a contracted service provider for a Commonwealth contract (whether or not a "
+        "party to the contract); or"
+    ),
+    "s6d/4/f": "is a credit reporting body.",
+    "s6e/1b": (
+        "If a small business operator is the protected action ballot agent for a protected "
+        "action ballot conducted under Part 3\u20113 of the Fair Work Act 2009, this Act "
+        "applies, with the prescribed modifications (if any), in relation to the activities "
+        "carried on by the small business operator for the purpose of, or in connection "
+        "with, the conduct of the protected action ballot, as if the small business operator "
+        "were an organisation."
+    ),
+    "s6e/1c": (
+        "If a small business operator is an association of employees that is registered or "
+        "recognised under the Fair Work (Registered Organisations) Act 2009, this Act "
+        "applies, with the prescribed modifications (if any), in relation to the activities "
+        "carried on by the small business operator, as if the small business operator were "
+        "an organisation (within the meaning of this Act)."
+    ),
+}
+
+
+@pytest.mark.parametrize("path", sorted(VERBATIM))
+def test_inserted_and_exemption_provisions_round_trip_verbatim(
+    clauses: dict[str, ClauseRecord], path: str
+) -> None:
+    """s6D(4)(a)-(f) and s6E(1B)/(1C): the words #93's model cites, exactly."""
+    assert clauses[path].text == VERBATIM[path]
+
+
 @pytest.mark.parametrize(
-    ("path", "starts"),
+    ("path", "starts", "ends"),
     [
-        ("s6e/1a", "If a small business operator is a reporting entity"),
-        ("s6e/1b", "If a small business operator is the protected action ballot agent"),
-        ("s6e/1c", "If a small business operator is an association of employees"),
-        ("s6e/1d", "If a small business operator holds an accreditation"),
-        ("s50/2/a/iia", "to the Ombudsman under a law in force in an external Territory"),
-        ("s50/2/a/ivaa", "to the National Student Ombudsman"),
+        ("s6e/1a", "If a small business operator is a reporting entity", "were an organisation."),
+        ("s6e/1d", "If a small business operator holds an accreditation", "were an organisation."),
+        ("s50/2/a/iia", "to the Ombudsman under a law in force in an external Territory", "or"),
+        ("s50/2/a/ivaa", "to the National Student Ombudsman", "or"),
     ],
 )
 def test_inserted_provisions_keep_their_suffix(
-    clauses: dict[str, ClauseRecord], path: str, starts: str
+    clauses: dict[str, ClauseRecord], path: str, starts: str, ends: str
 ) -> None:
     """(1A) and (iia) are inserted provisions, not renumbered ones: the
-    suffix is part of the path, lowercased."""
-    assert clauses[path].text.startswith(starts)
+    suffix is part of the path, lowercased. (s6E(1A) and (1D) close with their
+    tail line "as if the small business operator were an organisation".)"""
+    assert clauses[path].text.startswith(starts) and clauses[path].text.endswith(ends)
+
+
+def test_the_constructs_section_counts(clauses: dict[str, ClauseRecord]) -> None:
+    counts = Counter(p.split("/")[0] for p in clauses)
+    assert {s: counts[s] for s in ("s6d", "s6da", "s6e", "s6ea")} == {
+        "s6d": 27,
+        "s6da": 9,
+        "s6e": 14,
+        "s6ea": 8,
+    }
 
 
 def test_a_tokenless_paragraph_continues_the_one_above(
@@ -127,8 +185,20 @@ def test_the_whole_compilation_parses() -> None:
     raw = Path(os.environ["PRIVACY_ACT_COMPILATION_HTML"]).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == FULL_SHA256, "a different compilation file"
     clauses = _parse(raw.decode("utf-8"))
-    assert len(clauses) == 4115
+    assert len(clauses) == 4114
+    counts = Counter(p.split("/")[0] for p in clauses)
+    assert {s: counts[s] for s in ("s6", "s6c", "s6d", "s6da", "s6e", "s6ea", "sch1")} == {
+        "s6": 451,
+        "s6c": 33,
+        "s6d": 27,
+        "s6da": 9,
+        "s6e": 14,
+        "s6ea": 8,
+        "sch1": 236,
+    }
     apps = {p.split("/")[1] for p in clauses if p.startswith("sch1/")}
     assert apps == {f"app{n}" for n in range(1, 14)}
-    for section in ("s6c", "s6d", "s6da", "s6e", "s6ea"):
-        assert any(p.startswith(f"{section}/") for p in clauses), section
+    # A heading set in subsection style is not a clause (s80U).
+    assert "s80u" not in clauses and "s80u/1" in clauses
+    # Term and body joined as the source reads.
+    assert clauses["s6/1/breach"].text.startswith("breach:")

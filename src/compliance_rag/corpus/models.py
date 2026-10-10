@@ -11,6 +11,7 @@ import datetime as dt
 import hashlib
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable
 from enum import StrEnum
 from typing import Annotated
@@ -334,6 +335,15 @@ def definition_slug(term: str) -> str:
     if not slug:
         raise ValueError(f"term has no sluggable characters: {term!r}")
     return slug
+
+
+def assert_unique_clause_ids(clause_ids: Iterable[str]) -> None:
+    """Raise if one stable ID is produced twice. Two provisions on one path
+    would make a citation ambiguous — the stable ID is what the verifier
+    looks up (`CONTEXT.md`: Instrument id, issue #97)."""
+    duplicates = sorted(k for k, n in Counter(clause_ids).items() if n > 1)
+    if duplicates:
+        raise ValueError(f"{len(duplicates)} clause id(s) produced twice: {duplicates[:5]}")
 
 
 def assert_unique_definition_slugs(terms: Iterable[str]) -> None:

@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from compliance_rag.corpus.models import (
     ClauseRecord,
     Scope,
+    assert_unique_clause_ids,
     assert_unique_definition_slugs,
     clause_anchor_id,
     definition_slug,
@@ -57,19 +58,20 @@ _ANY_TAG_RE = re.compile(r"<[^>]+>")
 # Leading-token patterns, one per class, per the spike's documented forms —
 # plus inserted provisions, which take a letter suffix rather than renumbering
 # their neighbours: subsection (1A), subclause 11.1A, subparagraph (iia) or
-# (ivaa) (issue #97). Tokens are lowercased into the clause path (`s6e/1a`).
+# (ivaa) (issue #97). A subsection's letter suffix is lowercased into the clause
+# path (`s6e/1a`); subparagraph suffixes are lowercase in the source.
 _SUBSECTION_PAREN_RE = re.compile(r"^\((\d+[A-Z]*)\)\s*")
 _SUBSECTION_DOT_RE = re.compile(r"^\d+\.(\d+[A-Z]*)\s*")
 _PARAGRAPH_RE = re.compile(r"^\(([a-z]+)\)\s*")
 _PARAGRAPHSUB_RE = re.compile(r"^\(([ivx]+[a-z]*)\)\s*")
 _PARAGRAPHSUB_SUB_RE = re.compile(r"^\(([A-Z])\)\s*")
 
+# An APP's own heading: "11 Australian Privacy Principle 11—security of ...",
+# its number repeated. Main-body sections that merely mention the APPs — s6A
+# "Breach of an Australian Privacy Principle", s14 "Australian Privacy
+# Principles", s15 "APP entities must comply with ..." — are not APPs, and
+# filing them under `sch1/` put s15 at `sch1/app15` (issue #97).
 _APP_HEADING_RE = re.compile(r"^(\w+) Australian Privacy Principle (\w+)\b")
-"""An APP's own heading: "11 Australian Privacy Principle 11—security of ...",
-its number repeated. Main-body sections that merely mention the APPs — s6A
-"Breach of an Australian Privacy Principle", s14 "Australian Privacy
-Principles", s15 "APP entities must comply with ..." — are not APPs, and
-filing them under `sch1/` put s15 at `sch1/app15` (issue #97)."""
 
 
 def _strip_tags(fragment: str) -> str:
@@ -108,6 +110,19 @@ def _scan_blocks(source: str) -> list[_Block]:
     return blocks
 
 
+def _is_bold(span_attrs: str) -> bool:
+    """Word marks a defined term with an inline bold style on its spans."""
+    return "font-weight:bold" in span_attrs.replace(" ", "")
+
+
+def _join_term(term: str, body: str) -> str:
+    """Term and body as the source reads: no space before the body's leading
+    punctuation ("breach: ...", not "breach : ...")."""
+    if body[:1] in {":", ",", ";", "."}:
+        return f"{term}{body}"
+    return f"{term} {body}".strip()
+
+
 def _definition_term(block: _Block) -> tuple[str, str]:
     """The defined term and the remaining body text, for a `Definition` block
     — `CONTEXT.md`'s Definition entry requires capturing the term itself, not
@@ -123,10 +138,11 @@ def _definition_term(block: _Block) -> tuple[str, str]:
         return "", block.inner_text
     term_parts: list[str] = []
     for attrs, inner in spans:
-        if "font-weight:bold" not in attrs.replace(" ", ""):
+        if not _is_bold(attrs):
             break
         term_parts.append(inner)
     if not term_parts:
+        # No bold lead (not seen in C2026C00227): the first span, as before.
         term_parts, rest = [spans[0][1]], spans[1:]
     else:
         rest = spans[len(term_parts) :]
@@ -150,6 +166,15 @@ class _ParagraphNode:
     text: str
     block_index: int
     children: list[_ParagraphNode] = field(default_factory=list["_ParagraphNode"])
+
+    def continue_with(self, text: str) -> None:
+        """A tokenless paragraph block continues this paragraph: s6FA(a)'s
+        closing "that is also personal information;", or s26WG(h)'s text
+        between its subparagraphs (ii) and (iii), which still number on under
+        (h) (issue #97). Like a subsection's `subsection2` tail, it joins the
+        paragraph's own text after its lead-in; its subparagraphs stay
+        clauses of their own."""
+        self.text = f"{self.text} {text}".strip()
 
 
 @dataclass
@@ -281,11 +306,7 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
         if cls == "paragraph":
             token, rest = _strip_leading_token(block.inner_text, _PARAGRAPH_RE)
             if not token and current_paragraph is not None:
-                # A tokenless paragraph block continues the open paragraph:
-                # s6FA(a)'s closing "that is also personal information;", or
-                # s26WG(h)'s text between its subparagraphs (ii) and (iii),
-                # which still number on under (h) (issue #97).
-                current_paragraph.text = f"{current_paragraph.text} {rest}".strip()
+                current_paragraph.continue_with(rest)
                 continue
             node = _ParagraphNode(token=token, text=rest, block_index=index)
             parent = (
@@ -386,7 +407,7 @@ def _emit_subsection(
     for part in subsection.text_parts:
         if isinstance(part, _DefinitionNode):
             if singleton:
-                rendered_parts.append(f"{part.term} {part.text}".strip())
+                rendered_parts.append(_join_term(part.term, part.text))
         else:
             rendered_parts.append(part)
     ctx.clauses.append(ctx.build(subsection_path, " ".join(p for p in rendered_parts if p)))
@@ -397,7 +418,7 @@ def _emit_subsection(
             definition_path = subsection_path
         else:
             definition_path = f"{subsection_path}/{definition_slug(definition.term)}"
-            text = f"{definition.term} {definition.text}".strip()
+            text = _join_term(definition.term, definition.text)
             ctx.clauses.append(ctx.build(definition_path, text))
             ctx.anchors[definition.block_index] = definition_path
         for child in definition.children:
@@ -446,17 +467,17 @@ def parse_compilation(
         anchors={},
     )
     for section in sections:
+        numbered = any(s.token for s in section.subsections)
         for subsection in section.subsections:
+            if numbered and not subsection.token and not subsection.children:
+                # A heading set in subsection style ("Enforceable civil
+                # penalty provisions" above s80U(1)), not a provision: an
+                # unnumbered subsection is the section itself only when the
+                # section has no numbered ones (issue #97).
+                continue
             _emit_subsection(subsection, section_prefix=section.prefix, ctx=ctx)
 
-    seen: set[str] = set()
-    duplicates = sorted(
-        {c.clause_id for c in ctx.clauses if c.clause_id in seen or seen.add(c.clause_id)}
-    )
-    if duplicates:
-        # Two provisions on one path would make a citation ambiguous — the
-        # stable ID is what the verifier looks up (CONTEXT.md: Instrument id).
-        raise ValueError(f"{len(duplicates)} clause path(s) produced twice: {duplicates[:5]}")
+    assert_unique_clause_ids(c.clause_id for c in ctx.clauses)
 
     annotated = source
     for block_index in sorted(ctx.anchors, reverse=True):
