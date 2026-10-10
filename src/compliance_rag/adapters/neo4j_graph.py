@@ -34,36 +34,29 @@ from enum import StrEnum
 from pathlib import Path
 from typing import LiteralString, cast
 
-from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncManagedTransaction, Record
+from neo4j import (
+    AsyncDriver,
+    AsyncGraphDatabase,
+    AsyncManagedTransaction,
+    Record,
+    RoutingControl,
+)
 from neo4j.exceptions import Neo4jError
 from neo4j.time import Date, DateTime
 
 from compliance_rag import telemetry
+from compliance_rag.adapters.graph_query import BuiltQuery
+from compliance_rag.adapters.graph_schema import (
+    EDGE_TYPES,
+    PERSISTED_LABELS,
+    GraphWriteRefused,
+    checked_edge_type,
+    checked_label,
+)
 from compliance_rag.corpus.models import NO_END_DATE
 from compliance_rag.settings import Settings
 
 SCHEMA_PATH = Path(__file__).resolve().parents[3] / "db" / "neo4j" / "schema.cypher"
-
-PERSISTED_LABELS = frozenset(
-    {
-        "Instrument",
-        "InstrumentVersion",
-        "Clause",
-        "Obligation",
-        "Condition",
-        "Actor",
-        "Control",
-        "Jurisdiction",
-        "Sector",
-    }
-)
-"""PHASES.md Phase 2's schema. Tenant-subgraph labels (`Organisation`, ...)
-are projected per request and never persisted (CONTEXT.md), so they are not
-writable here."""
-
-EDGE_TYPES = frozenset(
-    {"PART_OF", "VERSION_OF", "SUPERSEDES", "APPLIES_TO", "REQUIRES", "CROSSWALKS_TO"}
-)
 
 BITEMPORAL_KEYS = frozenset({"valid_from", "valid_to", "status", "recorded_at"})
 
@@ -82,23 +75,6 @@ class Status(StrEnum):
     IN_FORCE = "in_force"
     NOT_YET_COMMENCED = "not_yet_commenced"
     REPEALED = "repealed"
-
-
-class GraphWriteRefused(ValueError):
-    """A write that would mutate an immutable node or edge, or that names
-    something the graph doesn't hold."""
-
-
-def checked_label(label: str) -> str:
-    if label not in PERSISTED_LABELS:
-        raise GraphWriteRefused(f"{label!r} is not a persisted graph label")
-    return label
-
-
-def checked_edge_type(edge_type: str) -> str:
-    if edge_type not in EDGE_TYPES:
-        raise GraphWriteRefused(f"{edge_type!r} is not a graph edge type")
-    return edge_type
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +111,15 @@ class SchemaReport:
     unsupported: tuple[str, ...]
     """Constraint names this edition refuses (property existence on
     Community). The writer enforces the same invariant instead."""
+
+
+@dataclass(frozen=True, slots=True)
+class GraphRow:
+    """One result of a builder-built read: the path's last node, with its
+    properties as stored, and the stable IDs along the path."""
+
+    node: Mapping[str, object]
+    path: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,8 +180,12 @@ def to_python(value: object) -> object:
     return value
 
 
+def _stored_from(record: Record, key: str) -> dict[str, object]:
+    return {k: to_python(v) for k, v in cast("dict[str, object]", record[key]).items()}
+
+
 def _stored(record: Record) -> dict[str, object]:
-    return {k: to_python(v) for k, v in cast("dict[str, object]", record["stored"]).items()}
+    return _stored_from(record, "stored")
 
 
 def _differing(
@@ -387,6 +376,26 @@ class Neo4jGraph:
         for nodes. Both ends must exist: an edge to nothing is a loader bug,
         not a node to invent."""
         props = _properties(properties or {})
+        checked_edge_type(edge_type)
+
+        async def work(tx: AsyncManagedTransaction) -> bool:
+            return await self._merge_edge(tx, edge_type, source, target, props)
+
+        attributes = {
+            "graph.edge_type": edge_type,
+            "graph.source": source.stable_id,
+            "graph.target": target.stable_id,
+        }
+        return await self._write("neo4j_graph.put_edge", attributes, work)
+
+    async def _merge_edge(
+        self,
+        tx: AsyncManagedTransaction,
+        edge_type: str,
+        source: NodeRef,
+        target: NodeRef,
+        props: Mapping[str, object],
+    ) -> bool:
         query = (
             f"OPTIONAL MATCH (a:{source.label} {{stable_id: $source}}) "
             f"OPTIONAL MATCH (b:{target.label} {{stable_id: $target}}) "
@@ -396,29 +405,94 @@ class Neo4jGraph:
             "WITH r, coalesce(r._created, false) AS created REMOVE r._created "
             "RETURN created, properties(r) AS stored"
         )
-
-        async def work(tx: AsyncManagedTransaction) -> bool:
-            result = await tx.run(
-                _trusted(query), source=source.stable_id, target=target.stable_id, props=props
+        result = await tx.run(
+            _trusted(query), source=source.stable_id, target=target.stable_id, props=props
+        )
+        record = await result.single()
+        if record is None:
+            raise GraphWriteRefused(
+                f"{edge_type}: {source.label} {source.stable_id!r} or {target.label} "
+                f"{target.stable_id!r} does not exist"
             )
-            record = await result.single()
-            if record is None:
-                raise GraphWriteRefused(
-                    f"{edge_type}: {source.label} {source.stable_id!r} or {target.label} "
-                    f"{target.stable_id!r} does not exist"
-                )
-            if not record["created"] and _differing(_stored(record), props, ignore=frozenset()):
-                raise GraphWriteRefused(
-                    f"{edge_type} {source.stable_id!r}->{target.stable_id!r} is immutable"
-                )
-            return bool(record["created"])
+        if not record["created"] and _differing(_stored(record), props, ignore=frozenset()):
+            raise GraphWriteRefused(
+                f"{edge_type} {source.stable_id!r}->{target.stable_id!r} is immutable"
+            )
+        return bool(record["created"])
+
+    async def amend(
+        self,
+        *,
+        old: NodeRef,
+        new: NodeRef,
+        effective: dt.date,
+        status: Status,
+        properties: Mapping[str, Scalar] | None = None,
+    ) -> None:
+        """D-05's amendment, in one transaction: `new` is written in force
+        from `effective`, `new -SUPERSEDES-> old`, and `old` is retired on
+        `effective`. All of it lands or none of it does. Re-running the same
+        amendment is a no-op."""
+        if old.label != new.label:
+            raise GraphWriteRefused(f"{new.label} cannot supersede a {old.label}")
+        props: dict[str, object] = {
+            **_properties(properties or {}),
+            "valid_from": effective,
+            "valid_to": NO_END_DATE,
+            "status": status.value,
+        }
+
+        async def work(tx: AsyncManagedTransaction) -> None:
+            await self._retire(tx, old, effective)
+            created, stored = await self._merge_node(tx, new, props)
+            if not created:
+                immutable = frozenset({"stable_id", "recorded_at", "valid_to"})
+                differs = _differing(stored, props, ignore=immutable)
+                if differs:
+                    raise GraphWriteRefused(
+                        f"{new.label} {new.stable_id!r} is immutable: {sorted(differs)} differ"
+                    )
+            await self._merge_edge(tx, "SUPERSEDES", new, old, {})
 
         attributes = {
-            "graph.edge_type": edge_type,
-            "graph.source": source.stable_id,
-            "graph.target": target.stable_id,
+            "graph.label": old.label,
+            "graph.old": old.stable_id,
+            "graph.new": new.stable_id,
+            "graph.effective": effective.isoformat(),
         }
-        return await self._write("neo4j_graph.put_edge", attributes, work)
+        await self._write("neo4j_graph.amend", attributes, work)
+
+    # ---- reads: only what the query builder built (D-05) --------------------
+
+    async def read(self, query: BuiltQuery) -> tuple[GraphRow, ...]:
+        """Run one builder-built query. A `BuiltQuery` can only come from
+        `GraphQuery.build`, so every read here carries `as_of` and a cap."""
+        if not isinstance(query, BuiltQuery):  # pyright: ignore[reportUnnecessaryIsInstance] — runtime guard
+            raise TypeError("Neo4jGraph.read runs only a BuiltQuery (D-05)")
+        with telemetry.span(
+            "neo4j_graph.read",
+            **{
+                "graph.as_of": query.as_of.isoformat(),
+                "graph.max_depth": query.max_depth,
+                "graph.query": query.text,
+            },
+        ) as current:
+            records, _, _ = await self._driver.execute_query(
+                query.text,
+                parameters_=dict(query.parameters),
+                database_=self._database,
+                routing_=RoutingControl.READ,
+            )
+            rows = tuple(
+                GraphRow(
+                    node=_stored_from(record, "node"),
+                    path=tuple(str(s) for s in cast("list[object]", record["path"])),
+                )
+                for record in records
+            )
+            current.set_attribute("graph.rows", len(rows))
+            current.set_attribute("graph.result_ids", [r.node.get("stable_id", "") for r in rows])  # pyright: ignore[reportArgumentType]
+            return rows
 
     # ---- counts (Phase 2 exit: Aura usage under 10% of its limits) ----------
 
@@ -436,3 +510,19 @@ class Neo4jGraph:
             s.set_attribute("graph.nodes", counted.nodes)
             s.set_attribute("graph.edges", counted.edges)
             return counted
+
+
+__all__ = [
+    "EDGE_TYPES",
+    "PERSISTED_LABELS",
+    "Bitemporal",
+    "GraphCounts",
+    "GraphRow",
+    "GraphWriteRefused",
+    "Neo4jGraph",
+    "NodeRef",
+    "SchemaReport",
+    "Status",
+    "checked_edge_type",
+    "checked_label",
+]
