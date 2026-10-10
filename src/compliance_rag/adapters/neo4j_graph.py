@@ -198,6 +198,18 @@ def _differing(
     }
 
 
+def _refuse_if_changed(
+    node: NodeRef, stored: Mapping[str, object], wanted: Mapping[str, object]
+) -> None:
+    """A node is immutable except `valid_to`, which only `_retire` changes."""
+    differs = _differing(stored, wanted, ignore=frozenset({"stable_id", "recorded_at", "valid_to"}))
+    if differs:
+        raise GraphWriteRefused(
+            f"{node.label} {node.stable_id!r} is immutable: {sorted(differs)} differ from what "
+            "is stored. An amendment is a new node with SUPERSEDES (D-05)"
+        )
+
+
 class Neo4jGraph:
     def __init__(
         self,
@@ -286,13 +298,7 @@ class Neo4jGraph:
             created, stored = await self._merge_node(tx, node, props)
             if created:
                 return True
-            immutable = frozenset({"stable_id", "recorded_at", "valid_to"})
-            differs = _differing(stored, props, ignore=immutable)
-            if differs:
-                raise GraphWriteRefused(
-                    f"{node.label} {node.stable_id!r} is immutable: {sorted(differs)} differ "
-                    "from what is stored. An amendment is a new node with SUPERSEDES (D-05)"
-                )
+            _refuse_if_changed(node, stored, props)
             if stored["valid_to"] != bitemporal.valid_to:
                 await self._retire(tx, node, bitemporal.valid_to)
             return False
@@ -446,12 +452,7 @@ class Neo4jGraph:
             await self._retire(tx, old, effective)
             created, stored = await self._merge_node(tx, new, props)
             if not created:
-                immutable = frozenset({"stable_id", "recorded_at", "valid_to"})
-                differs = _differing(stored, props, ignore=immutable)
-                if differs:
-                    raise GraphWriteRefused(
-                        f"{new.label} {new.stable_id!r} is immutable: {sorted(differs)} differ"
-                    )
+                _refuse_if_changed(new, stored, props)
             await self._merge_edge(tx, "SUPERSEDES", new, old, {})
 
         attributes = {
@@ -469,6 +470,7 @@ class Neo4jGraph:
         `GraphQuery.build`, so every read here carries `as_of` and a cap."""
         if not isinstance(query, BuiltQuery):  # pyright: ignore[reportUnnecessaryIsInstance] — runtime guard
             raise TypeError("Neo4jGraph.read runs only a BuiltQuery (D-05)")
+        query.verify()  # refuses one changed after building
         with telemetry.span(
             "neo4j_graph.read",
             **{
@@ -491,7 +493,9 @@ class Neo4jGraph:
                 for record in records
             )
             current.set_attribute("graph.rows", len(rows))
-            current.set_attribute("graph.result_ids", [r.node.get("stable_id", "") for r in rows])  # pyright: ignore[reportArgumentType]
+            current.set_attribute(
+                "graph.result_ids", [str(r.node.get("stable_id", "")) for r in rows]
+            )
             return rows
 
     # ---- counts (Phase 2 exit: Aura usage under 10% of its limits) ----------
