@@ -116,6 +116,7 @@ async def _setup(
         RetrievalPipeline(store, FakeReranker()),
         generator,
         Verifier(clauses, ledger, CanonicalCitationVerifier()),
+        ledger,
     )
     return pipeline, ledger, clauses
 
@@ -393,3 +394,30 @@ async def test_a_version_cannot_be_recorded_twice() -> None:
             valid_from=dt.date(2025, 1, 1),
             supersedes=None,
         )
+
+
+async def test_every_generation_call_leaves_a_usage_row_with_the_request_trace_id(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """#31: cost per query from real token counts, on ledger rows keyed to the
+    request's trace — one row for the answer, one per repair."""
+    generator = ScriptedGenerator(
+        {
+            "answer": "a",
+            "citations": [
+                _cite(V2_PROTECT, "reasonable steps to protect"),
+                _cite(V2_RETAIN, "kept for 7 years"),
+            ],
+        },
+        _cite(V2_RETAIN, "retained for seven years"),
+    )
+    pipeline, ledger, _ = await _setup(generator)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+
+    rows = await ledger.usage(TENANT)
+    assert len(rows) == 2  # the answer and its one repair
+    assert {r.trace_id for r in rows} == {result.trace_id}
+    (answer_span,) = [s for s in span_exporter.get_finished_spans() if s.name == "answer"]
+    assert answer_span.context is not None
+    assert result.trace_id == format(answer_span.context.trace_id, "032x")
+    assert abs(sum(r.cost_usd for r in rows) - result.cost_usd) < 1e-12

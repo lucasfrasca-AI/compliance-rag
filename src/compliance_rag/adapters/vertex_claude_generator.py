@@ -155,6 +155,7 @@ class VertexClaudeGenerator(Generator):
                 cache_read_input_tokens=cache_read,
                 cache_creation_input_tokens=cache_write,
                 cost_usd=cost,
+                model=self._model,
             )
             current.set_attribute("generator.input_tokens", generation.input_tokens)
             current.set_attribute("generator.output_tokens", generation.output_tokens)

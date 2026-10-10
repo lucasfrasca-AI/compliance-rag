@@ -42,3 +42,4 @@ models/reranker-onnx/
 # Hugging Face on first use, cached in CI (.github/workflows/ci.yml)
 .fastembed_cache/
 models/candidates/
+out/

@@ -22,6 +22,7 @@ from compliance_rag.adapters.interfaces import (
     RemovalAction,
     RemovalAuditEntry,
     RemovalOutcome,
+    UsageRecord,
 )
 
 SeedFinding = Callable[[str, str], Awaitable[None]]
@@ -53,6 +54,29 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     row = await ledger.get_assessment("acme", "a1")
     assert row is not None and row["trace_id"] == "f" * 32 and row["as_of"] == JUN
     assert await ledger.get_assessment("other-corp", "a1") is None
+
+    # ---- usage rows: real token counts and cost, keyed to the request (#31)
+    for tenant_id, usage_id in (("acme", "u-1"), ("_public", "u-2")):
+        await ledger.record_usage(
+            UsageRecord(
+                tenant_id=tenant_id,
+                usage_id=usage_id,
+                trace_id="e" * 32,
+                model="m",
+                input_tokens=1200,
+                output_tokens=300,
+                cached_prefix_hit=True,
+                cost_usd=0.0123,
+            )
+        )
+    (row_usage,) = await ledger.usage("acme")
+    assert (row_usage.trace_id, row_usage.input_tokens, row_usage.cached_prefix_hit) == (
+        "e" * 32,
+        1200,
+        True,
+    )
+    assert abs(row_usage.cost_usd - 0.0123) < 1e-9
+    assert len(await ledger.usage("_public")) == 1  # spend on library law has an owner (ADR-0025)
 
     # ---- library versions, then subscriptions to them (ADR-0020, ADR-0025)
     for instrument in (LAW, "iso-27001"):

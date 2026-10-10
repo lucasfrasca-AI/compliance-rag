@@ -125,6 +125,24 @@ class Generation:
     """Of `input_tokens`, those written to the cache by this request."""
     cost_usd: float = 0.0
     """From the real token counts at the adapter's published rates."""
+    model: str = ""
+    """The model that answered, as the adapter called it."""
+
+
+@dataclass(frozen=True, slots=True)
+class UsageRecord:
+    """One generation call's real token counts and cost — ledger `usage`, keyed
+    to the request's `trace_id` (#31; CLAUDE.md: every ledger row that results
+    from a request stores its `trace_id`)."""
+
+    tenant_id: str
+    usage_id: str
+    trace_id: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cached_prefix_hit: bool
+    cost_usd: float
 
 
 class RemovalAction(StrEnum):
@@ -330,6 +348,12 @@ class LedgerStore(ABC):
         """Findings of this tenant with at least one citation whose
         `clause_id` starts with `stable_id_prefix` — `instrument:` for every
         version, `instrument:version:` for one (ADR-0021)."""
+
+    @abstractmethod
+    async def record_usage(self, usage: UsageRecord) -> None: ...
+
+    @abstractmethod
+    async def usage(self, tenant_id: str) -> tuple[UsageRecord, ...]: ...
 
     @abstractmethod
     async def record_version(

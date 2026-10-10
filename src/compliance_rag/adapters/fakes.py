@@ -30,6 +30,7 @@ from compliance_rag.adapters.interfaces import (
     RetrievalResult,
     RetrievalStore,
     ScoredDocument,
+    UsageRecord,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import (
@@ -307,6 +308,7 @@ class FakeLedgerStore(LedgerStore):
         self._subscriptions: dict[tuple[str, str], str] = {}  # (tenant, instrument) -> by
         self._findings: list[tuple[str, tuple[str, ...]]] = []  # (tenant, cited clause_ids)
         self.withdrawn: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version) -> by
+        self._usage: list[UsageRecord] = []
         self._versions: dict[tuple[str, str, str], tuple[dt.date, dt.date | None]] = {}
         self.purged: dict[tuple[str, str, str | None], tuple[str, str]] = {}  # -> (by, reason)
         self._audit: list[RemovalAuditEntry] = []
@@ -362,6 +364,12 @@ class FakeLedgerStore(LedgerStore):
             for tenant, cited in self._findings
             if tenant == tenant_id and any(c.startswith(stable_id_prefix) for c in cited)
         )
+
+    async def record_usage(self, usage: UsageRecord) -> None:
+        self._usage.append(usage)
+
+    async def usage(self, tenant_id: str) -> tuple[UsageRecord, ...]:
+        return tuple(u for u in self._usage if u.tenant_id == tenant_id)
 
     async def record_version(
         self,
