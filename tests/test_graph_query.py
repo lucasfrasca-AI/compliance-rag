@@ -10,12 +10,14 @@ ontology content (obligations, conditions, applicability).
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from neo4j import AsyncDriver
 
 from compliance_rag.adapters.graph_query import (
     MAX_DEPTH_CEILING,
@@ -23,6 +25,7 @@ from compliance_rag.adapters.graph_query import (
     Direction,
     GraphQuery,
 )
+from compliance_rag.adapters.graph_schema import GraphSchemaRefused
 from compliance_rag.adapters.neo4j_graph import (
     Bitemporal,
     GraphCounts,
@@ -83,9 +86,39 @@ def test_hops_beyond_the_cap_are_refused_across_segments() -> None:
 
 def test_a_built_query_cannot_be_forged() -> None:
     """`Neo4jGraph.read` runs only a `BuiltQuery`, and only the builder can
-    make one — a hand-written Cypher string can't reach the graph."""
-    with pytest.raises(TypeError, match=r"only from GraphQuery\.build"):
-        BuiltQuery(text="MATCH (n) RETURN n", parameters={}, as_of=JAN, max_depth=1, _issuer=None)
+    make one: a hand-written one, or a real one altered after building, fails
+    its seal."""
+    real = GraphQuery(as_of=JAN, max_depth=1).start("Clause").build()
+    with pytest.raises(TypeError, match="unchanged"):
+        BuiltQuery(text="MATCH (n) RETURN n", parameters={}, as_of=JAN, max_depth=1, seal="x")
+    with pytest.raises(TypeError, match="unchanged"):
+        dataclasses.replace(real, text="MATCH (n) DETACH DELETE n")
+    with pytest.raises(TypeError, match="unchanged"):
+        dataclasses.replace(real, max_depth=6)
+    tampered = GraphQuery(as_of=JAN, max_depth=1).start("Clause").build()
+    object.__setattr__(tampered, "text", "MATCH (n) DETACH DELETE n")
+    with pytest.raises(TypeError, match="unchanged"):
+        tampered.verify()
+
+
+async def test_read_refuses_a_query_altered_after_building() -> None:
+    tampered = GraphQuery(as_of=JAN, max_depth=1).start("Clause").build()
+    object.__setattr__(tampered, "parameters", {"as_of": dt.date.max})
+    with pytest.raises(TypeError, match="unchanged"):
+        await Neo4jGraph(cast("AsyncDriver", None), database="unused").read(tampered)
+
+
+@pytest.mark.parametrize("hops", [0, True, 2.0, "2", None])
+def test_max_hops_must_be_a_positive_int(hops: object) -> None:
+    query = GraphQuery(as_of=JAN, max_depth=3).start("Clause")
+    with pytest.raises(ValueError, match=r"max_hops|exceeds"):
+        query.follow(("PART_OF",), "InstrumentVersion", direction=Direction.OUT, max_hops=hops)  # pyright: ignore[reportArgumentType]
+
+
+def test_direction_must_be_a_direction() -> None:
+    query = GraphQuery(as_of=JAN, max_depth=1).start("Clause")
+    with pytest.raises(ValueError, match="direction"):
+        query.follow(("PART_OF",), "InstrumentVersion", direction="sideways")  # pyright: ignore[reportArgumentType]
 
 
 def test_every_variable_length_pattern_is_bounded_and_every_node_is_scoped() -> None:
@@ -110,9 +143,9 @@ def test_values_are_parameters_never_cypher() -> None:
 
 
 def test_labels_and_edge_types_outside_the_schema_are_refused() -> None:
-    with pytest.raises(GraphWriteRefused):
+    with pytest.raises(GraphSchemaRefused):
         GraphQuery(as_of=JAN, max_depth=1).start("Organisation")
-    with pytest.raises(GraphWriteRefused):
+    with pytest.raises(GraphSchemaRefused):
         GraphQuery(as_of=JAN, max_depth=1).start("Clause").follow(
             ("HANDLES",), "Clause", direction=Direction.OUT
         )
@@ -134,11 +167,10 @@ async def amended(graph: Neo4jGraph) -> AsyncIterator[Neo4jGraph]:
     )
     c1, c2 = NodeRef("Clause", "act:v1:s1"), NodeRef("Clause", "act:v2:s1")
     await graph.put_node(act, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
-    for version, clause in ((v1, c1),):
-        await graph.put_node(version, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
-        await graph.put_node(clause, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
-        await graph.put_edge("PART_OF", clause, version)
-        await graph.put_edge("VERSION_OF", version, act)
+    await graph.put_node(v1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
+    await graph.put_node(c1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
+    await graph.put_edge("PART_OF", c1, v1)
+    await graph.put_edge("VERSION_OF", v1, act)
     await graph.amend(
         old=v1,
         new=v2,
@@ -247,3 +279,21 @@ async def test_an_amendment_is_atomic(graph: Neo4jGraph) -> None:
         await graph.amend(old=v1, new=v2, effective=JAN, status=Status.IN_FORCE)
     assert await graph.counts() == GraphCounts(nodes=1, edges=0)
     assert (await _properties(graph, v1))["valid_to"] == dt.date.max
+
+
+@needs_neo4j
+async def test_an_amendment_refused_after_the_retire_rolls_the_retire_back(
+    graph: Neo4jGraph,
+) -> None:
+    """The case that matters: the retire succeeds inside the transaction, then
+    the new node is refused (it already exists with different content). The
+    retire must not survive."""
+    await graph.apply_schema()
+    v1, v2 = NodeRef("InstrumentVersion", "act:v1"), NodeRef("InstrumentVersion", "act:v2")
+    await graph.put_node(v1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
+    await graph.put_node(v2, Bitemporal(valid_from=JUN, status=Status.IN_FORCE), {"title": "x"})
+    with pytest.raises(GraphWriteRefused, match="immutable"):
+        await graph.amend(old=v1, new=v2, effective=JUN, status=Status.IN_FORCE)
+    stored = await _properties(graph, v1)
+    assert stored["valid_to"] == dt.date.max and "_lock" not in stored
+    assert await graph.counts() == GraphCounts(nodes=2, edges=0)

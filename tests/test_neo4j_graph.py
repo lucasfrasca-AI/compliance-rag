@@ -24,6 +24,7 @@ import pytest
 from neo4j import AsyncDriver
 from neo4j.exceptions import ConstraintError
 
+from compliance_rag.adapters.graph_schema import GraphSchemaRefused
 from compliance_rag.adapters.neo4j_graph import (
     PERSISTED_LABELS,
     Bitemporal,
@@ -260,9 +261,9 @@ async def test_labels_and_edge_types_come_only_from_the_closed_sets() -> None:
     be parameters), so anything outside the schema is refused before a query
     is built."""
     for bad in ("Organisation", "Clause) DETACH DELETE (n", ""):
-        with pytest.raises(GraphWriteRefused):
+        with pytest.raises(GraphSchemaRefused):
             NodeRef(bad, "x")
-    with pytest.raises(GraphWriteRefused):
+    with pytest.raises(GraphSchemaRefused):
         await _offline().put_edge("HANDLES", C1, C1)
 
 

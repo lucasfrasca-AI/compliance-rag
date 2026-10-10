@@ -21,6 +21,9 @@ This is structure, not ontology: what makes an obligation apply to a profile
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import hmac
+import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -33,7 +36,13 @@ MAX_DEPTH_CEILING = 6
 crosswalk chains are short. A cap is a guard against an unbounded expansion
 on Aura Free, not a tuning knob."""
 
-_ISSUER = object()
+_SEAL_KEY = secrets.token_bytes(32)
+"""Per-process key. A `BuiltQuery` carries an HMAC over everything it would
+run; `Neo4jGraph.read` recomputes it. A query whose text, parameters, date or
+cap were changed after building — `dataclasses.replace`, `object.__setattr__`
+— no longer matches its seal and is refused. As with `RemovalAuthorization`,
+this makes a bypass deliberate and visible (importing a private key), not
+impossible."""
 
 
 class Direction(StrEnum):
@@ -41,19 +50,30 @@ class Direction(StrEnum):
     IN = "in"
 
 
+def _seal(text: str, parameters: Mapping[str, object], as_of: dt.date, max_depth: int) -> str:
+    body = repr((text, sorted((k, repr(v)) for k, v in parameters.items()), as_of, max_depth))
+    return hmac.new(_SEAL_KEY, body.encode(), hashlib.sha256).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class BuiltQuery:
-    """A read the builder produced — the only thing `Neo4jGraph.read` runs."""
+    """A read the builder produced — the only thing `Neo4jGraph.read` runs.
+    Each result row is one matching *path*: a node reached by two different
+    paths comes back twice."""
 
     text: LiteralString
     parameters: Mapping[str, object]
     as_of: dt.date
     max_depth: int
-    _issuer: object = field(repr=False, compare=False)
+    seal: str = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self._issuer is not _ISSUER:
-            raise TypeError("a BuiltQuery comes only from GraphQuery.build (D-05)")
+        self.verify()
+
+    def verify(self) -> None:
+        expected = _seal(self.text, self.parameters, self.as_of, self.max_depth)
+        if not hmac.compare_digest(self.seal, expected):
+            raise TypeError("a BuiltQuery comes only from GraphQuery.build, unchanged (D-05)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +122,10 @@ class GraphQuery:
             raise ValueError("start() before follow()")
         if not edge_types:
             raise ValueError("follow() needs at least one edge type")
+        if not isinstance(direction, Direction):  # pyright: ignore[reportUnnecessaryIsInstance] — runtime guard
+            raise ValueError(f"direction must be a Direction, not {direction!r}")
+        if not isinstance(max_hops, int) or isinstance(max_hops, bool):  # pyright: ignore[reportUnnecessaryIsInstance] — runtime guard
+            raise ValueError("max_hops must be an int")
         used = sum(s.max_hops for s in self._segments)
         if max_hops < 1 or used + max_hops > self._max_depth:
             raise ValueError(
@@ -144,5 +168,5 @@ class GraphQuery:
             parameters=parameters,
             as_of=self._as_of,
             max_depth=self._max_depth,
-            _issuer=_ISSUER,
+            seal=_seal(text, parameters, self._as_of, self._max_depth),
         )
