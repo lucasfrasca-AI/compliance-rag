@@ -38,7 +38,14 @@ from opentelemetry.trace import Span
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
-from compliance_rag.adapters.graph_schema import Bitemporal, GraphCounts, NodeRef, Status
+from compliance_rag.adapters.graph_schema import (
+    Bitemporal,
+    EdgeWrite,
+    GraphCounts,
+    NodeRef,
+    NodeWrite,
+    Status,
+)
 from compliance_rag.adapters.interfaces import GraphAdmin
 from compliance_rag.corpus.models import ClauseRecord, Scope, canonical_sha256, parse_stable_id
 from compliance_rag.graph.mappings import MappingError, MappingSet, Obligation
@@ -152,20 +159,25 @@ async def load_instrument_version(
                 retire_with=tuple(old_clauses),
             )
         created_edges += await graph.put_edge("VERSION_OF", version, instrument)
-        for clause in clauses:
-            node = NodeRef("Clause", clause.clause_id)
-            created_nodes += await graph.put_node(
-                node,
-                in_force,
-                {
-                    "instrument_id": instrument_id,
-                    "version_id": version_id,
-                    "clause_path": clause.clause_path,
-                    "canonical_sha256": canonical_sha256(clause.canonical_text),
-                    "canonicalisation_version": clause.canonicalisation_version,
-                },
-            )
-            created_edges += await graph.put_edge("PART_OF", node, version)
+        created_nodes += await graph.put_nodes(
+            [
+                NodeWrite(
+                    NodeRef("Clause", clause.clause_id),
+                    in_force,
+                    {
+                        "instrument_id": instrument_id,
+                        "version_id": version_id,
+                        "clause_path": clause.clause_path,
+                        "canonical_sha256": canonical_sha256(clause.canonical_text),
+                        "canonicalisation_version": clause.canonicalisation_version,
+                    },
+                )
+                for clause in clauses
+            ]
+        )
+        created_edges += await graph.put_edges(
+            [EdgeWrite("PART_OF", NodeRef("Clause", c.clause_id), version) for c in clauses]
+        )
         report = LoadReport(created_nodes, created_edges, await graph.counts())
         _record(span, report)
         return report

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,10 +49,12 @@ from compliance_rag.adapters.graph_schema import (
     EDGE_TYPES,
     PERSISTED_LABELS,
     Bitemporal,
+    EdgeWrite,
     GraphCounts,
     GraphRow,
     GraphWriteRefused,
     NodeRef,
+    NodeWrite,
     Scalar,
     Status,
     checked_edge_type,
@@ -65,6 +67,11 @@ from compliance_rag.settings import Settings
 SCHEMA_PATH = Path(__file__).resolve().parents[3] / "db" / "neo4j" / "schema.cypher"
 
 BITEMPORAL_KEYS = frozenset({"valid_from", "valid_to", "status", "recorded_at"})
+
+BATCH_SIZE = 500
+"""Rows per batched write transaction: large enough that loading a
+compilation is a handful of round trips to Aura, small enough that a refused
+row rolls back a bounded amount of work."""
 
 EDITION_REFUSAL = "Neo.DatabaseError.Schema.ConstraintCreationFailed"
 """The code Community returns for a property-existence constraint, with a
@@ -281,6 +288,123 @@ class Neo4jGraph(GraphAdmin):
         )
         record = await result.single(strict=True)
         return bool(record["created"]), _stored(record)
+
+    async def put_nodes(self, writes: Sequence[NodeWrite]) -> int:
+        """`put_node` for many nodes in `BATCH_SIZE`-row transactions, one
+        `UNWIND` statement each (issue #108: 780 single-node transactions to
+        offshore Aura took 14.5 minutes). Every guarantee holds per row: a
+        changed node is refused and its whole batch rolls back; a retirement
+        goes through `_retire`'s lock-then-read. Returns the number created."""
+        ids = [(w.node.label, w.node.stable_id) for w in writes]
+        if len(ids) != len(set(ids)):
+            raise GraphWriteRefused("a batch names the same node twice")
+        created = 0
+        for label in sorted({w.node.label for w in writes}):
+            same_label = [w for w in writes if w.node.label == label]
+            for start in range(0, len(same_label), BATCH_SIZE):
+                created += await self._put_node_batch(label, same_label[start : start + BATCH_SIZE])
+        return created
+
+    async def _put_node_batch(self, label: str, batch: Sequence[NodeWrite]) -> int:
+        props: list[dict[str, object]] = [
+            {
+                **_properties(w.properties),
+                "valid_from": w.bitemporal.valid_from,
+                "valid_to": w.bitemporal.valid_to,
+                "status": w.bitemporal.status.value,
+            }
+            for w in batch
+        ]
+        rows = [
+            {"stable_id": w.node.stable_id, "props": p} for w, p in zip(batch, props, strict=True)
+        ]
+        query = (
+            f"UNWIND $rows AS row MERGE (n:{checked_label(label)} {{stable_id: row.stable_id}}) "
+            "ON CREATE SET n += row.props, n.recorded_at = $now, n._created = true "
+            "WITH n, coalesce(n._created, false) AS created REMOVE n._created "
+            "RETURN n.stable_id AS stable_id, created, properties(n) AS stored"
+        )
+        wanted = {w.node.stable_id: (w, p) for w, p in zip(batch, props, strict=True)}
+
+        async def work(tx: AsyncManagedTransaction) -> int:
+            result = await tx.run(_trusted(query), rows=rows, now=self._clock())
+            created = 0
+            async for record in result:
+                write, wanted_props = wanted[str(record["stable_id"])]
+                if record["created"]:
+                    created += 1
+                    continue
+                stored = _stored(record)
+                _refuse_if_changed(write.node, stored, wanted_props)
+                if stored["valid_to"] != write.bitemporal.valid_to:
+                    await self._retire(tx, write.node, write.bitemporal.valid_to)
+            return created
+
+        attributes = {"graph.label": label, "graph.batch": str(len(batch))}
+        return await self._write("neo4j_graph.put_nodes", attributes, work)
+
+    async def put_edges(self, writes: Sequence[EdgeWrite]) -> int:
+        """`put_edge` for many edges in `BATCH_SIZE`-row transactions. Both
+        ends of every edge in a batch are checked before any is merged, so a
+        missing end refuses the batch with nothing written. Returns the
+        number created."""
+        created = 0
+        shapes = sorted({(w.edge_type, w.source.label, w.target.label) for w in writes})
+        for edge_type, source_label, target_label in shapes:
+            same = [
+                w
+                for w in writes
+                if (w.edge_type, w.source.label, w.target.label)
+                == (edge_type, source_label, target_label)
+            ]
+            for start in range(0, len(same), BATCH_SIZE):
+                created += await self._put_edge_batch(
+                    edge_type, source_label, target_label, same[start : start + BATCH_SIZE]
+                )
+        return created
+
+    async def _put_edge_batch(
+        self, edge_type: str, source_label: str, target_label: str, batch: Sequence[EdgeWrite]
+    ) -> int:
+        wanted: dict[tuple[str, str], dict[str, object]] = {
+            (w.source.stable_id, w.target.stable_id): _properties(w.properties) for w in batch
+        }
+        rows = [{"source": s, "target": t, "props": p} for (s, t), p in wanted.items()]
+        ends = (
+            f"UNWIND $rows AS row "
+            f"OPTIONAL MATCH (a:{checked_label(source_label)} {{stable_id: row.source}}) "
+            f"OPTIONAL MATCH (b:{checked_label(target_label)} {{stable_id: row.target}}) "
+        )
+        missing_query = ends + (
+            "WITH row, a, b WHERE a IS NULL OR b IS NULL "
+            "RETURN row.source AS source, row.target AS target"
+        )
+        merge_query = (
+            ends + f"MERGE (a)-[r:{checked_edge_type(edge_type)}]->(b) "
+            "ON CREATE SET r += row.props, r._created = true "
+            "WITH row, r, coalesce(r._created, false) AS created REMOVE r._created "
+            "RETURN row.source AS source, row.target AS target, created, properties(r) AS stored"
+        )
+
+        async def work(tx: AsyncManagedTransaction) -> int:
+            missing = [record async for record in await tx.run(_trusted(missing_query), rows=rows)]
+            if missing:
+                first = missing[0]
+                raise GraphWriteRefused(
+                    f"{edge_type}: {len(missing)} edge(s) name a node that does not exist "
+                    f"(first: {first['source']!r} -> {first['target']!r})"
+                )
+            created = 0
+            async for record in await tx.run(_trusted(merge_query), rows=rows):
+                key = (str(record["source"]), str(record["target"]))
+                if record["created"]:
+                    created += 1
+                elif _differing(_stored(record), wanted[key], ignore=frozenset()):
+                    raise GraphWriteRefused(f"{edge_type} {key[0]!r}->{key[1]!r} is immutable")
+            return created
+
+        attributes = {"graph.edge_type": edge_type, "graph.batch": str(len(batch))}
+        return await self._write("neo4j_graph.put_edges", attributes, work)
 
     async def retire_node(self, node: NodeRef, *, valid_to: dt.date) -> None:
         """Set `valid_to` on a node still open (`NO_END_DATE`) — the one

@@ -22,9 +22,11 @@ from enum import StrEnum
 from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
     Bitemporal,
+    EdgeWrite,
     GraphCounts,
     GraphRow,
     NodeRef,
+    NodeWrite,
     Scalar,
     Status,
 )
@@ -265,6 +267,19 @@ class GraphAdmin(ABC):
         properties: Mapping[str, Scalar] | None = None,
     ) -> bool:
         """True if created, False if an identical edge existed."""
+
+    async def put_nodes(self, writes: Sequence[NodeWrite]) -> int:
+        """Many nodes, with `put_node`'s guarantees; returns how many were
+        created. By default one at a time — an adapter overrides it to batch
+        (issue #108)."""
+        return sum([await self.put_node(w.node, w.bitemporal, w.properties) for w in writes])
+
+    async def put_edges(self, writes: Sequence[EdgeWrite]) -> int:
+        """Many edges, with `put_edge`'s guarantees; returns how many were
+        created."""
+        return sum(
+            [await self.put_edge(w.edge_type, w.source, w.target, w.properties) for w in writes]
+        )
 
     @abstractmethod
     async def retire_node(self, node: NodeRef, *, valid_to: dt.date) -> None:
