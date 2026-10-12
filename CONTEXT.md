@@ -53,14 +53,14 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 
 ## Assessment
 
-- **Profile** — a tenant's structured facts (jurisdictions, sector, size bands, actor roles, data categories, regulators). Lives in the ledger. Never embedded.
+- **Profile** — a tenant's structured facts. Lives in the ledger. Never embedded. The facts conditions read are **evidence**, each for a period, because the law asks about periods (s6D(1): turnover for the previous financial year; s6D(4)(a): any financial year since the business started). A tenant never declares a legal role such as "APP entity": the role is evaluated from its evidence (ADR-0027).
 - **Claim** — a statement extracted from an uploaded document ("data will be retained for 7 years"). About a *document*: what it says. Provenance inferred until the user confirms. A claim is never promoted or mutated; it stays the record of what the document said.
 - **Finding** — one claim against one obligation or policy clause: `consistent` / `conflicts` / `not_addressed` / `ambiguous`, with citations and provenance.
 - **Provenance tier** — how a fact entered the system: `parsed` (deterministic), `asserted` (a user said so), `inferred` (extracted from prose), `external` (web fallback, unverified against the corpus).
 - **Coverage** — for an assessment, which obligations were assessable, which weren't, and why.
 - **Verifier** — the deterministic check that every citation exists in the retrieved or cached set and its span matches canonical text.
 - **Repair** — the targeted regeneration of only the failing citation. Never a full regeneration.
-- **Evidence** — an asserted fact that satisfies or fails a condition, created by confirming a claim or by answering a questionnaire. About a *condition*, where a claim is about a document; confirming a claim creates evidence rather than changing the claim. Documents inform; humans assert.
+- **Evidence** — one dated fact about a tenant: a profile field, its value, the period it is true for (`annual_turnover_aud` was 2,500,000 for FY2025-26), its provenance, and its source — who said so, or what it was parsed from. About a *fact*, where a claim is about a document; one fact feeds every condition that reads its field. Created by answering a questionnaire or by confirming a claim; confirming a claim creates evidence rather than changing the claim. Only `asserted` and `parsed` evidence settles a condition — documents inform; humans assert. Append-only: a correction is new evidence that `supersedes` the old, which stays as the record of what an earlier assessment read. Two current facts that disagree are a conflict, reported, never resolved by guessing (#114).
 - **CAG prefix** — the cached prompt prefix: system prompt + obligation digest + tenant policy corpus.
 
 ## Loops

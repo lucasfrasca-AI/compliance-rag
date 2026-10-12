@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 
 import pytest
 
@@ -24,6 +25,7 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     UsageRecord,
 )
+from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Period
 
 SeedFinding = Callable[[str, str], Awaitable[None]]
 """(tenant_id, cited clause_id) -> records one finding citing that clause."""
@@ -41,6 +43,75 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     assert profile is not None and profile.jurisdictions == ("AU",)
     assert profile.sectors == ("retail",)
     assert await ledger.get_profile("nobody") is None
+
+    # ---- dated evidence, append-only (#114)
+    turnover = Evidence(
+        tenant_id="acme",
+        evidence_id="ev-1",
+        field="annual_turnover_aud",
+        value=2_400_000,
+        period=Period.financial_year(2025),
+        provenance=EvidenceProvenance.ASSERTED,
+        source="CFO, questionnaire",
+        asserted_by="cfo@acme.example",
+        trace_id="trace-ev",
+    )
+    started = Evidence(
+        tenant_id="acme",
+        evidence_id="ev-2",
+        field="business_started_on",
+        value=dt.date(2019, 3, 1),
+        period=Period(dt.date(2019, 3, 1)),
+        provenance=EvidenceProvenance.PARSED,
+        source="ASIC register extract",
+    )
+    forms = Evidence(
+        tenant_id="acme",
+        evidence_id="ev-3",
+        field="legal_forms",
+        value=("body_corporate",),
+        period=Period(dt.date(2019, 3, 1)),
+        provenance=EvidenceProvenance.INFERRED,
+        source="D3 §1.1",
+    )
+    for evidence in (turnover, started, forms):
+        await ledger.record_evidence(evidence)
+    corrected = Evidence(
+        tenant_id="acme",
+        evidence_id="ev-4",
+        field="annual_turnover_aud",
+        value=2_500_000,
+        period=Period.financial_year(2025),
+        provenance=EvidenceProvenance.ASSERTED,
+        source="CFO, audited accounts",
+        asserted_by="cfo@acme.example",
+        supersedes="ev-1",
+        trace_id="trace-ev-4",
+        document_id=None,
+    )
+    await ledger.record_evidence(corrected)
+    # Every row, superseded included, round-trips exactly (a date stays a date),
+    # stamped with when the ledger recorded it.
+    stored = await ledger.evidence("acme")
+    assert all(e.recorded_at is not None for e in stored)
+    assert tuple(replace(e, recorded_at=None) for e in stored) == (
+        turnover,
+        started,
+        forms,
+        corrected,
+    )
+    assert await ledger.evidence("other-corp") == ()
+    for refused in (
+        turnover,  # append-only: the same id again
+        replace(corrected, evidence_id="ev-5"),  # ev-1 already has a successor
+        replace(corrected, evidence_id="ev-6", supersedes="ev-404"),  # supersedes nothing
+        replace(turnover, tenant_id="nobody", evidence_id="ev-7"),  # unregistered tenant
+        replace(turnover, evidence_id="ev-8", trace_id=None),  # an assertion outside a request
+        replace(started, evidence_id="ev-9", supersedes="ev-4"),  # another field's correction
+    ):
+        with pytest.raises(ValueError):
+            await ledger.record_evidence(refused)
+    assert len(await ledger.evidence("acme")) == 4
 
     # ---- assessments carry their trace_id
     await ledger.record_assessment(

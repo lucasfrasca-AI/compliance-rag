@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import zlib
+from dataclasses import replace
 
 from compliance_rag.adapters.generation_residency import is_real_tenant_data
 from compliance_rag.adapters.interfaces import (
@@ -33,6 +34,7 @@ from compliance_rag.adapters.interfaces import (
     UsageRecord,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.assessment.evidence import Evidence, check_evidence_write
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     Chunk,
@@ -312,9 +314,32 @@ class FakeLedgerStore(LedgerStore):
         self._versions: dict[tuple[str, str, str], tuple[dt.date, dt.date | None]] = {}
         self.purged: dict[tuple[str, str, str | None], tuple[str, str]] = {}  # -> (by, reason)
         self._audit: list[RemovalAuditEntry] = []
+        self._evidence: list[Evidence] = []
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
         return self._profiles.get(tenant_id)
+
+    async def record_evidence(self, evidence: Evidence) -> None:
+        if evidence.tenant_id not in self._profiles:
+            raise ValueError(f"tenant {evidence.tenant_id!r} isn't registered in the ledger")
+        mine = [e for e in self._evidence if e.tenant_id == evidence.tenant_id]
+        if any(e.evidence_id == evidence.evidence_id for e in mine):
+            raise ValueError(f"evidence {evidence.evidence_id} is already recorded (append-only)")
+        check_evidence_write(evidence)
+        if evidence.supersedes is not None:
+            old = next((e for e in mine if e.evidence_id == evidence.supersedes), None)
+            if old is None:
+                raise ValueError(f"evidence {evidence.supersedes} to supersede isn't recorded")
+            if any(e.supersedes == evidence.supersedes for e in mine):
+                raise ValueError(f"evidence {evidence.supersedes} is already superseded")
+            if old.field != evidence.field:
+                raise ValueError(
+                    f"evidence about {evidence.field} cannot supersede evidence about {old.field}"
+                )
+        self._evidence.append(replace(evidence, recorded_at=dt.datetime.now(dt.UTC)))
+
+    async def evidence(self, tenant_id: str) -> tuple[Evidence, ...]:
+        return tuple(e for e in self._evidence if e.tenant_id == tenant_id)
 
     async def put_profile(self, profile: Profile) -> None:
         self._profiles[profile.tenant_id] = profile
