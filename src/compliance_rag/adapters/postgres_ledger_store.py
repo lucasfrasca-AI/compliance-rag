@@ -34,7 +34,13 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     UsageRecord,
 )
-from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, FactValue, Period
+from compliance_rag.assessment.evidence import (
+    Evidence,
+    EvidenceProvenance,
+    FactValue,
+    Period,
+    check_evidence_write,
+)
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     validate_library_instrument_id,
@@ -115,25 +121,43 @@ class PostgresLedgerStore(LedgerStore):
     # ---- evidence (#114) --------------------------------------------------------
 
     async def record_evidence(self, evidence: Evidence) -> None:
+        check_evidence_write(evidence)
         try:
-            await self._execute(
-                "INSERT INTO evidence (tenant_id, evidence_id, field, value, period_start, "
-                "period_end, provenance_tier, source, asserted_by, supersedes, trace_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (
-                    evidence.tenant_id,
-                    evidence.evidence_id,
-                    evidence.field,
-                    Jsonb(_encode_fact(evidence.value)),
-                    evidence.period.start,
-                    evidence.period.end,
-                    evidence.provenance.value,
-                    evidence.source,
-                    evidence.asserted_by,
-                    evidence.supersedes,
-                    evidence.trace_id,
-                ),
-            )
+            async with self._connection() as conn, conn.transaction():
+                if evidence.supersedes is not None:
+                    # The FK proves the old row exists; only a read proves it is
+                    # about the same field. Locked, so the check holds to commit.
+                    old = await (
+                        await conn.execute(
+                            "SELECT field FROM evidence WHERE tenant_id = %s AND evidence_id = %s "
+                            "FOR UPDATE",
+                            (evidence.tenant_id, evidence.supersedes),
+                        )
+                    ).fetchone()
+                    if old is not None and old[0] != evidence.field:
+                        raise ValueError(
+                            f"evidence about {evidence.field} cannot supersede evidence about "
+                            f"{old[0]}"
+                        )
+                await conn.execute(
+                    "INSERT INTO evidence (tenant_id, evidence_id, field, value, period_start, "
+                    "period_end, provenance_tier, source, asserted_by, supersedes, trace_id, "
+                    "document_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        evidence.tenant_id,
+                        evidence.evidence_id,
+                        evidence.field,
+                        Jsonb(_encode_fact(evidence.value)),
+                        evidence.period.start,
+                        evidence.period.end,
+                        evidence.provenance.value,
+                        evidence.source,
+                        evidence.asserted_by,
+                        evidence.supersedes,
+                        evidence.trace_id,
+                        evidence.document_id,
+                    ),
+                )
         except psycopg.errors.UniqueViolation as exc:
             if exc.diag.constraint_name == "evidence_one_successor":
                 raise ValueError(f"evidence {evidence.supersedes} is already superseded") from exc
@@ -146,14 +170,17 @@ class PostgresLedgerStore(LedgerStore):
                     f"evidence {evidence.supersedes} to supersede isn't recorded"
                 ) from exc
             raise ValueError(
-                f"tenant {evidence.tenant_id!r} isn't registered in the ledger"
+                f"tenant {evidence.tenant_id!r} or document {evidence.document_id!r} isn't "
+                "registered in the ledger"
             ) from exc
+        except psycopg.errors.CheckViolation as exc:
+            raise ValueError(f"evidence refused by {exc.diag.constraint_name}") from exc
 
     async def evidence(self, tenant_id: str) -> tuple[Evidence, ...]:
         rows = await self._fetchall(
             "SELECT evidence_id, field, value, period_start, period_end, provenance_tier, "
-            "source, asserted_by, supersedes, trace_id FROM evidence WHERE tenant_id = %s "
-            "ORDER BY recorded_at, evidence_id",
+            "source, asserted_by, supersedes, trace_id, document_id, recorded_at "
+            "FROM evidence WHERE tenant_id = %s ORDER BY recorded_at, evidence_id",
             (tenant_id,),
         )
         return tuple(
@@ -168,6 +195,8 @@ class PostgresLedgerStore(LedgerStore):
                 asserted_by=None if r[7] is None else str(r[7]),
                 supersedes=None if r[8] is None else str(r[8]),
                 trace_id=None if r[9] is None else str(r[9]),
+                document_id=None if r[10] is None else str(r[10]),
+                recorded_at=r[11],
             )
             for r in rows
         )
@@ -459,7 +488,9 @@ def _encode_fact(value: FactValue) -> object:
 
 def _decode_fact(raw: object) -> FactValue:
     if isinstance(raw, dict):
-        tagged = cast("dict[str, str]", raw)
+        tagged = cast("dict[str, object]", raw)
+        if set(tagged) != {"date"} or not isinstance(tagged["date"], str):
+            raise ValueError(f"unreadable evidence value {raw!r}")
         return dt.date.fromisoformat(tagged["date"])
     if isinstance(raw, list):
         return tuple(str(v) for v in cast("list[object]", raw))

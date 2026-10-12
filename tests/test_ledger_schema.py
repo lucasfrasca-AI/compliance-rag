@@ -522,6 +522,7 @@ def _insert_evidence(
         "source": "CFO",
         "asserted_by": "cfo@acme.example",
         "supersedes": None,
+        "trace_id": "t1",
     } | override
     columns = ", ".join(row)
     conn.execute(
@@ -538,6 +539,7 @@ def _insert_evidence(
         {"source": "  "},  # no source
         {"asserted_by": None},  # an assertion without who asserted it
         {"supersedes": "e1"},  # supersedes itself
+        {"trace_id": None},  # an assertion outside a request
     ],
 )
 def test_evidence_says_what_for_when_and_on_whose_word(

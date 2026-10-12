@@ -37,6 +37,12 @@ ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_asserted_by;
 ALTER TABLE evidence ADD CONSTRAINT evidence_asserted_by
     CHECK (provenance_tier <> 'asserted' OR asserted_by IS NOT NULL);
 
+-- An assertion arrives in a request: it carries that request's trace_id
+-- (CLAUDE.md: every ledger row that results from a request stores it).
+ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_asserted_in_a_request;
+ALTER TABLE evidence ADD CONSTRAINT evidence_asserted_in_a_request
+    CHECK (provenance_tier <> 'asserted' OR trace_id IS NOT NULL);
+
 ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_supersedes_other;
 ALTER TABLE evidence ADD CONSTRAINT evidence_supersedes_other CHECK (supersedes <> evidence_id);
 
