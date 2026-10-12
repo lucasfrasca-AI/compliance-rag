@@ -428,3 +428,15 @@ async def test_a_provision_loaded_ahead_of_commencement_applies_only_from_it(
     assert {o.obligation_id: o.outcome for o in after.obligations if o.obligation_id != new} == (
         unchanged
     )
+
+
+async def test_a_reason_says_which_conditions_were_met_and_which_were_not() -> None:
+    """#130: a condition that wasn't met is part of the reason, labelled so."""
+    coverage = await assess(
+        fact("annual_turnover_aud", 4000, LAST_FY), fact("provides_health_service", False)
+    )
+    reason = coverage.obligation("OB-T-HEALTH").reason
+    assert reason.startswith("Does not apply — ")
+    assert "not met: Provides a health service." in reason
+    applies = coverage.obligation("OB-T-KEEP").reason
+    assert "not met: Turnover for the previous financial year is 1000 or less." in applies
