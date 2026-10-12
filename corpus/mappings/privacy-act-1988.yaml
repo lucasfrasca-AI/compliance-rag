@@ -1,0 +1,937 @@
+# Privacy Act 1988 (Cth): who the Australian Privacy Principles bind, and the
+# obligations they impose (issue #118).
+#
+# DRAFTED BY THE MODEL, NOT YET REVIEWED. Corpus content under D-01: the model
+# authored it at the human's request; the human reviews it, and only then is
+# `reviewed_by` set and the file loaded into the graph. scripts/load_mappings.py
+# refuses a file whose reviewer is still pending.
+#
+# Read from compilation C2026C00227 (in force from 4 June 2026). Every clause id
+# below is a clause of that compilation; every condition and actor is
+# DERIVED_FROM the clauses it was read from, and those clauses are what an
+# answer cites (ADR-0027, ADR-0028).
+#
+# Dates. The APPs, `APP entity` and the current form of s15 commenced on
+# 12 March 2014 (Privacy Amendment (Enhancing Privacy Protection) Act 2012,
+# Endnote 3), so everything here is dated from then, except s6E(1D), which the
+# Treasury Laws Amendment (Consumer Data Right) Act 2019 inserted from
+# 13 August 2019. Earlier forms of ss 6C-6EA (in force from 21 December 2001)
+# gated the NPPs, which this corpus doesn't hold. The only text loaded is from
+# 4 June 2026, so before then Track A reports every obligation unassessable for
+# want of a compilation (ADR-0028), whatever these dates say.
+#
+# The applicability tree (s15 -> s6(1) -> s6C -> s6D -> s6DA/s6E/s6EA):
+#
+#   APP entity = agency OR organisation                              s6(1)
+#   organisation = legal form (s6C(1)(a)-(e))
+#                  AND NOT (registered political party OR agency
+#                           OR State/Territory authority)            s6C(1)
+#                  AND (NOT small business operator
+#                       OR deemed an organisation (s6E)
+#                       OR opted in (s6EA))                          s6C(1), s6E, s6EA
+#   small business operator = small business (s6D(1)/(2), turnover per s6DA)
+#                  AND carries on no business that isn't small       s6D(3)
+#                  AND NOT any s6D(4) exception (a)-(f), with the
+#                      (5)-(8) carve-backs folded into the questions s6D(4)-(8)
+#                  AND NOT related to a non-small body corporate     s6D(9)
+#
+# For a business under the threshold, four routes can still bring it under the
+# APPs: an s6D(4) exception, an s6D(9) related body, s6E deeming, and the s6EA
+# opt-in. Each is a condition below and each unknown leaf is a question.
+
+author: "model: Claude Opus 5.5 — drafted for #118 from C2026C00227 at the human's request"
+reviewed_by: "PENDING — Piero Frasca"
+date: 2026-10-12
+source_clause_ids:
+  - privacy-act-1988:C2026C00227:s15
+  - privacy-act-1988:C2026C00227:s6/1/app-entity
+  - privacy-act-1988:C2026C00227:s6/1/agency
+  - privacy-act-1988:C2026C00227:s6/1/organisation
+  - privacy-act-1988:C2026C00227:s6/1/registered-political-party
+  - privacy-act-1988:C2026C00227:s6/1/small-business-operator
+  - privacy-act-1988:C2026C00227:s6/1/annual-turnover
+  - privacy-act-1988:C2026C00227:s6/1/health-service
+  - privacy-act-1988:C2026C00227:s6/1/health-information
+  - privacy-act-1988:C2026C00227:s6/1/employee-record
+  - privacy-act-1988:C2026C00227:s6/1/contracted-service-provider
+  - privacy-act-1988:C2026C00227:s6/1/commonwealth-contract
+  - privacy-act-1988:C2026C00227:s6/1/credit-reporting-body
+  - privacy-act-1988:C2026C00227:s6/1/related-body-corporate
+  - privacy-act-1988:C2026C00227:s6/1/reporting-entity
+  - privacy-act-1988:C2026C00227:s6c/1
+  - privacy-act-1988:C2026C00227:s6c/1/a
+  - privacy-act-1988:C2026C00227:s6c/1/b
+  - privacy-act-1988:C2026C00227:s6c/1/c
+  - privacy-act-1988:C2026C00227:s6c/1/d
+  - privacy-act-1988:C2026C00227:s6c/1/e
+  - privacy-act-1988:C2026C00227:s6c/3
+  - privacy-act-1988:C2026C00227:s6d/1
+  - privacy-act-1988:C2026C00227:s6d/2
+  - privacy-act-1988:C2026C00227:s6d/3
+  - privacy-act-1988:C2026C00227:s6d/3/a
+  - privacy-act-1988:C2026C00227:s6d/3/b
+  - privacy-act-1988:C2026C00227:s6d/4
+  - privacy-act-1988:C2026C00227:s6d/4/a
+  - privacy-act-1988:C2026C00227:s6d/4/a/i
+  - privacy-act-1988:C2026C00227:s6d/4/a/ii
+  - privacy-act-1988:C2026C00227:s6d/4/b
+  - privacy-act-1988:C2026C00227:s6d/4/c
+  - privacy-act-1988:C2026C00227:s6d/4/d
+  - privacy-act-1988:C2026C00227:s6d/4/e
+  - privacy-act-1988:C2026C00227:s6d/4/f
+  - privacy-act-1988:C2026C00227:s6d/5
+  - privacy-act-1988:C2026C00227:s6d/6
+  - privacy-act-1988:C2026C00227:s6d/7
+  - privacy-act-1988:C2026C00227:s6d/8
+  - privacy-act-1988:C2026C00227:s6d/9
+  - privacy-act-1988:C2026C00227:s6da/1
+  - privacy-act-1988:C2026C00227:s6da/2
+  - privacy-act-1988:C2026C00227:s6e/1
+  - privacy-act-1988:C2026C00227:s6e/1a
+  - privacy-act-1988:C2026C00227:s6e/1b
+  - privacy-act-1988:C2026C00227:s6e/1c
+  - privacy-act-1988:C2026C00227:s6e/1d
+  - privacy-act-1988:C2026C00227:s6e/2
+  - privacy-act-1988:C2026C00227:s6e/3
+  - privacy-act-1988:C2026C00227:s6ea/1
+  - privacy-act-1988:C2026C00227:s6ea/3
+  - privacy-act-1988:C2026C00227:s6ea/6
+  - privacy-act-1988:C2026C00227:sch1/app1/2
+  - privacy-act-1988:C2026C00227:sch1/app1/3
+  - privacy-act-1988:C2026C00227:sch1/app1/4
+  - privacy-act-1988:C2026C00227:sch1/app1/5
+  - privacy-act-1988:C2026C00227:sch1/app1/6
+  - privacy-act-1988:C2026C00227:sch1/app2/1
+  - privacy-act-1988:C2026C00227:sch1/app3/1
+  - privacy-act-1988:C2026C00227:sch1/app3/2
+  - privacy-act-1988:C2026C00227:sch1/app3/3
+  - privacy-act-1988:C2026C00227:sch1/app3/5
+  - privacy-act-1988:C2026C00227:sch1/app3/6
+  - privacy-act-1988:C2026C00227:sch1/app4/1
+  - privacy-act-1988:C2026C00227:sch1/app4/3
+  - privacy-act-1988:C2026C00227:sch1/app5/1
+  - privacy-act-1988:C2026C00227:sch1/app6/1
+  - privacy-act-1988:C2026C00227:sch1/app6/4
+  - privacy-act-1988:C2026C00227:sch1/app6/5
+  - privacy-act-1988:C2026C00227:sch1/app7/1
+  - privacy-act-1988:C2026C00227:sch1/app7/7
+  - privacy-act-1988:C2026C00227:sch1/app8/1
+  - privacy-act-1988:C2026C00227:sch1/app9/1
+  - privacy-act-1988:C2026C00227:sch1/app9/2
+  - privacy-act-1988:C2026C00227:sch1/app10/1
+  - privacy-act-1988:C2026C00227:sch1/app10/2
+  - privacy-act-1988:C2026C00227:sch1/app11/1
+  - privacy-act-1988:C2026C00227:sch1/app11/2
+  - privacy-act-1988:C2026C00227:sch1/app12/1
+  - privacy-act-1988:C2026C00227:sch1/app12/4
+  - privacy-act-1988:C2026C00227:sch1/app12/5
+  - privacy-act-1988:C2026C00227:sch1/app12/7
+  - privacy-act-1988:C2026C00227:sch1/app12/8
+  - privacy-act-1988:C2026C00227:sch1/app12/9
+  - privacy-act-1988:C2026C00227:sch1/app13/1
+  - privacy-act-1988:C2026C00227:sch1/app13/2
+  - privacy-act-1988:C2026C00227:sch1/app13/3
+  - privacy-act-1988:C2026C00227:sch1/app13/4
+  - privacy-act-1988:C2026C00227:sch1/app13/5
+
+# ---------------------------------------------------------------------------
+# Who: the roles the Act defines
+# ---------------------------------------------------------------------------
+
+actors:
+  - id: privacy-act-1988/actor/app-entity
+    name: APP entity
+    description: An agency or organisation (s6(1)). An APP entity must not breach an APP (s15).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s15
+      - privacy-act-1988:C2026C00227:s6/1/app-entity
+    qualified_by: COND-PA-APP-ENTITY
+    valid_from: 2014-03-12
+  - id: privacy-act-1988/actor/organisation
+    name: Organisation
+    description: >
+      An APP entity that is an organisation (s6C): bound by the APPs that apply
+      only to organisations (APP 3.2, 6.4, 7, 9, 12.8).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6/1/organisation
+      - privacy-act-1988:C2026C00227:s6c/1
+    qualified_by: COND-PA-ORGANISATION
+    valid_from: 2014-03-12
+  - id: privacy-act-1988/actor/agency
+    name: Agency
+    description: >
+      An APP entity that is an agency (s6(1)): bound by the APPs that apply only
+      to agencies (APP 3.1, 12.7).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6/1/agency
+    qualified_by: COND-PA-AGENCY
+    valid_from: 2014-03-12
+
+# ---------------------------------------------------------------------------
+# The condition tree
+# ---------------------------------------------------------------------------
+
+conditions:
+  # ---- APP entity: s6(1) -----------------------------------------------------
+  - id: COND-PA-APP-ENTITY
+    description: An APP entity is an agency or an organisation.
+    clause_ids: [privacy-act-1988:C2026C00227:s6/1/app-entity]
+    valid_from: 2014-03-12
+    any_of: [COND-PA-AGENCY, COND-PA-ORGANISATION]
+
+  - id: COND-PA-AGENCY
+    description: The entity is an agency within the meaning of s6(1).
+    clause_ids: [privacy-act-1988:C2026C00227:s6/1/agency]
+    valid_from: 2014-03-12
+    leaf: {field: is_agency, test: eq, value: true}
+    question: >
+      Is the entity an agency within the meaning of s6(1) of the Privacy Act —
+      for example a Minister, a Department, or a body established for a public
+      purpose by or under a Commonwealth enactment?
+    unassessable_reason: Nobody has said whether the entity is an agency (s6(1)).
+
+  # ---- organisation: s6C(1) --------------------------------------------------
+  - id: COND-PA-ORGANISATION
+    description: >
+      An organisation is an individual, body corporate, partnership, other
+      unincorporated association or trust that is not a small business
+      operator, a registered political party, an agency, or a State or
+      Territory authority or prescribed instrumentality (s6C(1)) — or a small
+      business operator the Act treats as an organisation (s6E, s6EA).
+    clause_ids: [privacy-act-1988:C2026C00227:s6c/1]
+    valid_from: 2014-03-12
+    all_of: [COND-PA-LEGAL-FORM, COND-PA-NOT-EXCLUDED-BODY, COND-PA-NOT-SBO-OR-TREATED-AS-ORGANISATION]
+
+  - id: COND-PA-LEGAL-FORM
+    description: >
+      The entity is an individual, a body corporate, a partnership, any other
+      unincorporated association, or a trust.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6c/1/a
+      - privacy-act-1988:C2026C00227:s6c/1/b
+      - privacy-act-1988:C2026C00227:s6c/1/c
+      - privacy-act-1988:C2026C00227:s6c/1/d
+      - privacy-act-1988:C2026C00227:s6c/1/e
+    valid_from: 2014-03-12
+    leaf:
+      field: legal_form
+      test: in
+      value: [individual, body_corporate, partnership, unincorporated_association, trust]
+    question: >
+      What is the entity's legal form: an individual, a body corporate, a
+      partnership, another unincorporated association, or a trust?
+    unassessable_reason: The entity's legal form is not recorded (s6C(1)).
+
+  - id: COND-PA-NOT-EXCLUDED-BODY
+    description: Not one of the bodies s6C(1) excludes from being an organisation.
+    clause_ids: [privacy-act-1988:C2026C00227:s6c/1]
+    valid_from: 2014-03-12
+    not: COND-PA-EXCLUDED-BODY
+
+  - id: COND-PA-EXCLUDED-BODY
+    description: >
+      A registered political party, an agency, or a State or Territory
+      authority or prescribed instrumentality of a State or Territory.
+    clause_ids: [privacy-act-1988:C2026C00227:s6c/1]
+    valid_from: 2014-03-12
+    any_of: [COND-PA-POLITICAL-PARTY, COND-PA-AGENCY, COND-PA-STATE-AUTHORITY]
+
+  - id: COND-PA-POLITICAL-PARTY
+    description: The entity is a registered political party.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6c/1
+      - privacy-act-1988:C2026C00227:s6/1/registered-political-party
+    valid_from: 2014-03-12
+    leaf: {field: is_registered_political_party, test: eq, value: true}
+    question: >
+      Is the entity a political party registered under Part XI of the
+      Commonwealth Electoral Act 1918?
+    unassessable_reason: Nobody has said whether the entity is a registered political party (s6C(1)).
+
+  - id: COND-PA-STATE-AUTHORITY
+    description: >
+      The entity is a State or Territory authority (s6C(3)) or a prescribed
+      instrumentality of a State or Territory.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6c/1
+      - privacy-act-1988:C2026C00227:s6c/3
+    valid_from: 2014-03-12
+    leaf: {field: is_state_or_territory_authority, test: eq, value: true}
+    question: >
+      Is the entity a State or Territory authority within s6C(3) — for example a
+      State Department, or a body established for a public purpose under a
+      State or Territory law — or a prescribed instrumentality of a State or
+      Territory?
+    unassessable_reason: Nobody has said whether the entity is a State or Territory authority (s6C(1), (3)).
+
+  # ---- small business operator, or treated as an organisation anyway --------
+  - id: COND-PA-NOT-SBO-OR-TREATED-AS-ORGANISATION
+    description: >
+      Not a small business operator — or, if one, a small business operator the
+      Act applies to as if it were an organisation (s6E, s6EA).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6c/1
+      - privacy-act-1988:C2026C00227:s6e/1
+      - privacy-act-1988:C2026C00227:s6ea/1
+    valid_from: 2014-03-12
+    any_of: [COND-PA-NOT-SBO, COND-PA-S6E-TREATED-AS-ORGANISATION, COND-PA-S6EA-OPTED-IN]
+
+  - id: COND-PA-NOT-SBO
+    description: The entity is not a small business operator.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6c/1
+      - privacy-act-1988:C2026C00227:s6/1/small-business-operator
+    valid_from: 2014-03-12
+    not: COND-PA-SBO
+
+  - id: COND-PA-SBO
+    description: >
+      A small business operator carries on one or more small businesses and no
+      business that is not a small business (s6D(3)), is caught by none of the
+      s6D(4) exceptions, and is not a body corporate related to a body
+      corporate that carries on a business that is not small (s6D(9)).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/3
+      - privacy-act-1988:C2026C00227:s6d/3/a
+    valid_from: 2014-03-12
+    all_of:
+      - COND-PA-SMALL-BUSINESS
+      - COND-PA-NO-OTHER-BUSINESS-NOT-SMALL
+      - COND-PA-NO-S6D4-EXCEPTION
+      - COND-PA-NOT-RELATED-TO-NON-SMALL
+
+  # ---- s6D(1), (2), s6DA: the turnover threshold -------------------------------
+  - id: COND-PA-SMALL-BUSINESS
+    description: >
+      The business is a small business at the test time: annual turnover for
+      the previous financial year of $3,000,000 or less (s6D(1)) — or, if it
+      wasn't carried on at any time in the previous financial year, for the
+      current year (s6D(2)).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/1
+      - privacy-act-1988:C2026C00227:s6d/2
+    valid_from: 2014-03-12
+    any_of: [COND-PA-SMALL-BY-PREVIOUS-YEAR, COND-PA-SMALL-BY-CURRENT-YEAR]
+
+  - id: COND-PA-SMALL-BY-PREVIOUS-YEAR
+    description: Carried on in the previous financial year, with annual turnover for that year of $3,000,000 or less.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/1]
+    valid_from: 2014-03-12
+    all_of: [COND-PA-CARRIED-ON-LAST-YEAR, COND-PA-TURNOVER-PREVIOUS-YEAR-UNDER]
+
+  - id: COND-PA-CARRIED-ON-LAST-YEAR
+    description: The business was carried on at some time in the previous financial year.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/2]
+    valid_from: 2014-03-12
+    leaf:
+      field: business_started_on
+      test: before
+      value: start_of_current_financial_year
+    question: When did the entity start to carry on its business?
+    unassessable_reason: >
+      The date the business started is not recorded, so which financial year's
+      turnover s6D reads can't be settled (s6D(1), (2)).
+
+  - id: COND-PA-TURNOVER-PREVIOUS-YEAR-UNDER
+    description: Annual turnover (s6DA) for the previous financial year is $3,000,000 or less.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/1
+      - privacy-act-1988:C2026C00227:s6da/1
+      - privacy-act-1988:C2026C00227:s6/1/annual-turnover
+    valid_from: 2014-03-12
+    leaf:
+      field: annual_turnover_aud
+      period: previous_financial_year
+      test: lte
+      value: 3000000
+    question: >
+      What was the business's annual turnover for the previous financial year,
+      worked out as s6DA(1) says (sales, commission, repair and service, rent
+      and hire, government subsidies, interest, royalties and dividends, and
+      other operating income)?
+    unassessable_reason: No annual turnover is recorded for the previous financial year (s6D(1), s6DA).
+
+  - id: COND-PA-SMALL-BY-CURRENT-YEAR
+    description: Not carried on in the previous financial year, with annual turnover for the current year of $3,000,000 or less.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/2]
+    valid_from: 2014-03-12
+    all_of: [COND-PA-NOT-CARRIED-ON-LAST-YEAR, COND-PA-TURNOVER-CURRENT-YEAR-UNDER]
+
+  - id: COND-PA-NOT-CARRIED-ON-LAST-YEAR
+    description: The business was not carried on at any time in the previous financial year.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/2]
+    valid_from: 2014-03-12
+    not: COND-PA-CARRIED-ON-LAST-YEAR
+
+  - id: COND-PA-TURNOVER-CURRENT-YEAR-UNDER
+    description: Annual turnover (s6DA, including s6DA(2) for part of a year) for the current year is $3,000,000 or less.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/2
+      - privacy-act-1988:C2026C00227:s6da/1
+      - privacy-act-1988:C2026C00227:s6da/2
+    valid_from: 2014-03-12
+    leaf:
+      field: annual_turnover_aud
+      period: current_financial_year
+      test: lte
+      value: 3000000
+    question: >
+      What is the business's annual turnover for the current financial year,
+      worked out as s6DA says — for a business carried on for only part of the
+      year, by the s6DA(2) formula?
+    unassessable_reason: No annual turnover is recorded for the current financial year (s6D(2), s6DA).
+
+  # ---- s6D(3)(b): no other business that isn't small ----------------------------
+  - id: COND-PA-NO-OTHER-BUSINESS-NOT-SMALL
+    description: The entity does not carry on a business that is not a small business.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/3/b]
+    valid_from: 2014-03-12
+    not: COND-PA-OTHER-BUSINESS-NOT-SMALL
+
+  - id: COND-PA-OTHER-BUSINESS-NOT-SMALL
+    description: The entity carries on another business whose annual turnover is over $3,000,000.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/3/b]
+    valid_from: 2014-03-12
+    leaf: {field: carries_on_another_business_not_small, test: eq, value: true}
+    question: >
+      Does the entity carry on any other business that is not a small business
+      (annual turnover over $3,000,000)?
+    unassessable_reason: Nobody has said whether the entity carries on another business that is not small (s6D(3)(b)).
+
+  # ---- s6D(4): the six exceptions, with the (5)-(8) carve-backs -------------------
+  - id: COND-PA-NO-S6D4-EXCEPTION
+    description: None of the s6D(4) exceptions applies.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/4]
+    valid_from: 2014-03-12
+    not: COND-PA-S6D4-EXCEPTION
+
+  - id: COND-PA-S6D4-EXCEPTION
+    description: >
+      An s6D(4) exception applies: it is not a small business operator if any
+      of (a)-(f) is true.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/4]
+    valid_from: 2014-03-12
+    any_of:
+      - COND-PA-S6D4A-EVER-OVER-THRESHOLD
+      - COND-PA-S6D4B-HEALTH
+      - COND-PA-S6D4C-DISCLOSES-FOR-BENEFIT
+      - COND-PA-S6D4D-PAYS-TO-COLLECT
+      - COND-PA-S6D4E-COMMONWEALTH-CSP
+      - COND-PA-S6D4F-CREDIT-REPORTING-BODY
+
+  - id: COND-PA-S6D4A-EVER-OVER-THRESHOLD
+    description: >
+      It carries on a business that has had an annual turnover of more than
+      $3,000,000 for a financial year that has ended after the later of when it
+      started to carry on the business and the commencement of s6D
+      (21 December 2001).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/a
+      - privacy-act-1988:C2026C00227:s6d/4/a/i
+      - privacy-act-1988:C2026C00227:s6d/4/a/ii
+      - privacy-act-1988:C2026C00227:s6da/1
+    valid_from: 2014-03-12
+    leaf:
+      field: annual_turnover_aud
+      period: any_ended_financial_year
+      test: gt
+      value: 3000000
+      since_field: business_started_on
+      not_before: 2001-12-21
+    question: >
+      What was the business's annual turnover (s6DA) for each financial year
+      that has ended since it started (or since 21 December 2001, if later)?
+    unassessable_reason: >
+      Annual turnover is not recorded for every financial year since the
+      business started, so whether it has ever been over $3,000,000 can't be
+      settled (s6D(4)(a)).
+
+  - id: COND-PA-S6D4B-HEALTH
+    description: >
+      It provides a health service to another individual and holds health
+      information other than in an employee record.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/b
+      - privacy-act-1988:C2026C00227:s6d/5
+      - privacy-act-1988:C2026C00227:s6d/6
+    valid_from: 2014-03-12
+    all_of: [COND-PA-PROVIDES-HEALTH-SERVICE, COND-PA-HOLDS-HEALTH-INFORMATION]
+
+  - id: COND-PA-PROVIDES-HEALTH-SERVICE
+    description: In the course of a business it carries on, it provides a health service to another individual.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/b
+      - privacy-act-1988:C2026C00227:s6d/6
+      - privacy-act-1988:C2026C00227:s6/1/health-service
+    valid_from: 2014-03-12
+    leaf: {field: provides_health_service, test: eq, value: true}
+    question: >
+      In the course of a business it carries on, does the entity provide a
+      health service (s6FB) to another individual?
+    unassessable_reason: Nobody has said whether the entity provides a health service (s6D(4)(b)).
+
+  - id: COND-PA-HOLDS-HEALTH-INFORMATION
+    description: It holds health information other than in an employee record.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/b
+      - privacy-act-1988:C2026C00227:s6/1/health-information
+      - privacy-act-1988:C2026C00227:s6/1/employee-record
+    valid_from: 2014-03-12
+    leaf: {field: holds_health_information_outside_employee_records, test: eq, value: true}
+    question: >
+      Does the entity hold any health information (s6FA) other than in an
+      employee record (s6(1))?
+    unassessable_reason: >
+      Nobody has said whether the entity holds health information outside
+      employee records (s6D(4)(b)).
+
+  - id: COND-PA-S6D4C-DISCLOSES-FOR-BENEFIT
+    description: >
+      In the course of a business it carries on, it discloses personal
+      information about another individual to anyone else for a benefit,
+      service or advantage — other than with that individual's consent or as
+      required or authorised by or under legislation (s6D(7)).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/c
+      - privacy-act-1988:C2026C00227:s6d/6
+      - privacy-act-1988:C2026C00227:s6d/7
+    valid_from: 2014-03-12
+    leaf: {field: discloses_personal_information_for_benefit, test: eq, value: true}
+    question: >
+      In the course of a business it carries on, does the entity disclose
+      personal information about another individual to anyone else for a
+      benefit, service or advantage — leaving out disclosures made with that
+      individual's consent, or as required or authorised by or under
+      legislation (s6D(7))?
+    unassessable_reason: >
+      Nobody has said whether the entity discloses personal information for a
+      benefit, service or advantage (s6D(4)(c), (7)).
+
+  - id: COND-PA-S6D4D-PAYS-TO-COLLECT
+    description: >
+      In the course of a business it carries on, it provides a benefit, service
+      or advantage to collect personal information about another individual
+      from anyone else — other than with that individual's consent or as
+      required or authorised by or under legislation (s6D(8)).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/d
+      - privacy-act-1988:C2026C00227:s6d/6
+      - privacy-act-1988:C2026C00227:s6d/8
+    valid_from: 2014-03-12
+    leaf: {field: provides_benefit_to_collect_personal_information, test: eq, value: true}
+    question: >
+      In the course of a business it carries on, does the entity provide a
+      benefit, service or advantage to collect personal information about
+      another individual from anyone else — leaving out collection with that
+      individual's consent, or as required or authorised by or under
+      legislation (s6D(8))?
+    unassessable_reason: >
+      Nobody has said whether the entity provides a benefit to collect personal
+      information (s6D(4)(d), (8)).
+
+  - id: COND-PA-S6D4E-COMMONWEALTH-CSP
+    description: It is a contracted service provider for a Commonwealth contract, whether or not a party to it.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/e
+      - privacy-act-1988:C2026C00227:s6/1/contracted-service-provider
+      - privacy-act-1988:C2026C00227:s6/1/commonwealth-contract
+    valid_from: 2014-03-12
+    leaf: {field: commonwealth_contracted_service_provider, test: eq, value: true}
+    question: >
+      Is the entity a contracted service provider for a Commonwealth contract
+      (s6(1)), whether or not it is a party to the contract?
+    unassessable_reason: >
+      Nobody has said whether the entity is a contracted service provider for a
+      Commonwealth contract (s6D(4)(e)).
+
+  - id: COND-PA-S6D4F-CREDIT-REPORTING-BODY
+    description: It is a credit reporting body.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/4/f
+      - privacy-act-1988:C2026C00227:s6/1/credit-reporting-body
+    valid_from: 2014-03-12
+    leaf: {field: credit_reporting_body, test: eq, value: true}
+    question: Is the entity a credit reporting body (s6(1))?
+    unassessable_reason: Nobody has said whether the entity is a credit reporting body (s6D(4)(f)).
+
+  # ---- s6D(9): related bodies corporate --------------------------------------------
+  - id: COND-PA-NOT-RELATED-TO-NON-SMALL
+    description: Not a body corporate related to a body corporate that carries on a business that is not small.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/9]
+    valid_from: 2014-03-12
+    not: COND-PA-RELATED-TO-NON-SMALL
+
+  - id: COND-PA-RELATED-TO-NON-SMALL
+    description: >
+      A body corporate related to a body corporate that carries on a business
+      that is not a small business (s6D(9)).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/9
+      - privacy-act-1988:C2026C00227:s6/1/related-body-corporate
+    valid_from: 2014-03-12
+    all_of: [COND-PA-BODY-CORPORATE, COND-PA-RELATED-BODY-NOT-SMALL]
+
+  - id: COND-PA-BODY-CORPORATE
+    description: The entity is a body corporate.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/9]
+    valid_from: 2014-03-12
+    leaf: {field: legal_form, test: eq, value: body_corporate}
+    question: What is the entity's legal form?
+    unassessable_reason: The entity's legal form is not recorded (s6D(9)).
+
+  - id: COND-PA-RELATED-BODY-NOT-SMALL
+    description: A related body corporate carries on a business that is not a small business.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/9
+      - privacy-act-1988:C2026C00227:s6/1/related-body-corporate
+    valid_from: 2014-03-12
+    leaf: {field: related_body_corporate_not_small, test: eq, value: true}
+    question: >
+      Is the entity related (s6(8), Corporations Act s50) to a body corporate
+      that carries on a business with annual turnover over $3,000,000?
+    unassessable_reason: >
+      Nobody has said whether a related body corporate carries on a business
+      that is not small (s6D(9)).
+
+  # ---- s6E: small business operators treated as organisations ------------------------
+  - id: COND-PA-S6E-TREATED-AS-ORGANISATION
+    description: >
+      The Act applies to it as if it were an organisation under s6E — wholly
+      (s6E(1), (1C)) or for particular activities, information or practices
+      (s6E(1A), (1B), (1D), (2)).
+    clause_ids: [privacy-act-1988:C2026C00227:s6e/1]
+    valid_from: 2014-03-12
+    any_of:
+      - COND-PA-S6E1-PRESCRIBED
+      - COND-PA-S6E1A-AML-CTF
+      - COND-PA-S6E1B-BALLOT-AGENT
+      - COND-PA-S6E1C-EMPLOYEE-ASSOCIATION
+      - COND-PA-S6E1D-CDR-ACCREDITED
+      - COND-PA-S6E2-PRESCRIBED-ACTS
+
+  - id: COND-PA-S6E1-PRESCRIBED
+    description: It is a small business operator prescribed by regulations for s6E(1).
+    clause_ids: [privacy-act-1988:C2026C00227:s6e/1]
+    valid_from: 2014-03-12
+    leaf: {field: prescribed_under_s6e_1, test: eq, value: true}
+    question: Is the entity prescribed by the Privacy Regulations for s6E(1)?
+    unassessable_reason: Nobody has said whether the entity is prescribed for s6E(1).
+
+  - id: COND-PA-S6E1A-AML-CTF
+    description: >
+      It is a reporting entity, or an authorised agent of one, under the AML/CTF
+      Act 2006 because of its small business — for those activities.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6e/1a
+      - privacy-act-1988:C2026C00227:s6/1/reporting-entity
+    valid_from: 2014-03-12
+    leaf: {field: aml_ctf_reporting_entity, test: eq, value: true}
+    question: >
+      Is the entity a reporting entity, or an authorised agent of one, under the
+      Anti-Money Laundering and Counter-Terrorism Financing Act 2006 because of
+      anything done in the course of its business?
+    unassessable_reason: Nobody has said whether the entity is an AML/CTF reporting entity (s6E(1A)).
+
+  - id: COND-PA-S6E1B-BALLOT-AGENT
+    description: >
+      It is the protected action ballot agent for a ballot under Part 3-3 of the
+      Fair Work Act 2009 — for the conduct of that ballot.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6e/1b
+      - privacy-act-1988:C2026C00227:s6e/3
+    valid_from: 2014-03-12
+    leaf: {field: protected_action_ballot_agent, test: eq, value: true}
+    question: >
+      Is the entity the protected action ballot agent for a protected action
+      ballot under Part 3-3 of the Fair Work Act 2009?
+    unassessable_reason: Nobody has said whether the entity is a protected action ballot agent (s6E(1B)).
+
+  - id: COND-PA-S6E1C-EMPLOYEE-ASSOCIATION
+    description: >
+      It is an association of employees registered or recognised under the Fair
+      Work (Registered Organisations) Act 2009.
+    clause_ids: [privacy-act-1988:C2026C00227:s6e/1c]
+    valid_from: 2014-03-12
+    leaf: {field: registered_employee_association, test: eq, value: true}
+    question: >
+      Is the entity an association of employees registered or recognised under
+      the Fair Work (Registered Organisations) Act 2009?
+    unassessable_reason: Nobody has said whether the entity is a registered association of employees (s6E(1C)).
+
+  - id: COND-PA-S6E1D-CDR-ACCREDITED
+    description: >
+      It holds an accreditation under s56CA(1) of the Competition and Consumer
+      Act 2010 — for personal information that is not CDR data.
+    clause_ids: [privacy-act-1988:C2026C00227:s6e/1d]
+    valid_from: 2019-08-13
+    leaf: {field: cdr_accredited, test: eq, value: true}
+    question: >
+      Does the entity hold an accreditation under s56CA(1) of the Competition
+      and Consumer Act 2010 (the consumer data right)?
+    unassessable_reason: Nobody has said whether the entity holds a consumer data right accreditation (s6E(1D)).
+
+  - id: COND-PA-S6E2-PRESCRIBED-ACTS
+    description: >
+      It is a small business operator prescribed for s6E(2) — for the
+      prescribed acts or practices.
+    clause_ids: [privacy-act-1988:C2026C00227:s6e/2]
+    valid_from: 2014-03-12
+    leaf: {field: prescribed_under_s6e_2, test: eq, value: true}
+    question: Is the entity, or any of its acts or practices, prescribed by the Privacy Regulations for s6E(2)?
+    unassessable_reason: Nobody has said whether the entity is prescribed for s6E(2).
+
+  # ---- s6EA: opted in -------------------------------------------------------------------
+  - id: COND-PA-S6EA-OPTED-IN
+    description: >
+      A choice by the operator to be treated as an organisation is registered
+      under s6EA (the Commissioner's public register, s6EA(6)).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6ea/1
+      - privacy-act-1988:C2026C00227:s6ea/3
+      - privacy-act-1988:C2026C00227:s6ea/6
+    valid_from: 2014-03-12
+    leaf: {field: opted_in_under_s6ea, test: eq, value: true}
+    question: >
+      Is a choice by the entity to be treated as an organisation registered on
+      the Commissioner's s6EA register?
+    unassessable_reason: Nobody has said whether the entity has opted in under s6EA.
+
+# ---------------------------------------------------------------------------
+# What: the obligations the APPs impose (Schedule 1)
+# ---------------------------------------------------------------------------
+#
+# One obligation per APP subclause that imposes a requirement ("must",
+# "must not"). Object clauses, exceptions, permissions ("may") and
+# definitional subclauses (APP 1.1, 2.2, 3.4, 3.7, 4.2, 4.4, 5.2, 6.2, 6.3,
+# 6.6, 6.7, 7.2-7.6, 7.8, 8.2, 8.3, 9.3, 11.3, 12.2, 12.3, 12.6, 12.10) are
+# clauses, not obligations. Who each binds follows its text: "an APP entity",
+# "If an APP entity is an agency/organisation", "an organisation".
+
+obligations:
+  - id: OB-PA-APP1-2
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app1/2]
+    summary: >
+      Take reasonable steps to implement practices, procedures and systems that
+      ensure compliance with the APPs and any binding APP code, and enable
+      inquiries and complaints to be dealt with.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP1-3
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app1/3]
+    summary: Have a clearly expressed and up-to-date APP privacy policy.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP1-4
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app1/4]
+    summary: Include in the APP privacy policy the information APP 1.4 lists.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP1-5
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app1/5]
+    summary: Take reasonable steps to make the APP privacy policy available free of charge and in an appropriate form.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP1-6
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app1/6]
+    summary: Take reasonable steps to give a copy of the APP privacy policy in the form requested.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP2-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app2/1]
+    summary: Give individuals the option of not identifying themselves, or of using a pseudonym, unless APP 2.2 applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP3-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app3/1]
+    summary: >
+      As an agency, collect personal information (other than sensitive
+      information) only if reasonably necessary for, or directly related to, its
+      functions or activities.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/agency]}
+  - id: OB-PA-APP3-2
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app3/2]
+    summary: >
+      As an organisation, collect personal information (other than sensitive
+      information) only if reasonably necessary for its functions or activities.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/organisation]}
+  - id: OB-PA-APP3-3
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app3/3]
+    summary: Collect sensitive information only with consent and when reasonably necessary, or where APP 3.4 applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP3-5
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app3/5]
+    summary: Collect personal information only by lawful and fair means.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP3-6
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app3/6]
+    summary: Collect personal information about an individual only from that individual, unless an exception applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP4-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app4/1]
+    summary: >
+      On receiving unsolicited personal information, determine within a
+      reasonable period whether it could have been collected under APP 3.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP4-3
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app4/3]
+    summary: >
+      Destroy or de-identify unsolicited personal information that could not
+      have been collected, where lawful and reasonable and not in a
+      Commonwealth record.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP5-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app5/1]
+    summary: >
+      At or before collection (or as soon as practicable after), take
+      reasonable steps to notify the individual of the APP 5.2 matters or
+      ensure they are aware of them.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP6-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app6/1]
+    summary: >
+      Not use or disclose personal information for a secondary purpose unless
+      the individual consents or an APP 6.2 or 6.3 exception applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP6-4
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app6/4]
+    summary: >
+      As an organisation that collected personal information under s16B(2),
+      de-identify it before disclosing it under APP 6.1 or 6.2.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/organisation]}
+  - id: OB-PA-APP6-5
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app6/5]
+    summary: Make a written note of any use or disclosure under APP 6.2(e).
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP7-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app7/1]
+    summary: As an organisation, not use or disclose personal information for direct marketing unless an APP 7 exception applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/organisation]}
+  - id: OB-PA-APP7-7
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app7/7]
+    summary: >
+      As an organisation, give effect free of charge, within a reasonable
+      period, to an individual's APP 7.6 request about direct marketing.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/organisation]}
+  - id: OB-PA-APP8-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app8/1]
+    summary: >
+      Before disclosing personal information to an overseas recipient, take
+      reasonable steps to ensure the recipient does not breach the APPs, unless
+      APP 8.2 applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP9-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app9/1]
+    summary: As an organisation, not adopt a government related identifier as its own identifier of an individual unless an exception applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/organisation]}
+  - id: OB-PA-APP9-2
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app9/2]
+    summary: As an organisation, not use or disclose a government related identifier unless an exception applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/organisation]}
+  - id: OB-PA-APP10-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app10/1]
+    summary: Take reasonable steps to ensure personal information collected is accurate, up-to-date and complete.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP10-2
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app10/2]
+    summary: >
+      Take reasonable steps to ensure personal information used or disclosed is
+      accurate, up-to-date, complete and relevant for the purpose.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP11-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/1]
+    summary: >
+      Take reasonable steps to protect personal information held from misuse,
+      interference and loss, and from unauthorised access, modification or
+      disclosure.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP11-2
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app11/2]
+    summary: >
+      Take reasonable steps to destroy or de-identify personal information no
+      longer needed for any permitted purpose, unless it is in a Commonwealth
+      record or must be retained by law.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP12-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app12/1]
+    summary: On request, give an individual access to the personal information held about them, unless APP 12.2 or 12.3 applies.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP12-4
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app12/4]
+    summary: >
+      Respond to an access request within the APP 12.4 period and give access
+      in the manner requested if reasonable and practicable.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP12-5
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app12/5]
+    summary: When refusing access, take reasonable steps to give access in a way that meets the needs of both entity and individual.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP12-7
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app12/7]
+    summary: As an agency, not charge for an access request or for giving access.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/agency]}
+  - id: OB-PA-APP12-8
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app12/8]
+    summary: As an organisation that charges for giving access, keep the charge reasonable and not charge for making the request.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/organisation]}
+  - id: OB-PA-APP12-9
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app12/9]
+    summary: When refusing access (or access in the manner requested), give a written notice with reasons and how to complain.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP13-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app13/1]
+    summary: >
+      Take reasonable steps to correct personal information that is inaccurate,
+      out-of-date, incomplete, irrelevant or misleading, on the entity's own
+      view or at the individual's request.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP13-2
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app13/2]
+    summary: On request, take reasonable steps to notify another APP entity of a correction to information previously disclosed to it.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP13-3
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app13/3]
+    summary: When refusing a correction, give a written notice with reasons and how to complain.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP13-4
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app13/4]
+    summary: >
+      On refusing a correction, associate the individual's statement that the
+      information is inaccurate (etc.) with it, if requested.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
+  - id: OB-PA-APP13-5
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app13/5]
+    summary: >
+      Respond to a correction or statement request within the APP 13.5 period,
+      and charge nothing for the request, the correction or the statement.
+    valid_from: 2014-03-12
+    applies_to: {actors: [privacy-act-1988/actor/app-entity]}
