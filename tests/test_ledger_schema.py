@@ -503,3 +503,64 @@ def test_an_end_date_and_its_reason_come_together(
             "VALUES ('_public', 'privacy-act-1988', 'C1', 't', '2025-01-01', %s, %s)",
             (valid_to, end_reason),
         )
+
+
+# ---- #114: evidence is a field for a period, append-only ---------------------
+
+
+def _insert_evidence(
+    conn: psycopg.Connection[tuple[object, ...]], evidence_id: str, **override: object
+) -> None:
+    row: dict[str, object] = {
+        "tenant_id": "acme",
+        "evidence_id": evidence_id,
+        "field": "annual_turnover_aud",
+        "value": Jsonb(2500000),
+        "period_start": dt.date(2025, 7, 1),
+        "period_end": dt.date(2026, 7, 1),
+        "provenance_tier": "asserted",
+        "source": "CFO",
+        "asserted_by": "cfo@acme.example",
+        "supersedes": None,
+    } | override
+    columns = ", ".join(row)
+    conn.execute(
+        f"INSERT INTO evidence ({columns}) VALUES ({', '.join(['%s'] * len(row))})",  # pyright: ignore[reportArgumentType] — test-built column list
+        tuple(row.values()),
+    )
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"period_end": dt.date(2025, 7, 1)},  # empty period
+        {"field": "Annual Turnover"},  # not snake_case
+        {"source": "  "},  # no source
+        {"asserted_by": None},  # an assertion without who asserted it
+        {"supersedes": "e1"},  # supersedes itself
+    ],
+)
+def test_evidence_says_what_for_when_and_on_whose_word(
+    conn: psycopg.Connection[tuple[object, ...]], override: dict[str, object]
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _insert_evidence(conn, "e1", **override)
+
+
+def test_evidence_has_one_successor_and_supersedes_only_what_exists(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    _insert_evidence(conn, "e1")
+    _insert_evidence(conn, "e2", supersedes="e1")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        _insert_evidence(conn, "e3", supersedes="e1")
+
+
+def test_evidence_cannot_supersede_what_was_never_recorded(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        _insert_evidence(conn, "e1", supersedes="e404")

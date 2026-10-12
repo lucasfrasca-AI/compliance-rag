@@ -20,10 +20,11 @@ import datetime as dt
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, LiteralString
+from typing import Any, LiteralString, cast
 
 import psycopg
 from psycopg.rows import TupleRow
+from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
     LedgerStore,
@@ -33,6 +34,7 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     UsageRecord,
 )
+from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, FactValue, Period
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     validate_library_instrument_id,
@@ -108,6 +110,66 @@ class PostgresLedgerStore(LedgerStore):
             "INSERT INTO tenant (tenant_id, name, profile) VALUES (%s, %s, %s) "
             "ON CONFLICT (tenant_id) DO UPDATE SET profile = EXCLUDED.profile",
             (profile.tenant_id, profile.tenant_id, json.dumps(document)),
+        )
+
+    # ---- evidence (#114) --------------------------------------------------------
+
+    async def record_evidence(self, evidence: Evidence) -> None:
+        try:
+            await self._execute(
+                "INSERT INTO evidence (tenant_id, evidence_id, field, value, period_start, "
+                "period_end, provenance_tier, source, asserted_by, supersedes, trace_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    evidence.tenant_id,
+                    evidence.evidence_id,
+                    evidence.field,
+                    Jsonb(_encode_fact(evidence.value)),
+                    evidence.period.start,
+                    evidence.period.end,
+                    evidence.provenance.value,
+                    evidence.source,
+                    evidence.asserted_by,
+                    evidence.supersedes,
+                    evidence.trace_id,
+                ),
+            )
+        except psycopg.errors.UniqueViolation as exc:
+            if exc.diag.constraint_name == "evidence_one_successor":
+                raise ValueError(f"evidence {evidence.supersedes} is already superseded") from exc
+            raise ValueError(
+                f"evidence {evidence.evidence_id} is already recorded (append-only)"
+            ) from exc
+        except psycopg.errors.ForeignKeyViolation as exc:
+            if exc.diag.constraint_name == "evidence_supersedes_fk":
+                raise ValueError(
+                    f"evidence {evidence.supersedes} to supersede isn't recorded"
+                ) from exc
+            raise ValueError(
+                f"tenant {evidence.tenant_id!r} isn't registered in the ledger"
+            ) from exc
+
+    async def evidence(self, tenant_id: str) -> tuple[Evidence, ...]:
+        rows = await self._fetchall(
+            "SELECT evidence_id, field, value, period_start, period_end, provenance_tier, "
+            "source, asserted_by, supersedes, trace_id FROM evidence WHERE tenant_id = %s "
+            "ORDER BY recorded_at, evidence_id",
+            (tenant_id,),
+        )
+        return tuple(
+            Evidence(
+                tenant_id=tenant_id,
+                evidence_id=str(r[0]),
+                field=str(r[1]),
+                value=_decode_fact(r[2]),
+                period=Period(start=r[3], end=r[4]),
+                provenance=EvidenceProvenance(str(r[5])),
+                source=str(r[6]),
+                asserted_by=None if r[7] is None else str(r[7]),
+                supersedes=None if r[8] is None else str(r[8]),
+                trace_id=None if r[9] is None else str(r[9]),
+            )
+            for r in rows
         )
 
     async def record_assessment(
@@ -383,3 +445,24 @@ class PostgresLedgerStore(LedgerStore):
             )
             for r in rows
         )
+
+
+def _encode_fact(value: FactValue) -> object:
+    """JSON for a fact value. A date is tagged so it reads back as a date,
+    not a string that happens to look like one."""
+    if isinstance(value, dt.date):
+        return {"date": value.isoformat()}
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _decode_fact(raw: object) -> FactValue:
+    if isinstance(raw, dict):
+        tagged = cast("dict[str, str]", raw)
+        return dt.date.fromisoformat(tagged["date"])
+    if isinstance(raw, list):
+        return tuple(str(v) for v in cast("list[object]", raw))
+    if isinstance(raw, bool | int | float | str):
+        return raw
+    raise ValueError(f"unreadable evidence value {raw!r}")
