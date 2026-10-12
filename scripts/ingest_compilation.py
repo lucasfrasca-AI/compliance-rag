@@ -68,6 +68,7 @@ def _source(html_path: Path | None) -> str:
 
 async def main(bucket: str, html_path: Path | None) -> None:
     selection = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8"))
+    store = GCSClauseStore.for_bucket(bucket)
     result = await ingest_compilation(
         _source(html_path),
         instrument_id=INSTRUMENT_ID,
@@ -75,22 +76,17 @@ async def main(bucket: str, html_path: Path | None) -> None:
         tenant_id="_public",
         scope=Scope.PUBLIC,
         selection=selection,
-        store=GCSClauseStore.for_bucket(bucket),
+        store=store,
     )
     print(
         f"{result.instrument_id}:{result.version_id}: {result.clauses_written} clauses, "
         f"first ingest={result.first_ingest}, annotated source sha256 "
         f"{result.source_html_sha256}"
     )
-    store = GCSClauseStore.for_bucket(bucket)
     manifest = await store.get_manifest(INSTRUMENT_ID, VERSION_ID, tenant_id="_public")
+    # Clauses per top-level section; all of Schedule 1 counts as "sch1".
     by_section = Counter(path.split("/")[0] for path in manifest)
-    sch1 = sum(
-        n
-        for path, n in Counter("/".join(p.split("/")[:2]) for p in manifest).items()
-        if path.startswith("sch1/")
-    )
-    print({section: by_section[section] for section in sorted(by_section)} | {"sch1": sch1})
+    print({section: by_section[section] for section in sorted(by_section)})
 
 
 if __name__ == "__main__":

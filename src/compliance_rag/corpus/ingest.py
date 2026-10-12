@@ -119,6 +119,7 @@ async def ingest_compilation(
     )
     first_ingest = not completed
 
+    source_html_sha256 = sha256_hex(parsed.annotated_html)
     if completed:
         diff = _diff_manifests(old_manifest, new_manifest)
         if diff is not None:
@@ -127,6 +128,16 @@ async def ingest_compilation(
                 f"manifest — canonical text must never be edited after write "
                 f"({diff})"
             )
+        # Complete and unchanged: write nothing. The bucket is versioned, so
+        # re-uploading identical objects would leave a noncurrent generation
+        # of each one on every run, forever (library law is never purged).
+        return IngestResult(
+            instrument_id=instrument_id,
+            version_id=version_id,
+            clauses_written=0,
+            source_html_sha256=source_html_sha256,
+            first_ingest=False,
+        )
     elif old_manifest:
         # A first ingest that stopped before `put_manifest` (its last step):
         # it may resume only if everything already stored is part of this
@@ -141,7 +152,6 @@ async def ingest_compilation(
 
     await store.put_clauses(in_scope)
 
-    source_html_sha256 = sha256_hex(parsed.annotated_html)
     await store.put_manifest(
         instrument_id,
         version_id,

@@ -339,3 +339,30 @@ async def test_put_clauses_writes_the_manifest_once() -> None:
     assert len(writes) == 31
     stored = await store.get_manifest(INSTRUMENT_ID, VERSION_ID, tenant_id=PUBLIC_TENANT_ID)
     assert sorted(stored) == sorted(c.clause_path for c in clauses)
+
+
+async def test_a_batch_that_dies_part_way_still_lists_every_intended_path() -> None:
+    """The manifest is written before the clause objects: a crash after the
+    5th object leaves all 10 paths listed (so the next ingest's drift check
+    sees them), never objects the manifest doesn't know about."""
+    bucket = _FakeBucket()
+    original = bucket.write
+    objects_written = 0
+
+    def failing(name: str, data: str) -> None:
+        nonlocal objects_written
+        if "/clauses/" in name:
+            if objects_written == 5:
+                raise RuntimeError("429 Too Many Requests")
+            objects_written += 1
+        original(name, data)
+
+    bucket.write = failing  # type: ignore[method-assign]
+    store = GCSClauseStore(bucket)
+    clauses = tuple(_clause(f"s6d/{n}", f"text {n}") for n in range(1, 11))
+    with pytest.raises(RuntimeError):
+        await store.put_clauses(clauses)
+    listed = await store.get_manifest(INSTRUMENT_ID, VERSION_ID, tenant_id=PUBLIC_TENANT_ID)
+    assert sorted(listed) == sorted(c.clause_path for c in clauses)
+    stored = [n for n in bucket.objects if "/clauses/" in n]
+    assert len(stored) == 5 and all(n.split("/clauses/")[1][:-5] in listed for n in stored)

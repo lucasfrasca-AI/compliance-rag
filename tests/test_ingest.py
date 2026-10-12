@@ -169,7 +169,10 @@ async def test_re_running_with_no_change_is_idempotent(fixture_html: str) -> Non
 
     assert first.first_ingest is True
     assert second.first_ingest is False
-    assert second.clauses_written == first.clauses_written
+    # Complete and unchanged: nothing is written again (a versioned bucket
+    # would otherwise keep a noncurrent copy of every object per run).
+    assert second.clauses_written == 0
+    assert second.source_html_sha256 == first.source_html_sha256
 
 
 # --------------------------------------------------------------------------

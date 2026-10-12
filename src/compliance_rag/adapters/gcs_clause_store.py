@@ -11,11 +11,13 @@ Object layout, one instrument version per prefix:
   injected anchors into (`CONTEXT.md`: Position map).
 - `{instrument_id}/{version_id}/manifest.json` — `{"clause_paths": {path:
   canonical_sha256}, "canonicalisation_version": int, "source_html_sha256": str}`.
-  `clause_paths` is upserted by every `put_clause`, so `get_manifest` always
-  reflects exactly what's been individually written — the same behaviour
-  `FakeClauseStore` gives by deriving it from its in-memory dict, kept true
-  here by a read-modify-write on the same object rather than a separate
-  ledger.
+  `clause_paths` is upserted by `put_clause` (one read-modify-write per
+  clause) and by `put_clauses` (once per version, *before* its clause objects
+  — an intent record, so a crash part-way leaves every intended path listed
+  and the next ingest's drift check sees them). After a completed write the
+  manifest matches what `FakeClauseStore` derives from its in-memory dict;
+  during an interrupted batch it may list paths whose objects aren't written
+  yet, which `get_clause` reports as absent.
 
 A tenant-owned instrument's `instrument_id` is already prefixed with its
 tenant (issue #4: `validate_instrument_id`), so the object key itself is the
@@ -167,14 +169,13 @@ class GCSClauseStore(ClauseStore):
         object and answers 429 beyond it — the first real ingest (issue #99)
         failed at the 11th clause. Clause objects are distinct keys and have
         no such limit. A failure part-way leaves clause objects the manifest
-        doesn't list yet; the ingest re-runs them (idempotent keys)."""
-        for clause in clauses:
-            blob = self._bucket.blob(
-                self._clauses_key(clause.instrument_id, clause.version_id, clause.clause_path)
-            )
-            await asyncio.to_thread(
-                blob.upload_from_string, clause.model_dump_json(), content_type="application/json"
-            )
+        doesn't list yet; the ingest re-runs them (idempotent keys).
+
+        The manifest is written first, as an intent record: if the batch dies
+        part-way, every path it meant to write is listed, so the next ingest's
+        drift check compares a different selection against it instead of
+        mistaking the bucket for empty and leaving this batch's objects behind
+        as unlisted orphans `get_clause` would still serve."""
         versions = sorted({(c.instrument_id, c.version_id) for c in clauses})
         for instrument_id, version_id in versions:
             manifest = await self._read_manifest_or_empty(instrument_id, version_id)
@@ -183,6 +184,13 @@ class GCSClauseStore(ClauseStore):
                 if (clause.instrument_id, clause.version_id) == (instrument_id, version_id):
                     paths[clause.clause_path] = canonical_sha256(clause.canonical_text)
             await self._write_manifest(instrument_id, version_id, manifest)
+        for clause in clauses:
+            blob = self._bucket.blob(
+                self._clauses_key(clause.instrument_id, clause.version_id, clause.clause_path)
+            )
+            await asyncio.to_thread(
+                blob.upload_from_string, clause.model_dump_json(), content_type="application/json"
+            )
 
     async def get_manifest(
         self, instrument_id: str, version_id: str, *, tenant_id: str
