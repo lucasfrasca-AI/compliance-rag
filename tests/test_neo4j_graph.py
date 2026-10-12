@@ -294,16 +294,21 @@ def test_ci_never_holds_aura_credentials() -> None:
             assert not deployed.search(workflow.read_text(encoding="utf-8")), workflow.name
 
 
-def test_the_keepalive_runs_no_repository_code_and_only_reads() -> None:
+def test_the_keepalive_runs_no_repository_code_and_leaves_nothing_behind() -> None:
     """The one workflow holding Aura credentials checks nothing out, installs
-    nothing, has no token permissions, and sends a single read query."""
+    nothing, has no token permissions, and sends a single statement that
+    writes (so it counts as activity however Aura measures it) and deletes
+    what it wrote, in the same statement, touching only :KeepAlive."""
     text = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / KEEPALIVE).read_text(
         encoding="utf-8"
     )
     assert "actions/checkout" not in text and "uv " not in text and "pip " not in text
     assert "permissions: {}" in text
-    statements = re.findall(r'"statement":"([^"]*)"', text)
-    assert statements == ["RETURN 1 AS ok"]
+    (statement,) = re.findall(r'"statement":"(.*?)"}\'', text)
+    assert statement.startswith("MERGE (k:KeepAlive ")
+    assert "DELETE k" in statement and "DETACH" not in statement
+    assert re.findall(r"\((\w+):(\w+)", statement) == [("k", "KeepAlive")]  # nothing else matched
+    assert '"queryType":"rw"' in text  # fails unless Aura counted a write
 
 
 def test_no_cypher_outside_adapters() -> None:
