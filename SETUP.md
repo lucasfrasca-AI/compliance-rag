@@ -50,8 +50,14 @@ Region for everything: **`australia-southeast1`**. Pick a project ID you can typ
 
 - [x] Sign in at console.neo4j.io → New instance → **AuraDB Free**. *(done)*
 - [x] Name: `compliance-rag-neo` (instance ID `5b790f49`). *(done)* Cloud/region: whatever Free offers closest to you (Free is not offered in Australia — acceptable during build because the graph holds public law only; see `DECISIONS.md` D-09).
-- [x] Credentials captured. *(done)* Put `NEO4J_URI` (`neo4j+s://5b790f49.databases.neo4j.io` — verify against the console), `NEO4J_USERNAME`, `NEO4J_PASSWORD` in `.env`.
-- [ ] Nothing else to configure. Constraints, indexes and the bitemporal schema are created by code (`db/neo4j/schema.cypher`), and the keep-alive is a scheduled job Claude Code adds in Phase 4. Until then, open the console at least every 3 days or the instance pauses.
+- [x] Credentials captured. *(done)* Aura downloads a credentials file when the instance is created. **It is authoritative for all five values**: copy `NEO4J_INSTANCE_NAME`, `NEO4J_INSTANCE_ID`, `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD` from it into `.env`, and set `NEO4J_DATABASE` too. **On Aura Free the username and the database name are both the instance ID** (`5b790f49` here), not `neo4j`. The original kit defaulted both to `neo4j`, which was wrong from day one; it surfaced on 2026-10-11, the first time anything connected to the deployed instance, as an authentication failure that looked like a bad password.
+- [x] Keep-alive *(added 2026-10-12, start of Phase 2)*. Aura Free pauses after 3 days idle and deletes after 30. `.github/workflows/aura-keepalive.yml` sends one read query (`RETURN 1`) a day to Aura's Query API, so the instance stays awake. It needs two repository secrets, set once by the human (they hold the Aura password, so Claude Code doesn't set them):
+  ```
+  gh secret set AURA_KEEPALIVE_INSTANCE_ID   # the instance ID, e.g. 5b790f49
+  gh secret set AURA_KEEPALIVE_PASSWORD      # from the Aura credentials file
+  ```
+  Then run it once by hand (`gh workflow run aura-keepalive`) to confirm. A failed run emails you: that is the signal the instance is paused, deleted or its password changed.
+- [ ] Nothing else to configure. Constraints, indexes and the bitemporal schema are created by code (`db/neo4j/schema.cypher`, `Neo4jGraph.apply_schema`).
 
 ## 4. Qdrant Cloud
 

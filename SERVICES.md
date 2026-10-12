@@ -55,7 +55,8 @@ Billable means: any GCP resource that is not free-tier-only, any paid tier of a 
 | Cloud Run jobs (`ingest`, `eval`, `feed-poll`) | Batch work | Scale-to-zero | in above | 1 | Claude Code (ask) |
 | Cloud Build + Artifact Registry | Images | Free tier | $0 | 3 | Claude Code (ask) |
 | Cloud SQL Postgres `db-f1-micro`, `australia-southeast1`, 10 GB SSD, no HA, no read replica | Ledger, chat history, users | Shared-core | ~$9–10 | 3 | Claude Code (ask) |
-| Cloud Scheduler (≤3 jobs) | Feed poll, keep-alive, nightly eval | Free | $0 | 4 | Claude Code (ask) |
+| Cloud Scheduler (≤3 jobs) | Feed poll, Qdrant keep-alive, nightly eval | Free | $0 | 4 | Claude Code (ask) |
+| GitHub Actions scheduled workflow `aura-keepalive` | Aura Free keep-alive: one `RETURN 1` a day (2026-10-12, pulled forward from Phase 4). Not Cloud Scheduler: Aura can't authenticate a GCP identity, so a Scheduler HTTP job would hold the Aura password in plaintext job config; an encrypted repository secret is better | Seconds a day of Actions minutes | $0 | 2 | Human sets the two secrets |
 | Cloud Workflows | Loop A orchestration | Free tier | $0 | 4 | Claude Code (ask) |
 | Firebase Authentication | Login | Free | $0 | 3 | Human enables project; Claude Code configures |
 | Firebase Hosting **or** Cloudflare Pages | Frontend | Free | $0 | 3 | Claude Code (ask) |

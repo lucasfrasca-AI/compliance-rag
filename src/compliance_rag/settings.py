@@ -64,7 +64,10 @@ class Settings(BaseSettings):
     neo4j_uri: str = ""
     neo4j_username: str = ""
     neo4j_password: SecretStr = SecretStr("")
-    neo4j_database: str = "neo4j"
+    neo4j_database: str = ""
+    """On Aura Free the database name is the instance ID, and so is the
+    username — never "neo4j". No default, so a missing value fails loudly
+    instead of addressing a database that doesn't exist."""
     database_url: SecretStr = SecretStr("")
 
     # --- Reranker ----------------------------------------------------------

@@ -180,8 +180,12 @@ class Neo4jGraph(GraphAdmin):
     @classmethod
     @asynccontextmanager
     async def connect(
-        cls, uri: str, *, username: str, password: str, database: str = "neo4j"
+        cls, uri: str, *, username: str, password: str, database: str
     ) -> AsyncGenerator[Neo4jGraph]:
+        """`database` has no default: on Aura Free it is the instance ID, not
+        "neo4j", and every query names it explicitly."""
+        if not (uri and username and database):
+            raise ValueError("Neo4j uri, username and database are all required")
         driver = AsyncGraphDatabase.driver(uri, auth=(username, password))
         try:
             await driver.verify_connectivity()
@@ -192,7 +196,9 @@ class Neo4jGraph(GraphAdmin):
     @classmethod
     def from_settings(cls, settings: Settings) -> AbstractAsyncContextManager[Neo4jGraph]:
         """The deployed graph (Aura Free: public law only, D-09). Tests never
-        use this: they connect to a local server by URI."""
+        use this: they connect to a local server by URI. All five values come
+        from the credentials file Aura downloads; on Aura Free the username
+        and database are both the instance ID."""
         return cls.connect(
             settings.neo4j_uri,
             username=settings.neo4j_username,

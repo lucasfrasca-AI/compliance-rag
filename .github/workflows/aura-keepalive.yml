@@ -1,0 +1,36 @@
+name: aura-keepalive
+
+# Aura Free pauses an instance after 3 days idle and deletes it after 30
+# (BUILD_LOG 2026-10-01). Phase 2 is the first phase that depends on the
+# deployed graph, so this runs from its start: one read query a day keeps
+# compliance-rag-neo awake.
+#
+# Runs no repository code — no checkout, no install — just one HTTPS POST of
+# `RETURN 1` to Aura's Query API. On Aura Free the username and the database
+# are both the instance ID. A failed run (paused, deleted, or the password
+# rotated) emails the repository owner: that is the alert to resume or fix it.
+#
+# The only workflow that holds Aura credentials (tests/test_neo4j_graph.py:
+# test_ci_never_holds_aura_credentials). CI never does.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: One read query against compliance-rag-neo
+        env:
+          INSTANCE: ${{ secrets.AURA_KEEPALIVE_INSTANCE_ID }}
+          PASSWORD: ${{ secrets.AURA_KEEPALIVE_PASSWORD }}
+        run: |
+          curl -fsS --max-time 60 -u "$INSTANCE:$PASSWORD" \
+            -H 'Content-Type: application/json' \
+            -d '{"statement":"RETURN 1 AS ok"}' \
+            "https://$INSTANCE.databases.neo4j.io/db/$INSTANCE/query/v2" > /dev/null
