@@ -9,6 +9,7 @@ Fixtures are invented (`tests/fixtures/mappings/test-obligations.yaml`, the
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 from pathlib import Path
 from typing import Any
@@ -348,18 +349,22 @@ async def test_a_loaded_item_cannot_lose_a_clause_or_rewrite_a_crosswalk(
     grown["source_clause_ids"] = sorted(set(grown["source_clause_ids"]))
     await load_mappings(graph, load_mapping_set([write_yaml(tmp_path, grown, "a.yaml")]), today=SEP)
 
-    shrunk = fixture_document() | {"source_clause_ids": grown["source_clause_ids"]}
-    shrunk["conditions"], shrunk["actors"] = grown["conditions"], grown["actors"]
-    shrunk["obligations"] = grown["obligations"]
-    shrunk["obligations"][2] = grown["obligations"][2] | {"clause_ids": ["test-act:v2:s2/1"]}
+    shrunk = copy.deepcopy(grown)
+    shrunk["obligations"][2]["clause_ids"] = ["test-act:v2:s2/1"]
     with pytest.raises(MappingError, match="a clause was removed"):
         await load_mappings(
             graph, load_mapping_set([write_yaml(tmp_path, shrunk, "b.yaml")]), today=SEP
         )
 
-    renoted = dict(grown)
-    renoted["crosswalks"] = [grown["crosswalks"][0] | {"note": "A different note."}]
+    rekinded = copy.deepcopy(grown)
+    rekinded["crosswalks"][0]["kind"] = "equivalent"  # a crosswalk's kind is meaning
     with pytest.raises(MappingError, match="crosswalk to OB-TEST-2"):
         await load_mappings(
-            graph, load_mapping_set([write_yaml(tmp_path, renoted, "c.yaml")]), today=SEP
+            graph, load_mapping_set([write_yaml(tmp_path, rekinded, "c.yaml")]), today=SEP
+        )
+    renoted = copy.deepcopy(grown)
+    renoted["crosswalks"][0]["note"] = "A different note."  # its note is wording (ADR-0031)
+    with pytest.raises(MappingError, match=r"wording changed in loaded items \['OB-TEST-1B'\]"):
+        await load_mappings(
+            graph, load_mapping_set([write_yaml(tmp_path, renoted, "d.yaml")]), today=SEP
         )
