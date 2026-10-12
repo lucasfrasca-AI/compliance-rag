@@ -105,9 +105,12 @@ async def test_the_schema_applies_idempotently(graph: Neo4jGraph) -> None:
     second = await graph.apply_schema()
     assert await _schema_objects(graph) == after_first  # names and definitions
     assert (first.applied, first.unsupported) == (second.applied, second.unsupported)
-    created = {name for name in first.applied if "status" not in name}
-    assert created <= {name for _, name in after_first}
-    assert not {name for _, name in after_first if "status" in name}  # ADR-0029
+    statements = schema_statements()
+    created = {statement_name(s) for s in statements if s.startswith("CREATE")}
+    dropped = {statement_name(s) for s in statements if s.startswith("DROP")}
+    present = {name for _, name in after_first}
+    assert created - set(first.unsupported) <= present
+    assert not dropped & present  # retired by ADR-0027 / ADR-0029
 
 
 @needs_neo4j

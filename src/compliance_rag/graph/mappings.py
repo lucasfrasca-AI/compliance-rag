@@ -552,8 +552,8 @@ class MappingSet(_Strict):
                         f"crosswalk {crosswalk.source} -> {crosswalk.target}: "
                         f"unknown obligation or control {end}"
                     )
-        for items in by_kind.values():
-            _check_supersession(items)
+        for label, items in by_kind.items():
+            _check_supersession(label, items)
         for mapping in self.policy_mappings:
             if mapping.obligation_id not in by_kind["Obligation"]:
                 raise ValueError(f"{mapping.id}: unknown obligation {mapping.obligation_id}")
@@ -586,7 +586,7 @@ def _acyclic(conditions: Mapping[str, Condition]) -> None:
         visit(identifier, ())
 
 
-def _check_supersession(items: Mapping[str, Dated]) -> None:
+def _check_supersession(label: str, items: Mapping[str, Dated]) -> None:
     successors: dict[str, str] = {}
     for item in items.values():
         if item.supersedes is None:
@@ -599,7 +599,7 @@ def _check_supersession(items: Mapping[str, Dated]) -> None:
             )
         old = items.get(item.supersedes)
         if old is None:
-            raise ValueError(f"{item.id}: supersedes unknown {item.supersedes}")
+            raise ValueError(f"{item.id}: supersedes unknown {label.lower()} {item.supersedes}")
         if old.valid_until != item.valid_from:
             raise ValueError(
                 f"{item.id} starts {item.valid_from} but {old.id} ends {old.valid_until}: "
