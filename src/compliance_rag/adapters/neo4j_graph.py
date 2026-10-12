@@ -13,8 +13,8 @@ idempotent on stable ID.
 
 No status is stored (ADR-0029): whether a node is in force, not yet
 commenced or ended *on a date* is derived from `valid_from`, `valid_to` and
-`end_reason` (`corpus.models.status_on`). `drop_stored_status` removes the
-`status` property nodes written before ADR-0029 carry.
+`end_reason` (`corpus.models.status_on`). `migrate_to_derived_status` moves
+nodes written before ADR-0029 onto that model.
 
 Labels and relationship types can't be Cypher parameters, so they are taken
 only from the closed sets below; every value is a bound parameter.
@@ -69,9 +69,9 @@ from compliance_rag.settings import Settings
 SCHEMA_PATH = Path(__file__).resolve().parents[3] / "db" / "neo4j" / "schema.cypher"
 
 BITEMPORAL_KEYS = frozenset({"valid_from", "valid_to", "end_reason", "recorded_at"})
-WRITER_ONLY_KEYS = BITEMPORAL_KEYS | {"stable_id", "status"}
-"""Set by the writer, never passed as a property. `status` is here because it
-is derived and never stored (ADR-0029): no caller can write one back."""
+RESERVED_KEYS = BITEMPORAL_KEYS | {"stable_id", "status"}
+"""Never passed as a property: the writer sets the first five, and `status`
+is derived, never stored (ADR-0029), so no caller can write one back."""
 
 BATCH_SIZE = 500
 """Rows per batched write transaction: large enough that loading a
@@ -132,7 +132,7 @@ def _properties(properties: Mapping[str, Scalar]) -> dict[str, object]:
     for key, value in properties.items():
         if not _PROPERTY_KEY.match(key):
             raise GraphWriteRefused(f"property key {key!r} is not snake_case")
-        if key in WRITER_ONLY_KEYS:
+        if key in RESERVED_KEYS:
             raise GraphWriteRefused(f"{key!r} is set by the writer, not passed as a property")
         out[key] = list(value) if isinstance(value, tuple) else value
     return out
@@ -443,9 +443,9 @@ class Neo4jGraph(GraphAdmin):
     ) -> None:
         """A re-write that ends a stored open node retires it; one that
         reopens or re-dates it is refused by `_retire`."""
-        same_end = stored["valid_to"] == wanted.valid_to and stored.get("end_reason") == (
-            wanted.end_reason.value if wanted.end_reason else None
-        )
+        same_end = all(stored.get(k) == v for k, v in _bitemporal(wanted).items()) and (
+            "end_reason" in stored
+        ) == (wanted.end_reason is not None)
         if same_end:
             return
         if wanted.end_reason is None:
@@ -591,20 +591,46 @@ class Neo4jGraph(GraphAdmin):
 
     # ---- migration (ADR-0029) ---------------------------------------------
 
-    async def drop_stored_status(self) -> int:
-        """Remove the `status` property from nodes written before ADR-0029
-        made status derived. Idempotent; returns how many nodes changed.
+    async def migrate_to_derived_status(self) -> int:
+        """Move nodes written before ADR-0029 onto derived status, in one
+        transaction; idempotent. Returns how many nodes changed.
+
+        - A node whose stored status contradicts its dates — `repealed` while
+          still open — is refused, naming how many: which one is right is a
+          human's call, not the migration's.
+        - An ended node gets the `end_reason` its stored status implies:
+          `repealed` if it said so, otherwise `superseded` (amendment was the
+          only path that ended a node before this ADR).
+        - Then `status` is removed.
+
         Run after `apply_schema`, which drops the constraints that required
-        it (on Aura they would refuse the removal). Validity is untouched:
-        every node's dates and `end_reason` already say what status did."""
-        with telemetry.span("neo4j_graph.drop_stored_status") as s:
-            records, _, _ = await self._driver.execute_query(
-                "MATCH (n) WHERE n.status IS NOT NULL REMOVE n.status RETURN count(n) AS c",
-                database_=self._database,
+        `status` (on Aura they would refuse the removal)."""
+
+        async def work(tx: AsyncManagedTransaction) -> int:
+            contradictory = await tx.run(
+                "MATCH (n) WHERE n.status = 'repealed' AND n.valid_to = $open RETURN count(n) AS c",
+                open=NO_END_DATE,
             )
-            changed = int(records[0]["c"])
-            s.set_attribute("graph.status_removed", changed)
-            return changed
+            bad = int((await contradictory.single(strict=True))["c"])
+            if bad:
+                raise GraphWriteRefused(
+                    f"{bad} node(s) are stored as repealed but still open; resolve them by "
+                    "hand before migrating (ADR-0029)"
+                )
+            changed = await tx.run(
+                "MATCH (n) WHERE n.status IS NOT NULL "
+                "OR (n.valid_to <> $open AND n.end_reason IS NULL) "
+                "SET n.end_reason = CASE "
+                "  WHEN n.valid_to = $open THEN null "
+                "  WHEN n.end_reason IS NOT NULL THEN n.end_reason "
+                "  WHEN n.status = 'repealed' THEN 'repealed' "
+                "  ELSE 'superseded' END "
+                "REMOVE n.status RETURN count(n) AS c",
+                open=NO_END_DATE,
+            )
+            return int((await changed.single(strict=True))["c"])
+
+        return await self._write("neo4j_graph.migrate_to_derived_status", {}, work)
 
     # ---- reads: only what the query builder built (D-05) --------------------
 

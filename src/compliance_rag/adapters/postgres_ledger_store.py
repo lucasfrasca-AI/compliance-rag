@@ -261,7 +261,7 @@ class PostgresLedgerStore(LedgerStore):
             # date again is a no-op, a different one matches no row.
             "UPDATE instrument_version SET valid_to = %s, end_reason = 'superseded' "
             "WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s "
-            "AND (valid_to IS NULL OR valid_to = %s)",
+            "AND (valid_to IS NULL OR (valid_to = %s AND end_reason = 'superseded'))",
             (valid_to, tenant_id, instrument_id, version_id, valid_to),
         )
         if updated == 0:

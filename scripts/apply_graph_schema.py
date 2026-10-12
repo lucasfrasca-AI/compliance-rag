@@ -20,8 +20,8 @@ async def main() -> None:
     async with Neo4jGraph.from_settings(Settings()) as graph:
         report = await graph.apply_schema()
         print(f"schema: {len(report.applied)} applied, unsupported {list(report.unsupported)}")
-        # ADR-0029: status is derived. Constraints dropped above, then the property.
-        print(f"status property removed from {await graph.drop_stored_status()} node(s)")
+        # ADR-0029: status is derived. Constraints dropped above, then the nodes.
+        print(f"moved to derived status: {await graph.migrate_to_derived_status()} node(s)")
         counts = await graph.counts()
         print(f"graph: {counts.nodes} nodes, {counts.edges} edges")
 

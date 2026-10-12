@@ -44,8 +44,11 @@ The migration:
 - **Neo4j:**
   - `schema.cypher` drops the two `status` existence constraints and the status
     index (`DROP … IF EXISTS`), and requires `valid_to` instead.
-  - `Neo4jGraph.drop_stored_status` removes the property from nodes written
-    before this ADR, after `apply_schema`.
+  - `Neo4jGraph.migrate_to_derived_status`, run after `apply_schema`, moves
+    nodes written before this ADR: an ended node gains the `end_reason` its
+    old status implies (`repealed` if it said so, otherwise `superseded`),
+    then `status` is removed. A node stored as `repealed` but still open is
+    refused, not guessed at.
   - The writer refuses `status` as a property, so it can't come back.
 - **Ledger:**
   - `db/ledger/0008` drops `instrument_version.status` and adds `end_reason`.

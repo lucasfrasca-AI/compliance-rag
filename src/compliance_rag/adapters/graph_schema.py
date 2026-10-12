@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 
 from compliance_rag.corpus.models import NO_END_DATE, check_end
 from compliance_rag.corpus.models import EndReason as EndReason  # re-exported for the graph
-from compliance_rag.corpus.models import Status as Status  # re-exported for the graph
 
 PERSISTED_LABELS = frozenset(
     {
