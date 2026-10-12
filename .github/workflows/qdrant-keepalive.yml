@@ -1,0 +1,55 @@
+name: qdrant-keepalive
+
+# Qdrant Cloud's free tier suspends a cluster that sits idle, and deletes one
+# left suspended (SERVICES.md: Qdrant Cloud, Free). This keeps the corpus
+# cluster awake the same way aura-keepalive.yml keeps the graph awake: one
+# write a day.
+#
+# The ping writes, because a read may not count as activity: it upserts one
+# throwaway point (a fixed id, no vectors, payload {keepalive: true}) into the
+# corpus collection and deletes it, then checks it is gone. A point with no
+# vectors can't match a dense or sparse query, and with no `scope`,
+# `tenant_id` or `clause_id` payload every retrieval filter already excludes
+# it — so even a run that died between the two calls leaves nothing any query
+# returns, and the next run deletes it.
+#
+# Runs no repository code — no checkout, no install — just three HTTPS calls
+# to the cluster's REST API. A failed run (suspended, deleted, key rotated, or
+# the secrets not set yet) emails the repository owner: that is the alert.
+#
+# The only workflow that holds Qdrant Cloud credentials
+# (tests/test_keepalive_workflows.py). CI's Qdrant is a service container.
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: One write-and-delete against the corpus collection
+        env:
+          URL: ${{ secrets.QDRANT_KEEPALIVE_URL }}
+          API_KEY: ${{ secrets.QDRANT_KEEPALIVE_API_KEY }}
+          # Settings.qdrant_collection's default; a renamed collection makes the
+          # upsert 404, which fails the run.
+          COLLECTION: clauses
+          POINT: 00000000-0000-4000-8000-00000000a11e
+        # The key goes to curl on stdin (printf is a shell builtin), so it never
+        # appears in a process's argv.
+        run: |
+          test -n "$URL" && test -n "$API_KEY" || { echo "QDRANT_KEEPALIVE_* secrets are not set"; exit 1; }
+          call() { printf 'header = "api-key: %s"\n' "$API_KEY" | curl -sS --max-time 30 -K - "$@"; }
+          base="${URL%/}/collections/$COLLECTION/points"
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          call -f -X PUT "$base?wait=true" -H 'Content-Type: application/json' \
+            -d "{\"points\":[{\"id\":\"$POINT\",\"vector\":{},\"payload\":{\"keepalive\":true,\"at\":\"$now\"}}]}"
+          call -f -X POST "$base/delete?wait=true" -H 'Content-Type: application/json' \
+            -d "{\"points\":[\"$POINT\"]}"
+          status=$(call -o /dev/null -w '%{http_code}' "$base/$POINT")
+          test "$status" = 404 || { echo "keep-alive point still present (HTTP $status)"; exit 1; }

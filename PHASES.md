@@ -112,7 +112,7 @@ Goal: the corpus keeps itself current with a human in the loop.
 Deliverables
 - Feed poller (Federal Register, EUR-Lex Cellar) on Cloud Scheduler → Cloud Run job
 - Clause-level diff → GitHub PR naming affected mappings
-- Keep-alive job for Qdrant (Aura's moved to the start of Phase 2)
+- Keep-alive jobs: both moved to Phase 2 and run as GitHub Actions (`aura-keepalive.yml`, `qdrant-keepalive.yml`) rather than Cloud Scheduler; this phase confirms them over 30 days (the exit criterion below)
 - Regression gate re-runs golden set on corpus change; re-runs affected assessments
 - EU AI Act + Regulation 2026/1744 ingested; Omnibus commencement shifts as eval fixtures
 
