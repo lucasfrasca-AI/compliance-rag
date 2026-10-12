@@ -6,6 +6,7 @@ condition, with disagreement reported rather than resolved by guessing.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 
 import pytest
 
@@ -121,3 +122,58 @@ def test_evidence_says_what_who_and_from_where(change: dict[str, object], messag
     } | change
     with pytest.raises(ValueError, match=message):
         Evidence(**fields)  # pyright: ignore[reportArgumentType] — deliberately varied
+
+
+# ---- review of #124 ------------------------------------------------------------
+
+
+def test_an_inferred_row_cannot_unsettle_an_asserted_fact() -> None:
+    rows = [
+        _fact("e1", 2_500_000),
+        _fact("e2", 4_000_000, provenance=EvidenceProvenance.INFERRED, supersedes="e1"),
+    ]
+    assert Facts.of(rows).for_period("annual_turnover_aud", FY25).value == 2_500_000
+
+
+def test_evidence_for_part_of_the_period_is_a_conflict_not_a_value() -> None:
+    """A part year (s6DA(2) annualises it; this model doesn't guess) or a
+    period straddling the one asked about is reported, never ignored."""
+    part = Period(dt.date(2025, 3, 1), dt.date(2025, 7, 1))
+    reading = Facts.of([_fact("e1", 900_000, period=part)]).for_period(
+        "annual_turnover_aud", Period.financial_year(2024)
+    )
+    assert reading.conflict and not reading.missing
+
+
+def test_overlapping_facts_that_disagree_conflict() -> None:
+    straddling = Period(dt.date(2025, 1, 1), dt.date(2026, 1, 1))
+    reading = Facts.of(
+        [_fact("e1", 2_500_000), _fact("e2", 3_500_000, period=straddling)]
+    ).for_period("annual_turnover_aud", FY25)
+    assert reading.conflict
+
+
+def test_values_of_different_types_disagree() -> None:
+    since = Period(dt.date(2020, 1, 1))
+    reading = Facts.of(
+        [_fact("e1", 1, field="flag", period=since), _fact("e2", True, field="flag", period=since)]
+    ).on("flag", dt.date(2026, 1, 1))
+    assert reading.conflict
+
+
+def test_evidence_can_be_reread_as_it_stood() -> None:
+    """What an earlier assessment read: evidence recorded after it is left out."""
+    then = dt.datetime(2026, 9, 1, tzinfo=dt.UTC)
+    rows = [
+        replace(_fact("e1", 2_400_000), recorded_at=then - dt.timedelta(days=1)),
+        replace(_fact("e2", 2_500_000, supersedes="e1"), recorded_at=then + dt.timedelta(days=1)),
+    ]
+    assert (
+        Facts.of(rows, recorded_by=then).for_period("annual_turnover_aud", FY25).value == 2_400_000
+    )
+    assert Facts.of(rows).for_period("annual_turnover_aud", FY25).value == 2_500_000
+
+
+def test_a_fact_is_a_date_never_a_datetime() -> None:
+    with pytest.raises(ValueError, match="datetime"):
+        _fact("e1", dt.datetime(2026, 1, 1), field="business_started_on")

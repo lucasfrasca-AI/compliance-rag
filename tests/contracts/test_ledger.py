@@ -86,16 +86,28 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         source="CFO, audited accounts",
         asserted_by="cfo@acme.example",
         supersedes="ev-1",
+        trace_id="trace-ev-4",
+        document_id=None,
     )
     await ledger.record_evidence(corrected)
-    # Every row, superseded included, round-trips exactly (a date stays a date).
-    assert await ledger.evidence("acme") == (turnover, started, forms, corrected)
+    # Every row, superseded included, round-trips exactly (a date stays a date),
+    # stamped with when the ledger recorded it.
+    stored = await ledger.evidence("acme")
+    assert all(e.recorded_at is not None for e in stored)
+    assert tuple(replace(e, recorded_at=None) for e in stored) == (
+        turnover,
+        started,
+        forms,
+        corrected,
+    )
     assert await ledger.evidence("other-corp") == ()
     for refused in (
         turnover,  # append-only: the same id again
         replace(corrected, evidence_id="ev-5"),  # ev-1 already has a successor
         replace(corrected, evidence_id="ev-6", supersedes="ev-404"),  # supersedes nothing
         replace(turnover, tenant_id="nobody", evidence_id="ev-7"),  # unregistered tenant
+        replace(turnover, evidence_id="ev-8", trace_id=None),  # an assertion outside a request
+        replace(started, evidence_id="ev-9", supersedes="ev-4"),  # another field's correction
     ):
         with pytest.raises(ValueError):
             await ledger.record_evidence(refused)
