@@ -27,6 +27,7 @@ totals for the Aura capacity check (PHASES.md Phase 2 exit).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -47,10 +48,14 @@ from neo4j.time import Date, DateTime
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
+    CORRECTABLE_EDGES,
+    CORRECTIONS,
+    COSMETIC,
     EDGE_TYPES,
     PERSISTED_LABELS,
     WRITER_KEYS,
     Bitemporal,
+    CorrectionWrite,
     EdgeWrite,
     EndReason,
     GraphCounts,
@@ -72,7 +77,7 @@ from compliance_rag.settings import Settings
 SCHEMA_PATH = Path(__file__).resolve().parents[3] / "db" / "neo4j" / "schema.cypher"
 
 BITEMPORAL_KEYS = frozenset({"valid_from", "valid_to", "end_reason", "recorded_at"})
-RESERVED_KEYS = BITEMPORAL_KEYS | {"stable_id", "status"}
+RESERVED_KEYS = BITEMPORAL_KEYS | {"stable_id", "status", CORRECTIONS}
 """Never passed as a property: the writer sets the first five, and `status`
 is derived, never stored (ADR-0029), so no caller can write one back."""
 
@@ -180,6 +185,8 @@ def _bitemporal(bitemporal: Bitemporal) -> dict[str, object]:
 
 
 _RETIREMENT = WRITER_KEYS
+_EDGE_AUDIT = frozenset({CORRECTIONS})
+"""An edge's only writer-kept property: its correction trail (ADR-0031)."""
 
 
 def _refuse_if_changed(
@@ -414,7 +421,7 @@ class Neo4jGraph(GraphAdmin):
                 key = (str(record["source"]), str(record["target"]))
                 if record["created"]:
                     created += 1
-                elif _differing(_stored(record), wanted[key], ignore=frozenset()):
+                elif _differing(_stored(record), wanted[key], ignore=_EDGE_AUDIT):
                     raise GraphWriteRefused(f"{edge_type} {key[0]!r}->{key[1]!r} is immutable")
             return created
 
@@ -549,7 +556,7 @@ class Neo4jGraph(GraphAdmin):
                 f"{edge_type}: {source.label} {source.stable_id!r} or {target.label} "
                 f"{target.stable_id!r} does not exist"
             )
-        if not record["created"] and _differing(_stored(record), props, ignore=frozenset()):
+        if not record["created"] and _differing(_stored(record), props, ignore=_EDGE_AUDIT):
             raise GraphWriteRefused(
                 f"{edge_type} {source.stable_id!r}->{target.stable_id!r} is immutable"
             )
@@ -591,6 +598,100 @@ class Neo4jGraph(GraphAdmin):
             "graph.effective": effective.isoformat(),
         }
         await self._write("neo4j_graph.amend", attributes, work)
+
+    # ---- cosmetic corrections (ADR-0031) -------------------------------------
+
+    async def correct(
+        self, corrections: Sequence[CorrectionWrite], *, by: str, reason: str
+    ) -> None:
+        """Every correction in one transaction (all land or none does), each
+        lock, read, check, set — as a retirement does. Refused unless every
+        key is `COSMETIC` and already present, the edge (if any) is a
+        crosswalk, and the change names who made it and why; the previous
+        wording goes on the `corrections` trail, so the node or edge still
+        says what it said before."""
+        if not corrections:
+            return
+        if not (by.strip() and reason.strip()):
+            raise GraphWriteRefused("a correction names who made it and why (ADR-0031)")
+        for correction in corrections:
+            meaning = set(correction.changes) - COSMETIC
+            if meaning:
+                raise GraphWriteRefused(
+                    f"{sorted(meaning)} are meaning, not wording: a new id (ADR-0031)"
+                )
+            if correction.edge is not None and correction.edge[0] not in CORRECTABLE_EDGES:
+                raise GraphWriteRefused(f"{correction.edge[0]} carries no wording to correct")
+        now = self._clock().isoformat()
+
+        async def work(tx: AsyncManagedTransaction) -> None:
+            for correction in corrections:
+                await self._correct(tx, correction, by=by, reason=reason, now=now)
+
+        attributes = {
+            "graph.corrected": ",".join(sorted({c.node.stable_id for c in corrections})),
+            "graph.corrected_by": by,
+        }
+        await self._write("neo4j_graph.correct", attributes, work)
+
+    async def _correct(
+        self,
+        tx: AsyncManagedTransaction,
+        correction: CorrectionWrite,
+        *,
+        by: str,
+        reason: str,
+        now: str,
+    ) -> None:
+        node, edge = correction.node, correction.edge
+        parameters: dict[str, object] = {"stable_id": node.stable_id}
+        if edge is None:
+            match, subject = f"MATCH (n:{node.label} {{stable_id: $stable_id}}) ", "n"
+        else:
+            edge_type, other = edge
+            match = (
+                f"MATCH (a:{node.label} {{stable_id: $stable_id}})"
+                f"-[r:{checked_edge_type(edge_type)}]->(b:{other.label} {{stable_id: $other}}) "
+            )
+            subject = "r"
+            parameters["other"] = other.stable_id
+        locked = await tx.run(
+            _trusted(match + f"SET {subject}._lock = true RETURN properties({subject}) AS p"),
+            parameters,
+        )
+        record = await locked.single()
+        if record is None:
+            raise GraphWriteRefused(
+                f"nothing to correct: {node.label} {node.stable_id!r} {edge or ''}"
+            )
+        before = {k: to_python(v) for k, v in cast("dict[str, object]", record["p"]).items()}
+        props = _properties(correction.changes)
+        absent = sorted(k for k in props if k not in before)
+        if absent:
+            raise GraphWriteRefused(
+                f"{node.stable_id}: {absent} not present — a correction rewords, it never adds"
+            )
+        previous = {k: before[k] for k in props if before[k] != props[k]}
+        if not previous:
+            await tx.run(_trusted(match + f"REMOVE {subject}._lock"), parameters)
+            return  # already says this: idempotent
+        entry = json.dumps(
+            {
+                "at": now,
+                "by": by,
+                "reason": reason,
+                "previous": {k: str(v) for k, v in previous.items()},
+            },
+            sort_keys=True,
+        )
+        await tx.run(
+            _trusted(
+                match + f"SET {subject} += $props, "
+                f"{subject}.{CORRECTIONS} = coalesce({subject}.{CORRECTIONS}, []) + $entry "
+                f"REMOVE {subject}._lock"
+            ),
+            {**parameters, "props": props, "entry": entry},
+        )
 
     # ---- migration (ADR-0029) ---------------------------------------------
 

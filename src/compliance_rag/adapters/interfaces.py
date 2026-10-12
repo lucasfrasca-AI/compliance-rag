@@ -22,6 +22,7 @@ from enum import StrEnum
 from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
     Bitemporal,
+    CorrectionWrite,
     EdgeWrite,
     EndReason,
     GraphCounts,
@@ -333,6 +334,15 @@ class GraphAdmin(GraphReader):
     ) -> None:
         """New node, `SUPERSEDES`, old retired as superseded — and
         `retire_with` retired on the same date — in one transaction."""
+
+    @abstractmethod
+    async def correct(
+        self, corrections: Sequence[CorrectionWrite], *, by: str, reason: str
+    ) -> None:
+        """Cosmetic corrections in place (ADR-0031), all in one transaction:
+        each changes only `COSMETIC` properties its node (or crosswalk edge)
+        already has, and appends the previous wording, who and why to that
+        node's or edge's `corrections` trail. All land, or none does."""
 
     @abstractmethod
     async def counts(self) -> GraphCounts:
