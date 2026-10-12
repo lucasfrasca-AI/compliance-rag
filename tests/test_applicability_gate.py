@@ -8,6 +8,7 @@ machinery is tested on the invented `test-act` labels; the corpus labels
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from compliance_rag.corpus.models import ClauseRecord, Scope
 from compliance_rag.eval.applicability import (
     APPLICABILITY_PATH,
     ApplicabilityGoldenSet,
+    UnsignedLabels,
     check,
     load_applicability_set,
 )
@@ -102,6 +104,42 @@ async def test_a_wrong_label_is_reported_by_case_and_obligation() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("update", "what"),
+    [
+        ({"obligation_count": 4}, "obligation count"),
+        ({"outcomes": {"not_applicable": ["OB-T-HEALTH", "OB-T-TYPO"]}}, "OB-T-TYPO outcome"),
+        ({"acts_as": {"test-act/actor/keeper": "unknown"}}, "acts_as test-act/actor/keeper"),
+        ({"cites": {"OB-T-KEEP": ["test-act:v1:s9/9"]}}, "OB-T-KEEP cites"),
+    ],
+)
+async def test_every_kind_of_wrong_label_is_reported(update: dict[str, object], what: str) -> None:
+    labels = load_applicability_set(FIXTURE_LABELS)
+    first = labels.cases[0]
+    expected = type(first.expected).model_validate(first.expected.model_dump(mode="json") | update)
+    case = first.model_copy(update={"expected": expected})
+    mismatches = await check(
+        fake_for(load_mapping_set([FIXTURE_MAPPINGS]), labels),
+        labels.model_copy(update={"cases": (case,)}),
+    )
+    assert [m.what for m in mismatches] == [what]
+
+
+async def test_unsigned_labels_are_refused_unless_a_draft_is_asked_for() -> None:
+    labels = load_applicability_set(FIXTURE_LABELS)
+    draft = labels.model_copy(update={"reviewed_by": "PENDING — reviewer"})
+    store = fake_for(load_mapping_set([FIXTURE_MAPPINGS]), labels)
+    with pytest.raises(UnsignedLabels):
+        await check(store, draft)
+    assert await check(store, draft, allow_draft=True) == ()
+
+
+def test_a_clause_of_a_compilation_the_labels_do_not_name_is_refused() -> None:
+    labels = load_applicability_set(FIXTURE_LABELS)
+    with pytest.raises(ValueError, match="test-act:v2"):
+        labels.clause_validity({"test-act:v2:s1/1"})
+
+
 async def test_a_question_the_tree_never_needs_is_a_mismatch() -> None:
     labels = load_applicability_set(FIXTURE_LABELS)
     second = labels.cases[1]
@@ -125,8 +163,13 @@ async def test_the_fixture_labels_pass_on_neo4j(graph: Neo4jGraph) -> None:
 
 # ---- the gate, on the corpus labels -----------------------------------------------
 
+REQUIRED = bool(os.environ.get("REQUIRE_APPLICABILITY_GATE"))
+"""Set in CI once the corpus labels exist: from then a missing file fails the
+gate instead of skipping it, as REQUIRE_RECALL_GATE does for recall."""
+
 corpus_labels = pytest.mark.skipif(
-    not APPLICABILITY_PATH.exists(), reason="no corpus/golden/applicability.yaml yet"
+    not APPLICABILITY_PATH.exists() and not REQUIRED,
+    reason="no corpus/golden/applicability.yaml yet",
 )
 
 
@@ -134,7 +177,9 @@ corpus_labels = pytest.mark.skipif(
 async def test_the_corpus_labels_pass_on_the_fake() -> None:
     labels = load_applicability_set()
     mappings = load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml")))
-    mismatches = await check(fake_for(mappings, labels), labels)
+    # Drafts are checked too — that the draft labels agree with the draft
+    # mappings — but only signed labels are a gate (D-01).
+    mismatches = await check(fake_for(mappings, labels), labels, allow_draft=True)
     assert mismatches == (), "\n".join(str(m) for m in mismatches)
 
 
@@ -143,5 +188,5 @@ async def test_the_corpus_labels_pass_on_the_fake() -> None:
 async def test_the_corpus_labels_pass_on_neo4j(graph: Neo4jGraph) -> None:
     labels = load_applicability_set()
     store = await graph_for(graph, load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
-    mismatches = await check(store, labels)
+    mismatches = await check(store, labels, allow_draft=True)
     assert mismatches == (), "\n".join(str(m) for m in mismatches)

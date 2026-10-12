@@ -15,6 +15,7 @@ cases:
       - {field: operates_in, value: [AU-NSW], since: 2020-01-01}
       - {field: provides_health_service, value: false, since: 2020-01-01}
     expected:
+      obligation_count: 3
       outcomes: {not_applicable: [OB-T-HEALTH]}
       otherwise: applicable
       acts_as: {test-act/actor/keeper: "true"}
@@ -27,6 +28,7 @@ cases:
     facts:
       - {field: annual_turnover_aud, value: 900, financial_year: 2025}
     expected:
+      obligation_count: 3
       otherwise: unassessable
       acts_as: {test-act/actor/keeper: unknown}
       questions:
