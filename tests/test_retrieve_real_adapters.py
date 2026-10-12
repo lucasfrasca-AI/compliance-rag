@@ -47,7 +47,7 @@ from compliance_rag.reranker_service.app import create_app
 from compliance_rag.reranker_service.model import DEFAULT_ONNX_MODEL_PATH, RerankerModel
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings
-from tests.conftest import qdrant_reachable
+from tests.conftest import ALL_LAW, qdrant_reachable
 
 _QDRANT_URL = os.environ.get("QDRANT_URL", "")
 _REQUIRED = bool(os.environ.get("REQUIRE_REAL_RETRIEVE"))
@@ -136,7 +136,7 @@ async def pipeline(
 async def test_retrieve_runs_both_channels_fusion_and_the_real_cross_encoder(
     pipeline: RetrievalPipeline,
 ) -> None:
-    trace = await pipeline.retrieve(QUERY, PUBLIC_TENANT_ID, AS_OF)
+    trace = await pipeline.retrieve(QUERY, PUBLIC_TENANT_ID, AS_OF, law=ALL_LAW)
     assert trace.per_channel[Channel.DENSE]
     assert trace.per_channel[Channel.SPARSE]
     assert trace.fused
@@ -155,7 +155,7 @@ async def test_retrieve_runs_both_channels_fusion_and_the_real_cross_encoder(
 async def test_the_retrieve_span_carries_every_stage(
     pipeline: RetrievalPipeline, span_exporter: InMemorySpanExporter
 ) -> None:
-    await pipeline.retrieve(QUERY, PUBLIC_TENANT_ID, AS_OF)
+    await pipeline.retrieve(QUERY, PUBLIC_TENANT_ID, AS_OF, law=ALL_LAW)
     spans = {s.name: s for s in span_exporter.get_finished_spans()}
     attributes = dict(spans["retrieve"].attributes or {})
     assert attributes["query"] == QUERY
@@ -171,6 +171,6 @@ async def test_the_retrieve_span_carries_every_stage(
 async def test_a_clause_id_query_routes_to_the_keyword_channel_on_real_qdrant(
     pipeline: RetrievalPipeline,
 ) -> None:
-    trace = await pipeline.route(APP11_2, PUBLIC_TENANT_ID, AS_OF)
+    trace = await pipeline.route(APP11_2, PUBLIC_TENANT_ID, AS_OF, law=ALL_LAW)
     assert set(trace.per_channel) == {Channel.KEYWORD}
     assert [c.clause_id for c in trace.fused] == [APP11_2]

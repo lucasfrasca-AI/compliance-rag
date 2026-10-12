@@ -1,10 +1,9 @@
 """`retrieve()`: Track B end to end, from query to reranked candidates (issue #16).
 
-Track A (`GraphStore`, obligation filtering) is a later ticket's concern —
-this tracer bullet proves the retrieve -> rerank -> generate -> verify shape
-end to end (Loop B, `CONTEXT.md`), not the full loop. `obligation_ids` is
-always passed empty to `RetrievalStore.search`, which is D-03's "no filter"
-case, not a bypass of it.
+Track A's scope arrives as a `LawScope` (D-03, ADR-0030), which every call
+requires: library law only from the clauses Track A cites for the tenant on
+`as_of` (`LawScope.of(coverage)`), or `LawScope.unscoped(reason)` for a
+question asked with no tenant profile — named, never an empty filter.
 
 `RetrievalPipeline.from_settings` is the real composition (issue #25): the
 Qdrant store, the Vertex embedder and the reranker client, with no LLM
@@ -19,6 +18,7 @@ from dataclasses import dataclass
 from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
+    LawScope,
     LedgerStore,
     Reranker,
     RetrievalStore,
@@ -104,15 +104,17 @@ class RetrievalPipeline:
         tenant_id: str,
         as_of: dt.date,
         *,
+        law: LawScope,
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
         limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
     ) -> RetrievalTrace:
         """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank)."""
+        # The law scope is recorded on this span by the store's filter.
         with span("retrieve", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             result = await self.retrieval_store.search(
                 query,
-                obligation_ids=(),
+                law=law,
                 tenant_id=tenant_id,
                 scopes=scopes,
                 as_of=as_of,
@@ -144,6 +146,7 @@ class RetrievalPipeline:
         tenant_id: str,
         as_of: dt.date,
         *,
+        law: LawScope,
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
         limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
@@ -155,14 +158,14 @@ class RetrievalPipeline:
         """
         if not is_clause_id_query(query):
             return await self.retrieve(
-                query, tenant_id, as_of, scopes=scopes, limit=limit, top_k=top_k
+                query, tenant_id, as_of, law=law, scopes=scopes, limit=limit, top_k=top_k
             )
 
         with span(
             "retrieve.router_hit", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()
         ) as current:
             hit = await self.retrieval_store.lookup_clause(
-                query.strip(), tenant_id=tenant_id, as_of=as_of
+                query.strip(), law=law, tenant_id=tenant_id, as_of=as_of
             )
             fused = (hit,) if hit is not None else ()
             current.set_attribute("retrieval.channel.keyword", _scored(fused))

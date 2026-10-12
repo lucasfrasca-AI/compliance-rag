@@ -23,7 +23,7 @@ from compliance_rag.adapters.fakes import (
 from compliance_rag.adapters.interfaces import Candidate, Generation
 from compliance_rag.assessment import prompt
 from compliance_rag.assessment.draft import MalformedGeneration, parse_draft
-from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.assessment.prompt import (
     DelimiterCollision,
     SourceClause,
@@ -152,7 +152,7 @@ async def test_retrieved_text_cannot_influence_the_query_sent_to_the_retriever()
 
         setattr(pipeline.retrieval, name, spy)
 
-    result = await pipeline.answer(QUESTION, TENANT, AS_OF)
+    result = await pipeline.answer(QUESTION, TENANT, AS_OF, law=LIBRARY_QUESTION)
 
     assert canonicalise(POISON) in str(obeying.calls[0]["user"])  # it was retrieved and sent
     assert "acme employee salaries" in result.unverified_draft.answer  # and the model obeyed
@@ -206,7 +206,7 @@ async def test_the_policy_corpus_is_sent_as_the_cached_prefix() -> None:
     generator = FakeGenerator()
     pipeline, _ = await _pipeline(generator)
     policies = (SourceClause("acme/p:v1:1", "Policy one."),)
-    await pipeline.answer(QUESTION, TENANT, AS_OF, policies=policies)
+    await pipeline.answer(QUESTION, TENANT, AS_OF, law=LIBRARY_QUESTION, policies=policies)
     assert generator.calls[0]["cached_prefix"] == policy_prefix(policies)
 
 
@@ -215,7 +215,7 @@ async def test_a_malformed_reply_is_refused_whole_and_traced(
 ) -> None:
     pipeline, _ = await _pipeline(FakeGenerator(reply="Sure! Here's the answer: protect it."))
     with pytest.raises(MalformedGeneration):
-        await pipeline.answer(QUESTION, TENANT, AS_OF)
+        await pipeline.answer(QUESTION, TENANT, AS_OF, law=LIBRARY_QUESTION)
     (answer_span,) = [s for s in span_exporter.get_finished_spans() if s.name == "answer"]
     assert (answer_span.attributes or {})["generation.schema_valid"] is False
 

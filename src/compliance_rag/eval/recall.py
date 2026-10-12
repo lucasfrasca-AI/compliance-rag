@@ -19,7 +19,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from compliance_rag.adapters.interfaces import Candidate, Reranker, ScoredDocument
+from compliance_rag.adapters.interfaces import Candidate, LawScope, Reranker, ScoredDocument
 from compliance_rag.eval.golden import Category, GoldenQuery, GoldenSet
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 
@@ -37,6 +37,11 @@ revised with evidence."""
 
 RECALL_BASELINE_PATH = (
     Path(__file__).resolve().parents[3] / "corpus" / "golden" / "recall_baseline.json"
+)
+
+
+WHOLE_LIBRARY = LawScope.unscoped(
+    "Phase 1 retrieval eval: recall is measured over the whole library, with no tenant profile"
 )
 
 
@@ -97,7 +102,9 @@ async def measure(
         raise UnsignedGoldenSet("the golden set is not signed off; its labels are only a draft")
     results: list[QueryRecall] = []
     for query in golden.queries:
-        trace = await pipeline.route(query.query, query.tenant_id, query.as_of, top_k=k)
+        trace = await pipeline.route(
+            query.query, query.tenant_id, query.as_of, law=WHOLE_LIBRARY, top_k=k
+        )
         results.append(measure_trace(query, trace, k))
     return tuple(results)
 

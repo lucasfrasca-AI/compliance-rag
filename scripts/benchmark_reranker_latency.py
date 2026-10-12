@@ -32,7 +32,7 @@ import httpx
 
 from compliance_rag.eval.golden import Category, load_golden_set
 from compliance_rag.eval.harness import golden_store
-from compliance_rag.eval.recall import NoRerank
+from compliance_rag.eval.recall import WHOLE_LIBRARY, NoRerank
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 
 
@@ -44,7 +44,9 @@ async def batches() -> list[tuple[str, tuple[str, ...]]]:
         for q in load_golden_set().queries:
             if q.category is Category.EXACT_ID:
                 continue
-            trace = await pipeline.retrieve(q.query, q.tenant_id, q.as_of, limit=50)
+            trace = await pipeline.retrieve(
+                q.query, q.tenant_id, q.as_of, law=WHOLE_LIBRARY, limit=50
+            )
             out.append((q.query, tuple(c.text for c in trace.fused)))
         return out
 

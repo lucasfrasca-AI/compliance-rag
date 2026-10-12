@@ -7,8 +7,8 @@ SQL call exists outside `adapters/`. Each interface has in-memory fakes in
 Two rules are encoded in the signatures rather than left to convention:
 
 - every graph traversal takes `as_of` and a `max_depth` (D-05), and
-- retrieval is two-track: `RetrievalStore` filters on obligation IDs supplied by
-  the caller from Track A, and never ranks graph results (D-03).
+- retrieval is two-track: `RetrievalStore` returns library law only from the
+  clauses Track A cites (`LawScope`), and never ranks graph results (D-03).
 """
 
 from __future__ import annotations
@@ -82,6 +82,57 @@ class Candidate:
     score: float
     channel: Channel | None = None
     obligation_id: str | None = None
+
+
+UNSCOPED = "unscoped: "
+
+
+@dataclass(frozen=True, slots=True)
+class LawScope:
+    """Which library-law clauses Track B may return (D-03, ADR-0030).
+
+    Built from Track A's coverage (`LawScope.of`): the clauses its applicable
+    and unassessable obligations cite. A library clause outside that set is
+    never returned, by any channel, however well it matches. The tenant's own
+    documents aren't law, and Track A doesn't scope them.
+
+    `unscoped` is the one way to retrieve library law without Track A. It is
+    for a question asked with no tenant profile (the Phase 1 retrieval eval,
+    library-wide lookups), and it says why, so an unscoped call is visible in
+    code and in traces — never an empty filter that silently means
+    "everything"."""
+
+    clause_ids: frozenset[str] | None
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            raise ValueError("a law scope says where it came from")
+        if self.clause_ids is None and not self.reason.startswith(UNSCOPED):
+            raise ValueError("an unscoped retrieval comes only from LawScope.unscoped(reason)")
+
+    @classmethod
+    def of(cls, coverage: Coverage) -> LawScope:
+        return cls(
+            coverage.track_a_clause_ids,
+            f"Track A for {coverage.tenant_id} on {coverage.as_of}",
+        )
+
+    @classmethod
+    def unscoped(cls, reason: str) -> LawScope:
+        if not reason.strip():
+            raise ValueError("an unscoped retrieval says where it came from")
+        return cls(None, f"{UNSCOPED}{reason}")
+
+    def admits(self, scope: Scope, clause_id: str) -> bool:
+        return scope is not Scope.PUBLIC or self.clause_ids is None or clause_id in self.clause_ids
+
+    @property
+    def described(self) -> str:
+        """For a span: the reason, and how many clauses it admits."""
+        if self.clause_ids is None:
+            return self.reason
+        return f"{self.reason}: {len(self.clause_ids)} clause(s)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +351,9 @@ class RetrievalStore(ABC):
 
     Every implementation restricts a tenant to its own documents plus the
     library instruments it subscribes to (ADR-0020), on every method — the
-    caller cannot pass that filter in, so it cannot leave it out.
+    caller cannot pass that filter in, so it cannot leave it out. Library law
+    is further restricted to `law` (Track A's clauses, D-03), which every
+    method requires.
     """
 
     @abstractmethod
@@ -308,7 +361,7 @@ class RetrievalStore(ABC):
         self,
         query: str,
         *,
-        obligation_ids: tuple[str, ...],
+        law: LawScope,
         tenant_id: str,
         scopes: tuple[Scope, ...],
         as_of: dt.date,
@@ -321,6 +374,7 @@ class RetrievalStore(ABC):
         self,
         clause_id: str,
         *,
+        law: LawScope,
         tenant_id: str,
         as_of: dt.date,
     ) -> Candidate | None:
