@@ -36,7 +36,7 @@ from compliance_rag.adapters.qdrant_retrieval_store import (
     _chunk_point_id,  # pyright: ignore[reportPrivateUsage] — addresses one point directly
 )
 from compliance_rag.corpus.models import Chunk, Scope
-from tests.conftest import qdrant_reachable
+from tests.conftest import ALL_LAW, qdrant_reachable
 
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
@@ -190,7 +190,7 @@ async def test_bitemporal_filter_is_one_unconditional_range_both_sides(
     )
     before_expiry = await store.search(
         "direct marketing opt-outs",
-        obligation_ids=(),
+        law=ALL_LAW,
         tenant_id="_public",
         scopes=(Scope.PUBLIC,),
         as_of=dt.date(2022, 1, 1),
@@ -198,7 +198,7 @@ async def test_bitemporal_filter_is_one_unconditional_range_both_sides(
     )
     after_expiry = await store.search(
         "direct marketing opt-outs",
-        obligation_ids=(),
+        law=ALL_LAW,
         tenant_id="_public",
         scopes=(Scope.PUBLIC,),
         as_of=dt.date(2026, 1, 1),

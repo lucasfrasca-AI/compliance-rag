@@ -23,10 +23,11 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.interfaces import Candidate, Channel, ScoredDocument
-from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.verifier.citations import Verifier
+from tests.conftest import ALL_LAW
 
 TENANT_ID = "acme"
 AS_OF = dt.date(2026, 1, 1)
@@ -109,7 +110,7 @@ def test_top_candidate_is_none_when_nothing_was_retrieved() -> None:
 async def test_retrieve_returns_channels_fused_and_rerank_scores(
     assessment: AssessmentPipeline,
 ) -> None:
-    result = await assessment.retrieval.retrieve(QUERY, TENANT_ID, AS_OF)
+    result = await assessment.retrieval.retrieve(QUERY, TENANT_ID, AS_OF, law=ALL_LAW)
     assert Channel.DENSE in result.per_channel
     assert Channel.SPARSE in result.per_channel
     assert result.fused
@@ -120,7 +121,7 @@ async def test_retrieve_returns_channels_fused_and_rerank_scores(
 async def test_answer_composes_retrieve_generate_and_verify(
     assessment: AssessmentPipeline,
 ) -> None:
-    result = await assessment.answer(QUERY, TENANT_ID, AS_OF)
+    result = await assessment.answer(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
     assert result.retrieval.fused
     assert result.generation.text
     assert result.verified is True
@@ -134,9 +135,9 @@ async def test_answer_calls_retrieve_rather_than_duplicating_the_pipeline(
     spy = AsyncMock(wraps=assessment.retrieval.retrieve)
     assessment.retrieval.retrieve = spy  # type: ignore[method-assign]
 
-    await assessment.answer(QUERY, TENANT_ID, AS_OF)
+    await assessment.answer(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
 
-    spy.assert_awaited_once_with(QUERY, TENANT_ID, AS_OF)
+    spy.assert_awaited_once_with(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
 
 
 async def test_answer_runs_with_fakes_only(assessment: AssessmentPipeline) -> None:
@@ -155,7 +156,7 @@ async def test_spans_are_emitted_at_every_stage_with_required_attributes(
     """CLAUDE.md: every function touching an LLM or a retriever emits a span
     with structured attributes — proving the trace shape, not just that the
     pipeline runs."""
-    await assessment.answer(QUERY, TENANT_ID, AS_OF)
+    await assessment.answer(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
 
     spans = {s.name: s for s in span_exporter.get_finished_spans()}
     assert "retrieve" in spans

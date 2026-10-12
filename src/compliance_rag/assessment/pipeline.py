@@ -17,7 +17,13 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from compliance_rag.adapters.interfaces import Generation, Generator, LedgerStore, UsageRecord
+from compliance_rag.adapters.interfaces import (
+    Generation,
+    Generator,
+    LawScope,
+    LedgerStore,
+    UsageRecord,
+)
 from compliance_rag.assessment.draft import (
     DraftAnswer,
     MalformedGeneration,
@@ -37,6 +43,12 @@ from compliance_rag.telemetry import current_trace_id, span
 from compliance_rag.verifier.citations import CheckedCitation, Verifier
 
 REPAIR_MAX_TOKENS = 512
+
+
+LIBRARY_QUESTION = LawScope.unscoped(
+    "a question about the library, asked with no tenant profile (Phase 1 answer(); "
+    "an assessment passes Track A's scope, LawScope.of(coverage))"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,10 +118,14 @@ class AssessmentPipeline:
         tenant_id: str,
         as_of: dt.date,
         *,
+        law: LawScope,
         policies: Sequence[SourceClause] = (),
         max_tokens: int = 1024,
     ) -> Answer:
-        """`policies` is the tenant's policy corpus, sent as the cached prefix
+        """`law` is Track B's scope (D-03, ADR-0030): `LawScope.of(coverage)`
+        for an assessment, `LIBRARY_QUESTION` for a question about the library
+        with no tenant profile — required, so no call skips Track A unseen.
+        `policies` is the tenant's policy corpus, sent as the cached prefix
         (D-11). The retriever's query is `query` and only `query`: it is fixed
         here, before any text is retrieved, and nothing retrieved or generated
         flows back into it (#29's injection control) — repair included, which
@@ -117,7 +133,7 @@ class AssessmentPipeline:
         (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries the
         rule that fenced text is data, which no caller gets to drop."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
-            trace = await self.retrieval.retrieve(query, tenant_id, as_of)
+            trace = await self.retrieval.retrieve(query, tenant_id, as_of, law=law)
 
             retrieved = [SourceClause(c.clause_id, c.text) for c in trace.ranked_candidates()]
             generation = await self.generator.generate(
