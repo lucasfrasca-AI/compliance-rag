@@ -22,11 +22,10 @@ CREATE TABLE IF NOT EXISTS coverage (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, assessment_id, obligation_id),
     FOREIGN KEY (tenant_id, assessment_id) REFERENCES assessment (tenant_id, assessment_id),
-    -- A decided obligation cites the law it was decided by; an undecided one
-    -- asks no question only when it has no text to cite (ADR-0028).
-    CHECK (outcome = 'unassessable' OR jsonb_array_length(citations) > 0),
-    CHECK (outcome <> 'unassessable' OR jsonb_array_length(questions) > 0
-           OR jsonb_array_length(citations) = 0)
+    -- A decided obligation cites the law it was decided by. An undecided one
+    -- always has its reason (NOT NULL above): its questions, or why none can
+    -- be asked (no text loaded, ADR-0028; no role in force).
+    CHECK (outcome = 'unassessable' OR jsonb_array_length(citations) > 0)
 );
 
 COMMIT;

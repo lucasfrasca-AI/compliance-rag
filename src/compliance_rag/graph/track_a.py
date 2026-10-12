@@ -36,7 +36,7 @@ from compliance_rag.graph.applicability import (
     Snapshot,
     evaluate,
 )
-from compliance_rag.graph.mappings import Leaf, MappingSet, Operator
+from compliance_rag.graph.mappings import Leaf, MappingSet, Operator, lineage, words
 
 _HOPS = (
     ("Obligation", "DERIVED_FROM", "Clause"),
@@ -86,7 +86,7 @@ async def read_snapshot(reader: GraphReader, as_of: dt.date) -> Snapshot:
     results = await asyncio.gather(*reads)
     nodes = {
         label: {str(r.node["stable_id"]): r.node for r in rows}
-        for label, rows in zip(labels, results, strict=False)
+        for label, rows in zip(labels, results[: len(labels)], strict=True)
     }
     hops = {hop: _targets(rows) for hop, rows in zip(_HOPS, results[len(labels) :], strict=True)}
 
@@ -103,7 +103,7 @@ async def read_snapshot(reader: GraphReader, as_of: dt.date) -> Snapshot:
             leaf=_leaf(node),
             question=str(node.get("question", "")),
             unassessable_reason=str(node.get("unassessable_reason", "")),
-            supersedes=cast("str | None", node.get("supersedes")),
+            lineage=_strings(node.get("lineage")),
         )
         for cid, node in nodes["Condition"].items()
     }
@@ -153,12 +153,12 @@ def snapshot_of_mappings(
             id=c.id,
             operator=c.operator,
             operands=c.operands,
-            description=" ".join(c.description.split()),
+            description=words(c.description),
             clause_ids=clauses(c.clause_ids),
             leaf=c.leaf,
-            question=" ".join((c.question or "").split()),
-            unassessable_reason=" ".join((c.unassessable_reason or "").split()),
-            supersedes=c.supersedes,
+            question=words(c.question or ""),
+            unassessable_reason=words(c.unassessable_reason or ""),
+            lineage=lineage(mappings.conditions_by_id, c.id),
         )
         for c in mappings.conditions
         if live(c.valid_from, c.valid_until)
@@ -176,7 +176,7 @@ def snapshot_of_mappings(
         o.id: ObligationSpec(
             id=o.id,
             instrument_id=o.instrument_id,
-            summary=" ".join(o.summary.split()),
+            summary=words(o.summary),
             clause_ids=clauses(o.clause_ids),
             actors=tuple(sorted(a for a in o.applies_to.actors if a in actors)),
             jurisdictions=tuple(
@@ -217,6 +217,21 @@ class GraphTrackA(GraphStore):
             return coverage
 
     async def crosswalks(
+        self, obligation_id: str, *, as_of: dt.date, max_depth: int
+    ) -> tuple[str, ...]:
+        with telemetry.span(
+            "track_a.crosswalks",
+            **{
+                "track_a.obligation_id": obligation_id,
+                "graph.as_of": as_of.isoformat(),
+                "graph.max_depth": max_depth,
+            },
+        ) as span:
+            found = await self._crosswalks(obligation_id, as_of=as_of, max_depth=max_depth)
+            span.set_attribute("track_a.crosswalks", list(found))
+            return found
+
+    async def _crosswalks(
         self, obligation_id: str, *, as_of: dt.date, max_depth: int
     ) -> tuple[str, ...]:
         found: set[str] = set()

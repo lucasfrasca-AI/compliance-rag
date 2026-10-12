@@ -36,6 +36,7 @@ from compliance_rag.assessment.coverage import (
     ObligationCoverage,
     Outcome,
     Question,
+    TenantSubgraph,
     Truth,
 )
 from compliance_rag.assessment.evidence import Facts, FactValue, Period, Reading
@@ -61,7 +62,8 @@ class ConditionSpec:
     leaf: Leaf | None = None
     question: str = ""
     unassessable_reason: str = ""
-    supersedes: str | None = None
+    lineage: tuple[str, ...] = ()
+    """Every condition this one supersedes, through any chain."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +110,30 @@ def evaluate(snapshot: Snapshot, facts: Facts, *, tenant_id: str) -> Coverage:
         evaluator.obligation(snapshot.obligations[i]) for i in sorted(snapshot.obligations)
     )
     return Coverage(
-        tenant_id=tenant_id, as_of=snapshot.as_of, obligations=obligations, actors=actors
+        tenant_id=tenant_id,
+        as_of=snapshot.as_of,
+        obligations=obligations,
+        actors=actors,
+        subgraph=_project(facts, actors, tenant_id=tenant_id, as_of=snapshot.as_of),
+    )
+
+
+def _project(
+    facts: Facts, actors: tuple[ActorCoverage, ...], *, tenant_id: str, as_of: dt.date
+) -> TenantSubgraph:
+    def current(field: str) -> tuple[str, ...]:
+        reading = facts.on(field, as_of)
+        value = reading.value
+        if reading.conflict or not isinstance(value, tuple):
+            return ()
+        return tuple(str(v) for v in value)
+
+    return TenantSubgraph(
+        organisation=tenant_id,
+        operates_in=current(JURISDICTIONS_FIELD),
+        handles=current("data_categories"),
+        regulated_by=current("regulators"),
+        acts_as=tuple((a.actor_id, a.truth) for a in actors if a.truth is not Truth.FALSE),
     )
 
 
@@ -125,7 +150,7 @@ class _Evaluator:
         self._as_of = snapshot.as_of
         self._memo: dict[str, Explanation] = {}
         self._successor = {
-            c.supersedes: c.id for c in snapshot.conditions.values() if c.supersedes is not None
+            earlier: c.id for c in snapshot.conditions.values() for earlier in c.lineage
         }
 
     # ---- conditions ---------------------------------------------------------
@@ -146,16 +171,11 @@ class _Evaluator:
         return self._memo[resolved]
 
     def _resolve(self, condition_id: str) -> str | None:
-        """The condition in force on `as_of` for an id: itself, or the
-        successor that supersedes it, followed to the end of the chain."""
-        seen: set[str] = set()
-        current: str | None = condition_id
-        while current is not None and current not in seen:
-            if current in self._snapshot.conditions:
-                return current
-            seen.add(current)
-            current = self._successor.get(current)
-        return None
+        """The condition in force on `as_of` for an id: itself, or the one
+        whose lineage includes it — however many amendments ago."""
+        if condition_id in self._snapshot.conditions:
+            return condition_id
+        return self._successor.get(condition_id)
 
     def _evaluate(self, spec: ConditionSpec) -> Explanation:
         if spec.operator is Operator.LEAF and spec.leaf is not None:
@@ -234,9 +254,12 @@ class _Evaluator:
                 )
             if verdict is None:
                 unknown_years.append(year.label)
-        if since_known and not unknown_years:
+        # With the start date unknown the floor is still never earlier than
+        # `not_before`, so every year since then known and none passing is a
+        # sound "no". A year with turnover recorded is taken as a year the
+        # business was carried on (ADR-0027).
+        if not unknown_years:
             return _node(spec, Truth.FALSE, (), evidence_ids=tuple(read))
-        missing = tuple(unknown_years) if since_known else (leaf.since_field, *unknown_years)
         question = Question(
             condition_id=spec.id,
             field=leaf.field,
@@ -246,7 +269,8 @@ class _Evaluator:
             clause_ids=spec.clause_ids,
             conflict=since.conflict,
             evidence_ids=tuple(read),
-            missing_periods=missing,
+            missing_periods=tuple(unknown_years),
+            also_needs=() if since_known else (leaf.since_field,),
         )
         return _node(spec, Truth.UNKNOWN, (), question=question, evidence_ids=tuple(read))
 
@@ -298,6 +322,14 @@ class _Evaluator:
                     clause_ids=actor.clause_ids,
                     because=(actor.explanation,),
                 )
+            )
+        if not children:
+            return Explanation(
+                condition_id=f"{obligation.id}#actors",
+                operator="actors",
+                truth=Truth.UNKNOWN,
+                description=f"No role the obligation applies to is in force on {self._as_of}.",
+                clause_ids=(),
             )
         truth, deciding = _combine(Operator.ANY_OF, tuple(children))
         return Explanation(
@@ -401,7 +433,8 @@ def _combine(
     decided result keeps only the *first* decisive child in authored order —
     one reason is enough, and the citation chain stays minimal (#93: in
     Trace 1, s6D(4) never needed asking). An unknown keeps every unknown
-    child: each is a question that could change the answer."""
+    child — each is a question that could change the answer — and an unknown
+    `all_of` also keeps the operands already met, as cited context."""
     decisive, neutral = (
         (Truth.FALSE, Truth.TRUE) if operator is Operator.ALL_OF else (Truth.TRUE, Truth.FALSE)
     )
@@ -409,6 +442,11 @@ def _combine(
     if by_truth[decisive]:
         return decisive, by_truth[decisive][:1]
     if by_truth[Truth.UNKNOWN]:
+        if operator is Operator.ALL_OF:
+            # The conditions already met are why the answer is "possibly"
+            # rather than "no" (#93 Trace 2: under the threshold, s6D(1)), so
+            # they stay as cited context; only unknown leaves become questions.
+            return Truth.UNKNOWN, tuple(c for c in children if c.truth is not Truth.FALSE)
         return Truth.UNKNOWN, by_truth[Truth.UNKNOWN]
     return neutral, children
 
@@ -447,7 +485,9 @@ def _ended_years(*, after: dt.date, as_of: dt.date) -> tuple[Period, ...]:
     years: list[Period] = []
     year = Period.financial_year_of(after)
     while year.end <= as_of:
-        if year.end - dt.timedelta(days=1) > after:
+        # `end` is exclusive (1 July): a year ending 30 June ended after a
+        # start on 30 June, so it counts.
+        if year.end > after:
             years.append(year)
         year = Period.financial_year(year.start.year + 1)
     return tuple(years)
@@ -503,6 +543,9 @@ def _compare(fact: FactValue, test: Comparison, value: object, as_of: dt.date) -
 def _reason(outcome: Outcome, explanation: Explanation) -> str:
     if outcome is Outcome.UNASSESSABLE:
         questions = explanation.questions()
+        if not questions:
+            unknown = [n.description for n in explanation.walk() if n.truth is Truth.UNKNOWN]
+            return "Unassessable: " + (unknown[-1] if unknown else explanation.description)
         return "Depends on: " + "; ".join(q.unassessable_reason for q in questions)
     leaves = [n.description for n in explanation.walk() if not n.because and n.description]
     verb = "Applies" if outcome is Outcome.APPLICABLE else "Does not apply"

@@ -584,7 +584,6 @@ def _assessment(conn: psycopg.Connection[tuple[object, ...]]) -> None:
     [
         ("probable", ["x:v:1"], []),  # three outcomes, never a score (D-06)
         ("applicable", [], []),  # a decided obligation cites the law
-        ("unassessable", ["x:v:1"], []),  # with text to cite, it says what is missing
     ],
 )
 def test_coverage_rows_say_why(
