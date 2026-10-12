@@ -57,7 +57,7 @@ ACT = NodeRef("Instrument", "act")
 async def cypher(graph: Neo4jGraph, query: str) -> list[dict[str, Any]]:  # Any: raw rows
     """Inspect the database directly — tests only."""
     driver: AsyncDriver = graph._driver  # pyright: ignore[reportPrivateUsage]
-    rows, _, _ = await driver.execute_query(cast("LiteralString", query))
+    rows, _, _ = await driver.execute_query(cast("LiteralString", query), database_="neo4j")
     return [dict(r) for r in rows]
 
 
@@ -89,7 +89,7 @@ async def graph() -> AsyncIterator[Neo4jGraph]:
     host = urlparse(NEO4J_TEST_URI).hostname
     assert host in {"localhost", "127.0.0.1"}, f"refusing to wipe a non-local graph ({host})"
     async with Neo4jGraph.connect(
-        NEO4J_TEST_URI, username="neo4j", password=NEO4J_TEST_PASSWORD
+        NEO4J_TEST_URI, username="neo4j", password=NEO4J_TEST_PASSWORD, database="neo4j"
     ) as g:
         await _wipe(g)
         yield g
@@ -278,16 +278,32 @@ def test_valid_to_must_follow_valid_from() -> None:
         Bitemporal(valid_from=JUN, status=Status.IN_FORCE, valid_to=JAN)
 
 
+KEEPALIVE = "aura-keepalive.yml"
+
+
 def test_ci_never_holds_aura_credentials() -> None:
-    """CI's graph is the service container. No workflow references the
-    deployed graph's URI, credentials or any secret named for it (Aura holds
-    public law only, D-09, and nothing in CI needs it)."""
+    """CI's graph is the service container. No workflow but the keep-alive
+    references the deployed graph's URI, credentials or any secret named for
+    it (Aura holds public law only, D-09, and nothing in CI needs it)."""
     workflows = Path(__file__).resolve().parents[1] / ".github" / "workflows"
     deployed = re.compile(
         r"NEO4J_(URI|USERNAME|PASSWORD|INSTANCE)|secrets\.\w*(NEO4J|AURA)|neo4j\.io", re.IGNORECASE
     )
     for workflow in workflows.glob("*.yml"):
-        assert not deployed.search(workflow.read_text(encoding="utf-8")), workflow.name
+        if workflow.name != KEEPALIVE:
+            assert not deployed.search(workflow.read_text(encoding="utf-8")), workflow.name
+
+
+def test_the_keepalive_runs_no_repository_code_and_only_reads() -> None:
+    """The one workflow holding Aura credentials checks nothing out, installs
+    nothing, has no token permissions, and sends a single read query."""
+    text = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / KEEPALIVE).read_text(
+        encoding="utf-8"
+    )
+    assert "actions/checkout" not in text and "uv " not in text and "pip " not in text
+    assert "permissions: {}" in text
+    statements = re.findall(r'"statement":"([^"]*)"', text)
+    assert statements == ["RETURN 1 AS ok"]
 
 
 def test_no_cypher_outside_adapters() -> None:
@@ -302,3 +318,82 @@ def test_no_cypher_outside_adapters() -> None:
         if "adapters" not in p.parts and cypher_text.search(p.read_text(encoding="utf-8"))
     ]
     assert offenders == []
+
+
+# ---- the database is always named (Aura Free: it is the instance ID) -------
+
+
+class _RecordingDriver:
+    """Stands in for the driver: records the database every call names."""
+
+    def __init__(self) -> None:
+        self.databases: list[object] = []
+
+    async def verify_connectivity(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    async def execute_query(self, query: object, **kwargs: object) -> tuple[list[Any], None, None]:
+        self.databases.append(kwargs.get("database_"))
+        return [{"c": 0}], None, None
+
+    def session(self, **kwargs: object) -> _RecordingSession:
+        self.databases.append(kwargs.get("database"))
+        return _RecordingSession()
+
+
+class _RecordingSession:
+    async def __aenter__(self) -> _RecordingSession:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None: ...
+
+    async def execute_write(self, work: object) -> bool:
+        return True
+
+
+async def test_every_query_names_the_configured_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On Aura Free the database is the instance ID (`5b790f49`), not "neo4j":
+    a call that relied on the driver's default database would address one
+    that doesn't exist. `from_settings` carries NEO4J_DATABASE through, and
+    every query names it."""
+    from neo4j import AsyncGraphDatabase
+
+    from compliance_rag.settings import Settings
+
+    driver = _RecordingDriver()
+
+    def fake_driver(*args: object, **kwargs: object) -> _RecordingDriver:
+        return driver
+
+    monkeypatch.setattr(AsyncGraphDatabase, "driver", fake_driver)
+    settings = Settings(
+        neo4j_uri="neo4j+s://5b790f49.databases.neo4j.io",
+        neo4j_username="5b790f49",
+        neo4j_database="5b790f49",
+    )
+    async with Neo4jGraph.from_settings(settings) as graph:
+        await graph.counts()  # reads: execute_query
+        await graph.put_node(C1, OPEN)  # writes: a session
+    assert driver.databases == ["5b790f49", "5b790f49", "5b790f49"]
+
+
+@pytest.mark.parametrize("missing", ["neo4j_uri", "neo4j_username", "neo4j_database"])
+async def test_a_missing_connection_value_fails_loudly(missing: str) -> None:
+    from compliance_rag.settings import Settings
+
+    complete = Settings(
+        neo4j_uri="neo4j+s://x.databases.neo4j.io", neo4j_username="x", neo4j_database="x"
+    )
+    settings = complete.model_copy(update={missing: ""})
+    with pytest.raises(ValueError, match="all required"):
+        async with Neo4jGraph.from_settings(settings):
+            pass
+
+
+def test_the_settings_database_has_no_neo4j_default() -> None:
+    from compliance_rag.settings import Settings
+
+    assert Settings.model_fields["neo4j_database"].default == ""

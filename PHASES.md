@@ -64,7 +64,7 @@ Unlocks: Cloud Storage bucket, Vertex Embeddings, Claude on Vertex, Cloud Run `r
 
 Goal: "does this apply to us, as of this date" answered by traversal, not by the LLM.
 
-First task, before any of the below: verify `compliance-rag-neo` still exists and the credentials in `.env` are current. Aura Free pauses after 3 days idle and is deleted after 30 days of inactivity (BUILD_LOG, 2026-10-01) — if Phase 2 starts weeks after Phase 1 ends, as is likely, the instance has almost certainly paused at least once in the gap, and may need resuming (console only) or, in the worst case, recreating.
+First task, before any of the below: verify `compliance-rag-neo` still exists and the credentials in `.env` are current (on Aura Free the username and database are both the instance ID — SETUP.md §3), **and turn on the keep-alive** (`.github/workflows/aura-keepalive.yml`, pulled forward from Phase 4 on 2026-10-12 because this is the first phase that depends on the deployed graph). Aura Free pauses after 3 days idle and is deleted after 30 days of inactivity (BUILD_LOG, 2026-10-01) — if Phase 2 starts weeks after Phase 1 ends, as is likely, the instance has almost certainly paused at least once in the gap, and may need resuming (console only) or, in the worst case, recreating.
 
 Deliverables
 - Neo4j schema: `Instrument`, `InstrumentVersion`, `Clause`, `Obligation`, `Condition`, `Actor`, `Control`, `Jurisdiction`, `Sector`; edges `PART_OF`, `VERSION_OF`, `SUPERSEDES`, `APPLIES_TO`, `REQUIRES`, `CROSSWALKS_TO`; bitemporal properties on every node
@@ -112,7 +112,7 @@ Goal: the corpus keeps itself current with a human in the loop.
 Deliverables
 - Feed poller (Federal Register, EUR-Lex Cellar) on Cloud Scheduler → Cloud Run job
 - Clause-level diff → GitHub PR naming affected mappings
-- Keep-alive job for Aura and Qdrant
+- Keep-alive job for Qdrant (Aura's moved to the start of Phase 2)
 - Regression gate re-runs golden set on corpus change; re-runs affected assessments
 - EU AI Act + Regulation 2026/1744 ingested; Omnibus commencement shifts as eval fixtures
 
