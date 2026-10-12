@@ -45,13 +45,15 @@ import compliance_rag.adapters.reranker_client
 import compliance_rag.adapters.reranker_http_client
 import compliance_rag.adapters.vertex_embedder
 from compliance_rag.adapters.fakes import FakeLedgerStore, FakeReranker, FakeRetrievalStore
+from compliance_rag.adapters.interfaces import LawScope
 from compliance_rag.corpus.models import Chunk
 
 chunk = Chunk(chunk_id="c1", clause_id="privacy-act-1988:V1:sch1/app11/1", text="protect it")
 store = FakeRetrievalStore((chunk,), ledger=FakeLedgerStore())
 pipeline = RetrievalPipeline(store, FakeReranker())
-asyncio.run(pipeline.retrieve("protect it", "_public", dt.date(2026, 1, 1)))
-asyncio.run(pipeline.route(chunk.clause_id, "_public", dt.date(2026, 1, 1)))
+law = LawScope.unscoped("wiring test")
+asyncio.run(pipeline.retrieve("protect it", "_public", dt.date(2026, 1, 1), law=law))
+asyncio.run(pipeline.route(chunk.clause_id, "_public", dt.date(2026, 1, 1), law=law))
 llm = ("anthropic", "anthropic.", "vertexai.generative")
 loaded = [
     m for m in sys.modules

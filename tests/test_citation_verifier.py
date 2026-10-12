@@ -20,7 +20,7 @@ from compliance_rag.adapters.fakes import (
 )
 from compliance_rag.adapters.interfaces import Generation
 from compliance_rag.assessment.draft import DraftCitation
-from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Outcome, Verifier
@@ -130,7 +130,7 @@ async def test_a_good_citation_verifies_and_shows_canonical_text() -> None:
             }
         )
     )
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     assert result.verified
     (shown,) = result.citations
     assert shown.clause is not None and shown.clause.canonical_text == V2_PROTECT.canonical_text
@@ -146,7 +146,7 @@ async def test_a_deliberately_bad_citation_blocks() -> None:
             _cite(V2_PROTECT, invented),
         )
     )
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     assert not result.verified
     assert result.citations == ()
     assert [c.outcome for c in result.blocked] == [Outcome.QUOTE_MISMATCH]
@@ -206,7 +206,7 @@ async def test_a_failing_citation_is_repaired_on_its_own() -> None:
         _cite(V2_RETAIN, "retained for seven years"),
     )
     pipeline, _, _ = await _setup(generator)
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
 
     assert len(generator.calls) == 2
     repair_prompt = str(generator.calls[1]["user"])
@@ -228,7 +228,7 @@ async def test_a_repair_that_switches_clause_stays_blocked() -> None:
             _cite(V2_PROTECT, "reasonable steps to protect"),
         )
     )
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     assert [c.outcome for c in result.blocked] == [Outcome.QUOTE_MISMATCH]
 
 
@@ -238,7 +238,7 @@ async def test_a_clause_outside_the_retrieved_or_cached_set_blocks_without_repai
         {"answer": "a", "citations": [_cite(V2_RETAIN, "retained for seven years")]}
     )
     pipeline, _, _ = await _setup(generator, retrievable=(V2_PROTECT,))
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     assert [c.outcome for c in result.blocked] == [Outcome.NOT_IN_CONTEXT]
     assert len(generator.calls) == 1
 
@@ -250,12 +250,12 @@ async def test_a_retired_version_blocks_even_when_retrieval_leaked_it() -> None:
     citation verifies at an `as_of` when v1 was in force."""
     draft = {"answer": "a", "citations": [_cite(V1_PROTECT, "reasonable steps to protect")]}
     pipeline, _, _ = await _setup(ScriptedGenerator(draft), retrievable=(V1_PROTECT,))
-    today = await pipeline.answer(QUESTION, TENANT, TODAY)
+    today = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     assert V1_PROTECT.clause_id in {c.clause_id for c in today.retrieval.fused}  # it leaked
     assert [c.outcome for c in today.blocked] == [Outcome.VERSION_NOT_IN_FORCE]
 
     pipeline, _, _ = await _setup(ScriptedGenerator(draft), retrievable=(V1_PROTECT,))
-    assert (await pipeline.answer(QUESTION, TENANT, BEFORE_V2)).verified
+    assert (await pipeline.answer(QUESTION, TENANT, BEFORE_V2, law=LIBRARY_QUESTION)).verified
 
 
 async def test_a_withdrawn_version_blocks_even_when_retrieval_leaked_it() -> None:
@@ -264,7 +264,7 @@ async def test_a_withdrawn_version_blocks_even_when_retrieval_leaked_it() -> Non
     await ledger.mark_withdrawn(
         tenant_id=TENANT, instrument_id=POLICY, version_id="v2", withdrawn_by="admin@acme"
     )
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     assert V2_PROTECT.clause_id in {c.clause_id for c in result.retrieval.fused}  # it leaked
     assert [c.outcome for c in result.blocked] == [Outcome.WITHDRAWN]
 
@@ -274,7 +274,7 @@ async def test_a_version_the_ledger_never_recorded_blocks() -> None:
     draft = {"answer": "a", "citations": [_cite(unknown, "reasonable steps to protect")]}
     pipeline, _, clauses = await _setup(ScriptedGenerator(draft), retrievable=(unknown,))
     await clauses.put_clause(unknown)
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     assert [c.outcome for c in result.blocked] == [Outcome.VERSION_UNKNOWN]
 
 
@@ -306,10 +306,10 @@ async def test_the_verifier_outcome_is_on_every_answer_span(
             {"answer": "a", "citations": [_cite(V2_PROTECT, "reasonable steps to protect")]}
         )
     )
-    await pipeline.answer(QUESTION, TENANT, TODAY)
+    await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     bad, _, _ = await _setup(FakeGenerator(reply="not json"))
     with pytest.raises(ValueError):
-        await bad.answer(QUESTION, TENANT, TODAY)
+        await bad.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
 
     spans = [s for s in span_exporter.get_finished_spans() if s.name == "answer"]
     assert [(s.attributes or {})["verifier.result"] for s in spans] == [True, False]
@@ -354,7 +354,7 @@ async def test_the_verifier_result_is_false_when_verification_itself_fails(
 
     ledger.version_validity = broken  # type: ignore[method-assign]
     with pytest.raises(ConnectionError):
-        await pipeline.answer(QUESTION, TENANT, TODAY)
+        await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     (answer_span,) = [s for s in span_exporter.get_finished_spans() if s.name == "answer"]
     assert (answer_span.attributes or {})["verifier.result"] is False
 
@@ -368,7 +368,7 @@ async def test_a_hostile_failed_quote_is_fenced_in_the_repair_prompt() -> None:
         _cite(V2_RETAIN, "retained for seven years"),
     )
     pipeline, _, _ = await _setup(generator)
-    await pipeline.answer(QUESTION, TENANT, TODAY)
+    await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
     repair = str(generator.calls[1]["user"])
     opening = repair.index("<failed_quote boundary=")
     boundary = repair[opening:].split("=", 1)[1].split(">", 1)[0]
@@ -412,7 +412,7 @@ async def test_every_generation_call_leaves_a_usage_row_with_the_request_trace_i
         _cite(V2_RETAIN, "retained for seven years"),
     )
     pipeline, ledger, _ = await _setup(generator)
-    result = await pipeline.answer(QUESTION, TENANT, TODAY)
+    result = await pipeline.answer(QUESTION, TENANT, TODAY, law=LIBRARY_QUESTION)
 
     rows = await ledger.usage(TENANT)
     assert len(rows) == 2  # the answer and its one repair
