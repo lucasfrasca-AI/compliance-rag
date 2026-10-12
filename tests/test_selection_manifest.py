@@ -8,6 +8,8 @@ prospectively, it isn't derived from clauses that already exist.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from compliance_rag.corpus.models import ClauseRecord
@@ -184,3 +186,23 @@ def test_a_model_may_draft_a_manifest_but_never_review_one() -> None:
             date="2026-10-08",
             prefixes=("s6/",),
         )
+
+
+def test_a_section_prefix_does_not_match_its_inserted_neighbour() -> None:
+    """`s6d/` must not take `s6da/` (annual turnover), nor `s6e/` take
+    `s6ea/` (opt-in): inserted sections share their neighbour's digits and
+    letter (issue #98)."""
+    manifest = SelectionManifest(
+        author="a", reviewed_by="b", date="2026-10-11", prefixes=("s6d/", "s6e/")
+    )
+    clauses = (_clause("s6d/1"), _clause("s6da/1/a"), _clause("s6e/1a"), _clause("s6ea/1"))
+    assert [c.clause_path for c in manifest.select(clauses)] == ["s6d/1", "s6e/1a"]
+
+
+def test_the_checked_in_manifest_selects_the_small_business_exemption() -> None:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "corpus/instruments/privacy-act-1988/C2026C00227/manifest.yaml"
+    )
+    manifest = parse_selection_manifest(path.read_text(encoding="utf-8"))
+    assert {"s6c/", "s6d/", "s6da/", "s6e/", "s6ea/"} <= set(manifest.prefixes)

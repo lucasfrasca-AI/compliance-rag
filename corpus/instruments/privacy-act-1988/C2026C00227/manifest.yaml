@@ -5,9 +5,14 @@
 # author == reviewed_by: single-author review — a human may review their own
 # file (corpus/mappings/README.md: "Review"). A distinct second reviewer is
 # required before this corpus is used for a real customer.
-author: Piero Frasca
-reviewed_by: Piero Frasca
-date: 2026-09-24
+# 2026-10-11 (issue #98): s6da/ and s6ea/ proposed by the model for the
+# small business exemption (docs/research/graph-ontology-options.md) — s6D
+# reads annual turnover as s6DA defines it, and s6EA is the opt-in. Pending
+# the human's review: on approval, set reviewed_by to the reviewer's name.
+# The original 2026-09-24 selection was single-author reviewed by Piero Frasca.
+author: "model: Claude Opus 5.5 — added s6da/ and s6ea/ to Piero Frasca's 2026-09-24 selection"
+reviewed_by: "PENDING — Piero Frasca"
+date: 2026-10-11
 
 # Phase 1 scope (issue #19 acceptance criteria): Schedule 1 (the Australian
 # Privacy Principles) plus ss 6, 6C, 6D and 6E of the main body. Each
@@ -20,4 +25,6 @@ prefixes:
   - s6/
   - s6c/
   - s6d/
+  - s6da/
   - s6e/
+  - s6ea/
