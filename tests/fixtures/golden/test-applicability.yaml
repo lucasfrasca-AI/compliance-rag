@@ -1,0 +1,38 @@
+# TEST FIXTURE — labels for the invented `test-act` miniature
+# (tests/fixtures/mappings/test-applicability.yaml), to test the gate itself.
+author: "model: Claude Opus 5.5 — gate test fixture"
+reviewed_by: test-fixture (not a review — invented data)
+date: "2026-10-12"
+compilations:
+  "test-act:v1": 2026-01-01
+cases:
+  - id: GA-01
+    description: Over the threshold last year — covered, every obligation applies but the health one.
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts:
+      - {field: annual_turnover_aud, value: 4000, financial_year: 2025}
+      - {field: operates_in, value: [AU-NSW], since: 2020-01-01}
+      - {field: provides_health_service, value: false, since: 2020-01-01}
+    expected:
+      obligation_count: 3
+      outcomes: {not_applicable: [OB-T-HEALTH]}
+      otherwise: applicable
+      acts_as: {test-act/actor/keeper: "true"}
+      questions: []
+      cites: {OB-T-KEEP: ["test-act:v1:s1/1", "test-act:v1:s2/1"]}
+  - id: GA-02
+    description: Under the threshold, nothing else known — possibly, with three questions.
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts:
+      - {field: annual_turnover_aud, value: 900, financial_year: 2025}
+    expected:
+      obligation_count: 3
+      otherwise: unassessable
+      acts_as: {test-act/actor/keeper: unknown}
+      questions:
+        - COND-T-EVER-OVER
+        - COND-T-HEALTH
+        - COND-T-OPTED-IN
+        - OB-T-KEEP-AU#operates_in
