@@ -213,6 +213,7 @@ WRITERS = {
     "src/compliance_rag/corpus/ingest.py",  # library law only (refuses tenant scope)
     "src/compliance_rag/eval/harness.py",  # operator: the golden corpus
     "src/compliance_rag/eval/live.py",  # operator: live eval and injection probes
+    "src/compliance_rag/adapters/interfaces.py",  # ClauseStore.put_clauses' default delegates
 }
 
 
@@ -225,7 +226,7 @@ def test_only_known_paths_write_to_the_corpus_stores() -> None:
     callers = {
         str(path.relative_to(root))
         for path in (root / "src").rglob("*.py")
-        if re.search(r"\.(upsert_chunks|put_clause)\(", path.read_text(encoding="utf-8"))
+        if re.search(r"\.(upsert_chunks|put_clauses?)\(", path.read_text(encoding="utf-8"))
     }
     assert callers == WRITERS
 
