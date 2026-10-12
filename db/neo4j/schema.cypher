@@ -101,8 +101,11 @@ FOR (n:Clause) ON (n.instrument_id, n.version_id);
 CREATE INDEX obligation_instrument IF NOT EXISTS
 FOR (n:Obligation) ON (n.instrument_id);
 
-CREATE INDEX condition_kind IF NOT EXISTS
-FOR (n:Condition) ON (n.kind);
+CREATE INDEX condition_temporal IF NOT EXISTS
+FOR (n:Condition) ON (n.valid_from, n.valid_to);
+
+CREATE INDEX actor_temporal IF NOT EXISTS
+FOR (n:Actor) ON (n.valid_from, n.valid_to);
 
 CREATE INDEX jurisdiction_code IF NOT EXISTS
 FOR (n:Jurisdiction) ON (n.code);
@@ -110,15 +113,26 @@ FOR (n:Jurisdiction) ON (n.code);
 CREATE INDEX sector_code IF NOT EXISTS
 FOR (n:Sector) ON (n.code);
 
-CREATE INDEX actor_role IF NOT EXISTS
-FOR (n:Actor) ON (n.role);
+// --- retired by ADR-0027 --------------------------------------------------
+// Conditions have an `operator`, not a `kind`, and an Actor is identified by
+// its stable ID ({instrument_id}/actor/{slug}), not a `role` property.
+
+DROP INDEX condition_kind IF EXISTS;
+
+DROP INDEX actor_role IF EXISTS;
 
 // --- edges ------------------------------------------------------------------
-// PART_OF      (Clause)->(InstrumentVersion)
-// VERSION_OF   (InstrumentVersion)->(Instrument)
-// SUPERSEDES   (InstrumentVersion)->(InstrumentVersion), (Obligation)->(Obligation)
-// APPLIES_TO   (Obligation)->(Actor|Jurisdiction|Sector)
-// REQUIRES     (Obligation)->(Condition|Control)
+// PART_OF       (Clause)->(InstrumentVersion)
+// VERSION_OF    (InstrumentVersion)->(Instrument)
+// SUPERSEDES    (X)->(X), X one of InstrumentVersion, Obligation, Condition,
+//               Actor, Control, Jurisdiction, Sector
+// DERIVED_FROM  (Obligation|Condition|Actor|Control)->(Clause) — one per
+//               compilation the item is grounded in (ADR-0028)
+// QUALIFIED_BY  (Actor)->(Condition) — the root of the actor's condition tree
+// HAS_OPERAND   (Condition)->(Condition) — the operator (all_of, any_of, not,
+//               leaf) is the parent node's `operator` property (ADR-0027)
+// APPLIES_TO    (Obligation)->(Actor|Jurisdiction|Sector)
+// REQUIRES      (Obligation)->(Condition|Control)
 // CROSSWALKS_TO (Obligation|Control)->(Obligation|Control)
 //
 // Tenant subgraph nodes (Organisation, HANDLES, OPERATES_IN, ACTS_AS,

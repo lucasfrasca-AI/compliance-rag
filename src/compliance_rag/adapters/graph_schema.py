@@ -33,12 +33,27 @@ are projected per request and never persisted (CONTEXT.md), so they are not
 writable here."""
 
 EDGE_TYPES = frozenset(
-    {"PART_OF", "VERSION_OF", "SUPERSEDES", "APPLIES_TO", "REQUIRES", "CROSSWALKS_TO"}
+    {
+        "PART_OF",
+        "VERSION_OF",
+        "SUPERSEDES",
+        "APPLIES_TO",
+        "REQUIRES",
+        "CROSSWALKS_TO",
+        "DERIVED_FROM",
+        "QUALIFIED_BY",
+        "HAS_OPERAND",
+    }
 )
+"""PHASES.md Phase 2's edges, plus the #93 design session's (ADR-0027,
+ADR-0028): `DERIVED_FROM` (Obligation, Condition, Actor, Control -> Clause),
+`QUALIFIED_BY` (Actor -> its condition tree's root) and `HAS_OPERAND`
+(Condition -> Condition; the operator is on the parent node)."""
 
 
-Scalar = str | int | float | bool | dt.date | tuple[str, ...]
-"""What a node or edge property may hold: Neo4j stores these natively."""
+Scalar = str | int | float | bool | dt.date | tuple[str, ...] | tuple[int | float, ...]
+"""What a node or edge property may hold: Neo4j stores these natively (a list
+is homogeneous)."""
 
 
 class GraphRefused(ValueError):
