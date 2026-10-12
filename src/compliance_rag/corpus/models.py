@@ -56,12 +56,48 @@ STABLE_ID_RE = re.compile(
 )
 
 
-class Status(StrEnum):
-    """Bitemporal status of an instrument version or clause (D-05)."""
+class EndReason(StrEnum):
+    """Why a bitemporal record stopped being in force — stored with
+    `valid_to`, set once with it (ADR-0029). An open record has none."""
 
-    IN_FORCE = "in_force"
-    NOT_YET_COMMENCED = "not_yet_commenced"
+    SUPERSEDED = "superseded"
     REPEALED = "repealed"
+    EXPIRED = "expired"
+
+
+class Status(StrEnum):
+    """A record's status on one date: derived from its valid time and
+    `EndReason`, never stored (ADR-0029, D-05). Storing it beside the dates
+    would be two representations of one fact that can disagree."""
+
+    NOT_YET_COMMENCED = "not_yet_commenced"
+    IN_FORCE = "in_force"
+    SUPERSEDED = "superseded"
+    REPEALED = "repealed"
+    EXPIRED = "expired"
+
+
+def status_on(
+    as_of: dt.date, *, valid_from: dt.date, valid_to: dt.date, end_reason: EndReason | None
+) -> Status:
+    """The status on `as_of`: before `valid_from` it has not commenced; from
+    `valid_to` it has ended for its `end_reason`; otherwise it is in force."""
+    if as_of < valid_from:
+        return Status.NOT_YET_COMMENCED
+    if as_of < valid_to:
+        return Status.IN_FORCE
+    if end_reason is None:
+        raise ValueError(f"valid_to {valid_to} is set with no end_reason (ADR-0029)")
+    return Status(end_reason.value)
+
+
+def check_end(valid_to: dt.date, end_reason: EndReason | None) -> None:
+    """An end date and an end reason come together or not at all."""
+    if (valid_to == NO_END_DATE) != (end_reason is None):
+        raise ValueError(
+            "valid_to and end_reason are set together: an open record has neither, "
+            "an ended one has both (ADR-0029)"
+        )
 
 
 PUBLIC_TENANT_ID = "_public"
@@ -389,22 +425,28 @@ class InstrumentVersion(BaseModel):
     instrument_id: str
     version_id: str
     title: str
-    status: Status
     valid_from: dt.date
     valid_to: dt.date = NO_END_DATE
+    end_reason: EndReason | None = None
     recorded_at: dt.datetime
     source_url: str | None = None
     supersedes: str | None = Field(
         default=None, description="version_id of the version this one supersedes (D-05)"
     )
 
+    @model_validator(mode="after")
+    def _end(self) -> InstrumentVersion:
+        check_end(self.valid_to, self.end_reason)
+        return self
+
+    def status_on(self, as_of: dt.date) -> Status:
+        return status_on(
+            as_of, valid_from=self.valid_from, valid_to=self.valid_to, end_reason=self.end_reason
+        )
+
     def is_current(self, as_of: dt.date) -> bool:
         """Whether this version is in force on `as_of` (D-05)."""
-        if as_of < self.valid_from:
-            return False
-        if as_of >= self.valid_to:
-            return False
-        return self.status is Status.IN_FORCE
+        return self.status_on(as_of) is Status.IN_FORCE
 
 
 class ClauseRecord(BaseModel):

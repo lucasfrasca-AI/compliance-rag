@@ -11,20 +11,18 @@ obligations:
   - id: OB-TEST-1
     clause_id: test-act:v1:s1/1
     summary: Keep the invented records safe.
-    status: in_force
     valid_from: 2026-01-01
     valid_to: 2026-06-01
+    end_reason: superseded
   - id: OB-TEST-1B
     clause_id: test-act:v1:s1/1
     summary: Keep the invented records safe, and say how.
-    status: in_force
     valid_from: 2026-06-01
     valid_to: null
     supersedes: OB-TEST-1
   - id: OB-TEST-2
     clause_id: test-act:v1:s2/1
     summary: Destroy the invented records when no longer needed.
-    status: in_force
     valid_from: 2026-01-01
     valid_to: null
 

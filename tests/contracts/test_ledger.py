@@ -134,6 +134,12 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         await ledger.end_version(
             tenant_id="acme", instrument_id=POLICY, version_id="v9", valid_to=JUN
         )
+    # Set once (D-05, ADR-0029): the same date again is a no-op, another is refused.
+    await ledger.end_version(tenant_id="acme", instrument_id=POLICY, version_id="v1", valid_to=JUN)
+    with pytest.raises(ValueError, match="set once"):
+        await ledger.end_version(
+            tenant_id="acme", instrument_id=POLICY, version_id="v1", valid_to=JAN
+        )
 
     # ---- findings citing, by stable-id prefix
     await seed_finding("acme", f"{POLICY}:v1:3/1")

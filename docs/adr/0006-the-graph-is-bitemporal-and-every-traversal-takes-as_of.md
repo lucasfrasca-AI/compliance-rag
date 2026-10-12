@@ -1,6 +1,6 @@
 # ADR-0006 — The graph is bitemporal and every traversal takes as_of
 
-- Status: accepted
+- Status: accepted; status wording amended by ADR-0029
 - Date: 2026-09-20
 - Decision ID: `D-05` (`DECISIONS.md`)
 

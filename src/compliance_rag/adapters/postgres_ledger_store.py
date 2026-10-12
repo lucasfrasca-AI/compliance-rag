@@ -240,8 +240,8 @@ class PostgresLedgerStore(LedgerStore):
                 )
                 await conn.execute(
                     "INSERT INTO instrument_version "
-                    "(tenant_id, instrument_id, version_id, title, status, valid_from, supersedes) "
-                    "VALUES (%s, %s, %s, %s, 'in_force', %s, %s)",
+                    "(tenant_id, instrument_id, version_id, title, valid_from, supersedes) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
                     (tenant_id, instrument_id, version_id, instrument_id, valid_from, supersedes),
                 )
         except psycopg.errors.UniqueViolation as exc:
@@ -256,12 +256,24 @@ class PostgresLedgerStore(LedgerStore):
         self, *, tenant_id: str, instrument_id: str, version_id: str, valid_to: dt.date
     ) -> None:
         updated = await self._execute(
-            "UPDATE instrument_version SET valid_to = %s "
-            "WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s",
-            (valid_to, tenant_id, instrument_id, version_id),
+            # Version-and-retire ends a version only by supersession (ADR-0021);
+            # status is derived from these two (ADR-0029). Set once: the same
+            # date again is a no-op, a different one matches no row.
+            "UPDATE instrument_version SET valid_to = %s, end_reason = 'superseded' "
+            "WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s "
+            "AND (valid_to IS NULL OR (valid_to = %s AND end_reason = 'superseded'))",
+            (valid_to, tenant_id, instrument_id, version_id, valid_to),
         )
         if updated == 0:
-            raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
+            validity = await self.version_validity(
+                tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
+            )
+            if validity is None:
+                raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
+            raise ValueError(
+                f"{instrument_id}:{version_id} already ended on {validity[1]}; "
+                "valid_to is set once (D-05)"
+            )
 
     async def version_validity(
         self, *, tenant_id: str, instrument_id: str, version_id: str

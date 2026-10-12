@@ -392,7 +392,13 @@ class FakeLedgerStore(LedgerStore):
         key = (tenant_id, instrument_id, version_id)
         if key not in self._versions:
             raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
-        self._versions[key] = (self._versions[key][0], valid_to)
+        valid_from, ended = self._versions[key]
+        if ended is not None and ended != valid_to:
+            raise ValueError(
+                f"{instrument_id}:{version_id} already ended on {ended}; "
+                "valid_to is set once (D-05)"
+            )
+        self._versions[key] = (valid_from, valid_to)
 
     async def version_validity(
         self, *, tenant_id: str, instrument_id: str, version_id: str

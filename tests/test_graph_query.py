@@ -32,7 +32,6 @@ from compliance_rag.adapters.neo4j_graph import (
     GraphWriteRefused,
     Neo4jGraph,
     NodeRef,
-    Status,
     to_python,
 )
 from tests.test_neo4j_graph import cypher, needs_neo4j
@@ -166,18 +165,17 @@ async def amended(graph: Neo4jGraph) -> AsyncIterator[Neo4jGraph]:
         NodeRef("InstrumentVersion", "act:v2"),
     )
     c1, c2 = NodeRef("Clause", "act:v1:s1"), NodeRef("Clause", "act:v2:s1")
-    await graph.put_node(act, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
-    await graph.put_node(v1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
-    await graph.put_node(c1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
+    await graph.put_node(act, Bitemporal(valid_from=JAN))
+    await graph.put_node(v1, Bitemporal(valid_from=JAN))
+    await graph.put_node(c1, Bitemporal(valid_from=JAN))
     await graph.put_edge("PART_OF", c1, v1)
     await graph.put_edge("VERSION_OF", v1, act)
     await graph.amend(
         old=v1,
         new=v2,
         effective=JUN,
-        status=Status.IN_FORCE,
     )
-    await graph.put_node(c2, Bitemporal(valid_from=JUN, status=Status.IN_FORCE))
+    await graph.put_node(c2, Bitemporal(valid_from=JUN))
     await graph.put_edge("PART_OF", c2, v2)
     await graph.put_edge("VERSION_OF", v2, act)
     yield graph
@@ -248,11 +246,9 @@ async def test_supersession_is_an_edge_and_nothing_else_changes(graph: Neo4jGrap
     v1's every other property is exactly as it was."""
     await graph.apply_schema()
     v1, v2 = NodeRef("InstrumentVersion", "act:v1"), NodeRef("InstrumentVersion", "act:v2")
-    await graph.put_node(v1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE), {"title": "Act"})
+    await graph.put_node(v1, Bitemporal(valid_from=JAN), {"title": "Act"})
     before = await _properties(graph, v1)
-    await graph.amend(
-        old=v1, new=v2, effective=JUN, status=Status.IN_FORCE, properties={"title": "Act"}
-    )
+    await graph.amend(old=v1, new=v2, effective=JUN, properties={"title": "Act"})
     after = await _properties(graph, v1)
     assert {k for k in before if before[k] != after[k]} == {"valid_to"}
     assert after["valid_to"] == JUN
@@ -274,9 +270,9 @@ async def test_an_amendment_is_atomic(graph: Neo4jGraph) -> None:
     """If any part of an amendment is refused, none of it lands."""
     await graph.apply_schema()
     v1, v2 = NodeRef("InstrumentVersion", "act:v1"), NodeRef("InstrumentVersion", "act:v2")
-    await graph.put_node(v1, Bitemporal(valid_from=JUN, status=Status.IN_FORCE))
+    await graph.put_node(v1, Bitemporal(valid_from=JUN))
     with pytest.raises(GraphWriteRefused, match="not after"):
-        await graph.amend(old=v1, new=v2, effective=JAN, status=Status.IN_FORCE)
+        await graph.amend(old=v1, new=v2, effective=JAN)
     assert await graph.counts() == GraphCounts(nodes=1, edges=0)
     assert (await _properties(graph, v1))["valid_to"] == dt.date.max
 
@@ -290,10 +286,10 @@ async def test_an_amendment_refused_after_the_retire_rolls_the_retire_back(
     retire must not survive."""
     await graph.apply_schema()
     v1, v2 = NodeRef("InstrumentVersion", "act:v1"), NodeRef("InstrumentVersion", "act:v2")
-    await graph.put_node(v1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE))
-    await graph.put_node(v2, Bitemporal(valid_from=JUN, status=Status.IN_FORCE), {"title": "x"})
+    await graph.put_node(v1, Bitemporal(valid_from=JAN))
+    await graph.put_node(v2, Bitemporal(valid_from=JUN), {"title": "x"})
     with pytest.raises(GraphWriteRefused, match="immutable"):
-        await graph.amend(old=v1, new=v2, effective=JUN, status=Status.IN_FORCE)
+        await graph.amend(old=v1, new=v2, effective=JUN)
     stored = await _properties(graph, v1)
     assert stored["valid_to"] == dt.date.max and "_lock" not in stored
     assert await graph.counts() == GraphCounts(nodes=2, edges=0)
