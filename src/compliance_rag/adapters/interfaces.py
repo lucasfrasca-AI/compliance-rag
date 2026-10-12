@@ -32,6 +32,7 @@ from compliance_rag.adapters.graph_schema import (
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.assessment.evidence import Evidence
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, validate_tenant_id
 
 # --------------------------------------------------------------------------
@@ -388,6 +389,17 @@ class LedgerStore(ABC):
 
     @abstractmethod
     async def put_profile(self, profile: Profile) -> None: ...
+
+    @abstractmethod
+    async def record_evidence(self, evidence: Evidence) -> None:
+        """Append one fact (issue #114). Append-only: refuses an evidence id
+        already recorded, and a `supersedes` naming evidence this tenant
+        doesn't have or that something else already supersedes."""
+
+    @abstractmethod
+    async def evidence(self, tenant_id: str) -> tuple[Evidence, ...]:
+        """Every fact recorded for the tenant, superseded ones included (the
+        record of what an earlier assessment read), in recording order."""
 
     @abstractmethod
     async def record_assessment(
