@@ -57,6 +57,7 @@ from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
     Embedder,
+    LawScope,
     LedgerStore,
     RetrievalAdmin,
     RetrievalResult,
@@ -246,7 +247,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         tenant_id: str,
         scopes: tuple[Scope, ...],
         as_of: dt.date,
-        obligation_ids: tuple[str, ...],
+        law: LawScope,
         extra: list[models.Condition] | None = None,
     ) -> models.Filter:
         """The *only* place a `Filter` is built (module docstring). Mirrors
@@ -286,13 +287,32 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             models.FieldCondition(key="valid_from", range=models.Range(lte=epoch_days(as_of))),
             models.FieldCondition(key="valid_to", range=models.Range(gt=epoch_days(as_of))),
         ]
-        if obligation_ids:
-            # D-03: Track B only ever returns chunks under Track A's obligations.
-            must.append(
+        trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
+        if law.clause_ids is not None:
+            # D-03: library law only from the clauses Track A cites; the
+            # tenant's own documents aren't law and Track A doesn't scope them.
+            # An empty MatchAny isn't "match nothing" everywhere, so with no
+            # clauses the law branch is omitted outright.
+            own: list[models.Condition] = [
                 models.FieldCondition(
-                    key="obligation_id", match=models.MatchAny(any=list(obligation_ids))
+                    key="scope",
+                    match=models.MatchAny(any=[Scope.TENANT.value, Scope.USER.value]),
                 )
-            )
+            ]
+            if law.clause_ids:
+                own.append(
+                    models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="scope", match=models.MatchValue(value=Scope.PUBLIC.value)
+                            ),
+                            models.FieldCondition(
+                                key="clause_id", match=models.MatchAny(any=sorted(law.clause_ids))
+                            ),
+                        ]
+                    )
+                )
+            must.append(models.Filter(should=own))
         if extra:
             must.extend(extra)
         # ADR-0021: a withdrawn version is out of retrieval at every as_of.
@@ -394,14 +414,14 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         self,
         query: str,
         *,
-        obligation_ids: tuple[str, ...],
+        law: LawScope,
         tenant_id: str,
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
     ) -> RetrievalResult:
         query_filter = await self._build_filter(
-            tenant_id=tenant_id, scopes=scopes, as_of=as_of, obligation_ids=obligation_ids
+            tenant_id=tenant_id, scopes=scopes, as_of=as_of, law=law
         )
         (dense_vector,) = await self._embedder.embed((query,))
         (sparse_vector,) = _encode_sparse([query])
@@ -469,6 +489,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         self,
         clause_id: str,
         *,
+        law: LawScope,
         tenant_id: str,
         as_of: dt.date,
     ) -> Candidate | None:
@@ -476,7 +497,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             tenant_id=tenant_id,
             scopes=(Scope.PUBLIC, Scope.TENANT, Scope.USER),
             as_of=as_of,
-            obligation_ids=(),
+            law=law,
             extra=[
                 models.FieldCondition(key="clause_id", match=models.MatchValue(value=clause_id))
             ],

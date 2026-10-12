@@ -22,6 +22,7 @@ from compliance_rag.adapters.interfaces import (
     Generation,
     Generator,
     GraphStore,
+    LawScope,
     LedgerStore,
     ManifestMetadata,
     Profile,
@@ -188,20 +189,19 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         self,
         query: str,
         *,
-        obligation_ids: tuple[str, ...],
+        law: LawScope,
         tenant_id: str,
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
     ) -> RetrievalResult:
-        allowed = set(obligation_ids)
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         pool = [
             c
             for c in self._chunks.values()
             if self._visible(c, tenant_id, scopes, subscribed)
-            # D-03: Track B only ever returns chunks under Track A's obligations.
-            and (not allowed or (c.obligation_id is not None and c.obligation_id in allowed))
+            # D-03: library law only from the clauses Track A cites.
+            and law.admits(c.scope, c.clause_id)
             and as_of >= c.valid_from
             and as_of < c.valid_to
         ]
@@ -254,6 +254,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         self,
         clause_id: str,
         *,
+        law: LawScope,
         tenant_id: str,
         as_of: dt.date,
     ) -> Candidate | None:
@@ -264,6 +265,8 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                 continue
             if not self._visible(c, tenant_id, every_scope, subscribed):
                 continue
+            if not law.admits(c.scope, c.clause_id):
+                continue  # D-03: the keyword channel is a channel too
             if not (c.valid_from <= as_of < c.valid_to):
                 continue
             return Candidate(
