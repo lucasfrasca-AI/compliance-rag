@@ -257,13 +257,23 @@ class PostgresLedgerStore(LedgerStore):
     ) -> None:
         updated = await self._execute(
             # Version-and-retire ends a version only by supersession (ADR-0021);
-            # status is derived from these two (ADR-0029).
+            # status is derived from these two (ADR-0029). Set once: the same
+            # date again is a no-op, a different one matches no row.
             "UPDATE instrument_version SET valid_to = %s, end_reason = 'superseded' "
-            "WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s",
-            (valid_to, tenant_id, instrument_id, version_id),
+            "WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s "
+            "AND (valid_to IS NULL OR valid_to = %s)",
+            (valid_to, tenant_id, instrument_id, version_id, valid_to),
         )
         if updated == 0:
-            raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
+            validity = await self.version_validity(
+                tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
+            )
+            if validity is None:
+                raise KeyError(f"{instrument_id}:{version_id} was never recorded for {tenant_id}")
+            raise ValueError(
+                f"{instrument_id}:{version_id} already ended on {validity[1]}; "
+                "valid_to is set once (D-05)"
+            )
 
     async def version_validity(
         self, *, tenant_id: str, instrument_id: str, version_id: str

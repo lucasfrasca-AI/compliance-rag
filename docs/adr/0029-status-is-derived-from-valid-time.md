@@ -18,9 +18,9 @@ written as `in_force` on every insert and never changed. Every version that
 version-and-retire ended (ADR-0021) still said `in_force`.
 
 A stored status also can't load a passed-but-not-commenced provision ahead
-of time without a second write on commencement day. One example is APP 1.7–1.9,
-inserted by the Privacy and Other Legislation Amendment Act 2024 and
-commencing 10 Dec 2026.
+of time without a second write on commencement day. The Privacy and Other
+Legislation Amendment Act 2024 has such items: C2026C00227's Endnote 3 lists
+Schedule 1 items 87–89 as commencing 10 Dec 2026.
 
 ## Decision
 

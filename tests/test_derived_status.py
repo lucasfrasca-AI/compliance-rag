@@ -36,9 +36,7 @@ JAN, JUN, DEC = dt.date(2026, 1, 1), dt.date(2026, 6, 1), dt.date(2026, 12, 1)
     ],
 )
 def test_status_is_derived_from_the_dates(as_of: dt.date, expected: Status) -> None:
-    assert (
-        status_on(as_of, valid_from=JAN, valid_to=JUN, end_reason=EndReason.REPEALED) is expected
-    )
+    assert status_on(as_of, valid_from=JAN, valid_to=JUN, end_reason=EndReason.REPEALED) is expected
 
 
 @pytest.mark.parametrize("reason", list(EndReason))
@@ -47,9 +45,7 @@ def test_an_ended_record_reports_why_it_ended(reason: EndReason) -> None:
 
 
 def test_an_open_record_is_in_force_forever_after_it_commences() -> None:
-    assert (
-        status_on(DEC, valid_from=JAN, valid_to=NO_END_DATE, end_reason=None) is Status.IN_FORCE
-    )
+    assert status_on(DEC, valid_from=JAN, valid_to=NO_END_DATE, end_reason=None) is Status.IN_FORCE
 
 
 def test_a_passed_but_not_commenced_provision_can_be_loaded_ahead_of_time() -> None:
