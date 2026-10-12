@@ -1,0 +1,286 @@
+# Applicability golden set (issue #117): Acme profiles in, Privacy Act
+# obligation outcomes out. Gated in CI (tests/test_applicability_gate.py)
+# through the fake and through Track A over Neo4j.
+#
+# DRAFTED BY THE MODEL, NOT YET REVIEWED. Every label below is the model's
+# reading of C2026C00227 and is for the reviewer to correct: a label is a label
+# only once `reviewed_by` signs it (D-01; CONTEXT.md: Golden set).
+#
+# Acme Pty Ltd is the synthetic company of docs/research/fixtures/
+# synthetic-policies/. Its facts here (when it started, its turnover each year,
+# what it answered) are invented for the cases: the policies say nothing
+# about them. As of 12 October 2026 the current financial year is FY2026-27,
+# so s6D(1)'s "previous financial year" is FY2025-26 (`financial_year: 2025`).
+#
+# The base profile every case starts from: a body corporate (Acme Pty Ltd),
+# not an agency, party or State authority, carrying on one business since
+# 2 March 2015.
+
+author: "model: Claude Opus 5.5 — labels drafted for #117/#118 from C2026C00227"
+reviewed_by: "PENDING — Piero Frasca"
+date: "PENDING"
+compilations:
+  "privacy-act-1988:C2026C00227": 2026-06-04
+
+cases:
+  - id: GA-01
+    description: >
+      Acme at $4M turnover for FY2025-26: not a small business (s6D(1)), so an
+      organisation and an APP entity — every APP applies except the two that
+      bind only agencies.
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts: &base
+      - {field: legal_form, value: body_corporate, since: 2015-03-02}
+      - {field: is_agency, value: false, since: 2015-03-02}
+      - {field: is_registered_political_party, value: false, since: 2015-03-02}
+      - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
+      - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
+      - {field: annual_turnover_aud, value: 4000000, financial_year: 2025}
+    expected:
+      outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
+      otherwise: applicable
+      acts_as:
+        privacy-act-1988/actor/app-entity: "true"
+        privacy-act-1988/actor/organisation: "true"
+        privacy-act-1988/actor/agency: "false"
+      questions: []
+      cites:
+        OB-PA-APP11-1:
+          - privacy-act-1988:C2026C00227:sch1/app11/1
+          - privacy-act-1988:C2026C00227:s15
+          - privacy-act-1988:C2026C00227:s6/1/app-entity
+          - privacy-act-1988:C2026C00227:s6c/1
+          - privacy-act-1988:C2026C00227:s6c/1/b
+          - privacy-act-1988:C2026C00227:s6d/1
+          - privacy-act-1988:C2026C00227:s6da/1
+
+  - id: GA-02
+    description: >
+      Acme at $2.5M for FY2025-26, nothing else known: under the threshold
+      (s6D(1)), so possibly — four routes could still bring it under the APPs
+      (s6D(4), s6D(9), s6E, s6EA), each unresolved, and every question that
+      would settle them is asked. Agency-only APPs still don't apply.
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts:
+      - {field: legal_form, value: body_corporate, since: 2015-03-02}
+      - {field: is_agency, value: false, since: 2015-03-02}
+      - {field: is_registered_political_party, value: false, since: 2015-03-02}
+      - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
+      - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
+      - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
+    expected:
+      outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
+      otherwise: unassessable
+      acts_as:
+        privacy-act-1988/actor/app-entity: unknown
+        privacy-act-1988/actor/organisation: unknown
+        privacy-act-1988/actor/agency: "false"
+      questions:
+        # s6D(4)
+        - COND-PA-S6D4A-EVER-OVER-THRESHOLD
+        - COND-PA-PROVIDES-HEALTH-SERVICE
+        - COND-PA-HOLDS-HEALTH-INFORMATION
+        - COND-PA-S6D4C-DISCLOSES-FOR-BENEFIT
+        - COND-PA-S6D4D-PAYS-TO-COLLECT
+        - COND-PA-S6D4E-COMMONWEALTH-CSP
+        - COND-PA-S6D4F-CREDIT-REPORTING-BODY
+        # s6D(9)
+        - COND-PA-RELATED-BODY-NOT-SMALL
+        # s6E
+        - COND-PA-S6E1-PRESCRIBED
+        - COND-PA-S6E1A-AML-CTF
+        - COND-PA-S6E1B-BALLOT-AGENT
+        - COND-PA-S6E1C-EMPLOYEE-ASSOCIATION
+        - COND-PA-S6E1D-CDR-ACCREDITED
+        - COND-PA-S6E2-PRESCRIBED-ACTS
+        # s6EA
+        - COND-PA-S6EA-OPTED-IN
+      cites:
+        OB-PA-APP11-1:
+          - privacy-act-1988:C2026C00227:s15
+          - privacy-act-1988:C2026C00227:s6d/1
+          - privacy-act-1988:C2026C00227:s6d/4
+          - privacy-act-1988:C2026C00227:s6d/9
+          - privacy-act-1988:C2026C00227:s6e/1
+          - privacy-act-1988:C2026C00227:s6ea/1
+
+  - id: GA-03
+    description: >
+      Acme at $2.5M after answering the questionnaire: turnover has never been
+      over $3M, and no to s6D(4)(d)-(f), s6D(9), every s6E route and s6EA.
+      What's left are s6D(4)(b) and (c) — the two the policies speak to (D3:
+      health information only in employee records; D1 3.3: disclosure to
+      service providers) but can't settle. They are asked, never inferred.
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts: &answered
+      - {field: legal_form, value: body_corporate, since: 2015-03-02}
+      - {field: is_agency, value: false, since: 2015-03-02}
+      - {field: is_registered_political_party, value: false, since: 2015-03-02}
+      - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
+      - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
+      - {field: annual_turnover_aud, value: 400000, financial_year: 2014}
+      - {field: annual_turnover_aud, value: 900000, financial_year: 2015}
+      - {field: annual_turnover_aud, value: 1200000, financial_year: 2016}
+      - {field: annual_turnover_aud, value: 1500000, financial_year: 2017}
+      - {field: annual_turnover_aud, value: 1700000, financial_year: 2018}
+      - {field: annual_turnover_aud, value: 1600000, financial_year: 2019}
+      - {field: annual_turnover_aud, value: 1900000, financial_year: 2020}
+      - {field: annual_turnover_aud, value: 2100000, financial_year: 2021}
+      - {field: annual_turnover_aud, value: 2200000, financial_year: 2022}
+      - {field: annual_turnover_aud, value: 2300000, financial_year: 2023}
+      - {field: annual_turnover_aud, value: 2400000, financial_year: 2024}
+      - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
+      - {field: provides_benefit_to_collect_personal_information, value: false, since: 2015-03-02}
+      - {field: commonwealth_contracted_service_provider, value: false, since: 2015-03-02}
+      - {field: credit_reporting_body, value: false, since: 2015-03-02}
+      - {field: related_body_corporate_not_small, value: false, since: 2015-03-02}
+      - {field: prescribed_under_s6e_1, value: false, since: 2015-03-02}
+      - {field: aml_ctf_reporting_entity, value: false, since: 2015-03-02}
+      - {field: protected_action_ballot_agent, value: false, since: 2015-03-02}
+      - {field: registered_employee_association, value: false, since: 2015-03-02}
+      - {field: cdr_accredited, value: false, since: 2015-03-02}
+      - {field: prescribed_under_s6e_2, value: false, since: 2015-03-02}
+      - {field: opted_in_under_s6ea, value: false, since: 2015-03-02}
+    expected:
+      outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
+      otherwise: unassessable
+      acts_as:
+        privacy-act-1988/actor/app-entity: unknown
+        privacy-act-1988/actor/organisation: unknown
+      questions:
+        - COND-PA-PROVIDES-HEALTH-SERVICE
+        - COND-PA-HOLDS-HEALTH-INFORMATION
+        - COND-PA-S6D4C-DISCLOSES-FOR-BENEFIT
+
+  - id: GA-04
+    description: >
+      Acme at $2.5M with every question answered no: a small business operator,
+      so not an organisation, and the APPs don't apply — "the Privacy Act
+      doesn't apply to you", cited just as fully as "it does".
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts:
+      - {field: legal_form, value: body_corporate, since: 2015-03-02}
+      - {field: is_agency, value: false, since: 2015-03-02}
+      - {field: is_registered_political_party, value: false, since: 2015-03-02}
+      - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
+      - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
+      - {field: annual_turnover_aud, value: 400000, financial_year: 2014}
+      - {field: annual_turnover_aud, value: 900000, financial_year: 2015}
+      - {field: annual_turnover_aud, value: 1200000, financial_year: 2016}
+      - {field: annual_turnover_aud, value: 1500000, financial_year: 2017}
+      - {field: annual_turnover_aud, value: 1700000, financial_year: 2018}
+      - {field: annual_turnover_aud, value: 1600000, financial_year: 2019}
+      - {field: annual_turnover_aud, value: 1900000, financial_year: 2020}
+      - {field: annual_turnover_aud, value: 2100000, financial_year: 2021}
+      - {field: annual_turnover_aud, value: 2200000, financial_year: 2022}
+      - {field: annual_turnover_aud, value: 2300000, financial_year: 2023}
+      - {field: annual_turnover_aud, value: 2400000, financial_year: 2024}
+      - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
+      - {field: provides_health_service, value: false, since: 2015-03-02}
+      - {field: holds_health_information_outside_employee_records, value: false, since: 2015-03-02}
+      - {field: discloses_personal_information_for_benefit, value: false, since: 2015-03-02}
+      - {field: provides_benefit_to_collect_personal_information, value: false, since: 2015-03-02}
+      - {field: commonwealth_contracted_service_provider, value: false, since: 2015-03-02}
+      - {field: credit_reporting_body, value: false, since: 2015-03-02}
+      - {field: related_body_corporate_not_small, value: false, since: 2015-03-02}
+      - {field: prescribed_under_s6e_1, value: false, since: 2015-03-02}
+      - {field: aml_ctf_reporting_entity, value: false, since: 2015-03-02}
+      - {field: protected_action_ballot_agent, value: false, since: 2015-03-02}
+      - {field: registered_employee_association, value: false, since: 2015-03-02}
+      - {field: cdr_accredited, value: false, since: 2015-03-02}
+      - {field: prescribed_under_s6e_2, value: false, since: 2015-03-02}
+      - {field: opted_in_under_s6ea, value: false, since: 2015-03-02}
+    expected:
+      otherwise: not_applicable
+      acts_as:
+        privacy-act-1988/actor/app-entity: "false"
+        privacy-act-1988/actor/organisation: "false"
+        privacy-act-1988/actor/agency: "false"
+      questions: []
+      cites:
+        OB-PA-APP11-1:
+          - privacy-act-1988:C2026C00227:s15
+          - privacy-act-1988:C2026C00227:s6d/1
+          - privacy-act-1988:C2026C00227:s6d/3
+
+  - id: GA-05
+    description: >
+      Acme at $2.5M now, but over $3M in FY2023-24: s6D(4)(a) — a business that
+      has ever had a year over the threshold since it started is never again a
+      small business operator. Every APP applies but the agency-only two.
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts:
+      - {field: legal_form, value: body_corporate, since: 2015-03-02}
+      - {field: is_agency, value: false, since: 2015-03-02}
+      - {field: is_registered_political_party, value: false, since: 2015-03-02}
+      - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
+      - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
+      - {field: annual_turnover_aud, value: 3200000, financial_year: 2023}
+      - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
+    expected:
+      outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
+      otherwise: applicable
+      acts_as:
+        privacy-act-1988/actor/app-entity: "true"
+        privacy-act-1988/actor/organisation: "true"
+      questions: []
+      cites:
+        OB-PA-APP11-1:
+          - privacy-act-1988:C2026C00227:s6d/4
+          - privacy-act-1988:C2026C00227:s6d/4/a
+
+  - id: GA-06
+    description: >
+      Acme at $2.5M, nothing else known, but opted in under s6EA: the Act
+      applies as if it were an organisation, whatever the other routes say.
+    tenant_id: acme
+    as_of: 2026-10-12
+    facts:
+      - {field: legal_form, value: body_corporate, since: 2015-03-02}
+      - {field: is_agency, value: false, since: 2015-03-02}
+      - {field: is_registered_political_party, value: false, since: 2015-03-02}
+      - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
+      - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
+      - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
+      - {field: opted_in_under_s6ea, value: true, since: 2020-01-01}
+    expected:
+      outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
+      otherwise: applicable
+      acts_as:
+        privacy-act-1988/actor/app-entity: "true"
+        privacy-act-1988/actor/organisation: "true"
+      questions: []
+      cites:
+        OB-PA-APP11-1: [privacy-act-1988:C2026C00227:s6ea/1]
+
+  - id: GA-07
+    description: >
+      The same $4M profile as GA-01, asked as of 1 May 2026 — before
+      C2026C00227, the only compilation loaded: no text to cite, so every
+      obligation is unassessable for want of a compilation (ADR-0028), never
+      applicable. Same question, two dates, different answers (PHASES.md
+      Phase 2 exit).
+    tenant_id: acme
+    as_of: 2026-05-01
+    facts:
+      - {field: legal_form, value: body_corporate, since: 2015-03-02}
+      - {field: is_agency, value: false, since: 2015-03-02}
+      - {field: is_registered_political_party, value: false, since: 2015-03-02}
+      - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
+      - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
+      - {field: annual_turnover_aud, value: 4000000, financial_year: 2024}
+    expected:
+      otherwise: unassessable
+      questions: []
