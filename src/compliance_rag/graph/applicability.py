@@ -547,6 +547,12 @@ def _reason(outcome: Outcome, explanation: Explanation) -> str:
             unknown = [n.description for n in explanation.walk() if n.truth is Truth.UNKNOWN]
             return "Unassessable: " + (unknown[-1] if unknown else explanation.description)
         return "Depends on: " + "; ".join(q.unassessable_reason for q in questions)
-    leaves = [n.description for n in explanation.walk() if not n.because and n.description]
+    # Each deciding fact with whether it held: a condition that wasn't met
+    # is a reason too, and must never read as if it were (#130).
+    leaves = [
+        f"{'met' if n.truth is Truth.TRUE else 'not met'}: {n.description}"
+        for n in explanation.walk()
+        if not n.because and n.description
+    ]
     verb = "Applies" if outcome is Outcome.APPLICABLE else "Does not apply"
-    return f"{verb}: " + "; ".join(dict.fromkeys(leaves))
+    return f"{verb} — " + "; ".join(dict.fromkeys(leaves))

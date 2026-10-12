@@ -25,6 +25,12 @@ TABLE_CASES: list[tuple[str, str, str]] = [
     (PRIVACY_ACT, "sch1/app5/2/b", "APP 5.2(b)"),
     (PRIVACY_ACT, "s6c/1/a", "s 6C(1)(a)"),
     (PRIVACY_ACT, "s6/1", "s 6(1)"),
+    (PRIVACY_ACT, "s6da/1", "s 6DA(1)"),
+    (PRIVACY_ACT, "s6ea/3/b", "s 6EA(3)(b)"),
+    (PRIVACY_ACT, "s6e/1a", "s 6E(1A)"),
+    (PRIVACY_ACT, "s6d/4/a/ii", "s 6D(4)(a)(ii)"),
+    (PRIVACY_ACT, "s6/1/app-entity", 's 6(1) "app entity"'),
+    (PRIVACY_ACT, "s6/1/agency/c/ii", 's 6(1) "agency" (c)(ii)'),
     (EU_AI_ACT, "art9/2/b", "Art 9(2)(b)"),
     (ISO_27001, "annexa/8/3", "A.8.3"),
 ]

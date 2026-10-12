@@ -4,7 +4,8 @@
 A pure function of the path, never stored: storing both a path and a label
 lets them drift, and the path is the authority (`CONTEXT.md`). It restores
 what lowercasing throws away — a section's letter suffix is uppercased
-(`s6c` -> `6C`) — and dispatches on the clause_path's own segment shape
+(`s6c` -> `6C`, `s6da` -> `6DA`) — and names a defined term (`s6/1/app-entity`
+-> `s 6(1) "app entity"`) — and dispatches on the clause_path's own segment shape
 (`sch.../app...`, `sN...`, `art...`, `annexa...`) to pick how the remaining
 segments are joined: a dotted sub-clause then bracketed paragraphs for an
 APP (`APP 5.2(b)`), all-bracketed for a section or an EU article
@@ -24,13 +25,26 @@ from __future__ import annotations
 
 import re
 
-_SECTION_RE = re.compile(r"^s(\d+)([a-z]?)$")
+_SECTION_RE = re.compile(r"^s(\d+)([a-z]{0,2})$")
+_PARAGRAPH_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+)$")
+"""A paragraph or subsection segment: `1`, `1a`, `a`, `ca`, `iii`. Anything else
+under a section is a defined term's slug (CONTEXT.md: Definition)."""
 _ARTICLE_RE = re.compile(r"^art(\d+)$")
 _SCHEDULE_APP_RE = re.compile(r"^app(\d+)$")
 
 
+_INSERTED_RE = re.compile(r"^(\d+)([a-z]+)$")
+
+
+def _cased(segment: str) -> str:
+    """An inserted subsection keeps its capital: `1a` -> `1A` (s 6E(1A));
+    a paragraph letter stays lower case."""
+    match = _INSERTED_RE.match(segment)
+    return f"{match.group(1)}{match.group(2).upper()}" if match else segment
+
+
 def _bracketed(base: str, rest: list[str]) -> str:
-    return base + "".join(f"({segment})" for segment in rest)
+    return base + "".join(f"({_cased(segment)})" for segment in rest)
 
 
 def display_form(clause_path: str, instrument_id: str) -> str:
@@ -44,6 +58,16 @@ def display_form(clause_path: str, instrument_id: str) -> str:
     section_match = _SECTION_RE.match(head)
     if section_match is not None:
         number, letter = section_match.groups()
+        paragraphs: list[str] = []
+        for n, segment in enumerate(rest):
+            if not _PARAGRAPH_RE.match(segment):
+                # s6/1/app-entity: the definition of "app entity" in s 6(1),
+                # then any paragraphs of that definition.
+                term = segment.replace("-", " ")
+                defined = f'{_bracketed(f"s {number}{letter.upper()}", paragraphs)} "{term}"'
+                following = rest[n + 1 :]
+                return _bracketed(f"{defined} ", following) if following else defined
+            paragraphs.append(segment)
         return _bracketed(f"s {number}{letter.upper()}", rest)
 
     article_match = _ARTICLE_RE.match(head)
