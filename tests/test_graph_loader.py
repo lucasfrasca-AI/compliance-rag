@@ -382,7 +382,8 @@ async def test_a_correction_in_place_is_refused_before_any_write(
             "applies_to": {"actors": ["test-act/actor/keeper"]},
         }
     )
-    with pytest.raises(MappingError, match="OB-TEST-2 is already loaded"):
+    # Wording only: refused unless acknowledged (ADR-0031), before any write.
+    with pytest.raises(MappingError, match=r"wording changed in loaded items \['OB-TEST-2'\]"):
         await load_mappings(graph, load_mapping_set([write_yaml(tmp_path, document)]), today=SEP)
     assert await graph.counts() == before
 

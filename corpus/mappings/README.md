@@ -269,5 +269,9 @@ anything.
 - **A new compilation of unchanged law adds a clause id.** Append the new
   compilation's clause to `clause_ids`. That adds a `DERIVED_FROM` edge, and
   the old clause retires with its version (ADR-0028).
-- **Cosmetic corrections** to a summary, note, description or question are
-  issue #120 (#93 Q4).
+- **A correction of wording is made in place** (ADR-0031). This covers a
+  `summary`, `description`, `question`, `unassessable_reason`, `name`,
+  `descriptor` or crosswalk `note`. Edit the YAML, then load with an
+  acknowledgement naming exactly the corrected item ids, who made the change
+  and why. The previous wording stays on the node's `corrections` trail.
+  Without the acknowledgement the load is refused before anything is written.

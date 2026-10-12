@@ -387,3 +387,15 @@ async def test_any_year_since_it_started_edges(
     history: tuple[Evidence, ...], expected: Truth
 ) -> None:
     assert explain(snapshot(), Facts.of(history), "COND-T-EVER-OVER").truth is expected
+
+
+async def test_a_reason_says_which_conditions_were_met_and_which_were_not() -> None:
+    """#130: a condition that wasn't met is part of the reason, labelled so."""
+    coverage = await assess(
+        fact("annual_turnover_aud", 4000, LAST_FY), fact("provides_health_service", False)
+    )
+    reason = coverage.obligation("OB-T-HEALTH").reason
+    assert reason.startswith("Does not apply — ")
+    assert "not met: Provides a health service." in reason
+    applies = coverage.obligation("OB-T-KEEP").reason
+    assert "not met: Turnover for the previous financial year is 1000 or less." in applies
