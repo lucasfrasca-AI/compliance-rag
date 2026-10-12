@@ -4,8 +4,8 @@
 A pure function of the path, never stored: storing both a path and a label
 lets them drift, and the path is the authority (`CONTEXT.md`). It restores
 what lowercasing throws away — a section's letter suffix is uppercased
-(`s6c` -> `6C`, `s6da` -> `6DA`) — and names a defined term (`s6/1/app-entity`
--> `s 6(1) "app entity"`) — and dispatches on the clause_path's own segment shape
+(`s6c` -> `6C`, `s6da` -> `6DA`) — and names a defined term by its slug
+(`s6/1/app-entity` -> `s 6(1) "app-entity"`) — and dispatches on the clause_path's own segment shape
 (`sch.../app...`, `sN...`, `art...`, `annexa...`) to pick how the remaining
 segments are joined: a dotted sub-clause then bracketed paragraphs for an
 APP (`APP 5.2(b)`), all-bracketed for a section or an EU article
@@ -26,9 +26,12 @@ from __future__ import annotations
 import re
 
 _SECTION_RE = re.compile(r"^s(\d+)([a-z]{0,2})$")
-_PARAGRAPH_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+)$")
-"""A paragraph or subsection segment: `1`, `1a`, `a`, `ca`, `iii`. Anything else
-under a section is a defined term's slug (CONTEXT.md: Definition)."""
+_PARAGRAPH_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+[a-z]?)$")
+"""A subsection, paragraph or subparagraph segment: `1`, `1a`, `a`, `ca`, `iii`,
+`iia`. Anything else under a section is a defined term's slug (CONTEXT.md:
+Definition) — every one in C2026C00227 has three or more letters, and the one
+three-letter slug (`acc`, the ACC) is no paragraph shape
+(`test_display_form.py` checks every slug in the constructs fixture)."""
 _ARTICLE_RE = re.compile(r"^art(\d+)$")
 _SCHEDULE_APP_RE = re.compile(r"^app(\d+)$")
 
@@ -63,8 +66,10 @@ def display_form(clause_path: str, instrument_id: str) -> str:
             if not _PARAGRAPH_RE.match(segment):
                 # s6/1/app-entity: the definition of "app entity" in s 6(1),
                 # then any paragraphs of that definition.
-                term = segment.replace("-", " ")
-                defined = f'{_bracketed(f"s {number}{letter.upper()}", paragraphs)} "{term}"'
+                # The slug, verbatim: it can't say where capitals or real
+                # hyphens were ("APP entity" and "de-identified" both slug
+                # with a hyphen), so it is shown as the slug it is.
+                defined = f'{_bracketed(f"s {number}{letter.upper()}", paragraphs)} "{segment}"'
                 following = rest[n + 1 :]
                 return _bracketed(f"{defined} ", following) if following else defined
             paragraphs.append(segment)

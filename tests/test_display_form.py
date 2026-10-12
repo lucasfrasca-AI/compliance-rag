@@ -29,8 +29,11 @@ TABLE_CASES: list[tuple[str, str, str]] = [
     (PRIVACY_ACT, "s6ea/3/b", "s 6EA(3)(b)"),
     (PRIVACY_ACT, "s6e/1a", "s 6E(1A)"),
     (PRIVACY_ACT, "s6d/4/a/ii", "s 6D(4)(a)(ii)"),
-    (PRIVACY_ACT, "s6/1/app-entity", 's 6(1) "app entity"'),
+    (PRIVACY_ACT, "s6/1/app-entity", 's 6(1) "app-entity"'),
+    (PRIVACY_ACT, "s6/1/de-identified", 's 6(1) "de-identified"'),
+    (PRIVACY_ACT, "s6/1/acc", 's 6(1) "acc"'),
     (PRIVACY_ACT, "s6/1/agency/c/ii", 's 6(1) "agency" (c)(ii)'),
+    (PRIVACY_ACT, "s6/1/agency/c/iia", 's 6(1) "agency" (c)(iia)'),
     (EU_AI_ACT, "art9/2/b", "Art 9(2)(b)"),
     (ISO_27001, "annexa/8/3", "A.8.3"),
 ]
@@ -71,3 +74,30 @@ def test_nothing_stores_a_display_form() -> None:
         }
         assert "display_form" not in field_names
         assert "display_text" not in field_names
+
+
+def test_every_definition_in_the_constructs_fixture_reads_as_a_definition() -> None:
+    """The paragraph-or-slug rule against real paths: every s 6(1) definition
+    the parser emits from the constructs fixture renders as a quoted term, and
+    every paragraph below one as a bracket."""
+    from pathlib import Path
+
+    from compliance_rag.corpus.parser import parse_compilation
+
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "research"
+        / "fixtures"
+        / "privacy-act-1988-C2026C00227.constructs.html"
+    )
+    parsed = parse_compilation(
+        fixture.read_text(encoding="utf-8"), instrument_id=PRIVACY_ACT, version_id="C2026C00227"
+    )
+    definitions = [c.clause_path for c in parsed.clauses if c.clause_path.startswith("s6/1/")]
+    assert definitions
+    for path in definitions:
+        slug, *paragraphs = path.split("/")[2:]
+        rendered = display_form(path, PRIVACY_ACT)
+        assert f'"{slug}"' in rendered, rendered
+        assert all(f"({p})" in rendered for p in paragraphs), rendered

@@ -549,8 +549,9 @@ def _reason(outcome: Outcome, explanation: Explanation) -> str:
         return "Depends on: " + "; ".join(q.unassessable_reason for q in questions)
     # Each deciding fact with whether it held: a condition that wasn't met
     # is a reason too, and must never read as if it were (#130).
+    label = {Truth.TRUE: "met", Truth.FALSE: "not met", Truth.UNKNOWN: "unknown"}
     leaves = [
-        f"{'met' if n.truth is Truth.TRUE else 'not met'}: {n.description}"
+        f"{label[n.truth]}: {n.description}"
         for n in explanation.walk()
         if not n.because and n.description
     ]
