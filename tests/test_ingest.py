@@ -310,3 +310,78 @@ async def test_an_interrupted_ingest_with_different_text_is_drift(fixture_html: 
     assert edited != fixture_html
     with pytest.raises(IngestDriftError, match="changed_content"):
         await _run(edited, store, _manifest("s6c/"))
+
+
+# ---- growing a completed selection, by acknowledgement only ------------------
+
+
+async def _added_paths(fixture_html: str) -> frozenset[str]:
+    from compliance_rag.corpus.parser import parse_compilation
+
+    parsed = parse_compilation(fixture_html, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
+    return frozenset(c.clause_path for c in _manifest("sch1/").select(parsed.clauses))
+
+
+async def test_a_wider_selection_is_added_only_when_exactly_acknowledged(
+    fixture_html: str,
+) -> None:
+    store = FakeClauseStore()
+    first = await _run(fixture_html, store, _manifest("s6c/"))
+    added = await _added_paths(fixture_html)
+
+    with pytest.raises(IngestDriftError, match="to add them, acknowledge exactly"):
+        await _run(fixture_html, store, _manifest("s6c/", "sch1/"))
+
+    result = await ingest_compilation(
+        fixture_html,
+        instrument_id=INSTRUMENT_ID,
+        version_id=VERSION_ID,
+        tenant_id=PUBLIC_TENANT_ID,
+        scope=Scope.PUBLIC,
+        selection=_manifest("s6c/", "sch1/"),
+        store=store,
+        acknowledged_additions=added,
+    )
+    assert (result.clauses_written, result.first_ingest) == (len(added), False)
+    assert result.source_html_sha256 == first.source_html_sha256
+    manifest = await store.get_manifest(INSTRUMENT_ID, VERSION_ID, tenant_id=PUBLIC_TENANT_ID)
+    assert added <= set(manifest) and "s6c/1" in manifest
+
+
+@pytest.mark.parametrize("which", ["subset", "superset"])
+async def test_an_inexact_acknowledgement_is_refused(fixture_html: str, which: str) -> None:
+    store = FakeClauseStore()
+    await _run(fixture_html, store, _manifest("s6c/"))
+    added = await _added_paths(fixture_html)
+    acknowledged = (
+        frozenset(sorted(added)[1:]) if which == "subset" else added | {"s6/1/organisation"}
+    )
+    with pytest.raises(IngestDriftError):
+        await ingest_compilation(
+            fixture_html,
+            instrument_id=INSTRUMENT_ID,
+            version_id=VERSION_ID,
+            tenant_id=PUBLIC_TENANT_ID,
+            scope=Scope.PUBLIC,
+            selection=_manifest("s6c/", "sch1/"),
+            store=store,
+            acknowledged_additions=acknowledged,
+        )
+    manifest = await store.get_manifest(INSTRUMENT_ID, VERSION_ID, tenant_id=PUBLIC_TENANT_ID)
+    assert not added & set(manifest)
+
+
+async def test_a_removal_cannot_be_acknowledged(fixture_html: str) -> None:
+    store = FakeClauseStore()
+    await _run(fixture_html, store, _manifest("s6c/", "sch1/"))
+    with pytest.raises(IngestDriftError):
+        await ingest_compilation(
+            fixture_html,
+            instrument_id=INSTRUMENT_ID,
+            version_id=VERSION_ID,
+            tenant_id=PUBLIC_TENANT_ID,
+            scope=Scope.PUBLIC,
+            selection=_manifest("s6c/"),
+            store=store,
+            acknowledged_additions=frozenset({"sch1/app11/1"}),
+        )

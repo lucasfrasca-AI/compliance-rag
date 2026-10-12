@@ -65,6 +65,7 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 - **Loop A** — corpus maintenance: poll → parse → version → diff → PR → load → regression gate.
 - **Loop B** — assessment: sign in → upload/ask → claims → Track A → Track B → rerank → generate → verify → answer → record.
 - **Golden set** — labelled queries and profiles with known-correct answers. The regression gate. Lives in `corpus/golden/` as YAML carrying the same `author`, `reviewed_by` and `date` front matter as mapping YAML, because it is the same kind of artefact: a human assertion that CI enforces. The **label** — which clause is correct for a query — is always human-authored; query text may be drafted by an LLM and then reviewed. Note that the corpus version is a tag over `corpus/instruments/` only, so editing the golden set never changes it: a retrieval regression and a corpus change stay distinguishable.
+- **Human reviewer** — the one person whose name goes in `reviewed_by` on a reviewed artefact (mapping YAML, selection manifests, the golden set): **Piero Frasca**, who merges on GitHub as `lucasfrasca-AI`. The two forms are the same person, so a PR merged by `lucasfrasca-AI` is a review by Piero Frasca. The model is never the reviewer, and it records the name only when the human has approved the artefact.
 
 ## Stores
 

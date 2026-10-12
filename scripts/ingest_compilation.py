@@ -12,6 +12,10 @@ already-approved corpus bucket and creates no resource.
 
     uv run python scripts/ingest_compilation.py \\
         --bucket compliance-rag-508904-corpus [--html path/to/document_1.html]
+
+A completed version whose reviewed manifest has since grown stops with the
+exact paths being added; re-run with `--acknowledge <those paths>` to add them
+(and only them). Removals and edits can't be acknowledged.
 """
 
 from __future__ import annotations
@@ -66,7 +70,7 @@ def pinned_source(html_path: Path | None) -> str:
     return raw.decode("utf-8")
 
 
-async def main(bucket: str, html_path: Path | None) -> None:
+async def main(bucket: str, html_path: Path | None, acknowledged: frozenset[str]) -> None:
     selection = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8"))
     store = GCSClauseStore.for_bucket(bucket)
     result = await ingest_compilation(
@@ -77,6 +81,7 @@ async def main(bucket: str, html_path: Path | None) -> None:
         scope=Scope.PUBLIC,
         selection=selection,
         store=store,
+        acknowledged_additions=acknowledged,
     )
     print(
         f"{result.instrument_id}:{result.version_id}: {result.clauses_written} clauses, "
@@ -93,5 +98,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--html", type=Path, default=None)
+    parser.add_argument(
+        "--acknowledge",
+        nargs="*",
+        default=[],
+        metavar="CLAUSE_PATH",
+        help="every clause path a reviewed manifest adds to an already-ingested version, "
+        "exactly as the refusal lists them (issue #19's drift check)",
+    )
     arguments = parser.parse_args()
-    asyncio.run(main(arguments.bucket, arguments.html))
+    asyncio.run(main(arguments.bucket, arguments.html, frozenset(arguments.acknowledge)))

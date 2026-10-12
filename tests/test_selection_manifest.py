@@ -205,7 +205,7 @@ def test_the_checked_in_manifest_selects_the_small_business_exemption() -> None:
         / "corpus/instruments/privacy-act-1988/C2026C00227/manifest.yaml"
     )
     manifest = parse_selection_manifest(path.read_text(encoding="utf-8"))
-    assert {"s6c/", "s6d/", "s6da/", "s6e/", "s6ea/"} <= set(manifest.prefixes)
+    assert {"s6c/", "s6d/", "s6da/", "s6e/", "s6ea/", "s15"} <= set(manifest.prefixes)
 
 
 @pytest.mark.parametrize(

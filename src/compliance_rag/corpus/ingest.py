@@ -74,6 +74,7 @@ async def ingest_compilation(
     scope: Scope,
     selection: SelectionManifest,
     store: ClauseStore,
+    acknowledged_additions: frozenset[str] = frozenset(),
 ) -> IngestResult:
     """Parse `source_html`, select the clauses `selection` puts in scope,
     and write them — unless doing so would silently change what's already
@@ -83,6 +84,13 @@ async def ingest_compilation(
     Idempotent on stable ID: re-running with the same `source_html` and
     `selection` re-writes identical content, which `ClauseStore`
     implementations must treat as a no-op in effect (same bytes, same key).
+
+    A completed version's selection can grow only by acknowledgement: when a
+    reviewed manifest adds sections (s15, say), the run still stops — unless
+    `acknowledged_additions` names exactly the clause paths being added, and
+    every already-stored clause is unchanged. Then only the additions are
+    written. A removal or an edit is never acknowledgeable (issue #19's
+    guarantee; the acknowledgement mirrors ADR-0021's findings-citing count).
 
     Library law only: a tenant document is written through `CorpusLifecycle`,
     where the residency gate and the synthetic registry apply (ADR-0023,
@@ -122,11 +130,29 @@ async def ingest_compilation(
     source_html_sha256 = sha256_hex(parsed.annotated_html)
     if completed:
         diff = _diff_manifests(old_manifest, new_manifest)
+        added = frozenset(new_manifest) - frozenset(old_manifest)
+        unchanged = (
+            _diff_manifests(
+                old_manifest, {p: new_manifest[p] for p in old_manifest if p in new_manifest}
+            )
+            is None
+        )
+        additions_only = added and unchanged and frozenset(old_manifest) <= frozenset(new_manifest)
+        if diff is not None and additions_only and added == acknowledged_additions:
+            await store.put_clauses(tuple(c for c in in_scope if c.clause_path in added))
+            return IngestResult(
+                instrument_id=instrument_id,
+                version_id=version_id,
+                clauses_written=len(added),
+                source_html_sha256=source_html_sha256,
+                first_ingest=False,
+            )
         if diff is not None:
+            hint = f"; to add them, acknowledge exactly {sorted(added)!r}" if additions_only else ""
             raise IngestDriftError(
                 f"{instrument_id}:{version_id} re-ingest does not match the stored "
                 f"manifest — canonical text must never be edited after write "
-                f"({diff})"
+                f"({diff}){hint}"
             )
         # Complete and unchanged: write nothing. The bucket is versioned, so
         # re-uploading identical objects would leave a noncurrent generation
