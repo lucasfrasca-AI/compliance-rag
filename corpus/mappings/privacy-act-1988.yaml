@@ -269,10 +269,7 @@ conditions:
     description: >
       Not a small business operator — or, if one, a small business operator the
       Act applies to as if it were an organisation (s6E, s6EA).
-    clause_ids:
-      - privacy-act-1988:C2026C00227:s6c/1
-      - privacy-act-1988:C2026C00227:s6e/1
-      - privacy-act-1988:C2026C00227:s6ea/1
+    clause_ids: [privacy-act-1988:C2026C00227:s6c/1]
     valid_from: 2014-03-12
     any_of: [COND-PA-NOT-SBO, COND-PA-S6E-TREATED-AS-ORGANISATION, COND-PA-S6EA-OPTED-IN]
 

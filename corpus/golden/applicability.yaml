@@ -39,6 +39,7 @@ cases:
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 4000000, financial_year: 2025}
     expected:
+      obligation_count: 37
       outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
       otherwise: applicable
       acts_as:
@@ -73,6 +74,7 @@ cases:
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
     expected:
+      obligation_count: 37
       outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
       otherwise: unassessable
       acts_as:
@@ -148,6 +150,7 @@ cases:
       - {field: prescribed_under_s6e_2, value: false, since: 2015-03-02}
       - {field: opted_in_under_s6ea, value: false, since: 2015-03-02}
     expected:
+      obligation_count: 37
       outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
       otherwise: unassessable
       acts_as:
@@ -199,6 +202,7 @@ cases:
       - {field: prescribed_under_s6e_2, value: false, since: 2015-03-02}
       - {field: opted_in_under_s6ea, value: false, since: 2015-03-02}
     expected:
+      obligation_count: 37
       otherwise: not_applicable
       acts_as:
         privacy-act-1988/actor/app-entity: "false"
@@ -228,6 +232,7 @@ cases:
       - {field: annual_turnover_aud, value: 3200000, financial_year: 2023}
       - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
     expected:
+      obligation_count: 37
       outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
       otherwise: applicable
       acts_as:
@@ -255,6 +260,7 @@ cases:
       - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
       - {field: opted_in_under_s6ea, value: true, since: 2020-01-01}
     expected:
+      obligation_count: 37
       outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
       otherwise: applicable
       acts_as:
@@ -282,5 +288,6 @@ cases:
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 4000000, financial_year: 2024}
     expected:
+      obligation_count: 37
       otherwise: unassessable
       questions: []
