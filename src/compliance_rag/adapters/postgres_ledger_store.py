@@ -34,6 +34,13 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     UsageRecord,
 )
+from compliance_rag.assessment.coverage import (
+    Coverage,
+    CoverageRow,
+    Outcome,
+    question_json,
+    question_of_json,
+)
 from compliance_rag.assessment.evidence import (
     Evidence,
     EvidenceProvenance,
@@ -216,6 +223,57 @@ class PostgresLedgerStore(LedgerStore):
             "(tenant_id, assessment_id, corpus_version, mapping_version, as_of, trace_id) "
             "VALUES (%s, %s, %s, %s, %s, %s)",
             (tenant_id, assessment_id, corpus_version, mapping_version, as_of, trace_id),
+        )
+
+    async def record_coverage(
+        self, *, tenant_id: str, assessment_id: str, coverage: Coverage, trace_id: str
+    ) -> None:
+        rows = [CoverageRow.of(o) for o in coverage.obligations]
+        try:
+            async with self._connection() as conn, conn.transaction(), conn.cursor() as cursor:
+                await cursor.executemany(
+                    "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, "
+                    "reason, citations, questions, trace_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    [
+                        (
+                            tenant_id,
+                            assessment_id,
+                            row.obligation_id,
+                            row.outcome.value,
+                            row.reason,
+                            Jsonb(list(row.citations)),
+                            Jsonb([question_json(q) for q in row.questions]),
+                            trace_id,
+                        )
+                        for row in rows
+                    ],
+                )
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(f"assessment {assessment_id} isn't recorded for {tenant_id}") from exc
+        except psycopg.errors.UniqueViolation as exc:
+            raise ValueError(f"coverage for {assessment_id} is already recorded") from exc
+        except (psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation) as exc:
+            raise ValueError(f"coverage refused: {exc.diag.message_primary}") from exc
+
+    async def coverage_rows(self, tenant_id: str, assessment_id: str) -> tuple[CoverageRow, ...]:
+        rows = await self._fetchall(
+            "SELECT obligation_id, outcome, reason, citations, questions FROM coverage "
+            "WHERE tenant_id = %s AND assessment_id = %s ORDER BY obligation_id",
+            (tenant_id, assessment_id),
+        )
+        return tuple(
+            CoverageRow(
+                obligation_id=str(r[0]),
+                outcome=Outcome(str(r[1])),
+                reason=str(r[2]),
+                citations=tuple(str(c) for c in cast("list[object]", r[3])),
+                questions=tuple(
+                    question_of_json(cast("dict[str, object]", q))
+                    for q in cast("list[object]", r[4])
+                ),
+            )
+            for r in rows
         )
 
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> dict[str, object] | None:

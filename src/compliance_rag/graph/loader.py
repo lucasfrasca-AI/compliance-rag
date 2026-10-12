@@ -62,6 +62,8 @@ from compliance_rag.graph.mappings import (
     MappingSet,
     Obligation,
     Sector,
+    lineage,
+    words,
 )
 
 
@@ -184,13 +186,7 @@ async def load_instrument_version(
         return report
 
 
-def _words(text: str) -> str:
-    """YAML's folded scalars carry line breaks; the graph stores the words,
-    single-spaced."""
-    return " ".join(text.split())
-
-
-def _node_properties(item: Dated) -> dict[str, Scalar]:
+def _node_properties(item: Dated, mappings: MappingSet) -> dict[str, Scalar]:
     """What each kind stores besides its stable ID and valid time."""
     match item:
         case Jurisdiction() | Sector():
@@ -199,8 +195,14 @@ def _node_properties(item: Dated) -> dict[str, Scalar]:
             props: dict[str, Scalar] = {
                 "instrument_id": item.instrument_id,
                 "operator": item.operator.value,
-                "description": _words(item.description),
+                "description": words(item.description),
+                # Declared on the node, not only as edges: an operand not in
+                # force on as_of has no edge on that date but still counts —
+                # as false, or as its successor (ADR-0027).
+                "operands": item.operands,
             }
+            if item.supersedes is not None:
+                props["lineage"] = lineage(mappings.conditions_by_id, item.id)
             if item.leaf is not None and item.question and item.unassessable_reason:
                 leaf = item.leaf
                 props |= {
@@ -208,8 +210,8 @@ def _node_properties(item: Dated) -> dict[str, Scalar]:
                     "period": leaf.period.value,
                     "test": leaf.test.value,
                     "value": leaf.value,
-                    "question": _words(item.question),
-                    "unassessable_reason": _words(item.unassessable_reason),
+                    "question": words(item.question),
+                    "unassessable_reason": words(item.unassessable_reason),
                 }
                 if leaf.since_field is not None and leaf.not_before is not None:
                     props |= {"since_field": leaf.since_field, "not_before": leaf.not_before}
@@ -218,12 +220,12 @@ def _node_properties(item: Dated) -> dict[str, Scalar]:
             return {
                 "instrument_id": item.instrument_id,
                 "name": item.name,
-                "description": _words(item.description),
+                "description": words(item.description),
             }
         case Control():
-            return {"instrument_id": item.instrument_id, "descriptor": _words(item.descriptor)}
+            return {"instrument_id": item.instrument_id, "descriptor": words(item.descriptor)}
         case Obligation():
-            return {"instrument_id": item.instrument_id, "summary": _words(item.summary)}
+            return {"instrument_id": item.instrument_id, "summary": words(item.summary)}
         case _:
             raise TypeError(f"no graph node for {type(item).__name__}")
 
@@ -272,7 +274,7 @@ def _edges(mappings: MappingSet) -> list[EdgeWrite]:
                 "CROSSWALKS_TO",
                 NodeRef(labels[crosswalk.source], crosswalk.source),
                 NodeRef(labels[crosswalk.target], crosswalk.target),
-                {"kind": crosswalk.kind.value, "note": _words(crosswalk.note)},
+                {"kind": crosswalk.kind.value, "note": words(crosswalk.note)},
             )
         )
     return edges
@@ -354,7 +356,10 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> None:
             stored = loaded.get(NodeRef(label, item.id))
             if stored is None:
                 continue
-            wanted: dict[str, object] = {**_node_properties(item), "valid_from": item.valid_from}
+            wanted: dict[str, object] = {
+                **_node_properties(item, mappings),
+                "valid_from": item.valid_from,
+            }
             have = {k: v for k, v in stored.properties.items() if k not in WRITER_KEYS}
             changed = sorted(
                 k for k in set(wanted) | set(have) if have.get(k) != _comparable(wanted.get(k))
@@ -404,7 +409,9 @@ async def load_mappings(
         await _check_unchanged(graph, mappings)
         created_nodes = await graph.put_nodes(
             [
-                NodeWrite(NodeRef(label, item.id), _bitemporal(item), _node_properties(item))
+                NodeWrite(
+                    NodeRef(label, item.id), _bitemporal(item), _node_properties(item, mappings)
+                )
                 for label, items in mappings.by_label.items()
                 for item in items
             ]

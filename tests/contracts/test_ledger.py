@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import pytest
 
-from compliance_rag.adapters.fakes import FakeLedgerStore
+from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
     LedgerStore,
     Profile,
@@ -25,7 +25,14 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     UsageRecord,
 )
-from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Period
+from compliance_rag.assessment.coverage import CoverageRow, Outcome
+from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
+from compliance_rag.graph.mappings import load_mapping_set
+from tests.test_applicability import AS_OF as APPLICABILITY_AS_OF
+from tests.test_applicability import CLAUSES as APPLICABILITY_CLAUSES
+from tests.test_applicability import FIXTURE as APPLICABILITY
+from tests.test_applicability import LAST_FY
+from tests.test_applicability import fact as applicability_fact
 
 SeedFinding = Callable[[str, str], Awaitable[None]]
 """(tenant_id, cited clause_id) -> records one finding citing that clause."""
@@ -112,6 +119,41 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         with pytest.raises(ValueError):
             await ledger.record_evidence(refused)
     assert len(await ledger.evidence("acme")) == 4
+
+    # ---- coverage per assessment (#115, D-06)
+    await ledger.record_assessment(
+        tenant_id="acme",
+        assessment_id="cov-1",
+        corpus_version="c",
+        mapping_version="m",
+        as_of=JAN,
+        trace_id="trace-cov",
+    )
+    coverage = await FakeGraphStore(
+        load_mapping_set([APPLICABILITY]), clause_validity=APPLICABILITY_CLAUSES
+    ).coverage(
+        Facts.of([applicability_fact("annual_turnover_aud", 900, LAST_FY)]),
+        tenant_id="acme",
+        as_of=APPLICABILITY_AS_OF,
+    )
+    await ledger.record_coverage(
+        tenant_id="acme", assessment_id="cov-1", coverage=coverage, trace_id="trace-cov"
+    )
+    rows = await ledger.coverage_rows("acme", "cov-1")
+    assert rows == tuple(
+        sorted((CoverageRow.of(o) for o in coverage.obligations), key=lambda r: r.obligation_id)
+    )
+    unassessable = [r for r in rows if r.outcome is Outcome.UNASSESSABLE]
+    assert unassessable and all(r.questions for r in unassessable)
+    with pytest.raises(ValueError, match="already recorded"):
+        await ledger.record_coverage(
+            tenant_id="acme", assessment_id="cov-1", coverage=coverage, trace_id="trace-cov"
+        )
+    with pytest.raises(ValueError, match="isn't recorded"):
+        await ledger.record_coverage(
+            tenant_id="acme", assessment_id="cov-404", coverage=coverage, trace_id="t"
+        )
+    assert await ledger.coverage_rows("other-corp", "cov-1") == ()
 
     # ---- assessments carry their trace_id
     await ledger.record_assessment(

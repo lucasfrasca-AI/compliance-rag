@@ -33,7 +33,8 @@ from compliance_rag.adapters.graph_schema import (
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.assessment.evidence import Evidence
+from compliance_rag.assessment.coverage import Coverage, CoverageRow
+from compliance_rag.assessment.evidence import Evidence, Facts
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, validate_tenant_id
 
 # --------------------------------------------------------------------------
@@ -47,25 +48,6 @@ class Channel(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
     KEYWORD = "keyword"
-
-
-class Assessability(StrEnum):
-    """Whether Track A could decide an obligation applies (D-06)."""
-
-    ASSESSABLE = "assessable"
-    UNASSESSABLE = "unassessable"
-
-
-@dataclass(frozen=True, slots=True)
-class Obligation:
-    """A graph node for a clause that imposes a requirement."""
-
-    obligation_id: str
-    clause_id: str
-    instrument_id: str
-    summary: str
-    assessability: Assessability = Assessability.ASSESSABLE
-    unassessable_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,28 +194,15 @@ class ManifestMetadata:
 
 
 class GraphStore(ABC):
-    """Track A: deterministic traversal from profile to applicable obligations.
-
-    Every method takes `as_of`. A traversal without it is a test failure (D-05),
-    which is why it has no default.
-    """
-
-    @abstractmethod
-    async def applicable_obligations(
-        self,
-        profile: Profile,
-        *,
-        as_of: dt.date,
-        max_depth: int,
-    ) -> tuple[Obligation, ...]:
-        """Every obligation that binds this profile on `as_of`.
-
-        Unranked and untruncated: the caller must not impose a top-k (D-03).
-        """
+    """Track A (D-03): every obligation in force on `as_of`, each applicable,
+    not applicable or unassessable for this tenant (D-06), with the clauses
+    that decide it. Unranked and untruncated: there is no top-k to pass.
+    Every read behind it is a `BuiltQuery`, so it carries `as_of` and a depth
+    cap (D-05)."""
 
     @abstractmethod
-    async def obligation(self, obligation_id: str, *, as_of: dt.date) -> Obligation | None:
-        """One obligation as it stood on `as_of`."""
+    async def coverage(self, facts: Facts, *, tenant_id: str, as_of: dt.date) -> Coverage:
+        """Every obligation, evaluated against the tenant's evidence."""
 
     @abstractmethod
     async def crosswalks(
@@ -242,11 +211,20 @@ class GraphStore(ABC):
         *,
         as_of: dt.date,
         max_depth: int,
-    ) -> tuple[Obligation, ...]:
-        """Obligations reachable by `CROSSWALKS_TO` within `max_depth` hops."""
+    ) -> tuple[str, ...]:
+        """Obligation and control ids reachable by `CROSSWALKS_TO` within
+        `max_depth` hops, in force on `as_of`."""
 
 
-class GraphAdmin(ABC):
+class GraphReader(ABC):
+    """Builder-built reads of the persisted graph — all Track A needs."""
+
+    @abstractmethod
+    async def read(self, query: BuiltQuery) -> tuple[GraphRow, ...]:
+        """Run one builder-built query."""
+
+
+class GraphAdmin(GraphReader):
     """Writes to the persisted graph, and builder-built reads (Phase 2).
 
     The loaders (`graph/loader.py`) talk to this, never to the Neo4j adapter.
@@ -304,10 +282,6 @@ class GraphAdmin(ABC):
     ) -> None:
         """New node, `SUPERSEDES`, old retired as superseded — and
         `retire_with` retired on the same date — in one transaction."""
-
-    @abstractmethod
-    async def read(self, query: BuiltQuery) -> tuple[GraphRow, ...]:
-        """Run one builder-built query."""
 
     @abstractmethod
     async def counts(self) -> GraphCounts:
@@ -408,6 +382,17 @@ class LedgerStore(ABC):
     async def evidence(self, tenant_id: str) -> tuple[Evidence, ...]:
         """Every fact recorded for the tenant, superseded ones included (the
         record of what an earlier assessment read), in recording order."""
+
+    @abstractmethod
+    async def record_coverage(
+        self, *, tenant_id: str, assessment_id: str, coverage: Coverage, trace_id: str
+    ) -> None:
+        """One row per obligation for a recorded assessment (D-06): outcome,
+        reason, citations and, for an unassessable one, its questions."""
+
+    @abstractmethod
+    async def coverage_rows(self, tenant_id: str, assessment_id: str) -> tuple[CoverageRow, ...]:
+        """An assessment's coverage, by obligation id."""
 
     @abstractmethod
     async def record_assessment(

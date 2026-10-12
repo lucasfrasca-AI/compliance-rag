@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from compliance_rag.adapters.interfaces import Obligation
+from compliance_rag.assessment.coverage import ObligationCoverage
 from compliance_rag.corpus.display_form import display_form
 from compliance_rag.corpus.models import Citation, ClauseRecord
+from compliance_rag.graph.mappings import Obligation
 
 PRIVACY_ACT = "privacy-act-1988"
 EU_AI_ACT = "eu-ai-act"
@@ -57,7 +58,7 @@ def test_an_unknown_convention_falls_back_to_something_legible_rather_than_raisi
 def test_nothing_stores_a_display_form() -> None:
     """CONTEXT.md's Display form entry: storing both a path and a label lets
     them drift, so no model field may hold one."""
-    for model in (ClauseRecord, Citation, Obligation):
+    for model in (ClauseRecord, Citation, Obligation, ObligationCoverage):
         field_names = getattr(model, "model_fields", None) or {
             f.name
             for f in model.__dataclass_fields__.values()  # type: ignore[attr-defined]

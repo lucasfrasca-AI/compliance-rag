@@ -1,0 +1,106 @@
+# TEST FIXTURE — invented for the Track A tests (issue #115). Not law: a
+# miniature of a small-business exemption over the invented `test-act`, so
+# every evaluator path can be tested without the real Act's mappings.
+#
+# A keeper is covered unless it is small: under the threshold last financial
+# year and with no exception (ever over it since it started, or a health
+# service). Opting in covers it anyway.
+author: "model: Claude Opus 5.5 — Track A test fixture"
+reviewed_by: test-fixture (not a review — invented data)
+date: 2026-10-12
+source_clause_ids:
+  - test-act:v1:s1/1
+  - test-act:v1:s2/1
+
+jurisdictions:
+  - id: AU
+    name: Australia
+    source: ISO 3166-1
+    valid_from: 1901-01-01
+
+conditions:
+  - id: COND-T-COVERED
+    description: Covered unless small, or opted in.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    any_of: [COND-T-NOT-SMALL, COND-T-OPTED-IN]
+  - id: COND-T-NOT-SMALL
+    description: Not a small keeper.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    not: COND-T-SMALL
+  - id: COND-T-SMALL
+    description: Under the threshold, with no exception.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    all_of: [COND-T-UNDER-THRESHOLD, COND-T-NO-EXCEPTION]
+  - id: COND-T-UNDER-THRESHOLD
+    description: Turnover for the previous financial year is 1000 or less.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    leaf: {field: annual_turnover_aud, period: previous_financial_year, test: lte, value: 1000}
+    question: What was the turnover for the previous financial year?
+    unassessable_reason: No turnover is recorded for the previous financial year.
+  - id: COND-T-NO-EXCEPTION
+    description: No exception applies.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    not: COND-T-EXCEPTION
+  - id: COND-T-EXCEPTION
+    description: An exception applies.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    any_of: [COND-T-EVER-OVER, COND-T-HEALTH]
+  - id: COND-T-EVER-OVER
+    description: Turnover over 1000 in any financial year ended since it started.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    leaf:
+      field: annual_turnover_aud
+      period: any_ended_financial_year
+      test: gt
+      value: 1000
+      since_field: business_started_on
+      not_before: 2022-07-01
+    question: What was the turnover for each financial year since the business started?
+    unassessable_reason: Turnover is not recorded for every financial year since it started.
+  - id: COND-T-HEALTH
+    description: Provides a health service.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    leaf: {field: provides_health_service, test: eq, value: true}
+    question: Does the business provide a health service?
+    unassessable_reason: Nobody has said whether the business provides a health service.
+  - id: COND-T-OPTED-IN
+    description: Has opted in.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    leaf: {field: opted_in, test: eq, value: true}
+    question: Has the business opted in?
+    unassessable_reason: Nobody has said whether the business opted in.
+
+actors:
+  - id: test-act/actor/keeper
+    name: Keeper
+    description: Whoever keeps the invented records.
+    clause_ids: [test-act:v1:s1/1]
+    qualified_by: COND-T-COVERED
+    valid_from: 2026-01-01
+
+obligations:
+  - id: OB-T-KEEP
+    clause_ids: [test-act:v1:s1/1]
+    summary: Keep the invented records safe.
+    valid_from: 2026-01-01
+    applies_to: {actors: [test-act/actor/keeper]}
+  - id: OB-T-KEEP-AU
+    clause_ids: [test-act:v1:s1/1]
+    summary: Keep them in Australia.
+    valid_from: 2026-01-01
+    applies_to: {actors: [test-act/actor/keeper], jurisdictions: [AU]}
+  - id: OB-T-HEALTH
+    clause_ids: [test-act:v1:s2/1]
+    summary: Keep health records separately.
+    valid_from: 2026-01-01
+    applies_to: {actors: [test-act/actor/keeper]}
+    requires: {conditions: [COND-T-HEALTH]}

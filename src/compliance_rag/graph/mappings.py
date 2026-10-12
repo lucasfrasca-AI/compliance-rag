@@ -637,6 +637,25 @@ def _check_supersession(label: str, items: Mapping[str, Dated]) -> None:
             )
 
 
+def words(text: str) -> str:
+    """Prose as the graph stores it: YAML's folded line breaks gone,
+    single-spaced. One function, so the loader and the in-memory snapshot
+    can't store the same text two ways."""
+    return " ".join(text.split())
+
+
+def lineage(items: Mapping[str, Dated], identifier: str) -> tuple[str, ...]:
+    """Every item `identifier` supersedes, directly or through a chain, most
+    recent first. A node carries it so that an id from any earlier version
+    resolves to whatever stands in for it today (ADR-0027)."""
+    chain: list[str] = []
+    current = items[identifier].supersedes
+    while current is not None and current not in chain and current in items:
+        chain.append(current)
+        current = items[current].supersedes
+    return tuple(chain)
+
+
 def load_mapping_set(paths: Iterable[Path]) -> MappingSet:
     files = tuple(load_mapping_file(p) for p in sorted(paths))
     try:
