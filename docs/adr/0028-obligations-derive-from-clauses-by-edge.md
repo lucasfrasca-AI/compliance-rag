@@ -24,9 +24,10 @@ It runs from Obligation, Condition, Actor and Control to Clause.
   the path `Obligation -DERIVED_FROM-> Clause` returns exactly the text in
   force: the text the citation needs.
 - A node's grounding is checked by the loader:
-  - every clause it derives from is in the graph and in force at its start or
-    its last visible day;
-  - on that last day at least one of them is in force.
+  - every clause it derives from is in the graph and in force at some time
+    within the node's interval, so a node may list every compilation it
+    spans;
+  - on its last visible day at least one of them is in force.
 
   An item may not outlive the text it was read from.
 - An item's own `valid_from` records when the obligation existed in law, and

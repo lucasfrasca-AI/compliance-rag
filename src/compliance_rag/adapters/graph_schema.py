@@ -129,6 +129,35 @@ class GraphCounts:
     edges: int
 
 
+WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason"})
+"""Stored properties a loader doesn't author: the stable ID, transaction time,
+and the end of valid time, which only a retirement sets (D-05, ADR-0029)."""
+
+
+@dataclass(frozen=True, slots=True)
+class StoredEdge:
+    """One outgoing edge as stored: its type, its target, its properties."""
+
+    edge_type: str
+    target: NodeRef
+    properties: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredNode:
+    """A node exactly as stored, at no date: every property (valid time
+    included) and every outgoing edge. What a loader compares an authored
+    item with before it writes (`GraphAdmin.stored`); never an answer about
+    the law, which is always a builder-built read on `as_of` (D-05)."""
+
+    node: NodeRef
+    properties: Mapping[str, object]
+    edges: tuple[StoredEdge, ...]
+
+    def targets(self, edge_type: str) -> frozenset[NodeRef]:
+        return frozenset(e.target for e in self.edges if e.edge_type == edge_type)
+
+
 @dataclass(frozen=True, slots=True)
 class NodeWrite:
     """One node for a batched write (`GraphAdmin.put_nodes`)."""

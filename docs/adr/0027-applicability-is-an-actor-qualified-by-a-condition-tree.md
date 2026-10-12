@@ -50,10 +50,16 @@ itself, with no reasons and no citations.
    the fact is missing (D-06). Evaluation is three-valued, so a missing fact is
    *unknown*, never assumed (#115).
 4. **Conditions and actors carry their own valid time (Q1).** Each is derived
-   from its clauses and dated like an obligation, and anything a node refers
-   to must be in force for the whole of its interval. A change to a gate, such
-   as exemption reform, is one dated retirement. `as_of` then answers both
-   sides of the change.
+   from its clauses and dated like an obligation. An actor's qualifying tree,
+   and an obligation's actors, jurisdictions, sectors, required conditions and
+   controls, must be in force for the whole of what refers to them. **An
+   operand need not be.** On a date an operand isn't in force, the provision
+   it reads doesn't exist and evaluates as false. So a change to a gate is one
+   dated retirement, with no new ids up the tree. For example, if exemption
+   reform repealed the small business operator concept, `COND-PA-SBO` would
+   retire on commencement, and its parent's `not` would then read false →
+   true. `as_of` answers both sides of the change. Adding an operand still
+   changes the parent's structure, so that is a new parent id.
 5. **Jurisdictions and sectors are reference nodes (Q2).** They use ISO
    3166-1/2 codes (`AU`, `AU-NSW`) and ANZSIC divisions
    (`anzsic-2006:Q`), each naming its `source`. An obligation may be narrowed
@@ -74,8 +80,13 @@ itself, with no reasons and no citations.
 - Track A needs a small evaluator, in Python, not Cypher and not an LLM (#115).
   It also needs dated profile facts (#114).
 - The loader refuses an item that refers to something not in force for its
-  whole life. It also refuses a loaded node whose operands, qualification,
-  `applies_to` or `requires` changed. A change of meaning is a new id
+  whole life (operands excepted, above). It also refuses a loaded node whose
+  operands, qualification, `applies_to`, `requires` or `supersedes` changed,
+  whose `DERIVED_FROM` lost a clause, or whose crosswalk's kind or note
+  changed. It checks with one read of the named nodes at no date
+  (`GraphAdmin.stored`), the loader's integrity read. Like `counts()`, it
+  answers "what did we write", never "what was the law on a date", so it sits
+  outside the query builder. A change of meaning is a new id
   (D-05; #120 covers cosmetic corrections).
 - `schema.cypher` gains `QUALIFIED_BY` and `HAS_OPERAND` edges and drops the
   `Condition.kind` and `Actor.role` indexes that the old shape assumed.

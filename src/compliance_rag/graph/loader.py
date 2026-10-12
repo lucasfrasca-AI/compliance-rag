@@ -40,13 +40,14 @@ from opentelemetry.trace import Span
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
 from compliance_rag.adapters.graph_schema import (
+    WRITER_KEYS,
     Bitemporal,
     EdgeWrite,
     GraphCounts,
-    GraphRow,
     NodeRef,
     NodeWrite,
     Scalar,
+    StoredNode,
 )
 from compliance_rag.adapters.interfaces import GraphAdmin
 from compliance_rag.corpus.models import NO_END_DATE, ClauseRecord, Scope, canonical_sha256
@@ -183,8 +184,9 @@ async def load_instrument_version(
         return report
 
 
-def _strip(text: str) -> str:
-    """YAML's folded scalars end in a newline; the graph stores the words."""
+def _words(text: str) -> str:
+    """YAML's folded scalars carry line breaks; the graph stores the words,
+    single-spaced."""
     return " ".join(text.split())
 
 
@@ -197,17 +199,17 @@ def _node_properties(item: Dated) -> dict[str, Scalar]:
             props: dict[str, Scalar] = {
                 "instrument_id": item.instrument_id,
                 "operator": item.operator.value,
-                "description": _strip(item.description),
+                "description": _words(item.description),
             }
-            if item.leaf is not None:
+            if item.leaf is not None and item.question and item.unassessable_reason:
                 leaf = item.leaf
                 props |= {
                     "field": leaf.field,
                     "period": leaf.period.value,
                     "test": leaf.test.value,
                     "value": leaf.value,
-                    "question": _strip(item.question or ""),
-                    "unassessable_reason": _strip(item.unassessable_reason or ""),
+                    "question": _words(item.question),
+                    "unassessable_reason": _words(item.unassessable_reason),
                 }
                 if leaf.since_field is not None and leaf.not_before is not None:
                     props |= {"since_field": leaf.since_field, "not_before": leaf.not_before}
@@ -216,12 +218,12 @@ def _node_properties(item: Dated) -> dict[str, Scalar]:
             return {
                 "instrument_id": item.instrument_id,
                 "name": item.name,
-                "description": _strip(item.description),
+                "description": _words(item.description),
             }
         case Control():
-            return {"instrument_id": item.instrument_id, "descriptor": _strip(item.descriptor)}
+            return {"instrument_id": item.instrument_id, "descriptor": _words(item.descriptor)}
         case Obligation():
-            return {"instrument_id": item.instrument_id, "summary": _strip(item.summary)}
+            return {"instrument_id": item.instrument_id, "summary": _words(item.summary)}
         case _:
             raise TypeError(f"no graph node for {type(item).__name__}")
 
@@ -232,67 +234,55 @@ def _bitemporal(item: Dated) -> Bitemporal:
     )
 
 
-STRUCTURE = (
-    ("Condition", "HAS_OPERAND", "Condition"),
-    ("Actor", "QUALIFIED_BY", "Condition"),
-    ("Obligation", "APPLIES_TO", "Actor"),
-    ("Obligation", "APPLIES_TO", "Jurisdiction"),
-    ("Obligation", "APPLIES_TO", "Sector"),
-    ("Obligation", "REQUIRES", "Condition"),
-    ("Obligation", "REQUIRES", "Control"),
-)
-"""The edges that carry an item's meaning: once loaded, the set a node has is
-as immutable as its properties (D-05) — a different set is a new id."""
-
-
-def _structure(item: Dated, edge_type: str, target_label: str) -> frozenset[str]:
-    """The targets `item` has for one structural edge shape."""
-    match (item, edge_type, target_label):
-        case (Condition(), "HAS_OPERAND", _):
-            return frozenset(item.operands)
-        case (Actor(), "QUALIFIED_BY", _):
-            return frozenset({item.qualified_by})
-        case (Obligation(), "APPLIES_TO", "Actor"):
-            return frozenset(item.applies_to.actors)
-        case (Obligation(), "APPLIES_TO", "Jurisdiction"):
-            return frozenset(item.applies_to.jurisdictions)
-        case (Obligation(), "APPLIES_TO", "Sector"):
-            return frozenset(item.applies_to.sectors)
-        case (Obligation(), "REQUIRES", "Condition"):
-            return frozenset(item.requires.conditions)
-        case (Obligation(), "REQUIRES", "Control"):
-            return frozenset(item.requires.controls)
+def _outgoing(item: Dated) -> list[tuple[str, NodeRef]]:
+    """Every edge an item's own YAML gives it, as (edge type, target)."""
+    edges: list[tuple[str, NodeRef]] = []
+    if isinstance(item, Grounded):
+        edges += [("DERIVED_FROM", NodeRef("Clause", c)) for c in item.clause_ids]
+    match item:
+        case Condition():
+            edges += [("HAS_OPERAND", NodeRef("Condition", c)) for c in item.operands]
+        case Actor():
+            edges.append(("QUALIFIED_BY", NodeRef("Condition", item.qualified_by)))
+        case Obligation():
+            edges += [("APPLIES_TO", NodeRef("Actor", a)) for a in item.applies_to.actors]
+            edges += [
+                ("APPLIES_TO", NodeRef("Jurisdiction", j)) for j in item.applies_to.jurisdictions
+            ]
+            edges += [("APPLIES_TO", NodeRef("Sector", x)) for x in item.applies_to.sectors]
+            edges += [("REQUIRES", NodeRef("Condition", c)) for c in item.requires.conditions]
+            edges += [("REQUIRES", NodeRef("Control", c)) for c in item.requires.controls]
         case _:
-            return frozenset()
+            pass
+    return edges
 
 
 def _edges(mappings: MappingSet) -> list[EdgeWrite]:
+    labels = mappings.labels
     edges: list[EdgeWrite] = []
     for label, items in mappings.by_label.items():
         for item in items:
             node = NodeRef(label, item.id)
-            if isinstance(item, Grounded):
-                edges += [
-                    EdgeWrite("DERIVED_FROM", node, NodeRef("Clause", c)) for c in item.clause_ids
-                ]
-            for source_label, edge_type, target_label in STRUCTURE:
-                if source_label == label:
-                    edges += [
-                        EdgeWrite(edge_type, node, NodeRef(target_label, target))
-                        for target in sorted(_structure(item, edge_type, target_label))
-                    ]
+            edges += [EdgeWrite(edge_type, node, target) for edge_type, target in _outgoing(item)]
             if item.supersedes is not None:
                 edges.append(EdgeWrite("SUPERSEDES", node, NodeRef(label, item.supersedes)))
     for crosswalk in mappings.crosswalks:
         edges.append(
             EdgeWrite(
                 "CROSSWALKS_TO",
-                NodeRef(mappings.label_of(crosswalk.source), crosswalk.source),
-                NodeRef(mappings.label_of(crosswalk.target), crosswalk.target),
-                {"kind": crosswalk.kind.value, "note": _strip(crosswalk.note)},
+                NodeRef(labels[crosswalk.source], crosswalk.source),
+                NodeRef(labels[crosswalk.target], crosswalk.target),
+                {"kind": crosswalk.kind.value, "note": _words(crosswalk.note)},
             )
         )
     return edges
+
+
+MEANING = frozenset({"HAS_OPERAND", "QUALIFIED_BY", "APPLIES_TO", "REQUIRES", "SUPERSEDES"})
+"""Edges that carry an item's meaning: once loaded, the set a node has is as
+immutable as its properties (D-05) — a different set is a new id.
+`DERIVED_FROM` may grow (a new compilation, ADR-0028) but never shrink;
+`CROSSWALKS_TO` may grow, but a stored crosswalk's kind and note are fixed."""
 
 
 def _last_visible(item: Dated, today: dt.date) -> dt.date:
@@ -300,94 +290,96 @@ def _last_visible(item: Dated, today: dt.date) -> dt.date:
     return min(item.valid_until - dt.timedelta(days=1), max(today, item.valid_from))
 
 
-async def _ids_in_force(graph: GraphAdmin, label: str, as_of: dt.date) -> dict[str, GraphRow]:
-    rows = await graph.read(GraphQuery(as_of=as_of, max_depth=1).start(label).build())
-    return {str(row.node["stable_id"]): row for row in rows}
+def _interval(stored: StoredNode) -> tuple[dt.date, dt.date]:
+    return (
+        cast("dt.date", stored.properties["valid_from"]),
+        cast("dt.date", stored.properties["valid_to"]),
+    )
 
 
 async def _check_grounding(graph: GraphAdmin, mappings: MappingSet, today: dt.date) -> None:
-    """Every clause an item derives from is in the graph, in force at some
-    point of the item's interval we can see — its start or its last visible
-    day — and on that last day at least one of them is: an item may not
-    outlive the text it was read from (ADR-0028). One read per distinct date."""
-    grounded = [
-        (label, item)
-        for label, items in mappings.by_label.items()
-        for item in items
-        if isinstance(item, Grounded)
-    ]
-    dates = {d for _, item in grounded for d in (item.valid_from, _last_visible(item, today))}
-    in_force = {d: set(await _ids_in_force(graph, "Clause", d)) for d in sorted(dates)}
+    """Every clause an item derives from is in the graph and in force at some
+    time within the item's interval, and on the item's last visible day at
+    least one of them is: an item may not outlive the text it was read from
+    (ADR-0028). An item grounded in many compilations lists them all; each
+    only has to overlap the item."""
+    grounded = mappings.grounded
+    refs = {NodeRef("Clause", c) for _, item in grounded for c in item.clause_ids}
+    clauses = await graph.stored(sorted(refs, key=lambda r: r.stable_id))
     for label, item in grounded:
-        assert isinstance(item, Grounded)
-        first, last = item.valid_from, _last_visible(item, today)
+        last = _last_visible(item, today)
         for clause_id in item.clause_ids:
-            if clause_id not in in_force[first] | in_force[last]:
+            stored = clauses.get(NodeRef("Clause", clause_id))
+            if stored is None:
                 raise MappingError(
-                    f"{item.id}: clause {clause_id} is not in the graph in force on {first} "
-                    f"or {last} — load the corpus first"
+                    f"{item.id}: clause {clause_id} is not in the graph — load the corpus first"
                 )
-        if not in_force[last] & set(item.clause_ids):
+            start, end = _interval(stored)
+            if not (start < item.valid_until and item.valid_from < end):
+                raise MappingError(
+                    f"{item.id}: clause {clause_id} ({start} to {end}) is never in force while "
+                    f"the {label.lower()} is ({item.valid_from} to {item.valid_until})"
+                )
+        if not any(
+            _interval(clauses[NodeRef("Clause", c)])[0]
+            <= last
+            < _interval(clauses[NodeRef("Clause", c)])[1]
+            for c in item.clause_ids
+        ):
             raise MappingError(
                 f"{item.id}: none of its clauses is in force on {last} — end the "
                 f"{label.lower()} with its clause, or derive it from the compilation now in force"
             )
 
 
+def _refuse(item: Dated, label: str, what: str) -> MappingError:
+    return MappingError(
+        f"{item.id} is already loaded with different {what}: a loaded {label.lower()} is "
+        "immutable (D-05) — supersede it with a new id"
+    )
+
+
 async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> None:
-    """An item already loaded is unchanged — its properties, its valid_from,
-    any end already recorded, and its structural edges (`STRUCTURE`). A
-    correction in place would mutate a node (D-05), refused here, before any
-    write, rather than halfway through. Retiring an open node is the one
-    change allowed. One read per label, edge shape and distinct date."""
+    """An item already loaded is unchanged — its properties, its valid time
+    (retiring an open node is the one change allowed), and the edges that
+    carry its meaning (`MEANING`); its `DERIVED_FROM` may only grow, and a
+    stored crosswalk's kind and note are fixed. A correction in place would
+    mutate a node (D-05), so it is refused here, before any write, not
+    halfway through. One read for every item, at no date (`stored`)."""
+    edges = _edges(mappings)
+    refs = [NodeRef(label, item.id) for label, items in mappings.by_label.items() for item in items]
+    loaded = await graph.stored(refs)
     for label, items in mappings.by_label.items():
-        for valid_from in sorted({i.valid_from for i in items}):
-            dated = [i for i in items if i.valid_from == valid_from]
-            loaded = await _ids_in_force(graph, label, valid_from)
-            for item in dated:
-                row = loaded.get(item.id)
-                if row is None:
-                    continue
-                wanted: dict[str, object] = {**_node_properties(item), "valid_from": valid_from}
-                stored = {k: v for k, v in row.node.items() if k not in WRITER_KEYS}
-                changed = sorted(
-                    k
-                    for k in set(wanted) | set(stored)
-                    if stored.get(k) != _comparable(wanted.get(k))
-                )
-                ended = row.node.get("valid_to") not in (NO_END_DATE, item.valid_until)
-                if ended:
-                    changed.append("valid_to")
-                if changed:
-                    raise MappingError(
-                        f"{item.id} is already loaded with different {changed}: a loaded "
-                        f"{label.lower()} is immutable (D-05) — supersede it with a new id"
-                    )
-            for source_label, edge_type, target_label in STRUCTURE:
-                if source_label != label:
-                    continue
-                query = (
-                    GraphQuery(as_of=valid_from, max_depth=1)
-                    .start(label)
-                    .follow((edge_type,), target_label, direction=Direction.OUT)
-                )
-                stored_targets: dict[str, set[str]] = {}
-                for row in await graph.read(query.build()):
-                    stored_targets.setdefault(row.path[0], set()).add(row.path[1])
-                for item in dated:
-                    if item.id not in loaded:
-                        continue
-                    if frozenset(stored_targets.get(item.id, set())) != _structure(
-                        item, edge_type, target_label
-                    ):
-                        raise MappingError(
-                            f"{item.id} is already loaded with different {edge_type} "
-                            f"{target_label} edges: a loaded {label.lower()} is immutable "
-                            "(D-05) — supersede it with a new id"
-                        )
-
-
-WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason"})
+        for item in items:
+            stored = loaded.get(NodeRef(label, item.id))
+            if stored is None:
+                continue
+            wanted: dict[str, object] = {**_node_properties(item), "valid_from": item.valid_from}
+            have = {k: v for k, v in stored.properties.items() if k not in WRITER_KEYS}
+            changed = sorted(
+                k for k in set(wanted) | set(have) if have.get(k) != _comparable(wanted.get(k))
+            )
+            if changed:
+                raise _refuse(item, label, str(changed))
+            end, why = stored.properties["valid_to"], stored.properties.get("end_reason")
+            if end != NO_END_DATE and (end, why) != (item.valid_until, item.end_reason):
+                raise _refuse(item, label, "valid_to or end_reason")
+            mine = [e for e in edges if e.source == stored.node]
+            for edge_type in sorted(MEANING):
+                wanted_targets = frozenset(e.target for e in mine if e.edge_type == edge_type)
+                if stored.targets(edge_type) != wanted_targets:
+                    raise _refuse(item, label, f"{edge_type} edges")
+            derived = {e.target for e in mine if e.edge_type == "DERIVED_FROM"}
+            if not stored.targets("DERIVED_FROM") <= derived:
+                raise _refuse(item, label, "DERIVED_FROM edges (a clause was removed)")
+            crosswalks = {e.target: e.properties for e in mine if e.edge_type == "CROSSWALKS_TO"}
+            for edge in stored.edges:
+                if (
+                    edge.edge_type == "CROSSWALKS_TO"
+                    and edge.target in crosswalks
+                    and dict(edge.properties) != dict(crosswalks[edge.target])
+                ):
+                    raise _refuse(item, label, f"crosswalk to {edge.target.stable_id}")
 
 
 def _comparable(value: object) -> object:

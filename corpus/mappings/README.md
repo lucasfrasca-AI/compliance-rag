@@ -80,7 +80,9 @@ Settled in the #93 design session (ADR-0027, ADR-0028, ADR-0029):
 
   No status is authored: it is derived from the dates on each `as_of`.
   Anything an item refers to must be in force for the whole of the item's
-  interval.
+  interval, except a condition's operands. An operand may start later or end
+  earlier than its parent. On a date it isn't in force it evaluates as false,
+  so repealing one gate is one retirement (ADR-0027).
 
 Every id is stable forever, never reused, and unique across all kinds.
 

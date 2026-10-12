@@ -27,8 +27,10 @@ Validation happens in full before the loader writes: front matter through
 `validate_review`, every enum, every clause among the file's
 `source_clause_ids`, every reference resolving among the files loaded
 together, no condition cycle, and every referenced node in force for the whole
-interval of what refers to it. References to nodes already in the graph —
-clauses — are checked by the loader, which can see the graph.
+interval of what refers to it — except an operand, which only has to overlap
+its parent and counts as false on a date it isn't in force (ADR-0027).
+References to nodes already in the graph — clauses — are checked by the
+loader, which can see the graph.
 """
 
 from __future__ import annotations
@@ -158,6 +160,10 @@ class Dated(_Strict):
     def covers(self, other: Dated) -> bool:
         """In force for the whole of `other`'s interval."""
         return self.valid_from <= other.valid_from and other.valid_until <= self.valid_until
+
+    def overlaps(self, other: Dated) -> bool:
+        """In force on at least one day `other` is."""
+        return self.valid_from < other.valid_until and other.valid_from < self.valid_until
 
     @model_validator(mode="after")
     def _dates(self) -> Self:
@@ -439,10 +445,6 @@ def load_mapping_file(path: Path) -> MappingFile:
         raise MappingError(f"{path.name}: {exc}") from exc
 
 
-LABELS = ("Jurisdiction", "Sector", "Condition", "Actor", "Control", "Obligation")
-"""The graph label of each kind of mapping item, in load order."""
-
-
 class MappingSet(_Strict):
     """Every mapping file loaded together, checked as one: ids unique across
     files and kinds, every reference resolving, no condition cycle, every
@@ -503,11 +505,20 @@ class MappingSet(_Strict):
             "Obligation": self.obligations,
         }
 
-    def label_of(self, identifier: str) -> str:
-        for label, items in self.by_label.items():
-            if any(i.id == identifier for i in items):
-                return label
-        raise KeyError(identifier)
+    @property
+    def labels(self) -> dict[str, str]:
+        """Each item's graph label, by id."""
+        return {item.id: label for label, items in self.by_label.items() for item in items}
+
+    @property
+    def grounded(self) -> tuple[tuple[str, Grounded], ...]:
+        """Every item `DERIVED_FROM` clauses, with its label."""
+        return tuple(
+            (label, item)
+            for label, items in self.by_label.items()
+            for item in items
+            if isinstance(item, Grounded)
+        )
 
     @model_validator(mode="after")
     def _references(self) -> Self:
@@ -516,11 +527,17 @@ class MappingSet(_Strict):
         _unique("policy mapping", [m.id for m in self.policy_mappings])
         by_kind = {label: {i.id: i for i in items} for label, items in self.by_label.items()}
 
-        def resolve(referrer: Dated, label: str, target: str, what: str) -> None:
+        def resolve(
+            referrer: Dated, label: str, target: str, what: str, *, whole: bool = True
+        ) -> None:
             found = by_kind[label].get(target)
             if found is None:
                 raise ValueError(f"{referrer.id}: {what} unknown {label.lower()} {target}")
-            if not found.covers(referrer):
+            if not whole and not found.overlaps(referrer):
+                raise ValueError(
+                    f"{referrer.id} has operand {target}, which is never in force while it is"
+                )
+            if whole and not found.covers(referrer):
                 raise ValueError(
                     f"{referrer.id} ({referrer.valid_from} to {referrer.valid_until}) refers to "
                     f"{target} ({found.valid_from} to {found.valid_until}), which is not in "
@@ -529,7 +546,10 @@ class MappingSet(_Strict):
 
         for condition in self.conditions:
             for operand in condition.operands:
-                resolve(condition, "Condition", operand, "has operand")
+                # An operand may start later or end earlier than its parent: on a
+                # date it isn't in force, the provision doesn't exist and counts as
+                # false, so repealing one gate is one retirement (ADR-0027, Q1).
+                resolve(condition, "Condition", operand, "has operand", whole=False)
         _acyclic(self.conditions_by_id)
         for actor in self.actors:
             resolve(actor, "Condition", actor.qualified_by, "is qualified by")
@@ -552,6 +572,11 @@ class MappingSet(_Strict):
                         f"crosswalk {crosswalk.source} -> {crosswalk.target}: "
                         f"unknown obligation or control {end}"
                     )
+            if not ends[crosswalk.source].overlaps(ends[crosswalk.target]):
+                raise ValueError(
+                    f"crosswalk {crosswalk.source} -> {crosswalk.target}: the two are never "
+                    "in force at the same time"
+                )
         for label, items in by_kind.items():
             _check_supersession(label, items)
         for mapping in self.policy_mappings:

@@ -62,7 +62,7 @@ def write_yaml(tmp_path: Path, document: dict[str, Any], name: str = "m.yaml") -
     return path
 
 
-def _clauses(version: str, texts: dict[str, str]) -> tuple[ClauseRecord, ...]:
+def clause_records(version: str, texts: dict[str, str]) -> tuple[ClauseRecord, ...]:
     return tuple(
         ClauseRecord.build(
             instrument_id="test-act",
@@ -76,8 +76,8 @@ def _clauses(version: str, texts: dict[str, str]) -> tuple[ClauseRecord, ...]:
     )
 
 
-V1 = _clauses("v1", {"s1/1": "Keep records safe.", "s2/1": "Destroy records."})
-V2 = _clauses("v2", {"s1/1": "Keep records safe and say how.", "s2/1": "Destroy records."})
+V1 = clause_records("v1", {"s1/1": "Keep records safe.", "s2/1": "Destroy records."})
+V2 = clause_records("v2", {"s1/1": "Keep records safe and say how.", "s2/1": "Destroy records."})
 
 
 # ---- validation, no server ---------------------------------------------------

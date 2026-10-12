@@ -26,6 +26,7 @@ from tests.test_graph_loader import (
     SEP,
     SINCE,
     V2,
+    clause_records,
     fixture_document,
     load_test_corpus,
     write_yaml,
@@ -250,3 +251,115 @@ async def test_jurisdictions_sectors_and_controls_load_and_crosswalk(
             .follow((edge,), label, direction=Direction.OUT)
         )
         assert _paths(await graph.read(query.build())) == {expected}
+
+
+# ---- review of #122: one retirement, many compilations, no silent change ------
+
+
+def test_an_operand_may_end_before_its_parent(tmp_path: Path) -> None:
+    """ADR-0027, Q1: repealing one gate is one retirement. The parent keeps
+    its id; on later dates the repealed operand counts as false."""
+    document = fixture_document()
+    document["conditions"][2] |= {"valid_to": "2026-06-01", "end_reason": "repealed"}
+    mappings = load_mapping_set([write_yaml(tmp_path, document)])
+    assert mappings.conditions_by_id["COND-TEST-COVERED"].valid_to is None
+
+
+def test_a_crosswalk_between_items_never_in_force_together_is_refused(tmp_path: Path) -> None:
+    document = fixture_document()
+    document["crosswalks"][0] |= {"from": "OB-TEST-1", "to": "OB-TEST-1B"}
+    with pytest.raises(MappingError, match="never in force at the same time"):
+        load_mapping_set([write_yaml(tmp_path, document)])
+
+
+@needs_neo4j
+async def test_an_item_may_derive_from_three_compilations(
+    graph: Neo4jGraph, tmp_path: Path
+) -> None:
+    """ADR-0028: v2 is in force on neither the item's first day nor today,
+    and is still a valid grounding — each clause only has to overlap."""
+    v3 = clause_records(
+        "v3", {"s1/1": "Keep records safe and say how.", "s2/1": "Destroy records."}
+    )
+    await load_test_corpus(graph)
+    await load_instrument_version(graph, V2, instrument_since=SINCE, effective=MAR, supersedes="v1")
+    await load_instrument_version(graph, v3, instrument_since=SINCE, effective=JUN, supersedes="v2")
+    document = fixture_document()
+    document["source_clause_ids"] += [f"test-act:{v}:s{n}/1" for v in ("v2", "v3") for n in (1, 2)]
+    document["obligations"][2]["clause_ids"] = [f"test-act:{v}:s2/1" for v in ("v1", "v2", "v3")]
+    for item in [*document["conditions"]]:
+        item["clause_ids"] = [f"test-act:{v}:s2/1" for v in ("v1", "v2", "v3")]
+    document["actors"][0]["clause_ids"] = [f"test-act:{v}:s1/1" for v in ("v1", "v2", "v3")]
+    del document["obligations"][:2]
+    document["crosswalks"] = []
+    await load_mappings(graph, load_mapping_set([write_yaml(tmp_path, document)]), today=SEP)
+    for as_of, version in ((dt.date(2026, 2, 1), "v1"), (dt.date(2026, 4, 1), "v2"), (SEP, "v3")):
+        query = (
+            GraphQuery(as_of=as_of, max_depth=1)
+            .start("Obligation", stable_id="OB-TEST-2")
+            .follow(("DERIVED_FROM",), "Clause", direction=Direction.OUT)
+        )
+        assert _paths(await graph.read(query.build())) == {
+            ("OB-TEST-2", f"test-act:{version}:s2/1")
+        }
+
+
+@pytest.mark.parametrize(
+    ("section", "index", "edit", "message"),
+    [
+        ("obligations", 2, {"requires": {"conditions": ["COND-TEST-LARGE"]}}, "REQUIRES"),
+        ("obligations", 2, {"valid_from": "2026-02-01"}, "valid_from"),
+        ("actors", 0, {"qualified_by": "COND-TEST-LARGE"}, "QUALIFIED_BY"),
+    ],
+)
+@needs_neo4j
+async def test_a_loaded_item_cannot_change_meaning(
+    graph: Neo4jGraph,
+    tmp_path: Path,
+    section: str,
+    index: int,
+    edit: dict[str, object],
+    message: str,
+) -> None:
+    await load_test_corpus(graph)
+    await load_mappings(graph, load_mapping_set([FIXTURE]), today=SEP)
+    before = await graph.counts()
+    document = fixture_document()
+    document[section][index] |= edit
+    with pytest.raises(MappingError, match=message):
+        await load_mappings(graph, load_mapping_set([write_yaml(tmp_path, document)]), today=SEP)
+    assert await graph.counts() == before
+
+
+@needs_neo4j
+async def test_a_loaded_item_cannot_lose_a_clause_or_rewrite_a_crosswalk(
+    graph: Neo4jGraph, tmp_path: Path
+) -> None:
+    await load_test_corpus(graph)
+    await load_instrument_version(graph, V2, instrument_since=SINCE, effective=JUN, supersedes="v1")
+    grown = fixture_document()
+    grown["source_clause_ids"].append("test-act:v2:s2/1")
+    grown["obligations"][2]["clause_ids"].append("test-act:v2:s2/1")
+    grown["obligations"][1]["clause_ids"] = ["test-act:v2:s2/1"]
+    grown["source_clause_ids"].append("test-act:v2:s1/1")
+    for item in [*grown["conditions"], *grown["actors"]]:
+        item["clause_ids"].append(item["clause_ids"][0].replace(":v1:", ":v2:"))
+        grown["source_clause_ids"].append(item["clause_ids"][-1])
+    grown["source_clause_ids"] = sorted(set(grown["source_clause_ids"]))
+    await load_mappings(graph, load_mapping_set([write_yaml(tmp_path, grown, "a.yaml")]), today=SEP)
+
+    shrunk = fixture_document() | {"source_clause_ids": grown["source_clause_ids"]}
+    shrunk["conditions"], shrunk["actors"] = grown["conditions"], grown["actors"]
+    shrunk["obligations"] = grown["obligations"]
+    shrunk["obligations"][2] = grown["obligations"][2] | {"clause_ids": ["test-act:v2:s2/1"]}
+    with pytest.raises(MappingError, match="a clause was removed"):
+        await load_mappings(
+            graph, load_mapping_set([write_yaml(tmp_path, shrunk, "b.yaml")]), today=SEP
+        )
+
+    renoted = dict(grown)
+    renoted["crosswalks"] = [grown["crosswalks"][0] | {"note": "A different note."}]
+    with pytest.raises(MappingError, match="crosswalk to OB-TEST-2"):
+        await load_mappings(
+            graph, load_mapping_set([write_yaml(tmp_path, renoted, "c.yaml")]), today=SEP
+        )
