@@ -17,7 +17,6 @@ from compliance_rag.adapters.fakes import (
     FakeClauseStore,
     FakeEmbedder,
     FakeGenerator,
-    FakeGraphStore,
     FakeLedgerStore,
     FakeReranker,
     FakeRetrievalStore,
@@ -29,9 +28,7 @@ from compliance_rag.adapters.interfaces import (
     ClauseStore,
     Embedder,
     Generator,
-    GraphStore,
     LedgerStore,
-    Obligation,
     Profile,
     Reranker,
     RetrievalStore,
@@ -51,36 +48,6 @@ LIBRARY_INSTRUMENT = "privacy-act-1988"
 APP11 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app11/1"
 APP12 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app12/1"
 LIBRARY_CHUNK_IDS = frozenset({"c1", "c2"})  # the `chunks` fixture's public-scope chunks
-
-
-@pytest.fixture
-def graph() -> FakeGraphStore:
-    return FakeGraphStore(
-        obligations={
-            "OB-APP11": Obligation(
-                obligation_id="OB-APP11",
-                clause_id=APP11,
-                instrument_id="privacy-act-1988",
-                summary="Take reasonable steps to protect personal information.",
-            ),
-            "OB-APP12": Obligation(
-                obligation_id="OB-APP12",
-                clause_id=APP12,
-                instrument_id="privacy-act-1988",
-                summary="Give an individual access to their personal information.",
-            ),
-            "OB-ISO-A8": Obligation(
-                obligation_id="OB-ISO-A8",
-                clause_id="iso-27001:2022:annexa/8/3",
-                instrument_id="iso-27001",
-                summary="Information access restriction.",
-            ),
-        },
-        applicability={"AU": ("OB-APP11", "OB-APP12"), "health": ("OB-APP11",)},
-        crosswalk_edges={"OB-APP11": ("OB-ISO-A8",)},
-        # Tranche-style commencement: OB-APP12 only binds from 2027.
-        valid_from={"OB-APP12": dt.date(2027, 1, 1)},
-    )
 
 
 @pytest.fixture
@@ -116,42 +83,9 @@ def contract_chunks() -> tuple[Chunk, ...]:
 
 
 # --------------------------------------------------------------------------
-# GraphStore
+# GraphStore: its contract runs on the fake and on Neo4j in
+# tests/contracts/test_graph_store.py
 # --------------------------------------------------------------------------
-
-
-async def test_graph_store_is_a_graph_store(graph: FakeGraphStore) -> None:
-    assert isinstance(graph, GraphStore)
-
-
-async def test_traversal_requires_a_depth_cap(graph: FakeGraphStore) -> None:
-    """D-05: an uncapped traversal is a test failure."""
-    profile = Profile(tenant_id="acme", jurisdictions=("AU",))
-    with pytest.raises(ValueError, match="max_depth"):
-        await graph.applicable_obligations(profile, as_of=TODAY, max_depth=0)
-
-
-async def test_as_of_changes_the_obligation_set(graph: FakeGraphStore) -> None:
-    """D-05: the same question on two dates gives different, correct answers."""
-    profile = Profile(tenant_id="acme", jurisdictions=("AU",))
-    now = await graph.applicable_obligations(profile, as_of=TODAY, max_depth=3)
-    later = await graph.applicable_obligations(profile, as_of=LATER, max_depth=3)
-    assert [o.obligation_id for o in now] == ["OB-APP11"]
-    assert [o.obligation_id for o in later] == ["OB-APP11", "OB-APP12"]
-
-
-async def test_applicable_obligations_are_untruncated(graph: FakeGraphStore) -> None:
-    """D-03: Track A returns the full set; there is no top-k to pass."""
-    profile = Profile(tenant_id="acme", jurisdictions=("AU",), sectors=("health",))
-    found = await graph.applicable_obligations(profile, as_of=LATER, max_depth=3)
-    assert {o.obligation_id for o in found} == {"OB-APP11", "OB-APP12"}
-
-
-async def test_crosswalks_respect_the_depth_cap(graph: FakeGraphStore) -> None:
-    hops = await graph.crosswalks("OB-APP11", as_of=TODAY, max_depth=1)
-    assert [o.obligation_id for o in hops] == ["OB-ISO-A8"]
-    with pytest.raises(ValueError, match="max_depth"):
-        await graph.crosswalks("OB-APP11", as_of=TODAY, max_depth=0)
 
 
 # --------------------------------------------------------------------------

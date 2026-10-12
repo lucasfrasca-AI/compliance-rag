@@ -566,3 +566,48 @@ def test_evidence_cannot_supersede_what_was_never_recorded(
     _insert_tenant(conn, "acme")
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         _insert_evidence(conn, "e1", supersedes="e404")
+
+
+# ---- #115: coverage, one row per assessment and obligation -----------------------
+
+
+def _assessment(conn: psycopg.Connection[tuple[object, ...]]) -> None:
+    _insert_tenant(conn, "acme")
+    conn.execute(
+        "INSERT INTO assessment (tenant_id, assessment_id, corpus_version, mapping_version, "
+        "as_of, trace_id) VALUES ('acme', 'a1', 'c', 'm', '2026-10-12', 't1')"
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "citations", "questions"),
+    [
+        ("probable", ["x:v:1"], []),  # three outcomes, never a score (D-06)
+        ("applicable", [], []),  # a decided obligation cites the law
+        ("unassessable", ["x:v:1"], []),  # with text to cite, it says what is missing
+    ],
+)
+def test_coverage_rows_say_why(
+    conn: psycopg.Connection[tuple[object, ...]],
+    outcome: str,
+    citations: list[str],
+    questions: list[object],
+) -> None:
+    _assessment(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, reason, "
+            "citations, questions, trace_id) VALUES ('acme', 'a1', 'OB-1', %s, 'r', %s, %s, 't1')",
+            (outcome, Jsonb(citations), Jsonb(questions)),
+        )
+
+
+def test_coverage_belongs_to_a_recorded_assessment(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, reason, "
+            "trace_id) VALUES ('acme', 'nope', 'OB-1', 'unassessable', 'r', 't1')"
+        )

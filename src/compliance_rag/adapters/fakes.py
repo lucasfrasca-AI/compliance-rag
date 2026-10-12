@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import zlib
+from collections.abc import Mapping
 from dataclasses import replace
 
 from compliance_rag.adapters.generation_residency import is_real_tenant_data
@@ -23,7 +24,6 @@ from compliance_rag.adapters.interfaces import (
     GraphStore,
     LedgerStore,
     ManifestMetadata,
-    Obligation,
     Profile,
     RemovalAuditEntry,
     Reranker,
@@ -34,7 +34,8 @@ from compliance_rag.adapters.interfaces import (
     UsageRecord,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.assessment.evidence import Evidence, check_evidence_write
+from compliance_rag.assessment.coverage import Coverage, CoverageRow, Outcome
+from compliance_rag.assessment.evidence import Evidence, Facts, check_evidence_write
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     Chunk,
@@ -47,56 +48,30 @@ from compliance_rag.corpus.models import (
     validate_library_instrument_id,
     validate_tenant_id,
 )
+from compliance_rag.graph.applicability import evaluate
+from compliance_rag.graph.mappings import MappingSet
+from compliance_rag.graph.track_a import snapshot_of_mappings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier
 
 
 class FakeGraphStore(GraphStore):
-    """Traversal over dictionaries, with the same invariants as the real thing."""
+    """Track A over mapping YAML in memory: the same snapshot `GraphTrackA`
+    reads from the graph, built by `snapshot_of_mappings`, and the same
+    evaluator — so the fake can't drift from the real thing. Clause validity
+    stands in for the compilations loaded."""
 
     def __init__(
         self,
-        obligations: dict[str, Obligation] | None = None,
-        applicability: dict[str, tuple[str, ...]] | None = None,
-        crosswalk_edges: dict[str, tuple[str, ...]] | None = None,
-        valid_from: dict[str, dt.date] | None = None,
-    ) -> None:
-        self._obligations = obligations or {}
-        # jurisdiction/sector/role token -> obligation ids it makes applicable
-        self._applicability = applicability or {}
-        self._crosswalks = crosswalk_edges or {}
-        self._valid_from = valid_from or {}
-
-    def _in_force(self, obligation_id: str, as_of: dt.date) -> bool:
-        start = self._valid_from.get(obligation_id)
-        return start is None or as_of >= start
-
-    async def applicable_obligations(
-        self,
-        profile: Profile,
+        mappings: MappingSet,
         *,
-        as_of: dt.date,
-        max_depth: int,
-    ) -> tuple[Obligation, ...]:
-        if max_depth < 1:
-            raise ValueError("max_depth must be >= 1 (D-05: every traversal is capped)")
-        tokens = (
-            *profile.jurisdictions,
-            *profile.sectors,
-            *profile.actor_roles,
-            *profile.data_categories,
-        )
-        found: dict[str, Obligation] = {}
-        for token in tokens:
-            for oid in self._applicability.get(token, ()):
-                if oid in self._obligations and self._in_force(oid, as_of):
-                    found[oid] = self._obligations[oid]
-        return tuple(found[k] for k in sorted(found))
+        clause_validity: Mapping[str, tuple[dt.date, dt.date]],
+    ) -> None:
+        self._mappings = mappings
+        self._clauses = clause_validity
 
-    async def obligation(self, obligation_id: str, *, as_of: dt.date) -> Obligation | None:
-        found = self._obligations.get(obligation_id)
-        if found is None or not self._in_force(obligation_id, as_of):
-            return None
-        return found
+    async def coverage(self, facts: Facts, *, tenant_id: str, as_of: dt.date) -> Coverage:
+        snapshot = snapshot_of_mappings(self._mappings, as_of, clause_validity=self._clauses)
+        return evaluate(snapshot, facts, tenant_id=tenant_id)
 
     async def crosswalks(
         self,
@@ -104,25 +79,26 @@ class FakeGraphStore(GraphStore):
         *,
         as_of: dt.date,
         max_depth: int,
-    ) -> tuple[Obligation, ...]:
+    ) -> tuple[str, ...]:
         if max_depth < 1:
             raise ValueError("max_depth must be >= 1 (D-05: every traversal is capped)")
-        seen: dict[str, Obligation] = {}
-        frontier = [obligation_id]
+        live = {
+            item.id
+            for items in self._mappings.by_label.values()
+            for item in items
+            if item.valid_from <= as_of < item.valid_until
+        }
+        seen: set[str] = set()
+        frontier = {obligation_id} & live
         for _ in range(max_depth):
-            nxt: list[str] = []
-            for current in frontier:
-                for target in self._crosswalks.get(current, ()):
-                    if target in seen or target == obligation_id:
-                        continue
-                    node = self._obligations.get(target)
-                    if node is not None and self._in_force(target, as_of):
-                        seen[target] = node
-                        nxt.append(target)
-            frontier = nxt
-            if not frontier:
-                break
-        return tuple(seen[k] for k in sorted(seen))
+            frontier = {
+                x.target
+                for x in self._mappings.crosswalks
+                if x.source in frontier and x.target in live and x.target not in seen
+            }
+            seen |= frontier
+        seen.discard(obligation_id)
+        return tuple(sorted(seen))
 
 
 def _version_key(chunk: Chunk) -> tuple[str, str, str]:
@@ -315,9 +291,30 @@ class FakeLedgerStore(LedgerStore):
         self.purged: dict[tuple[str, str, str | None], tuple[str, str]] = {}  # -> (by, reason)
         self._audit: list[RemovalAuditEntry] = []
         self._evidence: list[Evidence] = []
+        self._coverage: dict[tuple[str, str], dict[str, CoverageRow]] = {}
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
         return self._profiles.get(tenant_id)
+
+    async def record_coverage(
+        self, *, tenant_id: str, assessment_id: str, coverage: Coverage, trace_id: str
+    ) -> None:
+        if (tenant_id, assessment_id) not in self._assessments:
+            raise ValueError(f"assessment {assessment_id} isn't recorded for {tenant_id}")
+        if not trace_id:
+            raise ValueError("a coverage row carries the trace_id of its request")
+        rows = {o.obligation_id: CoverageRow.of(o) for o in coverage.obligations}
+        for row in rows.values():
+            if row.outcome is not Outcome.UNASSESSABLE and not row.citations:
+                raise ValueError(f"{row.obligation_id}: a decided obligation cites its clauses")
+        key = (tenant_id, assessment_id)
+        if key in self._coverage:
+            raise ValueError(f"coverage for {assessment_id} is already recorded")
+        self._coverage[key] = rows
+
+    async def coverage_rows(self, tenant_id: str, assessment_id: str) -> tuple[CoverageRow, ...]:
+        rows = self._coverage.get((tenant_id, assessment_id), {})
+        return tuple(rows[k] for k in sorted(rows))
 
     async def record_evidence(self, evidence: Evidence) -> None:
         if evidence.tenant_id not in self._profiles:

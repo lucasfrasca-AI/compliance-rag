@@ -200,7 +200,13 @@ def _node_properties(item: Dated) -> dict[str, Scalar]:
                 "instrument_id": item.instrument_id,
                 "operator": item.operator.value,
                 "description": _words(item.description),
+                # Declared on the node, not only as edges: an operand not in
+                # force on as_of has no edge on that date but still counts —
+                # as false, or as its successor (ADR-0027).
+                "operands": item.operands,
             }
+            if item.supersedes is not None:
+                props["supersedes"] = item.supersedes
             if item.leaf is not None and item.question and item.unassessable_reason:
                 leaf = item.leaf
                 props |= {
