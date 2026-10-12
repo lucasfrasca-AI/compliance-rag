@@ -206,3 +206,20 @@ def test_the_checked_in_manifest_selects_the_small_business_exemption() -> None:
     )
     manifest = parse_selection_manifest(path.read_text(encoding="utf-8"))
     assert {"s6c/", "s6d/", "s6da/", "s6e/", "s6ea/"} <= set(manifest.prefixes)
+
+
+@pytest.mark.parametrize(
+    ("entry", "selected"),
+    [
+        ("s15", ["s15"]),
+        ("s14", ["s14/1", "s14/2"]),
+        ("s6d/", ["s6d/1"]),
+    ],
+)
+def test_an_entry_without_a_slash_names_a_whole_clause(entry: str, selected: list[str]) -> None:
+    """`s15` (a one-sentence section, path without a slash since #97) selects
+    itself and its children — never `s150` or `s15a`, which share its
+    characters."""
+    manifest = SelectionManifest(author="a", reviewed_by="b", date="2026-10-12", prefixes=(entry,))
+    paths = ("s15", "s150/1", "s15a/1", "s14/1", "s14/2", "s6d/1", "s6da/1")
+    assert [c.clause_path for c in manifest.select(tuple(_clause(p) for p in paths))] == selected
