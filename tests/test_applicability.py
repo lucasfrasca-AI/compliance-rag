@@ -387,3 +387,41 @@ async def test_any_year_since_it_started_edges(
     history: tuple[Evidence, ...], expected: Truth
 ) -> None:
     assert explain(snapshot(), Facts.of(history), "COND-T-EVER-OVER").truth is expected
+
+
+# ---- a commencement date as a fixture (#134, PHASES.md Phase 2 graph eval) -------
+
+
+async def test_a_provision_loaded_ahead_of_commencement_applies_only_from_it(
+    tmp_path: Path,
+) -> None:
+    """Tranche 1's pattern (items commencing 10 Dec 2026, ADR-0029): a new
+    obligation and the compilation carrying its text are loaded before they
+    commence. The same question on either side of that date gets different,
+    correct obligation sets, and nothing else moves."""
+    commencement = dt.date(2026, 12, 10)
+    document = fixture_document()
+    new_clause = "test-act:v2:s9/1"
+    document["source_clause_ids"].append(new_clause)
+    document["obligations"].append(
+        {
+            "id": "OB-T-AUTOMATED-DECISIONS",
+            "clause_ids": [new_clause],
+            "summary": "Say in the policy when decisions are made by computer.",
+            "valid_from": commencement.isoformat(),
+            "applies_to": {"actors": ["test-act/actor/keeper"]},
+        }
+    )
+    store = FakeGraphStore(
+        mappings(document, tmp_path),
+        clause_validity={**CLAUSES, new_clause: (commencement, NO_END_DATE)},
+    )
+    evidence = (fact("annual_turnover_aud", 4000, LAST_FY),)
+    before = await assess(*evidence, as_of=dt.date(2026, 12, 9), store=store)
+    after = await assess(*evidence, as_of=commencement, store=store)
+    assert "OB-T-AUTOMATED-DECISIONS" not in {o.obligation_id for o in before.obligations}
+    assert after.obligation("OB-T-AUTOMATED-DECISIONS").outcome is Outcome.APPLICABLE
+    unchanged = {o.obligation_id: o.outcome for o in before.obligations}
+    assert {
+        k: v for k, v in ((o.obligation_id, o.outcome) for o in after.obligations) if k in unchanged
+    } == unchanged
