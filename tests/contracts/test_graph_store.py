@@ -151,3 +151,65 @@ async def test_neo4j_and_the_fake_agree_across_amendment_and_repeal(
         assert await real.coverage(facts, tenant_id="acme", as_of=as_of) == await fake.coverage(
             facts, tenant_id="acme", as_of=as_of
         )
+
+
+@needs_neo4j
+async def test_neo4j_and_the_fake_agree_either_side_of_a_commencement(
+    graph: Neo4jGraph, tmp_path: Path
+) -> None:
+    """#134 on the real read path: an obligation and the compilation that
+    carries its text, loaded ahead of commencement, read through
+    `read_snapshot`'s builder-built queries on either side of the date."""
+    import yaml
+
+    from compliance_rag.corpus.models import NO_END_DATE, ClauseRecord, Scope
+
+    commencement = dt.date(2026, 12, 10)
+    v2 = tuple(
+        ClauseRecord.build(
+            instrument_id="test-act",
+            version_id="v2",
+            clause_path=p,
+            text=f"(placeholder for {p})",
+            scope=Scope.PUBLIC,
+            tenant_id="_public",
+        )
+        for p in ("s1/1", "s2/1", "s9/1")
+    )
+    document = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
+    for item in [*document["conditions"], *document["actors"], *document["obligations"]]:
+        item["clause_ids"] = [*item["clause_ids"], item["clause_ids"][0].replace(":v1:", ":v2:")]
+    new_clause = "test-act:v2:s9/1"
+    document["source_clause_ids"] += [c.replace(":v1:", ":v2:") for c in CLAUSES] + [new_clause]
+    document["obligations"].append(
+        {
+            "id": "OB-T-AUTOMATED-DECISIONS",
+            "clause_ids": [new_clause],
+            "summary": "Say in the policy when decisions are made by computer.",
+            "valid_from": commencement.isoformat(),
+            "applies_to": {"actors": ["test-act/actor/keeper"]},
+        }
+    )
+    path = tmp_path / "commencing.yaml"
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    mappings = load_mapping_set([path])
+    await graph.apply_schema()
+    await load_instrument_version(
+        graph, V1, instrument_since=SINCE, effective=dt.date(2026, 1, 1), supersedes=None
+    )
+    await load_instrument_version(
+        graph, v2, instrument_since=SINCE, effective=commencement, supersedes="v1"
+    )
+    await load_mappings(graph, mappings, today=AS_OF)
+    validity = {
+        **{c: (dt.date(2026, 1, 1), commencement) for c in CLAUSES},
+        **{c.replace(":v1:", ":v2:"): (commencement, NO_END_DATE) for c in CLAUSES},
+        new_clause: (commencement, NO_END_DATE),
+    }
+    fake, real = FakeGraphStore(mappings, clause_validity=validity), GraphTrackA(graph)
+    facts = Facts.of([fact("annual_turnover_aud", 4000, LAST_FY)])
+    for as_of in (dt.date(2026, 12, 9), commencement):
+        got = await real.coverage(facts, tenant_id="acme", as_of=as_of)
+        assert got == await fake.coverage(facts, tenant_id="acme", as_of=as_of)
+        present = "OB-T-AUTOMATED-DECISIONS" in {o.obligation_id for o in got.obligations}
+        assert present is (as_of >= commencement)
