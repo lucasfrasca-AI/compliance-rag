@@ -118,11 +118,14 @@ class AssessmentPipeline:
         tenant_id: str,
         as_of: dt.date,
         *,
+        law: LawScope,
         policies: Sequence[SourceClause] = (),
         max_tokens: int = 1024,
-        law: LawScope = LIBRARY_QUESTION,
     ) -> Answer:
-        """`policies` is the tenant's policy corpus, sent as the cached prefix
+        """`law` is Track B's scope (D-03, ADR-0030): `LawScope.of(coverage)`
+        for an assessment, `LIBRARY_QUESTION` for a question about the library
+        with no tenant profile — required, so no call skips Track A unseen.
+        `policies` is the tenant's policy corpus, sent as the cached prefix
         (D-11). The retriever's query is `query` and only `query`: it is fixed
         here, before any text is retrieved, and nothing retrieved or generated
         flows back into it (#29's injection control) — repair included, which

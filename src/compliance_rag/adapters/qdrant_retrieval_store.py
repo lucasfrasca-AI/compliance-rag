@@ -293,14 +293,14 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             # tenant's own documents aren't law and Track A doesn't scope them.
             # An empty MatchAny isn't "match nothing" everywhere, so with no
             # clauses the law branch is omitted outright.
-            own: list[models.Condition] = [
+            own_or_law: list[models.Condition] = [
                 models.FieldCondition(
                     key="scope",
                     match=models.MatchAny(any=[Scope.TENANT.value, Scope.USER.value]),
                 )
             ]
             if law.clause_ids:
-                own.append(
+                own_or_law.append(
                     models.Filter(
                         must=[
                             models.FieldCondition(
@@ -312,7 +312,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                         ]
                     )
                 )
-            must.append(models.Filter(should=own))
+            must.append(models.Filter(should=own_or_law))
         if extra:
             must.extend(extra)
         # ADR-0021: a withdrawn version is out of retrieval at every as_of.

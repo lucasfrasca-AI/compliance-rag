@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from compliance_rag.assessment.draft import MalformedGeneration
-from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.assessment.prompt import SourceClause
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 from compliance_rag.eval.answer_summary import summarise
@@ -90,7 +90,9 @@ async def _answer(
     policies = _policies() if tenant == POLICY_TENANT_ID else ()
     start = time.perf_counter()
     try:
-        result = await pipeline.answer(question, tenant, as_of, policies=policies)
+        result = await pipeline.answer(
+            question, tenant, as_of, law=LIBRARY_QUESTION, policies=policies
+        )
     except MalformedGeneration as exc:
         return {"schema_valid": False, "error": str(exc)[:500]}
     retrieved = {c.clause_id for c in result.retrieval.ranked_candidates()}

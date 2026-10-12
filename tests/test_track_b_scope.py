@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -133,8 +134,11 @@ async def test_track_a_coverage_becomes_the_scope() -> None:
     )
     coverage = await graph.coverage(over, tenant_id="acme", as_of=AS_OF)
     law = LawScope.of(coverage)
-    assert law.clause_ids == coverage.track_a_clause_ids
     assert "Track A for acme" in law.reason
+    # Applicable or not, every clause Track A cites for what might apply is in.
+    assert law.clause_ids is not None and law.clause_ids >= set(
+        coverage.obligation("OB-T-KEEP").citations
+    )
     possibly = await graph.coverage(
         Facts.of([fact("annual_turnover_aud", 900, LAST_FY)]), tenant_id="acme", as_of=AS_OF
     )
@@ -145,3 +149,106 @@ def test_an_unscoped_call_says_why() -> None:
     with pytest.raises(ValueError, match="says where it came from"):
         LawScope.unscoped(" ")
     assert LawScope.unscoped("eval").described == "unscoped: eval"
+
+
+# ---- review of #127: both tracks composed ---------------------------------------
+
+
+async def test_a_clause_of_an_obligation_that_does_not_apply_is_never_retrieved(
+    tmp_path: Path,
+) -> None:
+    """End to end through `tracked_retrieve`: Track A finds OB-T-SEPARATE not
+    applicable (it requires a health service the tenant says it doesn't
+    provide), so its clause is never retrieved — not even for a query that is
+    its exact text — while the tenant's own and user-scoped documents still
+    are. The positive control is the same query unscoped."""
+    import yaml
+
+    from compliance_rag.adapters.fakes import FakeGraphStore, FakeReranker
+    from compliance_rag.assessment.coverage import Outcome
+    from compliance_rag.assessment.tracks import tracked_retrieve
+    from compliance_rag.graph.mappings import load_mapping_set
+    from compliance_rag.retrieval.pipeline import RetrievalPipeline
+    from tests.test_applicability import AS_OF, CLAUSES, FIXTURE, LAST_FY, fact
+
+    document = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
+    separate = "test-act:v1:s3/1"
+    document["source_clause_ids"].append(separate)
+    document["obligations"].append(
+        {
+            "id": "OB-T-SEPARATE",
+            "clause_ids": [separate],
+            "summary": "Report invented health incidents.",
+            "valid_from": "2026-01-01",
+            "applies_to": {"actors": ["test-act/actor/keeper"]},
+            "requires": {"conditions": ["COND-T-HEALTH"]},
+        }
+    )
+    path = tmp_path / "m.yaml"
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    graph = FakeGraphStore(
+        load_mapping_set([path]), clause_validity={**CLAUSES, separate: CLAUSES["test-act:v1:s1/1"]}
+    )
+
+    text = "Report every invented health incident to the invented regulator within a day."
+    ledger = FakeLedgerStore()
+    await ledger.subscribe(tenant_id="acme", instrument_id="test-act", subscribed_by="test")
+    store = FakeRetrievalStore(
+        (
+            Chunk(chunk_id="sep", clause_id=separate, text=text),
+            Chunk(
+                chunk_id="keep",
+                clause_id="test-act:v1:s1/1",
+                text="Keep invented health records safe.",
+            ),
+            Chunk(
+                chunk_id="mine",
+                clause_id="acme/incident-policy:v1:1/1",
+                text="Acme reports every invented health incident within a day.",
+                scope=Scope.TENANT,
+                tenant_id="acme",
+            ),
+        ),
+        ledger=ledger,
+    )
+    pipeline = RetrievalPipeline(store, FakeReranker())
+    facts = Facts.of(
+        [fact("annual_turnover_aud", 4000, LAST_FY), fact("provides_health_service", False)]
+    )
+    tracked = await tracked_retrieve(
+        text, tenant_id="acme", as_of=AS_OF, facts=facts, graph=graph, retrieval=pipeline
+    )
+    assert tracked.coverage.obligation("OB-T-SEPARATE").outcome is Outcome.NOT_APPLICABLE
+    returned = {c.clause_id for c in tracked.retrieval.fused}
+    assert separate not in returned
+    assert {"test-act:v1:s1/1", "acme/incident-policy:v1:1/1"} <= returned
+    unscoped = await pipeline.retrieve(text, "acme", AS_OF, law=ALL_LAW)
+    assert unscoped.fused[0].clause_id == separate  # positive control
+
+
+async def test_user_scoped_documents_are_not_law_either() -> None:
+    ledger = FakeLedgerStore()
+    note = Chunk(
+        chunk_id="note",
+        clause_id="acme/my-notes:v1:1/1",
+        text=OUT_TEXT,
+        scope=Scope.USER,
+        tenant_id="acme",
+    )
+    store = FakeRetrievalStore((*CHUNKS, note), ledger=ledger)
+    await ledger.subscribe(tenant_id="acme", instrument_id="test-act", subscribed_by="test")
+    result = await store.search(
+        OUT_TEXT,
+        law=TRACK_A,
+        tenant_id="acme",
+        scopes=(Scope.PUBLIC, Scope.USER),
+        as_of=TODAY,
+        limit=10,
+    )
+    assert "acme/my-notes:v1:1/1" in {c.clause_id for c in result.fused}
+    assert OUT_OF_SCOPE not in {c.clause_id for c in result.fused}
+
+
+def test_an_unscoped_scope_comes_only_from_unscoped() -> None:
+    with pytest.raises(ValueError, match=r"only from LawScope\.unscoped"):
+        LawScope(None, "a filter nobody named")

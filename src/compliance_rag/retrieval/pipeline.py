@@ -110,13 +110,8 @@ class RetrievalPipeline:
         top_k: int = 10,
     ) -> RetrievalTrace:
         """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank)."""
-        with span(
-            "retrieve",
-            query=query,
-            tenant_id=tenant_id,
-            as_of=as_of.isoformat(),
-            **{"retrieval.law_scope": law.described},
-        ) as current:
+        # The law scope is recorded on this span by the store's filter.
+        with span("retrieve", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             result = await self.retrieval_store.search(
                 query,
                 law=law,

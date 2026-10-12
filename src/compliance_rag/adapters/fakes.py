@@ -13,6 +13,8 @@ import zlib
 from collections.abc import Mapping
 from dataclasses import replace
 
+from opentelemetry import trace
+
 from compliance_rag.adapters.generation_residency import is_real_tenant_data
 from compliance_rag.adapters.interfaces import (
     Candidate,
@@ -196,6 +198,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         limit: int,
     ) -> RetrievalResult:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
+        trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
         pool = [
             c
             for c in self._chunks.values()

@@ -84,6 +84,9 @@ class Candidate:
     obligation_id: str | None = None
 
 
+UNSCOPED = "unscoped: "
+
+
 @dataclass(frozen=True, slots=True)
 class LawScope:
     """Which library-law clauses Track B may return (D-03, ADR-0030).
@@ -105,6 +108,8 @@ class LawScope:
     def __post_init__(self) -> None:
         if not self.reason.strip():
             raise ValueError("a law scope says where it came from")
+        if self.clause_ids is None and not self.reason.startswith(UNSCOPED):
+            raise ValueError("an unscoped retrieval comes only from LawScope.unscoped(reason)")
 
     @classmethod
     def of(cls, coverage: Coverage) -> LawScope:
@@ -117,7 +122,7 @@ class LawScope:
     def unscoped(cls, reason: str) -> LawScope:
         if not reason.strip():
             raise ValueError("an unscoped retrieval says where it came from")
-        return cls(None, f"unscoped: {reason}")
+        return cls(None, f"{UNSCOPED}{reason}")
 
     def admits(self, scope: Scope, clause_id: str) -> bool:
         return scope is not Scope.PUBLIC or self.clause_ids is None or clause_id in self.clause_ids

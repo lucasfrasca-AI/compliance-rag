@@ -20,6 +20,7 @@ import datetime as dt
 import sys
 from pathlib import Path
 
+from compliance_rag.assessment.pipeline import LIBRARY_QUESTION
 from compliance_rag.corpus.display_form import display_form
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID
 from compliance_rag.eval.harness import clause_link, law_source_html
@@ -36,7 +37,7 @@ async def main(question: str) -> None:
     source.write_text(law_source_html(), encoding="utf-8")
 
     async with live_answer_pipeline(Settings()) as pipeline:
-        result = await pipeline.answer(question, PUBLIC_TENANT_ID, AS_OF)
+        result = await pipeline.answer(question, PUBLIC_TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
 
     print(f"Q: {question}\n\nA: {result.unverified_draft.answer}\n")
     print(
