@@ -44,6 +44,13 @@ golden set (`corpus/golden/`). It is enforced by `validate_review` in
   review it would be a fiction, worse than an honest single name. Selection
   manifests are reviewed this way today (`author == reviewed_by`).
 
+**Pending review.** A model-drafted file carries
+`reviewed_by: "PENDING — <reviewer>"` until the reviewer signs it.
+`scripts/load_mappings.py` refuses to load any file still pending, and the
+applicability gate checks pending labels only as a draft (`allow_draft`).
+Signing means replacing that value with the reviewer's name and dating the
+file.
+
 The rule depends on the `model:` prefix being written honestly — a model
 recorded without it would pass as a human self-review. That is a review
 discipline, not something a loader can detect.

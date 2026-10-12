@@ -79,7 +79,7 @@ Single-context: root `CONTEXT.md`, decisions in `DECISIONS.md` and `docs/adr/`. 
 
 - `corpus/instruments/` — raw sources and parser output, one folder per instrument version. Never hand-edit parser output.
 - `corpus/mappings/` — hand-authored YAML: obligations, conditions, crosswalks. Changes only via PR. Every mapping carries `author`, `reviewed_by`, `date`, `source_clause_ids`.
-- Never generate a clause, obligation or mapping with an LLM. Proposing a tenant policy-to-law mapping for human approval is the single exception, and the proposal is stored as `status: proposed` until approved.
+- Never generate a clause with an LLM: clause text is parsed, never written. An obligation, condition or mapping is drafted by the model only when the human asks for it. The file records the model as `author` (`model:` prefix) and `reviewed_by: "PENDING — <reviewer>"`, is presented to the human as a table, and reaches the graph only after the human has reviewed it and signed `reviewed_by` (D-01). `scripts/load_mappings.py` refuses a file still pending. Proposing a tenant policy-to-law mapping for human approval is the other exception, and the proposal is stored as `status: proposed` until approved.
 
 ## Definition of done for a phase
 
