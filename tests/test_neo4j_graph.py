@@ -235,17 +235,52 @@ async def test_an_ended_node_is_never_reopened(graph: Neo4jGraph) -> None:
 
 
 @needs_neo4j
-async def test_drop_stored_status_removes_the_pre_adr_0029_property(graph: Neo4jGraph) -> None:
-    """Nodes written before ADR-0029 carry `status`; the migration removes it
-    and touches nothing else. Idempotent."""
+async def test_migration_moves_pre_adr_0029_nodes_to_derived_status(graph: Neo4jGraph) -> None:
+    """Nodes written before ADR-0029: an open one loses `status` and gains
+    nothing; a retired one keeps its dates and gains the `end_reason` its old
+    status implies; nothing else changes. Idempotent."""
     await graph.apply_schema()
     await graph.put_node(V1, OPEN)
-    await cypher(graph, "MATCH (n:InstrumentVersion) SET n.status = 'in_force'")
-    (before,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN properties(n) AS p")
-    assert await graph.drop_stored_status() == 1
-    assert await graph.drop_stored_status() == 0
-    (after,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN properties(n) AS p")
+    await cypher(
+        graph,
+        "CREATE (:InstrumentVersion {stable_id: 'act:v0', valid_from: date('2025-01-01'), "
+        "valid_to: date('2026-01-01'), status: 'in_force', recorded_at: datetime()}), "
+        "(:Obligation {stable_id: 'OB-OLD', valid_from: date('2025-01-01'), "
+        "valid_to: date('2026-01-01'), status: 'repealed', recorded_at: datetime()})",
+    )
+    await cypher(
+        graph, "MATCH (n:InstrumentVersion {stable_id: 'act:v1'}) SET n.status = 'in_force'"
+    )
+    (before,) = await cypher(graph, "MATCH (n {stable_id: 'act:v1'}) RETURN properties(n) AS p")
+    assert await graph.migrate_to_derived_status() == 3
+    assert await graph.migrate_to_derived_status() == 0
+    rows = await cypher(
+        graph, "MATCH (n) RETURN n.stable_id AS id, n.end_reason AS why, keys(n) AS keys"
+    )
+    assert {r["id"]: r["why"] for r in rows} == {
+        "act:v1": None,
+        "act:v0": "superseded",
+        "OB-OLD": "repealed",
+    }
+    assert not any("status" in r["keys"] for r in rows)
+    (after,) = await cypher(graph, "MATCH (n {stable_id: 'act:v1'}) RETURN properties(n) AS p")
     assert dict(after["p"]) == {k: v for k, v in dict(before["p"]).items() if k != "status"}
+    # A migrated retirement re-runs as a no-op, as any other does.
+    retired = Bitemporal(
+        valid_from=dt.date(2025, 1, 1), valid_to=JAN, end_reason=EndReason.SUPERSEDED
+    )
+    assert await graph.put_node(NodeRef("InstrumentVersion", "act:v0"), retired) is False
+
+
+@needs_neo4j
+async def test_migration_refuses_a_status_that_contradicts_the_dates(graph: Neo4jGraph) -> None:
+    await graph.apply_schema()
+    await graph.put_node(V1, OPEN)
+    await cypher(graph, "MATCH (n:InstrumentVersion) SET n.status = 'repealed'")
+    with pytest.raises(GraphWriteRefused, match="repealed but still open"):
+        await graph.migrate_to_derived_status()
+    (row,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN n.status AS status")
+    assert row["status"] == "repealed"  # nothing changed
 
 
 @needs_neo4j
