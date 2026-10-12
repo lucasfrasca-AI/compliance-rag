@@ -32,6 +32,7 @@ from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
     FUSED,
     RERANKED,
+    WHOLE_LIBRARY,
     NoRerank,
     QueryRecall,
     by_category,
@@ -71,7 +72,9 @@ async def run_arm(
     results: list[QueryRecall] = []
     rankings: list[list[str]] = []
     for q in golden.queries:
-        trace = await pipeline.route(q.query, q.tenant_id, q.as_of, limit=arm.candidates, top_k=10)
+        trace = await pipeline.route(
+            q.query, q.tenant_id, q.as_of, law=WHOLE_LIBRARY, limit=arm.candidates, top_k=10
+        )
         results.append(measure_trace(q, trace))
         rankings.append([c.clause_id for c in trace.ranked_candidates()])
     summary = by_category(results)

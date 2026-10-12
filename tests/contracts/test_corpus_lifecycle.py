@@ -37,6 +37,7 @@ from compliance_rag.corpus.models import CANONICALISATION_VERSION, Chunk, Clause
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry, synthetic_key
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
+from tests.conftest import ALL_LAW
 
 NOW = dt.date(2026, 10, 8)
 GENERATION_REGION = BUILD_PHASE_OFFSHORE_REGION  # the build phase's setting
@@ -160,12 +161,12 @@ async def assert_corpus_lifecycle_contract(
 
     # Mechanism 2: at today's as_of, v1 is in no channel, not fused, not
     # reranked — and v2 is in every one of them (the positive control).
-    today = _routes(await pipeline.retrieve(QUERY, "acme", NOW))
+    today = _routes(await pipeline.retrieve(QUERY, "acme", NOW, law=ALL_LAW))
     assert all(V2 in found and V1 not in found for found in today.values()), today
-    assert await store.lookup_clause(V1, tenant_id="acme", as_of=NOW) is None
+    assert await store.lookup_clause(V1, law=ALL_LAW, tenant_id="acme", as_of=NOW) is None
     # Before v2 took effect, v1 is the one returned: retirement is a date,
     # not a deletion.
-    then = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN))
+    then = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN, law=ALL_LAW))
     assert all(V1 in found and V2 not in found for found in then.values()), then
 
     # The ledger records the same dates, independently of the payloads — the
@@ -231,7 +232,10 @@ async def assert_corpus_lifecycle_contract(
         with pytest.raises(RemovalRefused):
             await attempt
     assert {LAW_CLAUSE, BETA_DOC} <= await stored_chunk_ids()
-    assert await store.lookup_clause(LAW_CLAUSE, tenant_id="_public", as_of=NOW) is not None
+    assert (
+        await store.lookup_clause(LAW_CLAUSE, law=ALL_LAW, tenant_id="_public", as_of=NOW)
+        is not None
+    )
     acme_refused = [
         e for e in await ledger.removal_audit("acme") if e.outcome is RemovalOutcome.REFUSED
     ]
@@ -251,9 +255,9 @@ async def assert_corpus_lifecycle_contract(
         reason="superseded by board resolution",
     )
     for as_of in (NOW, AFTER_V2):  # both on or after v2 took effect
-        found = _routes(await pipeline.retrieve(QUERY, "acme", as_of))
+        found = _routes(await pipeline.retrieve(QUERY, "acme", as_of, law=ALL_LAW))
         assert all(V2 not in ids for ids in found.values()), found
-    assert await store.lookup_clause(V2, tenant_id="acme", as_of=NOW) is None
+    assert await store.lookup_clause(V2, law=ALL_LAW, tenant_id="acme", as_of=NOW) is None
     assert V2 in await stored_chunk_ids()
     still_stored = await clauses.get_clause(V2, tenant_id="acme")
     assert still_stored is not None
@@ -306,7 +310,7 @@ async def assert_corpus_lifecycle_contract(
     assert {V2, LAW_CLAUSE, BETA_DOC} <= stored  # other version, library, other tenant untouched
     assert await clauses.get_clause(V1, tenant_id="acme") is None
     assert await clauses.get_clause(V2, tenant_id="acme") is not None
-    gone = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN))
+    gone = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN, law=ALL_LAW))
     assert all(V1 not in ids for ids in gone.values()), gone
     assert await ledger.purge_marker(tenant_id="acme", instrument_id=POLICY, version_id="v1") == (
         "u1",
@@ -375,7 +379,7 @@ async def assert_corpus_lifecycle_contract(
     stored_text = await clauses.get_clause(fixed.clause_id, tenant_id="acme")
     assert stored_text is not None
     assert stored_text.text == fixed.text
-    hit = await store.lookup_clause(fixed.clause_id, tenant_id="acme", as_of=NOW)
+    hit = await store.lookup_clause(fixed.clause_id, law=ALL_LAW, tenant_id="acme", as_of=NOW)
     assert hit is not None
     assert "their desk" in hit.text
 

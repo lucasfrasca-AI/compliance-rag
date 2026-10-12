@@ -20,11 +20,17 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from compliance_rag.adapters.interfaces import LawScope
+
 SPAN_EXPORTER = InMemorySpanExporter()
 
 _provider = TracerProvider()
 _provider.add_span_processor(SimpleSpanProcessor(SPAN_EXPORTER))
 trace.set_tracer_provider(_provider)
+
+
+ALL_LAW = LawScope.unscoped("test: retrieval with no tenant profile")
+"""For tests of retrieval itself, not of Track A's scope (D-03, ADR-0030)."""
 
 
 @pytest.fixture(autouse=True)

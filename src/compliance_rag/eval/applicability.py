@@ -86,10 +86,14 @@ class GoldenFact(_Strict):
 
 
 class Expected(_Strict):
+    obligation_count: int = Field(ge=0)
+    """How many obligations are in force on the case's date: an obligation
+    that disappears (a mapping deleted or ended) fails the case instead of
+    passing unnoticed under `otherwise`."""
     outcomes: Mapping[Outcome, tuple[str, ...]] = Field(
         default_factory=dict[Outcome, tuple[str, ...]]
     )
-    otherwise: Outcome | None = None
+    otherwise: Outcome
     """The outcome of every obligation not listed in `outcomes`."""
     acts_as: Mapping[str, Truth] = Field(default_factory=dict[str, Truth])
     questions: tuple[str, ...] | None = None
@@ -154,6 +158,8 @@ class ApplicabilityGoldenSet(_Strict):
         if len(ids) != len(set(ids)):
             raise ValueError("applicability case ids must be unique")
         validate_review(self.author, self.reviewed_by)
+        if self.is_signed_off:
+            dt.date.fromisoformat(self.date)  # a signed file carries the real review date
         return self
 
     @property
@@ -163,13 +169,17 @@ class ApplicabilityGoldenSet(_Strict):
 
     def clause_validity(self, clause_ids: set[str]) -> dict[str, tuple[dt.date, dt.date]]:
         """Each clause in force from its compilation's date (the compilations
-        named here are the ones loaded; none is superseded yet)."""
+        named here are the ones loaded; none is superseded yet). A clause of a
+        compilation not named is refused, not silently left out."""
         validity: dict[str, tuple[dt.date, dt.date]] = {}
         for clause_id in clause_ids:
             instrument_id, version_id, _ = parse_stable_id(clause_id)
-            start = self.compilations.get(f"{instrument_id}:{version_id}")
-            if start is not None:
-                validity[clause_id] = (start, NO_END_DATE)
+            key = f"{instrument_id}:{version_id}"
+            if key not in self.compilations:
+                raise ValueError(
+                    f"{clause_id}: compilation {key} is not in the labels' compilations"
+                )
+            validity[clause_id] = (self.compilations[key], NO_END_DATE)
         return validity
 
 
@@ -194,11 +204,20 @@ def compare(case: ApplicabilityCase, coverage: Coverage) -> tuple[Mismatch, ...]
     expected = case.expected
     actual = {o.obligation_id: o.outcome for o in coverage.obligations}
     wanted = {oid: outcome for outcome, ids in expected.outcomes.items() for oid in ids}
+    if len(actual) != expected.obligation_count:
+        found.append(Mismatch(case.id, "obligation count", expected.obligation_count, len(actual)))
     for oid in sorted(set(wanted) - set(actual)):
-        found.append(Mismatch(case.id, f"{oid} outcome", wanted[oid], "not in force"))
+        found.append(
+            Mismatch(
+                case.id,
+                f"{oid} outcome",
+                wanted[oid].value,
+                "not in coverage (unknown id, or not in force)",
+            )
+        )
     for oid, outcome in sorted(actual.items()):
         label = wanted.get(oid, expected.otherwise)
-        if label is not None and label is not outcome:
+        if label is not outcome:
             found.append(Mismatch(case.id, f"{oid} outcome", label.value, outcome.value))
     roles = {a.actor_id: a.truth for a in coverage.actors}
     for actor_id, truth in sorted(expected.acts_as.items()):
@@ -216,8 +235,19 @@ def compare(case: ApplicabilityCase, coverage: Coverage) -> tuple[Mismatch, ...]
     return tuple(found)
 
 
-async def check(store: GraphStore, golden: ApplicabilityGoldenSet) -> tuple[Mismatch, ...]:
-    """Every case through `store`; the mismatches, if any."""
+class UnsignedLabels(ValueError):
+    """Labels nobody has reviewed: not a gate (D-01)."""
+
+
+async def check(
+    store: GraphStore, golden: ApplicabilityGoldenSet, *, allow_draft: bool = False
+) -> tuple[Mismatch, ...]:
+    """Every case through `store`; the mismatches, if any. Unsigned labels
+    are refused, as the recall gate refuses an unsigned golden set, unless
+    the caller asks to check a draft — which proves a draft agrees with the
+    code, never that the labels are right."""
+    if not golden.is_signed_off and not allow_draft:
+        raise UnsignedLabels("the applicability labels are not signed off (D-01)")
     found: list[Mismatch] = []
     for case in golden.cases:
         coverage = await store.coverage(
