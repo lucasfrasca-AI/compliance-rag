@@ -55,7 +55,7 @@ MANIFEST = (
 )
 
 
-def _source(html_path: Path | None) -> str:
+def pinned_source(html_path: Path | None) -> str:
     raw = (
         html_path.read_bytes()
         if html_path is not None
@@ -74,7 +74,7 @@ async def main(bucket: str, html_path: Path | None, acknowledged: frozenset[str]
     selection = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8"))
     store = GCSClauseStore.for_bucket(bucket)
     result = await ingest_compilation(
-        _source(html_path),
+        pinned_source(html_path),
         instrument_id=INSTRUMENT_ID,
         version_id=VERSION_ID,
         tenant_id="_public",
