@@ -12,6 +12,13 @@
 # PR #101 was merged by the human (2026-10-12), who then instructed the
 # ingest; the reviewer's name is theirs to record here, not the model's.
 # The original 2026-09-24 selection was single-author reviewed by Piero Frasca.
+#
+# 2026-10-12: `s15` proposed by the model — "An APP entity must not do an act,
+# or engage in a practice, that breaches an Australian Privacy Principle", the
+# provision that binds APP entities to Schedule 1 and the first link in the
+# #93 applicability trace. No trailing slash: s15 is one sentence, so its
+# clause path is `s15` itself, and a bare entry selects exactly that clause
+# (and never s150 or s15A). Pending the human's review, like s6da/ and s6ea/.
 author: "model: Claude Opus 5.5 — added s6da/ and s6ea/ to Piero Frasca's 2026-09-24 selection"
 reviewed_by: "PENDING — Piero Frasca"
 date: 2026-10-11
@@ -30,3 +37,4 @@ prefixes:
   - s6da/
   - s6e/
   - s6ea/
+  - s15
