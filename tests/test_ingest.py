@@ -261,3 +261,49 @@ async def test_a_prefix_matching_nothing_in_the_real_compilation_fails_before_an
         await _run(fixture_html, store, _manifest("s6c/", "s99/"))
     manifest = await store.get_manifest(INSTRUMENT_ID, VERSION_ID, tenant_id=PUBLIC_TENANT_ID)
     assert manifest == {}
+
+
+# ---- an interrupted first ingest (issue #99) ---------------------------------
+
+
+async def _interrupted(fixture_html: str, store: FakeClauseStore, n: int) -> None:
+    """What the first real ingest left behind: the first `n` selected clauses
+    written, `put_manifest` (the last step) never reached."""
+    from compliance_rag.corpus.parser import parse_compilation
+
+    parsed = parse_compilation(
+        fixture_html, instrument_id="privacy-act-1988", version_id="C2026C00227"
+    )
+    for clause in _manifest("s6c/").select(parsed.clauses)[:n]:
+        await store.put_clause(clause)
+
+
+async def test_an_interrupted_first_ingest_resumes(fixture_html: str) -> None:
+    store = FakeClauseStore()
+    await _interrupted(fixture_html, store, 10)
+    result = await _run(fixture_html, store, _manifest("s6c/"))
+    assert result.first_ingest
+    complete = FakeClauseStore()
+    await _run(fixture_html, complete, _manifest("s6c/"))
+    tenant = {"tenant_id": "_public"}
+    assert await store.get_manifest("privacy-act-1988", "C2026C00227", **tenant) == (
+        await complete.get_manifest("privacy-act-1988", "C2026C00227", **tenant)
+    )
+
+
+async def test_an_interrupted_ingest_from_another_selection_is_drift(fixture_html: str) -> None:
+    """Resuming is only for the same selection: a stored clause this
+    selection doesn't include means two runs disagree — a human looks."""
+    store = FakeClauseStore()
+    await _interrupted(fixture_html, store, 10)
+    with pytest.raises(IngestDriftError, match="interrupted first ingest"):
+        await _run(fixture_html, store, _manifest("s6/"))
+
+
+async def test_an_interrupted_ingest_with_different_text_is_drift(fixture_html: str) -> None:
+    store = FakeClauseStore()
+    await _interrupted(fixture_html, store, 3)
+    edited = fixture_html.replace("a body corporate; or", "a body politic; or", 1)
+    assert edited != fixture_html
+    with pytest.raises(IngestDriftError, match="changed_content"):
+        await _run(edited, store, _manifest("s6c/"))

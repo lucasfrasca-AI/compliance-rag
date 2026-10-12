@@ -316,3 +316,26 @@ async def test_purge_deletes_noncurrent_generations_too() -> None:
 
     remaining = list(bucket.objects) + [n for n, _, _ in bucket.noncurrent]
     assert not [n for n in remaining if n.startswith("acme/retention-policy/v1/")]
+
+
+async def test_put_clauses_writes_the_manifest_once() -> None:
+    """Cloud Storage allows about one write per second to one object; the
+    first real ingest got 429 rewriting manifest.json after every clause
+    (issue #99). A batch writes each clause object, then the manifest once."""
+    bucket = _FakeBucket()
+    writes: list[str] = []
+    original = bucket.write
+
+    def counting(name: str, data: str) -> None:
+        writes.append(name)
+        original(name, data)
+
+    bucket.write = counting  # type: ignore[method-assign]
+    store = GCSClauseStore(bucket)
+    clauses = tuple(_clause(f"s6d/{n}", f"text {n}") for n in range(1, 31))
+    await store.put_clauses(clauses)
+    manifest_key = f"{INSTRUMENT_ID}/{VERSION_ID}/manifest.json"
+    assert writes.count(manifest_key) == 1
+    assert len(writes) == 31
+    stored = await store.get_manifest(INSTRUMENT_ID, VERSION_ID, tenant_id=PUBLIC_TENANT_ID)
+    assert sorted(stored) == sorted(c.clause_path for c in clauses)

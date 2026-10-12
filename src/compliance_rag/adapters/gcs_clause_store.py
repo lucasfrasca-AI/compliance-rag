@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any, Protocol, cast
 
 from google.api_core.exceptions import NotFound
@@ -157,6 +157,32 @@ class GCSClauseStore(ClauseStore):
             clause.canonical_text
         )
         await self._write_manifest(clause.instrument_id, clause.version_id, manifest)
+
+    async def put_clauses(self, clauses: Sequence[ClauseRecord]) -> None:
+        """Every clause object, then each version's `manifest.json` once.
+
+        `put_clause` rewrites the manifest after each clause, which is right
+        for one clause but, for an ingest, means hundreds of writes to one
+        object: Cloud Storage allows about one write per second to a single
+        object and answers 429 beyond it — the first real ingest (issue #99)
+        failed at the 11th clause. Clause objects are distinct keys and have
+        no such limit. A failure part-way leaves clause objects the manifest
+        doesn't list yet; the ingest re-runs them (idempotent keys)."""
+        for clause in clauses:
+            blob = self._bucket.blob(
+                self._clauses_key(clause.instrument_id, clause.version_id, clause.clause_path)
+            )
+            await asyncio.to_thread(
+                blob.upload_from_string, clause.model_dump_json(), content_type="application/json"
+            )
+        versions = sorted({(c.instrument_id, c.version_id) for c in clauses})
+        for instrument_id, version_id in versions:
+            manifest = await self._read_manifest_or_empty(instrument_id, version_id)
+            paths = manifest.setdefault("clause_paths", {})
+            for clause in clauses:
+                if (clause.instrument_id, clause.version_id) == (instrument_id, version_id):
+                    paths[clause.clause_path] = canonical_sha256(clause.canonical_text)
+            await self._write_manifest(instrument_id, version_id, manifest)
 
     async def get_manifest(
         self, instrument_id: str, version_id: str, *, tenant_id: str
