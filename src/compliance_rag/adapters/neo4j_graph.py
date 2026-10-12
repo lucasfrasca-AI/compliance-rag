@@ -49,6 +49,7 @@ from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
     EDGE_TYPES,
     PERSISTED_LABELS,
+    WRITER_KEYS,
     Bitemporal,
     EdgeWrite,
     EndReason,
@@ -58,6 +59,8 @@ from compliance_rag.adapters.graph_schema import (
     NodeRef,
     NodeWrite,
     Scalar,
+    StoredEdge,
+    StoredNode,
     checked_edge_type,
     checked_label,
     refuse_duplicates,
@@ -176,7 +179,7 @@ def _bitemporal(bitemporal: Bitemporal) -> dict[str, object]:
     return stored
 
 
-_RETIREMENT = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason"})
+_RETIREMENT = WRITER_KEYS
 
 
 def _refuse_if_changed(
@@ -666,6 +669,43 @@ class Neo4jGraph(GraphAdmin):
                 "graph.result_ids", [str(r.node.get("stable_id", "")) for r in rows]
             )
             return rows
+
+    # ---- what a loader compares with (not a traversal) ----------------------
+
+    async def stored(self, nodes: Sequence[NodeRef]) -> dict[NodeRef, StoredNode]:
+        """Named nodes as stored, with their outgoing edges — one statement
+        per label. Like `counts()`, outside the query builder because it
+        answers "what did we write", not "what was the law on a date": a
+        loader's integrity check needs every edge, whatever its dates."""
+        found: dict[NodeRef, StoredNode] = {}
+        with telemetry.span("neo4j_graph.stored", **{"graph.nodes": len(nodes)}):
+            for label in sorted({n.label for n in nodes}):
+                ids = sorted({n.stable_id for n in nodes if n.label == label})
+                query = (
+                    f"UNWIND $ids AS id MATCH (n:{checked_label(label)} {{stable_id: id}}) "
+                    "OPTIONAL MATCH (n)-[r]->(m) "
+                    "RETURN n.stable_id AS id, properties(n) AS props, "
+                    "collect(CASE WHEN r IS NULL THEN null ELSE {type: type(r), "
+                    "label: labels(m)[0], target: m.stable_id, props: properties(r)} END) AS edges"
+                )
+                records, _, _ = await self._driver.execute_query(
+                    _trusted(query), ids=ids, database_=self._database, routing_=RoutingControl.READ
+                )
+                for record in records:
+                    node = NodeRef(label, str(record["id"]))
+                    edges = tuple(
+                        StoredEdge(
+                            edge_type=str(e["type"]),
+                            target=NodeRef(str(e["label"]), str(e["target"])),
+                            properties={
+                                k: to_python(v)
+                                for k, v in cast("dict[str, object]", e["props"]).items()
+                            },
+                        )
+                        for e in cast("list[dict[str, object]]", record["edges"])
+                    )
+                    found[node] = StoredNode(node, _stored_from(record, "props"), edges)
+        return found
 
     # ---- counts (Phase 2 exit: Aura usage under 10% of its limits) ----------
 

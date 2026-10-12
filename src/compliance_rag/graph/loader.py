@@ -14,50 +14,55 @@ law only: a policy never gets a persisted node (CONTEXT.md: Policy, D-14), and
 Aura holds public law only during the build (D-09). Clause text is not stored
 in the graph — it lives in Cloud Storage; the graph carries its canonical hash.
 
-**Mapping YAML** (`load_mappings`): obligations, obligation supersession and
-crosswalks between obligations. The rest of the README's shape is validated
-but **not loaded**, because loading it needs ontology decisions that belong to
-the Phase 2 design session (`DESIGN_SESSION_QUESTIONS`, issue #93): a file that
-carries conditions, `applies_to`, controls or a crosswalk to a control is
-refused by name, never half-loaded. Tenant policy mappings are never loaded
-into the graph (D-09, D-14: tenant content has no persisted node), so a
+**Mapping YAML** (`load_mappings`): the ontology the #93 design session
+settled (ADR-0027, ADR-0028) — obligations, actors, condition trees,
+controls, jurisdictions and sectors, with `DERIVED_FROM`, `QUALIFIED_BY`,
+`HAS_OPERAND`, `APPLIES_TO`, `REQUIRES`, `CROSSWALKS_TO` and `SUPERSEDES`.
+Checked against the graph first: every clause an item derives from present
+and in force within its interval, and every item already loaded unchanged —
+properties and structural edges alike. Tenant policy mappings are never
+loaded into the graph (D-09, D-14: tenant content has no persisted node), so a
 `status: proposed` mapping can't be traversed by construction.
 
-Correcting a mapping in place ("edits the existing entry", README) changes a
-node, which D-05 forbids once it is loaded: such a load is refused before any
-write, naming the obligation. Whether corrections become new ids or a
-recorded exception to immutability is a design-session question too.
+Correcting a loaded item in place changes a node, which D-05 forbids: such a
+load is refused before any write, naming the item. A change of meaning is a
+new id with `supersedes` (#93 Q4).
 """
 
 from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from typing import cast
 
 from opentelemetry.trace import Span
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
 from compliance_rag.adapters.graph_schema import (
+    WRITER_KEYS,
     Bitemporal,
     EdgeWrite,
     GraphCounts,
     NodeRef,
     NodeWrite,
+    Scalar,
+    StoredNode,
 )
 from compliance_rag.adapters.interfaces import GraphAdmin
-from compliance_rag.corpus.models import ClauseRecord, Scope, canonical_sha256, parse_stable_id
-from compliance_rag.graph.mappings import MappingError, MappingSet, Obligation
-
-DESIGN_SESSION_QUESTIONS = {
-    "conditions": "a Condition's valid time — the README gives conditions no dates, and every "
-    "node is bitemporal (D-05)",
-    "applies_to": "the identity and valid time of Actor, Jurisdiction and Sector nodes that "
-    "APPLIES_TO edges point at",
-    "controls": "where Control nodes come from (#12's ISO 27001 controls) and their valid time",
-}
-"""What the loader won't guess. Each is a decision for the Phase 2 design
-session (issue #93); until then a file that needs one is refused, naming it."""
+from compliance_rag.corpus.models import NO_END_DATE, ClauseRecord, Scope, canonical_sha256
+from compliance_rag.graph.mappings import (
+    Actor,
+    Condition,
+    Control,
+    Dated,
+    Grounded,
+    Jurisdiction,
+    MappingError,
+    MappingSet,
+    Obligation,
+    Sector,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,139 +184,232 @@ async def load_instrument_version(
         return report
 
 
-def _not_yet_loadable(mappings: MappingSet) -> list[str]:
-    obligation_ids = set(mappings.obligations_by_id)
-    refusals: list[str] = []
-    if mappings.conditions:
-        refusals.append(f"conditions: {DESIGN_SESSION_QUESTIONS['conditions']}")
-    for obligation in mappings.obligations:
-        if not obligation.applies_to.empty:
-            refusals.append(f"{obligation.id} applies_to: {DESIGN_SESSION_QUESTIONS['applies_to']}")
-        if obligation.requires.conditions:
-            refusals.append(f"{obligation.id} requires: {DESIGN_SESSION_QUESTIONS['conditions']}")
-        if obligation.requires.controls:
-            refusals.append(f"{obligation.id} requires: {DESIGN_SESSION_QUESTIONS['controls']}")
-    for crosswalk in mappings.crosswalks:
-        for end in (crosswalk.source, crosswalk.target):
-            if end in obligation_ids:
-                continue
-            if ":" not in end:  # not a clause/control stable ID: a mistyped obligation
-                raise MappingError(
-                    f"crosswalk {crosswalk.source} -> {crosswalk.target}: unknown obligation {end}"
-                )
-            refusals.append(f"crosswalk to {end}: {DESIGN_SESSION_QUESTIONS['controls']}")
-    return refusals
+def _words(text: str) -> str:
+    """YAML's folded scalars carry line breaks; the graph stores the words,
+    single-spaced."""
+    return " ".join(text.split())
 
 
-def _obligation_bitemporal(obligation: Obligation) -> Bitemporal:
+def _node_properties(item: Dated) -> dict[str, Scalar]:
+    """What each kind stores besides its stable ID and valid time."""
+    match item:
+        case Jurisdiction() | Sector():
+            return {"code": item.id, "name": item.name, "source": item.source}
+        case Condition():
+            props: dict[str, Scalar] = {
+                "instrument_id": item.instrument_id,
+                "operator": item.operator.value,
+                "description": _words(item.description),
+            }
+            if item.leaf is not None and item.question and item.unassessable_reason:
+                leaf = item.leaf
+                props |= {
+                    "field": leaf.field,
+                    "period": leaf.period.value,
+                    "test": leaf.test.value,
+                    "value": leaf.value,
+                    "question": _words(item.question),
+                    "unassessable_reason": _words(item.unassessable_reason),
+                }
+                if leaf.since_field is not None and leaf.not_before is not None:
+                    props |= {"since_field": leaf.since_field, "not_before": leaf.not_before}
+            return props
+        case Actor():
+            return {
+                "instrument_id": item.instrument_id,
+                "name": item.name,
+                "description": _words(item.description),
+            }
+        case Control():
+            return {"instrument_id": item.instrument_id, "descriptor": _words(item.descriptor)}
+        case Obligation():
+            return {"instrument_id": item.instrument_id, "summary": _words(item.summary)}
+        case _:
+            raise TypeError(f"no graph node for {type(item).__name__}")
+
+
+def _bitemporal(item: Dated) -> Bitemporal:
     return Bitemporal(
-        valid_from=obligation.valid_from,
-        valid_to=obligation.valid_until,
-        end_reason=obligation.end_reason,
+        valid_from=item.valid_from, valid_to=item.valid_until, end_reason=item.end_reason
     )
 
 
-def _obligation_properties(obligation: Obligation) -> dict[str, str]:
-    instrument_id, _, _ = parse_stable_id(obligation.clause_id)
-    return {
-        "clause_id": obligation.clause_id,
-        "instrument_id": instrument_id,
-        "summary": obligation.summary.strip(),
-    }
+def _outgoing(item: Dated) -> list[tuple[str, NodeRef]]:
+    """Every edge an item's own YAML gives it, as (edge type, target)."""
+    edges: list[tuple[str, NodeRef]] = []
+    if isinstance(item, Grounded):
+        edges += [("DERIVED_FROM", NodeRef("Clause", c)) for c in item.clause_ids]
+    match item:
+        case Condition():
+            edges += [("HAS_OPERAND", NodeRef("Condition", c)) for c in item.operands]
+        case Actor():
+            edges.append(("QUALIFIED_BY", NodeRef("Condition", item.qualified_by)))
+        case Obligation():
+            edges += [("APPLIES_TO", NodeRef("Actor", a)) for a in item.applies_to.actors]
+            edges += [
+                ("APPLIES_TO", NodeRef("Jurisdiction", j)) for j in item.applies_to.jurisdictions
+            ]
+            edges += [("APPLIES_TO", NodeRef("Sector", x)) for x in item.applies_to.sectors]
+            edges += [("REQUIRES", NodeRef("Condition", c)) for c in item.requires.conditions]
+            edges += [("REQUIRES", NodeRef("Control", c)) for c in item.requires.controls]
+        case _:
+            pass
+    return edges
 
 
-async def _preflight(graph: GraphAdmin, mappings: MappingSet, today: dt.date) -> None:
-    """Graph checks before any write.
-
-    - Every obligation's clause is in the graph and in force on the day the
-      obligation starts, and still in force at the last date the obligation
-      covers that we can see (its end, or today) — an obligation about a
-      clause that doesn't exist, or that outlives it, is a mapping error.
-    - An obligation already loaded is unchanged: a correction in place would
-      mutate a node (D-05), refused here rather than halfway through.
-    """
-    for obligation in mappings.obligations:
-        last = min(obligation.valid_until - dt.timedelta(days=1), max(today, obligation.valid_from))
-        for as_of in sorted({obligation.valid_from, last}):
-            clause = GraphQuery(as_of=as_of, max_depth=1).start(
-                "Clause", stable_id=obligation.clause_id
+def _edges(mappings: MappingSet) -> list[EdgeWrite]:
+    labels = mappings.labels
+    edges: list[EdgeWrite] = []
+    for label, items in mappings.by_label.items():
+        for item in items:
+            node = NodeRef(label, item.id)
+            edges += [EdgeWrite(edge_type, node, target) for edge_type, target in _outgoing(item)]
+            if item.supersedes is not None:
+                edges.append(EdgeWrite("SUPERSEDES", node, NodeRef(label, item.supersedes)))
+    for crosswalk in mappings.crosswalks:
+        edges.append(
+            EdgeWrite(
+                "CROSSWALKS_TO",
+                NodeRef(labels[crosswalk.source], crosswalk.source),
+                NodeRef(labels[crosswalk.target], crosswalk.target),
+                {"kind": crosswalk.kind.value, "note": _words(crosswalk.note)},
             )
-            if not await graph.read(clause.build()):
-                raise MappingError(
-                    f"{obligation.id}: clause {obligation.clause_id} is not in the graph in "
-                    f"force on {as_of} — load the corpus first, or end the obligation with "
-                    "its clause"
-                )
-        loaded = await graph.read(
-            GraphQuery(as_of=obligation.valid_from, max_depth=1)
-            .start("Obligation", stable_id=obligation.id)
-            .build()
         )
-        wanted: dict[str, object] = {
-            **_obligation_properties(obligation),
-            "valid_from": obligation.valid_from,
-        }
-        for row in loaded:
-            changed = sorted(k for k, v in wanted.items() if row.node.get(k) != v)
-            if changed:
+    return edges
+
+
+MEANING = frozenset({"HAS_OPERAND", "QUALIFIED_BY", "APPLIES_TO", "REQUIRES", "SUPERSEDES"})
+"""Edges that carry an item's meaning: once loaded, the set a node has is as
+immutable as its properties (D-05) — a different set is a new id.
+`DERIVED_FROM` may grow (a new compilation, ADR-0028) but never shrink;
+`CROSSWALKS_TO` may grow, but a stored crosswalk's kind and note are fixed."""
+
+
+def _last_visible(item: Dated, today: dt.date) -> dt.date:
+    """The last day of the item we can see: its end, or today."""
+    return min(item.valid_until - dt.timedelta(days=1), max(today, item.valid_from))
+
+
+def _interval(stored: StoredNode) -> tuple[dt.date, dt.date]:
+    return (
+        cast("dt.date", stored.properties["valid_from"]),
+        cast("dt.date", stored.properties["valid_to"]),
+    )
+
+
+async def _check_grounding(graph: GraphAdmin, mappings: MappingSet, today: dt.date) -> None:
+    """Every clause an item derives from is in the graph and in force at some
+    time within the item's interval, and on the item's last visible day at
+    least one of them is: an item may not outlive the text it was read from
+    (ADR-0028). An item grounded in many compilations lists them all; each
+    only has to overlap the item."""
+    grounded = mappings.grounded
+    refs = {NodeRef("Clause", c) for _, item in grounded for c in item.clause_ids}
+    clauses = await graph.stored(sorted(refs, key=lambda r: r.stable_id))
+    for label, item in grounded:
+        last = _last_visible(item, today)
+        for clause_id in item.clause_ids:
+            stored = clauses.get(NodeRef("Clause", clause_id))
+            if stored is None:
                 raise MappingError(
-                    f"{obligation.id} is already loaded with different {changed}: a loaded "
-                    "obligation is immutable (D-05) — supersede it with a new id"
+                    f"{item.id}: clause {clause_id} is not in the graph — load the corpus first"
                 )
+            start, end = _interval(stored)
+            if not (start < item.valid_until and item.valid_from < end):
+                raise MappingError(
+                    f"{item.id}: clause {clause_id} ({start} to {end}) is never in force while "
+                    f"the {label.lower()} is ({item.valid_from} to {item.valid_until})"
+                )
+        if not any(
+            _interval(clauses[NodeRef("Clause", c)])[0]
+            <= last
+            < _interval(clauses[NodeRef("Clause", c)])[1]
+            for c in item.clause_ids
+        ):
+            raise MappingError(
+                f"{item.id}: none of its clauses is in force on {last} — end the "
+                f"{label.lower()} with its clause, or derive it from the compilation now in force"
+            )
 
 
-def _supersession_order(mappings: MappingSet) -> list[str]:
-    """Obligation ids with every superseded obligation before its successor.
-    (Gapless dates already rule out cycles; validation guarantees one
-    successor each.)"""
-    by_id = mappings.obligations_by_id
-    ordered: list[str] = []
+def _refuse(item: Dated, label: str, what: str) -> MappingError:
+    return MappingError(
+        f"{item.id} is already loaded with different {what}: a loaded {label.lower()} is "
+        "immutable (D-05) — supersede it with a new id"
+    )
 
-    def visit(identifier: str) -> None:
-        if identifier in ordered:
-            return
-        previous = by_id[identifier].supersedes
-        if previous is not None:
-            visit(previous)
-        ordered.append(identifier)
 
-    for identifier in sorted(by_id):
-        visit(identifier)
-    return ordered
+async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> None:
+    """An item already loaded is unchanged — its properties, its valid time
+    (retiring an open node is the one change allowed), and the edges that
+    carry its meaning (`MEANING`); its `DERIVED_FROM` may only grow, and a
+    stored crosswalk's kind and note are fixed. A correction in place would
+    mutate a node (D-05), so it is refused here, before any write, not
+    halfway through. One read for every item, at no date (`stored`)."""
+    edges = _edges(mappings)
+    refs = [NodeRef(label, item.id) for label, items in mappings.by_label.items() for item in items]
+    loaded = await graph.stored(refs)
+    for label, items in mappings.by_label.items():
+        for item in items:
+            stored = loaded.get(NodeRef(label, item.id))
+            if stored is None:
+                continue
+            wanted: dict[str, object] = {**_node_properties(item), "valid_from": item.valid_from}
+            have = {k: v for k, v in stored.properties.items() if k not in WRITER_KEYS}
+            changed = sorted(
+                k for k in set(wanted) | set(have) if have.get(k) != _comparable(wanted.get(k))
+            )
+            if changed:
+                raise _refuse(item, label, str(changed))
+            end, why = stored.properties["valid_to"], stored.properties.get("end_reason")
+            if end != NO_END_DATE and (end, why) != (item.valid_until, item.end_reason):
+                raise _refuse(item, label, "valid_to or end_reason")
+            mine = [e for e in edges if e.source == stored.node]
+            for edge_type in sorted(MEANING):
+                wanted_targets = frozenset(e.target for e in mine if e.edge_type == edge_type)
+                if stored.targets(edge_type) != wanted_targets:
+                    raise _refuse(item, label, f"{edge_type} edges")
+            derived = {e.target for e in mine if e.edge_type == "DERIVED_FROM"}
+            if not stored.targets("DERIVED_FROM") <= derived:
+                raise _refuse(item, label, "DERIVED_FROM edges (a clause was removed)")
+            crosswalks = {e.target: e.properties for e in mine if e.edge_type == "CROSSWALKS_TO"}
+            for edge in stored.edges:
+                if (
+                    edge.edge_type == "CROSSWALKS_TO"
+                    and edge.target in crosswalks
+                    and dict(edge.properties) != dict(crosswalks[edge.target])
+                ):
+                    raise _refuse(item, label, f"crosswalk to {edge.target.stable_id}")
+
+
+def _comparable(value: object) -> object:
+    """A wanted property as it reads back from the graph (lists as tuples)."""
+    if isinstance(value, list):
+        return tuple(cast("list[object]", value))
+    return value
 
 
 async def load_mappings(
     graph: GraphAdmin, mappings: MappingSet, *, today: dt.date | None = None
 ) -> LoadReport:
-    refusals = _not_yet_loadable(mappings)
-    if refusals:
-        raise MappingError(
-            "not loadable until the Phase 2 design session decides: " + "; ".join(refusals)
+    """Every node and edge the mapping set describes, after checking the
+    graph: clauses present and in force, loaded items unchanged. Nodes first
+    (every kind, batched), then edges. Tenant policy mappings are validated
+    and reported, never written (D-09, D-14)."""
+    attributes = {
+        f"graph.{label.lower()}s": len(items) for label, items in mappings.by_label.items()
+    }
+    with telemetry.span("graph_loader.load_mappings", **attributes) as span:
+        await _check_grounding(graph, mappings, today or dt.date.today())
+        await _check_unchanged(graph, mappings)
+        created_nodes = await graph.put_nodes(
+            [
+                NodeWrite(NodeRef(label, item.id), _bitemporal(item), _node_properties(item))
+                for label, items in mappings.by_label.items()
+                for item in items
+            ]
         )
-    by_id = mappings.obligations_by_id
-    with telemetry.span(
-        "graph_loader.load_mappings",
-        **{"graph.obligations": len(by_id), "graph.crosswalks": len(mappings.crosswalks)},
-    ) as span:
-        await _preflight(graph, mappings, today or dt.date.today())
-        created_nodes = created_edges = 0
-        for identifier in _supersession_order(mappings):
-            obligation = by_id[identifier]
-            node = NodeRef("Obligation", identifier)
-            created_nodes += await graph.put_node(
-                node, _obligation_bitemporal(obligation), _obligation_properties(obligation)
-            )
-            if obligation.supersedes is not None:
-                created_edges += await graph.put_edge(
-                    "SUPERSEDES", node, NodeRef("Obligation", obligation.supersedes)
-                )
-        for crosswalk in mappings.crosswalks:
-            created_edges += await graph.put_edge(
-                "CROSSWALKS_TO",
-                NodeRef("Obligation", crosswalk.source),
-                NodeRef("Obligation", crosswalk.target),
-                {"kind": crosswalk.kind.value, "note": crosswalk.note.strip()},
-            )
+        created_edges = await graph.put_edges(_edges(mappings))
         report = LoadReport(
             created_nodes,
             created_edges,

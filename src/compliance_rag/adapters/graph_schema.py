@@ -32,12 +32,27 @@ are projected per request and never persisted (CONTEXT.md), so they are not
 writable here."""
 
 EDGE_TYPES = frozenset(
-    {"PART_OF", "VERSION_OF", "SUPERSEDES", "APPLIES_TO", "REQUIRES", "CROSSWALKS_TO"}
+    {
+        "PART_OF",
+        "VERSION_OF",
+        "SUPERSEDES",
+        "APPLIES_TO",
+        "REQUIRES",
+        "CROSSWALKS_TO",
+        "DERIVED_FROM",
+        "QUALIFIED_BY",
+        "HAS_OPERAND",
+    }
 )
+"""PHASES.md Phase 2's edges, plus the #93 design session's (ADR-0027,
+ADR-0028): `DERIVED_FROM` (Obligation, Condition, Actor, Control -> Clause),
+`QUALIFIED_BY` (Actor -> its condition tree's root) and `HAS_OPERAND`
+(Condition -> Condition; the operator is on the parent node)."""
 
 
-Scalar = str | int | float | bool | dt.date | tuple[str, ...]
-"""What a node or edge property may hold: Neo4j stores these natively."""
+Scalar = str | int | float | bool | dt.date | tuple[str, ...] | tuple[int | float, ...]
+"""What a node or edge property may hold: Neo4j stores these natively (a list
+is homogeneous)."""
 
 
 class GraphRefused(ValueError):
@@ -112,6 +127,35 @@ class GraphRow:
 class GraphCounts:
     nodes: int
     edges: int
+
+
+WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason"})
+"""Stored properties a loader doesn't author: the stable ID, transaction time,
+and the end of valid time, which only a retirement sets (D-05, ADR-0029)."""
+
+
+@dataclass(frozen=True, slots=True)
+class StoredEdge:
+    """One outgoing edge as stored: its type, its target, its properties."""
+
+    edge_type: str
+    target: NodeRef
+    properties: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredNode:
+    """A node exactly as stored, at no date: every property (valid time
+    included) and every outgoing edge. What a loader compares an authored
+    item with before it writes (`GraphAdmin.stored`); never an answer about
+    the law, which is always a builder-built read on `as_of` (D-05)."""
+
+    node: NodeRef
+    properties: Mapping[str, object]
+    edges: tuple[StoredEdge, ...]
+
+    def targets(self, edge_type: str) -> frozenset[NodeRef]:
+        return frozenset(e.target for e in self.edges if e.edge_type == edge_type)
 
 
 @dataclass(frozen=True, slots=True)

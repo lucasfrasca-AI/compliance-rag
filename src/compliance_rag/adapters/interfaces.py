@@ -29,6 +29,7 @@ from compliance_rag.adapters.graph_schema import (
     NodeRef,
     NodeWrite,
     Scalar,
+    StoredNode,
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
@@ -311,6 +312,13 @@ class GraphAdmin(ABC):
     @abstractmethod
     async def counts(self) -> GraphCounts:
         """Whole-graph node and edge totals."""
+
+    @abstractmethod
+    async def stored(self, nodes: Sequence[NodeRef]) -> dict[NodeRef, StoredNode]:
+        """These nodes exactly as stored, at no date — properties, valid
+        time, outgoing edges — for a loader to compare with what it is about
+        to write. Absent nodes are absent from the result. Not a traversal and
+        never an answer about the law: Track A reads only `BuiltQuery`s."""
 
 
 class RetrievalStore(ABC):

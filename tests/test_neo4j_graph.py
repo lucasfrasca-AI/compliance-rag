@@ -105,9 +105,12 @@ async def test_the_schema_applies_idempotently(graph: Neo4jGraph) -> None:
     second = await graph.apply_schema()
     assert await _schema_objects(graph) == after_first  # names and definitions
     assert (first.applied, first.unsupported) == (second.applied, second.unsupported)
-    created = {name for name in first.applied if "status" not in name}
-    assert created <= {name for _, name in after_first}
-    assert not {name for _, name in after_first if "status" in name}  # ADR-0029
+    statements = schema_statements()
+    created = {statement_name(s) for s in statements if s.startswith("CREATE")}
+    dropped = {statement_name(s) for s in statements if s.startswith("DROP")}
+    present = {name for _, name in after_first}
+    assert created - set(first.unsupported) <= present
+    assert not dropped & present  # retired by ADR-0027 / ADR-0029
 
 
 @needs_neo4j
@@ -570,3 +573,21 @@ async def test_a_batch_naming_one_edge_twice_is_refused_not_collapsed() -> None:
                 EdgeWrite("PART_OF", source, V1, {"kind": "b"}),
             ]
         )
+
+
+@needs_neo4j
+async def test_stored_returns_named_nodes_with_their_edges_at_no_date(graph: Neo4jGraph) -> None:
+    """The loader's integrity read: properties and outgoing edges whatever
+    their dates; a node that isn't there is simply absent."""
+    await graph.apply_schema()
+    await graph.put_node(
+        V1, Bitemporal(valid_from=JAN, valid_to=JUN, end_reason=EndReason.SUPERSEDED)
+    )
+    await graph.put_node(ACT, OPEN, {"title": "Act"})
+    await graph.put_edge("VERSION_OF", V1, ACT, {"note": "n"})
+    found = await graph.stored([V1, ACT, NodeRef("Clause", "missing")])
+    assert set(found) == {V1, ACT}
+    assert found[V1].properties["end_reason"] == "superseded"
+    assert found[V1].targets("VERSION_OF") == {ACT}
+    assert dict(found[V1].edges[0].properties) == {"note": "n"}
+    assert found[ACT].edges == ()

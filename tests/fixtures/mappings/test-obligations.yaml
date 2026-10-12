@@ -1,5 +1,5 @@
-# TEST FIXTURE — invented for the loader tests (issue #89). Not law, not a
-# mapping of any real instrument, and never loaded from corpus/mappings/.
+# TEST FIXTURE — invented for the loader tests (issues #89, #113). Not law,
+# not a mapping of any real instrument, and never loaded from corpus/mappings/.
 author: "model: Claude Opus 5.5 — loader test fixture"
 reviewed_by: test-fixture (not a review — invented data)
 date: 2026-10-10
@@ -7,24 +7,64 @@ source_clause_ids:
   - test-act:v1:s1/1
   - test-act:v1:s2/1
 
+conditions:
+  - id: COND-TEST-COVERED
+    description: A keeper is covered if it is large or has opted in.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    any_of: [COND-TEST-LARGE, COND-TEST-OPTED-IN]
+  - id: COND-TEST-LARGE
+    description: Invented turnover over 1000 in the previous financial year.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    leaf:
+      field: annual_turnover_aud
+      period: previous_financial_year
+      test: gt
+      value: 1000
+    question: What was the annual turnover for the previous financial year?
+    unassessable_reason: No turnover is recorded for the previous financial year.
+  - id: COND-TEST-OPTED-IN
+    description: The keeper has opted in.
+    clause_ids: [test-act:v1:s2/1]
+    valid_from: 2026-01-01
+    leaf:
+      field: opted_in
+      test: eq
+      value: true
+    question: Has the business opted in?
+    unassessable_reason: Nobody has said whether the business opted in.
+
+actors:
+  - id: test-act/actor/keeper
+    name: Keeper
+    description: Whoever keeps the invented records.
+    clause_ids: [test-act:v1:s1/1]
+    qualified_by: COND-TEST-COVERED
+    valid_from: 2026-01-01
+
 obligations:
   - id: OB-TEST-1
-    clause_id: test-act:v1:s1/1
+    clause_ids: [test-act:v1:s1/1]
     summary: Keep the invented records safe.
     valid_from: 2026-01-01
     valid_to: 2026-06-01
     end_reason: superseded
+    applies_to:
+      actors: [test-act/actor/keeper]
   - id: OB-TEST-1B
-    clause_id: test-act:v1:s1/1
+    clause_ids: [test-act:v1:s1/1]
     summary: Keep the invented records safe, and say how.
     valid_from: 2026-06-01
-    valid_to: null
     supersedes: OB-TEST-1
+    applies_to:
+      actors: [test-act/actor/keeper]
   - id: OB-TEST-2
-    clause_id: test-act:v1:s2/1
+    clause_ids: [test-act:v1:s2/1]
     summary: Destroy the invented records when no longer needed.
     valid_from: 2026-01-01
-    valid_to: null
+    applies_to:
+      actors: [test-act/actor/keeper]
 
 crosswalks:
   - from: OB-TEST-1B

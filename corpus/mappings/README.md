@@ -53,6 +53,39 @@ for a real customer**, whoever authored it. When a second reviewer exists,
 tighten `validate_review` so `reviewed_by != author` always, and update this
 section — don't leave it standing beside a rule nobody follows.
 
+## The ontology
+
+Settled in the #93 design session (ADR-0027, ADR-0028, ADR-0029):
+
+- An **obligation** is the requirement a clause imposes. It `APPLIES_TO` one or
+  more **actors**. It may also be narrowed to **jurisdictions** and
+  **sectors**, and `REQUIRES` obligation-specific **conditions** or
+  **controls**.
+- An **actor** is a role an instrument defines, such as "APP entity". It is
+  `QUALIFIED_BY` one **condition tree**. Whether a tenant holds the role is
+  the law's question, answered by evaluating the tree against the tenant's
+  dated facts. It is never a tag the tenant declares.
+- A **condition** is `all_of`, `any_of` or `not` over other conditions, down to
+  **leaves**. Each leaf tests one profile fact for one period. Evaluation is
+  three-valued: a leaf whose fact is missing is *unknown*, never assumed.
+  That is how an obligation comes out unassessable, with the leaf's question
+  as the reason (D-06).
+- Every item except a jurisdiction or sector is `DERIVED_FROM` the clauses it
+  was read from, one edge per compilation. Those clauses are its citations.
+- Every item is dated:
+  - `valid_from`;
+  - `valid_to` with `end_reason` once it ends (`superseded`, `repealed` or
+    `expired`);
+  - `supersedes` for its replacement.
+
+  No status is authored: it is derived from the dates on each `as_of`.
+  Anything an item refers to must be in force for the whole of the item's
+  interval, except a condition's operands. An operand may start later or end
+  earlier than its parent. On a date it isn't in force it evaluates as false,
+  so repealing one gate is one retirement (ADR-0027).
+
+Every id is stable forever, never reused, and unique across all kinds.
+
 ## Obligations
 
 ```yaml
@@ -61,10 +94,16 @@ reviewed_by: sam.smith@example.com
 date: 2026-09-20
 source_clause_ids:
   - privacy-act-1988:C2026C00227:sch1/app11/1
+  - privacy-act-1988:C2026C00227:s15
+  - privacy-act-1988:C2026C00227:s6/1/app-entity
+  - privacy-act-1988:C2026C00227:s6d/1
+  - privacy-act-1988:C2026C00227:s6da/1
+  - iso-27001:2022:annexa/8/3
 
 obligations:
   - id: OB-APP11-1                       # stable, never reused
-    clause_id: privacy-act-1988:C2026C00227:sch1/app11/1
+    clause_ids:                          # DERIVED_FROM, one per compilation
+      - privacy-act-1988:C2026C00227:sch1/app11/1
     summary: >
       Take such steps as are reasonable in the circumstances to protect
       personal information from misuse, interference and loss.
@@ -72,35 +111,108 @@ obligations:
     valid_to: null                       # null means still in force
     end_reason: null                     # superseded | repealed | expired, with valid_to
     applies_to:                          # APPLIES_TO edges
-      jurisdictions: [AU]
-      sectors: []                        # empty means all sectors
-      actor_roles: [apn_entity]
+      actors: [privacy-act-1988/actor/app-entity]   # at least one
+      jurisdictions: []                  # empty means no narrowing
+      sectors: []
     requires:                            # REQUIRES edges
-      conditions: [COND-SMALL-BUSINESS-THRESHOLD]
-      controls: []
+      conditions: []                     # obligation-specific gates
+      controls: []                       # only where an instrument mandates one
     supersedes: null                     # obligation id this one replaces
 ```
 
 Not every clause is an obligation. Recitals and definitions are clauses without
 an obligation node (`CONTEXT.md`).
 
+## Actors
+
+```yaml
+actors:
+  - id: privacy-act-1988/actor/app-entity   # {instrument_id}/actor/{slug}
+    name: APP entity
+    description: An agency or organisation (s6(1)), bound by the APPs (s15).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6/1/app-entity
+      - privacy-act-1988:C2026C00227:s15
+    qualified_by: COND-EXAMPLE-NOT-SMALL      # the root of its condition tree
+    valid_from: 2014-03-12
+```
+
 ## Conditions
 
-A condition gates an obligation and is evaluated against the tenant profile.
-Conditions never read a document directly: documents inform, humans assert
+A condition is exactly one of `all_of`, `any_of`, `not` or `leaf`. Conditions
+never read a document directly: documents inform, humans assert
 (`CONTEXT.md`).
 
 ```yaml
 conditions:
+  - id: COND-EXAMPLE-NOT-SMALL
+    description: Not a small business by turnover.
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/1]
+    valid_from: 2014-03-12
+    not: COND-SMALL-BUSINESS-THRESHOLD
   - id: COND-SMALL-BUSINESS-THRESHOLD
-    kind: turnover                       # turnover | actor | jurisdiction | data_category
-    description: Annual turnover exceeds AUD 3,000,000.
-    profile_field: annual_turnover_aud
-    operator: gt                         # eq | ne | gt | gte | lt | lte | in | not_in
-    value: 3000000
+    description: Annual turnover for the previous financial year is $3,000,000 or less.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6d/1
+      - privacy-act-1988:C2026C00227:s6da/1
+    valid_from: 2014-03-12
+    leaf:
+      field: annual_turnover_aud           # a profile fact
+      period: previous_financial_year      # which fact, relative to as_of
+      test: lte                            # see below
+      value: 3000000
+    question: What was the business's annual turnover (s6DA) for the previous financial year?
     unassessable_reason: >
-      Stated when the profile has no value for this field, so the obligation is
-      reported as unassessable rather than assumed either way (D-06).
+      No turnover is recorded for the previous financial year, so the
+      threshold can't be applied either way (D-06).
+```
+
+A **leaf** names:
+
+- **`field`**: a profile fact, in snake_case.
+- **`period`**: which dated fact to read, relative to `as_of`:
+  - `current`: the fact in force on `as_of`, such as a legal form.
+  - `previous_financial_year` / `current_financial_year`: the Australian
+    financial year, 1 July to 30 June.
+  - `any_ended_financial_year`: true if the test holds for any financial year
+    that ended by `as_of` and after the later of `since_field`'s date and
+    `not_before`. It is false only if every such year is known (s6D(4)(a)).
+- **`test`**: one of
+  - `eq`, `ne`;
+  - `gt`, `gte`, `lt`, `lte` (numbers);
+  - `in`, `not_in` (a list);
+  - `before`, `on_or_after` (a date, or `start_of_current_financial_year` /
+    `start_of_previous_financial_year`).
+
+A leaf carries the `question` to ask when its fact is missing and the
+`unassessable_reason` reported until it is answered. A composite carries
+neither.
+
+## Controls, jurisdictions and sectors
+
+A **control** is a standard's control, a crosswalk target. Its `descriptor`
+is our own words, never the standard's title (PHASES.md, ISO licensing).
+**Jurisdictions** (ISO 3166-2) and **sectors** (ANZSIC) are reference nodes.
+They are not derived from a clause, so they name their `source`.
+
+```yaml
+controls:
+  - id: iso-27001/control/a.8.3
+    clause_ids: [iso-27001:2022:annexa/8/3]
+    descriptor: Restrict access to information to those whose role needs it.
+    valid_from: 2022-10-25
+
+jurisdictions:
+  - id: AU
+    name: Australia
+    source: ISO 3166-1
+    valid_from: 1901-01-01
+
+sectors:
+  - id: anzsic-2006:Q
+    name: Health care and social assistance
+    source: ANZSIC 2006
+    valid_from: 2006-01-01
 ```
 
 ## Crosswalks
@@ -110,7 +222,7 @@ A `CROSSWALKS_TO` edge between obligations or controls across instruments.
 ```yaml
 crosswalks:
   - from: OB-APP11-1
-    to: iso-27001:2022:annexa/8/3
+    to: iso-27001/control/a.8.3
     kind: partial                        # equivalent | partial | related
     note: >
       ISO annexa/8/3 covers access restriction only; APP 11.1 is broader and also
@@ -137,12 +249,18 @@ policy_mappings:
 A mapping with `status: proposed` is stored, shown in the approval queue, and
 never traversed. Only `approved` mappings reach Track A.
 
-## Stable IDs
+## Stable IDs and corrections
 
-No status is authored: in force, not yet commenced or ended is derived from
-the dates on each `as_of` (ADR-0029). An ended obligation says why
-(`end_reason`), and only an ended one does.
+Ids are stable forever and never reused. A loaded item is immutable (D-05):
+its properties and its structural edges (operands, qualification,
+`applies_to`, `requires`). The loader refuses a changed item before writing
+anything.
 
-Obligation and condition IDs are stable forever. Correcting a mapping edits the
-existing entry; replacing an obligation creates a new ID and sets `supersedes`
-on the new one and `valid_to` on the old (D-05). IDs are never reused.
+- **A change of meaning is a new id.** That covers a different clause, dates,
+  actors, operands, test or value. Set `supersedes` on the new item, and
+  `valid_to` with `end_reason: superseded` on the old one.
+- **A new compilation of unchanged law adds a clause id.** Append the new
+  compilation's clause to `clause_ids`. That adds a `DERIVED_FROM` edge, and
+  the old clause retires with its version (ADR-0028).
+- **Cosmetic corrections** to a summary, note, description or question are
+  issue #120 (#93 Q4).
