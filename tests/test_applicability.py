@@ -389,6 +389,47 @@ async def test_any_year_since_it_started_edges(
     assert explain(snapshot(), Facts.of(history), "COND-T-EVER-OVER").truth is expected
 
 
+# ---- a commencement date as a fixture (#134, PHASES.md Phase 2 graph eval) -------
+
+
+async def test_a_provision_loaded_ahead_of_commencement_applies_only_from_it(
+    tmp_path: Path,
+) -> None:
+    """Tranche 1's pattern (items commencing 10 Dec 2026, ADR-0029): a new
+    obligation and the compilation carrying its text are loaded before they
+    commence. The same question on either side of that date gets different,
+    correct obligation sets, and nothing else moves."""
+    commencement = dt.date(2026, 12, 10)
+    document = fixture_document()
+    new_clause = "test-act:v2:s9/1"
+    document["source_clause_ids"].append(new_clause)
+    document["obligations"].append(
+        {
+            "id": "OB-T-AUTOMATED-DECISIONS",
+            "clause_ids": [new_clause],
+            "summary": "Say in the policy when decisions are made by computer.",
+            "valid_from": commencement.isoformat(),
+            "applies_to": {"actors": ["test-act/actor/keeper"]},
+        }
+    )
+    store = FakeGraphStore(
+        mappings(document, tmp_path),
+        clause_validity={**CLAUSES, new_clause: (commencement, NO_END_DATE)},
+    )
+    evidence = (fact("annual_turnover_aud", 4000, LAST_FY),)
+    before = await assess(*evidence, as_of=dt.date(2026, 12, 9), store=store)
+    after = await assess(*evidence, as_of=commencement, store=store)
+    new = "OB-T-AUTOMATED-DECISIONS"
+    assert new not in {o.obligation_id for o in before.obligations}
+    assert after.obligation(new).outcome is Outcome.APPLICABLE
+    assert new_clause in after.obligation(new).citations  # the text that commenced with it
+    unchanged = {o.obligation_id: o.outcome for o in before.obligations}
+    assert len(unchanged) == 3
+    assert {o.obligation_id: o.outcome for o in after.obligations if o.obligation_id != new} == (
+        unchanged
+    )
+
+
 async def test_a_reason_says_which_conditions_were_met_and_which_were_not() -> None:
     """#130: a condition that wasn't met is part of the reason, labelled so."""
     coverage = await assess(
