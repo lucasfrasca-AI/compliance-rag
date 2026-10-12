@@ -29,8 +29,10 @@ jobs:
         env:
           INSTANCE: ${{ secrets.AURA_KEEPALIVE_INSTANCE_ID }}
           PASSWORD: ${{ secrets.AURA_KEEPALIVE_PASSWORD }}
+        # Credentials go to curl on stdin (printf is a shell builtin), so the
+        # password never appears in a process's argv.
         run: |
-          curl -fsS --max-time 60 -u "$INSTANCE:$PASSWORD" \
+          printf 'user = "%s:%s"\n' "$INSTANCE" "$PASSWORD" | curl -fsS --max-time 60 -K - \
             -H 'Content-Type: application/json' \
             -d '{"statement":"RETURN 1 AS ok"}' \
             "https://$INSTANCE.databases.neo4j.io/db/$INSTANCE/query/v2" > /dev/null

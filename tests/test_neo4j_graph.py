@@ -57,7 +57,7 @@ ACT = NodeRef("Instrument", "act")
 async def cypher(graph: Neo4jGraph, query: str) -> list[dict[str, Any]]:  # Any: raw rows
     """Inspect the database directly — tests only."""
     driver: AsyncDriver = graph._driver  # pyright: ignore[reportPrivateUsage]
-    rows, _, _ = await driver.execute_query(cast("LiteralString", query))
+    rows, _, _ = await driver.execute_query(cast("LiteralString", query), database_="neo4j")
     return [dict(r) for r in rows]
 
 
@@ -337,6 +337,20 @@ class _RecordingDriver:
         self.databases.append(kwargs.get("database_"))
         return [{"c": 0}], None, None
 
+    def session(self, **kwargs: object) -> _RecordingSession:
+        self.databases.append(kwargs.get("database"))
+        return _RecordingSession()
+
+
+class _RecordingSession:
+    async def __aenter__(self) -> _RecordingSession:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None: ...
+
+    async def execute_write(self, work: object) -> bool:
+        return True
+
 
 async def test_every_query_names_the_configured_database(
     monkeypatch: pytest.MonkeyPatch,
@@ -361,8 +375,9 @@ async def test_every_query_names_the_configured_database(
         neo4j_database="5b790f49",
     )
     async with Neo4jGraph.from_settings(settings) as graph:
-        await graph.counts()
-    assert driver.databases == ["5b790f49", "5b790f49"]
+        await graph.counts()  # reads: execute_query
+        await graph.put_node(C1, OPEN)  # writes: a session
+    assert driver.databases == ["5b790f49", "5b790f49", "5b790f49"]
 
 
 @pytest.mark.parametrize("missing", ["neo4j_uri", "neo4j_username", "neo4j_database"])
