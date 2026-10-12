@@ -23,12 +23,12 @@ from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
     Bitemporal,
     EdgeWrite,
+    EndReason,
     GraphCounts,
     GraphRow,
     NodeRef,
     NodeWrite,
     Scalar,
-    Status,
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
@@ -287,8 +287,8 @@ class GraphAdmin(ABC):
         )
 
     @abstractmethod
-    async def retire_node(self, node: NodeRef, *, valid_to: dt.date) -> None:
-        """Set `valid_to` once, from the open sentinel."""
+    async def retire_node(self, node: NodeRef, *, valid_to: dt.date, end_reason: EndReason) -> None:
+        """Set `valid_to` and `end_reason` once, from the open sentinel."""
 
     @abstractmethod
     async def amend(
@@ -297,12 +297,11 @@ class GraphAdmin(ABC):
         old: NodeRef,
         new: NodeRef,
         effective: dt.date,
-        status: Status,
         properties: Mapping[str, Scalar] | None = None,
         retire_with: tuple[NodeRef, ...] = (),
     ) -> None:
-        """New node, `SUPERSEDES`, old retired — and `retire_with` retired on
-        the same date — in one transaction."""
+        """New node, `SUPERSEDES`, old retired as superseded — and
+        `retire_with` retired on the same date — in one transaction."""
 
     @abstractmethod
     async def read(self, query: BuiltQuery) -> tuple[GraphRow, ...]:

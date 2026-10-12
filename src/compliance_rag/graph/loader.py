@@ -44,7 +44,6 @@ from compliance_rag.adapters.graph_schema import (
     GraphCounts,
     NodeRef,
     NodeWrite,
-    Status,
 )
 from compliance_rag.adapters.interfaces import GraphAdmin
 from compliance_rag.corpus.models import ClauseRecord, Scope, canonical_sha256, parse_stable_id
@@ -119,7 +118,7 @@ async def load_instrument_version(
     instrument_id, version_id = _validate_version(clauses, supersedes)
     instrument = NodeRef("Instrument", instrument_id)
     version = version_ref(instrument_id, version_id)
-    in_force = Bitemporal(valid_from=effective, status=Status.IN_FORCE)
+    in_force = Bitemporal(valid_from=effective)
 
     with telemetry.span(
         "graph_loader.load_instrument_version",
@@ -143,9 +142,7 @@ async def load_instrument_version(
             old_clauses = await _clauses_in_force(graph, old, day_before)
 
         created_nodes = created_edges = 0
-        created_nodes += await graph.put_node(
-            instrument, Bitemporal(valid_from=instrument_since, status=Status.IN_FORCE)
-        )
+        created_nodes += await graph.put_node(instrument, Bitemporal(valid_from=instrument_since))
         version_properties = {"instrument_id": instrument_id, "version_id": version_id}
         if supersedes is None:
             created_nodes += await graph.put_node(version, in_force, version_properties)
@@ -154,7 +151,6 @@ async def load_instrument_version(
                 old=version_ref(instrument_id, supersedes),
                 new=version,
                 effective=effective,
-                status=Status.IN_FORCE,
                 properties=version_properties,
                 retire_with=tuple(old_clauses),
             )
@@ -209,7 +205,9 @@ def _not_yet_loadable(mappings: MappingSet) -> list[str]:
 
 def _obligation_bitemporal(obligation: Obligation) -> Bitemporal:
     return Bitemporal(
-        valid_from=obligation.valid_from, status=obligation.status, valid_to=obligation.valid_until
+        valid_from=obligation.valid_from,
+        valid_to=obligation.valid_until,
+        end_reason=obligation.end_reason,
     )
 
 
@@ -251,7 +249,6 @@ async def _preflight(graph: GraphAdmin, mappings: MappingSet, today: dt.date) ->
         )
         wanted: dict[str, object] = {
             **_obligation_properties(obligation),
-            "status": obligation.status.value,
             "valid_from": obligation.valid_from,
         }
         for row in loaded:

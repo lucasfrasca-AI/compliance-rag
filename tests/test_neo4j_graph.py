@@ -24,7 +24,7 @@ import pytest
 from neo4j import AsyncDriver
 from neo4j.exceptions import ConstraintError
 
-from compliance_rag.adapters.graph_schema import EdgeWrite, GraphSchemaRefused, NodeWrite
+from compliance_rag.adapters.graph_schema import EdgeWrite, EndReason, GraphSchemaRefused, NodeWrite
 from compliance_rag.adapters.neo4j_graph import (
     PERSISTED_LABELS,
     Bitemporal,
@@ -32,7 +32,6 @@ from compliance_rag.adapters.neo4j_graph import (
     GraphWriteRefused,
     Neo4jGraph,
     NodeRef,
-    Status,
     schema_statements,
     statement_name,
 )
@@ -48,7 +47,7 @@ needs_neo4j = pytest.mark.skipif(
 )
 
 JAN, JUN, DEC = dt.date(2026, 1, 1), dt.date(2026, 6, 1), dt.date(2026, 12, 1)
-OPEN = Bitemporal(valid_from=JAN, status=Status.IN_FORCE)
+OPEN = Bitemporal(valid_from=JAN)
 C1 = NodeRef("Clause", "c1")
 V1 = NodeRef("InstrumentVersion", "act:v1")
 ACT = NodeRef("Instrument", "act")
@@ -106,7 +105,9 @@ async def test_the_schema_applies_idempotently(graph: Neo4jGraph) -> None:
     second = await graph.apply_schema()
     assert await _schema_objects(graph) == after_first  # names and definitions
     assert (first.applied, first.unsupported) == (second.applied, second.unsupported)
-    assert set(first.applied) <= {name for _, name in after_first}
+    created = {name for name in first.applied if "status" not in name}
+    assert created <= {name for _, name in after_first}
+    assert not {name for _, name in after_first if "status" in name}  # ADR-0029
 
 
 @needs_neo4j
@@ -157,7 +158,7 @@ async def test_every_written_node_carries_all_four_bitemporal_properties(
     rows = await cypher(
         graph,
         "MATCH (n) WHERE n.valid_from IS NULL OR n.valid_to IS NULL "
-        "OR n.status IS NULL OR n.recorded_at IS NULL RETURN count(n) AS missing",
+        "OR n.recorded_at IS NULL OR n.status IS NOT NULL RETURN count(n) AS missing",
     )
     assert rows[0]["missing"] == 0
     (row,) = await cypher(graph, "MATCH (n:Clause) RETURN n.valid_to AS valid_to")
@@ -179,27 +180,72 @@ async def test_a_node_is_immutable(graph: Neo4jGraph) -> None:
     with pytest.raises(GraphWriteRefused, match="immutable"):
         await graph.put_node(C1, OPEN, {"text_sha256": "cd"})
     with pytest.raises(GraphWriteRefused, match="immutable"):
-        await graph.put_node(
-            C1, Bitemporal(valid_from=JUN, status=Status.IN_FORCE), {"text_sha256": "ab"}
-        )
+        await graph.put_node(C1, Bitemporal(valid_from=JUN), {"text_sha256": "ab"})
 
 
 @needs_neo4j
 async def test_retiring_sets_valid_to_once(graph: Neo4jGraph) -> None:
     await graph.apply_schema()
     await graph.put_node(V1, OPEN)
-    await graph.retire_node(V1, valid_to=JUN)
-    await graph.retire_node(V1, valid_to=JUN)  # same date: no-op
+    await graph.retire_node(V1, valid_to=JUN, end_reason=EndReason.SUPERSEDED)
+    await graph.retire_node(V1, valid_to=JUN, end_reason=EndReason.SUPERSEDED)  # same date: no-op
     with pytest.raises(GraphWriteRefused, match="already retired"):
-        await graph.retire_node(V1, valid_to=DEC)
+        await graph.retire_node(V1, valid_to=DEC, end_reason=EndReason.SUPERSEDED)
     with pytest.raises(GraphWriteRefused, match="no InstrumentVersion"):
-        await graph.retire_node(NodeRef("InstrumentVersion", "act:v9"), valid_to=JUN)
+        await graph.retire_node(
+            NodeRef("InstrumentVersion", "act:v9"), valid_to=JUN, end_reason=EndReason.SUPERSEDED
+        )
     # A loader re-running with the retired content is idempotent...
-    retired = Bitemporal(valid_from=JAN, status=Status.IN_FORCE, valid_to=JUN)
+    retired = Bitemporal(valid_from=JAN, valid_to=JUN, end_reason=EndReason.SUPERSEDED)
     assert await graph.put_node(V1, retired) is False
     # ...and can't move the date again.
     with pytest.raises(GraphWriteRefused, match="already retired"):
-        await graph.put_node(V1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE, valid_to=DEC))
+        await graph.put_node(
+            V1, Bitemporal(valid_from=JAN, valid_to=DEC, end_reason=EndReason.SUPERSEDED)
+        )
+
+
+@needs_neo4j
+async def test_a_retirement_records_why_and_cannot_change_it(graph: Neo4jGraph) -> None:
+    """ADR-0029: `end_reason` is set with `valid_to`, once."""
+    await graph.apply_schema()
+    await graph.put_node(V1, OPEN)
+    await graph.retire_node(V1, valid_to=JUN, end_reason=EndReason.REPEALED)
+    (row,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN n.end_reason AS why")
+    assert row["why"] == "repealed"
+    with pytest.raises(GraphWriteRefused, match="already retired"):
+        await graph.retire_node(V1, valid_to=JUN, end_reason=EndReason.SUPERSEDED)
+
+
+@needs_neo4j
+async def test_an_open_node_stores_no_end_reason_and_no_status(graph: Neo4jGraph) -> None:
+    await graph.apply_schema()
+    await graph.put_node(V1, OPEN)
+    (row,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN keys(n) AS keys")
+    assert "end_reason" not in row["keys"]
+    assert "status" not in row["keys"]
+
+
+@needs_neo4j
+async def test_an_ended_node_is_never_reopened(graph: Neo4jGraph) -> None:
+    await graph.apply_schema()
+    await graph.put_node(V1, Bitemporal(valid_from=JAN, valid_to=JUN, end_reason=EndReason.EXPIRED))
+    with pytest.raises(GraphWriteRefused, match="never reopened"):
+        await graph.put_node(V1, OPEN)
+
+
+@needs_neo4j
+async def test_drop_stored_status_removes_the_pre_adr_0029_property(graph: Neo4jGraph) -> None:
+    """Nodes written before ADR-0029 carry `status`; the migration removes it
+    and touches nothing else. Idempotent."""
+    await graph.apply_schema()
+    await graph.put_node(V1, OPEN)
+    await cypher(graph, "MATCH (n:InstrumentVersion) SET n.status = 'in_force'")
+    (before,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN properties(n) AS p")
+    assert await graph.drop_stored_status() == 1
+    assert await graph.drop_stored_status() == 0
+    (after,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN properties(n) AS p")
+    assert dict(after["p"]) == {k: v for k, v in dict(before["p"]).items() if k != "status"}
 
 
 @needs_neo4j
@@ -211,8 +257,8 @@ async def test_concurrent_retires_cannot_both_win(graph: Neo4jGraph) -> None:
         node = NodeRef("InstrumentVersion", f"act:race{attempt}")
         await graph.put_node(node, OPEN)
         results = await asyncio.gather(
-            graph.retire_node(node, valid_to=JUN),
-            graph.retire_node(node, valid_to=DEC),
+            graph.retire_node(node, valid_to=JUN, end_reason=EndReason.SUPERSEDED),
+            graph.retire_node(node, valid_to=DEC, end_reason=EndReason.SUPERSEDED),
             return_exceptions=True,
         )
         refused = [r for r in results if isinstance(r, GraphWriteRefused)]
@@ -275,7 +321,7 @@ async def test_the_writer_owns_the_bitemporal_and_id_properties() -> None:
 
 def test_valid_to_must_follow_valid_from() -> None:
     with pytest.raises(GraphWriteRefused, match="not after"):
-        Bitemporal(valid_from=JUN, status=Status.IN_FORCE, valid_to=JAN)
+        Bitemporal(valid_from=JUN, valid_to=JAN, end_reason=EndReason.SUPERSEDED)
 
 
 KEEPALIVE = "aura-keepalive.yml"
@@ -424,7 +470,7 @@ async def test_a_batch_spanning_several_transactions_writes_every_node_once(
     rows = await cypher(
         graph,
         "MATCH (n:Clause) WHERE n.valid_from IS NULL OR n.valid_to IS NULL "
-        "OR n.status IS NULL OR n.recorded_at IS NULL RETURN count(n) AS missing",
+        "OR n.recorded_at IS NULL OR n.status IS NOT NULL RETURN count(n) AS missing",
     )
     assert rows[0]["missing"] == 0
     assert await graph.counts() == GraphCounts(nodes=30, edges=0)
@@ -445,13 +491,17 @@ async def test_a_changed_node_refuses_its_whole_batch(graph: Neo4jGraph) -> None
 async def test_a_batch_can_retire_and_cannot_move_a_date(graph: Neo4jGraph) -> None:
     await graph.apply_schema()
     await graph.put_nodes([NodeWrite(V1, OPEN)])
-    retired = Bitemporal(valid_from=JAN, status=Status.IN_FORCE, valid_to=JUN)
+    retired = Bitemporal(valid_from=JAN, valid_to=JUN, end_reason=EndReason.SUPERSEDED)
     assert await graph.put_nodes([NodeWrite(V1, retired)]) == 0
     (row,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN n.valid_to AS v")
     assert row["v"].to_native() == JUN
     with pytest.raises(GraphWriteRefused, match="already retired"):
         await graph.put_nodes(
-            [NodeWrite(V1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE, valid_to=DEC))]
+            [
+                NodeWrite(
+                    V1, Bitemporal(valid_from=JAN, valid_to=DEC, end_reason=EndReason.SUPERSEDED)
+                )
+            ]
         )
 
 

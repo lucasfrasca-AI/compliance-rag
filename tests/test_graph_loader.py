@@ -22,7 +22,6 @@ from compliance_rag.adapters.graph_schema import (
     GraphCounts,
     GraphWriteRefused,
     NodeRef,
-    Status,
 )
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.corpus.models import ClauseRecord, Scope
@@ -112,7 +111,7 @@ def test_missing_front_matter_is_refused(tmp_path: Path, field: str) -> None:
 @pytest.mark.parametrize(
     ("section", "index", "key", "value"),
     [
-        ("obligations", 0, "status", "revoked"),
+        ("obligations", 0, "end_reason", "revoked"),
         ("crosswalks", 0, "kind", "maybe"),
         ("policy_mappings", 0, "status", "pending"),
         ("policy_mappings", 0, "proposed_by", "agent"),
@@ -410,7 +409,6 @@ async def test_a_correction_in_place_is_refused_before_any_write(
             "id": "OB-TEST-0",  # sorts first: would be written before the refusal
             "clause_id": "test-act:v1:s2/1",
             "summary": "A new one.",
-            "status": "in_force",
             "valid_from": "2026-01-01",
             "valid_to": None,
         }
@@ -449,7 +447,7 @@ async def test_a_refused_supersession_leaves_the_old_clauses_in_force(graph: Neo
     await _corpus(graph)
     await graph.put_node(
         NodeRef("InstrumentVersion", "test-act:v2"),
-        Bitemporal(valid_from=SEP, status=Status.IN_FORCE),  # clashes with effective=JUN
+        Bitemporal(valid_from=SEP),  # clashes with effective=JUN
     )
     with pytest.raises(GraphWriteRefused, match="immutable"):
         await load_instrument_version(

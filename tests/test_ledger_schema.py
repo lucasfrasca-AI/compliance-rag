@@ -96,9 +96,9 @@ def _seed_clause(
     )
     conn.execute(
         "INSERT INTO instrument_version "
-        "(tenant_id, instrument_id, version_id, title, status, valid_from) "
-        "VALUES (%s, %s, %s, %s, %s, %s)",
-        (tenant_id, instrument_id, version_id, "v1", "in_force", dt.date(2020, 1, 1)),
+        "(tenant_id, instrument_id, version_id, title, valid_from) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (tenant_id, instrument_id, version_id, "v1", dt.date(2020, 1, 1)),
     )
     conn.execute(
         "INSERT INTO clause (tenant_id, instrument_id, clause_path) VALUES (%s, %s, %s)",
@@ -286,15 +286,15 @@ def test_a_public_law_instrument_and_its_versions_can_be_recorded(
     conn: psycopg.Connection[tuple[object, ...]],
 ) -> None:
     _library_instrument(conn, "privacy-act-1988")
-    for version, valid_from, valid_to in (
-        ("C2025C00100", "2025-01-01", "2026-01-01"),
-        ("C2026C00227", "2026-01-01", None),
+    for version, valid_from, valid_to, end_reason in (
+        ("C2025C00100", "2025-01-01", "2026-01-01", "superseded"),
+        ("C2026C00227", "2026-01-01", None, None),
     ):
         conn.execute(
             "INSERT INTO instrument_version "
-            "(tenant_id, instrument_id, version_id, title, status, valid_from, valid_to) "
-            "VALUES ('_public', 'privacy-act-1988', %s, 'Privacy Act 1988', 'in_force', %s, %s)",
-            (version, valid_from, valid_to),
+            "(tenant_id, instrument_id, version_id, title, valid_from, valid_to, end_reason) "
+            "VALUES ('_public', 'privacy-act-1988', %s, 'Privacy Act 1988', %s, %s, %s)",
+            (version, valid_from, valid_to, end_reason),
         )
     count = conn.execute(
         "SELECT count(*) FROM instrument_version WHERE tenant_id = '_public'"
@@ -383,8 +383,8 @@ def _seed_version(
     )
     conn.execute(
         "INSERT INTO instrument_version "
-        "(tenant_id, instrument_id, version_id, title, status, valid_from) "
-        "VALUES (%s, %s, 'v1', 'v1', 'in_force', %s)",
+        "(tenant_id, instrument_id, version_id, title, valid_from) "
+        "VALUES (%s, %s, 'v1', 'v1', %s)",
         (tenant_id, instrument_id, dt.date(2025, 1, 1)),
     )
 
@@ -469,3 +469,37 @@ def test_count_findings_citing_matches_by_stable_id_prefix(
     assert conn.execute(
         "SELECT count_findings_citing('other-corp', 'acme/retention_policy:')"
     ).fetchone() == (0,)
+
+
+# ---- ADR-0029: status is derived, never stored ------------------------------
+
+
+def test_instrument_version_stores_no_status(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    columns = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'instrument_version'"
+        ).fetchall()
+    }
+    assert "status" not in columns
+    assert {"valid_from", "valid_to", "end_reason"} <= columns
+
+
+@pytest.mark.parametrize(
+    ("valid_to", "end_reason"),
+    [("2026-01-01", None), (None, "superseded"), ("2026-01-01", "revoked")],
+)
+def test_an_end_date_and_its_reason_come_together(
+    conn: psycopg.Connection[tuple[object, ...]], valid_to: str | None, end_reason: str | None
+) -> None:
+    _library_instrument(conn, "privacy-act-1988")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO instrument_version "
+            "(tenant_id, instrument_id, version_id, title, valid_from, valid_to, end_reason) "
+            "VALUES ('_public', 'privacy-act-1988', 'C1', 't', '2025-01-01', %s, %s)",
+            (valid_to, end_reason),
+        )

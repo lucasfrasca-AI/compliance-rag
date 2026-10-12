@@ -7,12 +7,17 @@
 //                            open-ended node carries the NO_END_DATE sentinel
 //                            (9999-12-31, CONTEXT.md: Bitemporal), so "in force
 //                            on as_of" is always valid_from <= as_of < valid_to
-//   status      : string     'in_force' | 'not_yet_commenced' | 'repealed'
+//   end_reason  : string     'superseded' | 'repealed' | 'expired' — only on an
+//                            ended node, set with valid_to
 //   recorded_at : datetime   when we learned it (set by the writer)
 //
+// No status is stored (ADR-0029): not yet commenced, in force, or ended (for
+// its end_reason) is derived from the dates on each as_of.
+//
 // Nodes are immutable. An amendment creates a new version node, a SUPERSEDES
-// edge to the old, and sets valid_to on the old — once, from NO_END_DATE to a
-// date. Nothing else is deleted or mutated (adapters/neo4j_graph.py enforces it).
+// edge to the old, and sets valid_to and end_reason on the old — once, from
+// NO_END_DATE to a date. Nothing else is deleted or mutated
+// (adapters/neo4j_graph.py enforces it).
 //
 // Applied by Neo4jGraph.apply_schema, one statement at a time, idempotently.
 //
@@ -56,29 +61,36 @@ FOR (n:Sector) REQUIRE n.stable_id IS UNIQUE;
 // (the CI service container) refuses them; apply_schema reports each refused
 // statement by name rather than failing or skipping silently, and the writer
 // (Neo4jGraph.put_node) enforces the same invariant on every edition: no node
-// is written without valid_from, valid_to, status and recorded_at.
+// is written without valid_from, valid_to and recorded_at.
 
 CREATE CONSTRAINT obligation_valid_from IF NOT EXISTS
 FOR (n:Obligation) REQUIRE n.valid_from IS NOT NULL;
 
-CREATE CONSTRAINT obligation_status IF NOT EXISTS
-FOR (n:Obligation) REQUIRE n.status IS NOT NULL;
+CREATE CONSTRAINT obligation_valid_to IF NOT EXISTS
+FOR (n:Obligation) REQUIRE n.valid_to IS NOT NULL;
 
 CREATE CONSTRAINT instrument_version_valid_from IF NOT EXISTS
 FOR (n:InstrumentVersion) REQUIRE n.valid_from IS NOT NULL;
 
-CREATE CONSTRAINT instrument_version_status IF NOT EXISTS
-FOR (n:InstrumentVersion) REQUIRE n.status IS NOT NULL;
+CREATE CONSTRAINT instrument_version_valid_to IF NOT EXISTS
+FOR (n:InstrumentVersion) REQUIRE n.valid_to IS NOT NULL;
+
+// --- retired by ADR-0029 (status is derived, never stored) -----------------
+// Dropped before Neo4jGraph.drop_stored_status removes the property, which
+// these constraints would refuse on Aura. IF EXISTS: a no-op once dropped.
+
+DROP CONSTRAINT obligation_status IF EXISTS;
+
+DROP CONSTRAINT instrument_version_status IF EXISTS;
+
+DROP INDEX obligation_status_idx IF EXISTS;
 
 // --- lookup indexes ---------------------------------------------------------
-// as_of filtering reads valid_from / valid_to / status on every traversal, so
-// they are indexed on the labels the traversal starts from and passes through.
+// as_of filtering reads valid_from / valid_to on every traversal, so they are
+// indexed on the labels the traversal starts from and passes through.
 
 CREATE INDEX obligation_temporal IF NOT EXISTS
 FOR (n:Obligation) ON (n.valid_from, n.valid_to);
-
-CREATE INDEX obligation_status_idx IF NOT EXISTS
-FOR (n:Obligation) ON (n.status);
 
 CREATE INDEX instrument_version_temporal IF NOT EXISTS
 FOR (n:InstrumentVersion) ON (n.valid_from, n.valid_to);

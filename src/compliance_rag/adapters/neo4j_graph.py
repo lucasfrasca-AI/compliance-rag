@@ -1,19 +1,20 @@
 """The Neo4j graph (issue #87, Phase 2): schema, and the only writes.
 
 D-05's bitemporal rules are enforced here, on every edition, not left to the
-database: every node is written with `valid_from`, `valid_to`, `status` and
+database: every node is written with `valid_from`, `valid_to` and
 `recorded_at`; `valid_to` is a date, never null (the `NO_END_DATE` sentinel,
 CONTEXT.md: Bitemporal); a node, once written, is immutable except for one
-transition — `valid_to` from `NO_END_DATE` to a real date, which is how a
-superseded node is retired. That transition takes the node's write lock
-before reading `valid_to`, so two concurrent retires serialise and can't both
-win. Re-writing a node or edge with identical
-content is a no-op, so loaders are idempotent on stable ID.
+transition — `valid_to` from `NO_END_DATE` to a real date, with the
+`end_reason` that says why (superseded, repealed, expired), which is how a
+node is retired. That transition takes the node's write lock before reading
+`valid_to`, so two concurrent retires serialise and can't both win.
+Re-writing a node or edge with identical content is a no-op, so loaders are
+idempotent on stable ID.
 
-`status` is the node's own content (in force, not yet commenced, repealed as
-enacted) and is immutable like the rest; whether a node is in force *on a
-date* is always the `valid_from <= as_of < valid_to` range, which retiring
-changes.
+No status is stored (ADR-0029): whether a node is in force, not yet
+commenced or ended *on a date* is derived from `valid_from`, `valid_to` and
+`end_reason` (`corpus.models.status_on`). `drop_stored_status` removes the
+`status` property nodes written before ADR-0029 carry.
 
 Labels and relationship types can't be Cypher parameters, so they are taken
 only from the closed sets below; every value is a bound parameter.
@@ -50,13 +51,13 @@ from compliance_rag.adapters.graph_schema import (
     PERSISTED_LABELS,
     Bitemporal,
     EdgeWrite,
+    EndReason,
     GraphCounts,
     GraphRow,
     GraphWriteRefused,
     NodeRef,
     NodeWrite,
     Scalar,
-    Status,
     checked_edge_type,
     checked_label,
     refuse_duplicates,
@@ -67,7 +68,10 @@ from compliance_rag.settings import Settings
 
 SCHEMA_PATH = Path(__file__).resolve().parents[3] / "db" / "neo4j" / "schema.cypher"
 
-BITEMPORAL_KEYS = frozenset({"valid_from", "valid_to", "status", "recorded_at"})
+BITEMPORAL_KEYS = frozenset({"valid_from", "valid_to", "end_reason", "recorded_at"})
+WRITER_ONLY_KEYS = BITEMPORAL_KEYS | {"stable_id", "status"}
+"""Set by the writer, never passed as a property. `status` is here because it
+is derived and never stored (ADR-0029): no caller can write one back."""
 
 BATCH_SIZE = 500
 """Rows per batched write transaction: large enough that loading a
@@ -99,7 +103,7 @@ def schema_statements(path: Path = SCHEMA_PATH) -> tuple[str, ...]:
 
 
 def statement_name(statement: str) -> str:
-    match = re.match(r"CREATE (?:CONSTRAINT|INDEX) (\w+)", statement)
+    match = re.match(r"(?:CREATE|DROP) (?:CONSTRAINT|INDEX) (\w+)", statement)
     if match is None:
         raise ValueError(f"schema statement without a name: {statement[:60]!r}")
     return match.group(1)
@@ -128,7 +132,7 @@ def _properties(properties: Mapping[str, Scalar]) -> dict[str, object]:
     for key, value in properties.items():
         if not _PROPERTY_KEY.match(key):
             raise GraphWriteRefused(f"property key {key!r} is not snake_case")
-        if key in BITEMPORAL_KEYS or key == "stable_id":
+        if key in WRITER_ONLY_KEYS:
             raise GraphWriteRefused(f"{key!r} is set by the writer, not passed as a property")
         out[key] = list(value) if isinstance(value, tuple) else value
     return out
@@ -161,11 +165,26 @@ def _differing(
     }
 
 
+def _bitemporal(bitemporal: Bitemporal) -> dict[str, object]:
+    """The stored form: `end_reason` only once ended (Neo4j stores no null)."""
+    stored: dict[str, object] = {
+        "valid_from": bitemporal.valid_from,
+        "valid_to": bitemporal.valid_to,
+    }
+    if bitemporal.end_reason is not None:
+        stored["end_reason"] = bitemporal.end_reason.value
+    return stored
+
+
+_RETIREMENT = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason"})
+
+
 def _refuse_if_changed(
     node: NodeRef, stored: Mapping[str, object], wanted: Mapping[str, object]
 ) -> None:
-    """A node is immutable except `valid_to`, which only `_retire` changes."""
-    differs = _differing(stored, wanted, ignore=frozenset({"stable_id", "recorded_at", "valid_to"}))
+    """A node is immutable except `valid_to` and `end_reason`, which only
+    `_retire` changes."""
+    differs = _differing(stored, wanted, ignore=_RETIREMENT)
     if differs:
         raise GraphWriteRefused(
             f"{node.label} {node.stable_id!r} is immutable: {sorted(differs)} differ from what "
@@ -256,20 +275,14 @@ class Neo4jGraph(GraphAdmin):
         node already existed. Different content under the same stable ID is
         refused, except retiring it (`valid_to` from `NO_END_DATE` to a date),
         which is applied."""
-        props: dict[str, object] = {
-            **_properties(properties or {}),
-            "valid_from": bitemporal.valid_from,
-            "valid_to": bitemporal.valid_to,
-            "status": bitemporal.status.value,
-        }
+        props: dict[str, object] = {**_properties(properties or {}), **_bitemporal(bitemporal)}
 
         async def work(tx: AsyncManagedTransaction) -> bool:
             created, stored = await self._merge_node(tx, node, props)
             if created:
                 return True
             _refuse_if_changed(node, stored, props)
-            if stored["valid_to"] != bitemporal.valid_to:
-                await self._retire(tx, node, bitemporal.valid_to)
+            await self._retire_if_ending(tx, node, stored, bitemporal)
             return False
 
         attributes = {"graph.label": node.label, "graph.stable_id": node.stable_id}
@@ -310,13 +323,7 @@ class Neo4jGraph(GraphAdmin):
 
     async def _put_node_batch(self, label: str, batch: Sequence[NodeWrite]) -> int:
         props: list[dict[str, object]] = [
-            {
-                **_properties(w.properties),
-                "valid_from": w.bitemporal.valid_from,
-                "valid_to": w.bitemporal.valid_to,
-                "status": w.bitemporal.status.value,
-            }
-            for w in batch
+            {**_properties(w.properties), **_bitemporal(w.bitemporal)} for w in batch
         ]
         rows = [
             {"stable_id": w.node.stable_id, "props": p} for w, p in zip(batch, props, strict=True)
@@ -339,8 +346,7 @@ class Neo4jGraph(GraphAdmin):
                     continue
                 stored = _stored(record)
                 _refuse_if_changed(write.node, stored, wanted_props)
-                if stored["valid_to"] != write.bitemporal.valid_to:
-                    await self._retire(tx, write.node, write.bitemporal.valid_to)
+                await self._retire_if_ending(tx, write.node, stored, write.bitemporal)
             return created
 
         attributes: dict[str, str | int] = {"graph.label": label, "graph.batch": len(batch)}
@@ -412,21 +418,46 @@ class Neo4jGraph(GraphAdmin):
         attributes: dict[str, str | int] = {"graph.edge_type": edge_type, "graph.batch": len(batch)}
         return await self._write("neo4j_graph.put_edges", attributes, work)
 
-    async def retire_node(self, node: NodeRef, *, valid_to: dt.date) -> None:
-        """Set `valid_to` on a node still open (`NO_END_DATE`) — the one
-        permitted change. Retiring again to the same date is a no-op."""
+    async def retire_node(self, node: NodeRef, *, valid_to: dt.date, end_reason: EndReason) -> None:
+        """Set `valid_to` and `end_reason` on a node still open
+        (`NO_END_DATE`) — the one permitted change. Retiring again to the same
+        date for the same reason is a no-op."""
 
         async def work(tx: AsyncManagedTransaction) -> None:
-            await self._retire(tx, node, valid_to)
+            await self._retire(tx, node, valid_to, end_reason)
 
         attributes = {
             "graph.label": node.label,
             "graph.stable_id": node.stable_id,
             "graph.valid_to": valid_to.isoformat(),
+            "graph.end_reason": end_reason.value,
         }
         await self._write("neo4j_graph.retire_node", attributes, work)
 
-    async def _retire(self, tx: AsyncManagedTransaction, node: NodeRef, valid_to: dt.date) -> None:
+    async def _retire_if_ending(
+        self,
+        tx: AsyncManagedTransaction,
+        node: NodeRef,
+        stored: Mapping[str, object],
+        wanted: Bitemporal,
+    ) -> None:
+        """A re-write that ends a stored open node retires it; one that
+        reopens or re-dates it is refused by `_retire`."""
+        same_end = stored["valid_to"] == wanted.valid_to and stored.get("end_reason") == (
+            wanted.end_reason.value if wanted.end_reason else None
+        )
+        if same_end:
+            return
+        if wanted.end_reason is None:
+            raise GraphWriteRefused(
+                f"{node.label} {node.stable_id!r} ended on {stored['valid_to']}; "
+                "a node is never reopened (D-05)"
+            )
+        await self._retire(tx, node, wanted.valid_to, wanted.end_reason)
+
+    async def _retire(
+        self, tx: AsyncManagedTransaction, node: NodeRef, valid_to: dt.date, end_reason: EndReason
+    ) -> None:
         """Lock, then read, then set — in one transaction. The first statement
         is a real write, so it takes the node's write lock; a concurrent retire
         blocks there until this one commits, and its read then sees this
@@ -440,25 +471,29 @@ class Neo4jGraph(GraphAdmin):
         if (await locked.single(strict=True))["found"] == 0:
             raise GraphWriteRefused(f"no {node.label} {node.stable_id!r} to retire")
         result = await tx.run(
-            _trusted(match + "REMOVE n._lock RETURN n.valid_to AS was, n.valid_from AS valid_from"),
+            _trusted(
+                match + "REMOVE n._lock RETURN n.valid_to AS was, n.end_reason AS why, "
+                "n.valid_from AS valid_from"
+            ),
             stable_id=node.stable_id,
         )
         record = await result.single(strict=True)
         was = to_python(record["was"])
         valid_from = cast("dt.date", to_python(record["valid_from"]))
-        if was == valid_to:
-            return  # already retired on this date: idempotent
+        if was == valid_to and record["why"] == end_reason.value:
+            return  # already retired on this date for this reason: idempotent
         if was != NO_END_DATE:
             raise GraphWriteRefused(
-                f"{node.label} {node.stable_id!r} was already retired on {was}; "
-                "valid_to is set once (D-05)"
+                f"{node.label} {node.stable_id!r} was already retired on {was} "
+                f"({record['why']}); valid_to and end_reason are set once (D-05)"
             )
         if valid_to <= valid_from:
             raise GraphWriteRefused(f"valid_to {valid_to} is not after valid_from {valid_from}")
         await tx.run(
-            _trusted(match + "SET n.valid_to = $valid_to"),
+            _trusted(match + "SET n.valid_to = $valid_to, n.end_reason = $end_reason"),
             stable_id=node.stable_id,
             valid_to=valid_to,
+            end_reason=end_reason.value,
         )
 
     async def put_edge(
@@ -523,27 +558,24 @@ class Neo4jGraph(GraphAdmin):
         old: NodeRef,
         new: NodeRef,
         effective: dt.date,
-        status: Status,
         properties: Mapping[str, Scalar] | None = None,
         retire_with: tuple[NodeRef, ...] = (),
     ) -> None:
         """D-05's amendment, in one transaction: `new` is written in force
         from `effective`, `new -SUPERSEDES-> old`, and `old` is retired on
-        `effective`. All of it lands or none of it does. Re-running the same
-        amendment is a no-op."""
+        `effective` as superseded. All of it lands or none of it does.
+        Re-running the same amendment is a no-op."""
         if old.label != new.label:
             raise GraphWriteRefused(f"{new.label} cannot supersede a {old.label}")
         props: dict[str, object] = {
             **_properties(properties or {}),
-            "valid_from": effective,
-            "valid_to": NO_END_DATE,
-            "status": status.value,
+            **_bitemporal(Bitemporal(valid_from=effective)),
         }
 
         async def work(tx: AsyncManagedTransaction) -> None:
-            await self._retire(tx, old, effective)
+            await self._retire(tx, old, effective, EndReason.SUPERSEDED)
             for node in retire_with:
-                await self._retire(tx, node, effective)
+                await self._retire(tx, node, effective, EndReason.SUPERSEDED)
             created, stored = await self._merge_node(tx, new, props)
             if not created:
                 _refuse_if_changed(new, stored, props)
@@ -556,6 +588,23 @@ class Neo4jGraph(GraphAdmin):
             "graph.effective": effective.isoformat(),
         }
         await self._write("neo4j_graph.amend", attributes, work)
+
+    # ---- migration (ADR-0029) ---------------------------------------------
+
+    async def drop_stored_status(self) -> int:
+        """Remove the `status` property from nodes written before ADR-0029
+        made status derived. Idempotent; returns how many nodes changed.
+        Run after `apply_schema`, which drops the constraints that required
+        it (on Aura they would refuse the removal). Validity is untouched:
+        every node's dates and `end_reason` already say what status did."""
+        with telemetry.span("neo4j_graph.drop_stored_status") as s:
+            records, _, _ = await self._driver.execute_query(
+                "MATCH (n) WHERE n.status IS NOT NULL REMOVE n.status RETURN count(n) AS c",
+                database_=self._database,
+            )
+            changed = int(records[0]["c"])
+            s.set_attribute("graph.status_removed", changed)
+            return changed
 
     # ---- reads: only what the query builder built (D-05) --------------------
 
@@ -620,7 +669,6 @@ __all__ = [
     "Neo4jGraph",
     "NodeRef",
     "SchemaReport",
-    "Status",
     "checked_edge_type",
     "checked_label",
 ]

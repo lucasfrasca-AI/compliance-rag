@@ -22,10 +22,11 @@ from typing import Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from compliance_rag.adapters.graph_schema import Status
 from compliance_rag.corpus.models import (
     MODEL_AUTHOR_PREFIX,
     NO_END_DATE,
+    EndReason,
+    check_end,
     parse_stable_id,
     validate_review,
 )
@@ -93,9 +94,11 @@ class Obligation(_Strict):
     id: str
     clause_id: str
     summary: str
-    status: Status
     valid_from: dt.date
     valid_to: dt.date | None = None
+    end_reason: EndReason | None = None
+    """Why it ended — required with `valid_to`, absent without (ADR-0029).
+    Status is never authored: it is derived from these dates on each `as_of`."""
     applies_to: AppliesTo = AppliesTo()
     requires: Requires = Requires()
     supersedes: str | None = None
@@ -115,6 +118,10 @@ class Obligation(_Strict):
     def _dates(self) -> Self:
         if self.valid_until <= self.valid_from:
             raise ValueError(f"{self.id}: valid_to is not after valid_from")
+        try:
+            check_end(self.valid_until, self.end_reason)
+        except ValueError as exc:
+            raise ValueError(f"{self.id}: {exc}") from exc
         if self.supersedes == self.id:
             raise ValueError(f"{self.id} cannot supersede itself")
         return self
@@ -260,6 +267,11 @@ class MappingSet(_Strict):
                     raise ValueError(
                         f"{obligation.id} starts {obligation.valid_from} but "
                         f"{old.id} ends {old.valid_until}: a supersession leaves no gap or overlap"
+                    )
+                if old.end_reason is not EndReason.SUPERSEDED:
+                    raise ValueError(
+                        f"{old.id} is superseded by {obligation.id}, so its end_reason is "
+                        f"superseded, not {old.end_reason}"
                     )
         for mapping in self.policy_mappings:
             if mapping.obligation_id not in obligation_ids:

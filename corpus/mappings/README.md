@@ -68,9 +68,9 @@ obligations:
     summary: >
       Take such steps as are reasonable in the circumstances to protect
       personal information from misuse, interference and loss.
-    status: in_force                     # in_force | not_yet_commenced | repealed
     valid_from: 2014-03-12
     valid_to: null                       # null means still in force
+    end_reason: null                     # superseded | repealed | expired, with valid_to
     applies_to:                          # APPLIES_TO edges
       jurisdictions: [AU]
       sectors: []                        # empty means all sectors
@@ -138,6 +138,10 @@ A mapping with `status: proposed` is stored, shown in the approval queue, and
 never traversed. Only `approved` mappings reach Track A.
 
 ## Stable IDs
+
+No status is authored: in force, not yet commenced or ended is derived from
+the dates on each `as_of` (ADR-0029). An ended obligation says why
+(`end_reason`), and only an ended one does.
 
 Obligation and condition IDs are stable forever. Correcting a mapping edits the
 existing entry; replacing an obligation creates a new ID and sets `supersedes`

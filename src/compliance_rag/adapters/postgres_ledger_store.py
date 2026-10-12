@@ -240,8 +240,8 @@ class PostgresLedgerStore(LedgerStore):
                 )
                 await conn.execute(
                     "INSERT INTO instrument_version "
-                    "(tenant_id, instrument_id, version_id, title, status, valid_from, supersedes) "
-                    "VALUES (%s, %s, %s, %s, 'in_force', %s, %s)",
+                    "(tenant_id, instrument_id, version_id, title, valid_from, supersedes) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
                     (tenant_id, instrument_id, version_id, instrument_id, valid_from, supersedes),
                 )
         except psycopg.errors.UniqueViolation as exc:
@@ -256,7 +256,9 @@ class PostgresLedgerStore(LedgerStore):
         self, *, tenant_id: str, instrument_id: str, version_id: str, valid_to: dt.date
     ) -> None:
         updated = await self._execute(
-            "UPDATE instrument_version SET valid_to = %s "
+            # Version-and-retire ends a version only by supersession (ADR-0021);
+            # status is derived from these two (ADR-0029).
+            "UPDATE instrument_version SET valid_to = %s, end_reason = 'superseded' "
             "WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s",
             (valid_to, tenant_id, instrument_id, version_id),
         )
