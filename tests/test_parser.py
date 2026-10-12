@@ -192,6 +192,25 @@ def test_app_11_paragraphs_and_the_subsection2_tail(parsed: ParsedCompilation) -
     assert "such steps include technical" in _by_path(parsed, "sch1/app11/3").text
 
 
+def test_app_11_2_tail_follows_its_chapeau_in_canonical_text(parsed: ParsedCompilation) -> None:
+    """11.2 has 6C(1)'s shape — chapeau, lettered conditions, subsection2 tail
+    — the shape the word-order bug lived in. `startswith`/`in` can't tell a
+    tail placed before the chapeau from one after it; the exact canonical
+    text can. The conditions are their own clauses, not part of 11.2's text."""
+    clause = _by_path(parsed, "sch1/app11/2")
+    assert clause.canonical_text == (
+        "If: the entity must take such steps as are reasonable in the circumstances "
+        "to destroy the information or to ensure that the information is de-identified."
+    )
+    for letter, opening in (
+        ("a", "an APP entity holds personal information"),
+        ("b", "the entity no longer needs the information"),
+        ("c", "the information is not contained in a Commonwealth record"),
+        ("d", "the entity is not required by or under an Australian law"),
+    ):
+        assert _by_path(parsed, f"sch1/app11/2/{letter}").canonical_text.startswith(opening)
+
+
 def test_part_heading_after_app_11_closes_it_without_becoming_a_clause(
     parsed: ParsedCompilation,
 ) -> None:

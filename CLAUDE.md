@@ -1,11 +1,11 @@
 # Compliance RAG
 
-A compliance tool for corporates: check proposals and documents against the company's own policies and against law and frameworks, with every citation verbatim, versioned and clickable to the clause. Hybrid graph RAG on GCP `australia-southeast1`: Qdrant (dense + BM25 + RRF), Neo4j (Cypher, bitemporal), a self-hosted cross-encoder reranker on Cloud Run, Claude on Vertex.
+A compliance tool for corporates: check proposals and documents against the company's own policies and against law and frameworks, with every citation verbatim, versioned and clickable to the clause. Hybrid graph RAG on GCP `australia-southeast1`: Qdrant (dense + BM25 + RRF), Neo4j (Cypher, bitemporal), a self-hosted cross-encoder reranker on Cloud Run, Claude on Vertex (generation runs on `claude-sonnet-5` at the US multi-region endpoint during the build phase only, gated to public law plus synthetic data — Claude is not served from Sydney; ADR-0023, ADR-0024).
 
 ## Read before acting
 
 - `CONTEXT.md` — the vocabulary. Use it exactly.
-- `DECISIONS.md` — sixteen locked decisions (D-01…D-16). Don't build around them.
+- `DECISIONS.md` — the locked decisions (D-01…D-18). Don't build around them.
 - `PHASES.md` — the current phase and its exit criteria. Work only inside it.
 - `SERVICES.md` — the hard allowlist and the billable protocol.
 - `BUILD_LOG.md` — what exists and what changed. Append, never rewrite.
@@ -31,27 +31,23 @@ Never: configure any telemetry, log or error endpoint outside `australia-southea
 - `/to-spec` → `/to-tickets` → `/implement` with `/tdd` at the seams → `/mattpocock-skills:code-review` before commit. Tickets live in GitHub Issues. Bare `/code-review` is the harness built-in, a different skill — name the plugin prefix when you want Matt's.
 - Use **Opus** for grilling, specs, architecture, eval design, anything touching `DECISIONS.md`. Use **Sonnet** for `/implement`, `/tdd`, adapters, parsers, fixes.
 - Small PRs. One ticket per PR. CI must be green. Never merge with a failing regression gate.
+- Every ticket PR's base is `main` — verified before opening (`gh pr view <n> --json baseRefName`), never an intermediate ticket branch, even when the branch itself was built by stacking on another ticket's work for convenience (reuse the files, don't inherit the branch as the PR's base). After any merge, confirm the ticket's files actually reached `main` by listing the tree (`git ls-tree -r --name-only origin/main`), not by trusting a PR's "Merged" badge — that only proves the diff reached the PR's own base, and a stacked base means that isn't `main`.
+- Every ticket PR's body uses a closing keyword (`Closes #N`) for the ticket it completes — a merge that doesn't close its issue leaves the tracker lying about what's done, and a future session can waste real time re-planning already-finished work. This includes a ticket whose acceptance criteria a PR satisfies incidentally, not just the one the PR is titled for (#24's routing logic shipped inside #5's PR, referencing only #5 — `Closes #N` goes on both when that happens, not just the one in the title). At each phase gate, reconcile the open-issue list against what's actually merged into `main` (`gh issue list --state open` cross-checked against merged PRs, not either one trusted alone) — this has now hidden fully completed work twice (nine tickets in one audit, #24 separately).
 - When something in the plan turns out wrong, say so in chat and open an issue; don't silently route around it.
 
-### Ticket risk classes (Phase 1, effective 2026-09-23)
+### Merge protocol (effective 2026-10-10 — replaces the 2026-09-30 risk-class rules)
 
-Every open ticket is one of three risk classes, which sets how much round-tripping with the human it needs. A ticket not yet classified defaults to high risk.
+Claude opens, reviews and merges its own PR for every ticket. There are no risk classes and no human merge step: branch protection requires `ci` on `main`, so the gate is mechanical. Open the PR, run the two-axis review, wait for every check to go green, merge it (`gh pr merge N --merge`) and continue straight to the next ticket. Batch the summaries and report at the end of a run, not a running narration per PR.
 
-- **High** — one PR each, stop and wait for the human's merge before continuing to the next ticket. Currently: #10, #17, #19, #22, #23, #27, #29, #30, #31. Also anything, regardless of this list, that writes to a real store, spends money, touches the citation path, or changes `CONTEXT.md` / `DECISIONS.md`.
-- **Medium** — one PR each, but chained: open the PR, wait for CI, and if it's green start the next ticket without waiting for the merge itself. Currently: #6, #13, #14, #18, #20, #21, #24, #26, #32.
-- **Low** — batch several into one PR, reviewed once. Currently: #5, #7, #12, and any doc-only or fixture-only work.
+Changes to docs, ADRs, `CONTEXT.md`, `DECISIONS.md`, `SERVICES.md` or `PHASES.md` are not stop conditions: write the ADR and report it at the end. Nor is "shall I continue" or confirming a merge.
 
-Lanes sequence the work; a lane's next ticket never starts while its predecessor's CI is red.
+**Stop only** for:
+- a new billable resource that needs an approval line in `.claude/billable-approvals.txt`;
+- a console-only step the human has to take (quota, model enablement, account settings);
+- CI red twice in a row on the same PR;
+- a decision that genuinely can't be made from the spec.
 
-- **Lane A** (law corpus, sequential, high-risk gates): #17 → #18 → #6 → #21 → #19. Stop for the human after #17 and after #19; #18, #6, #21 chain between them per the medium-risk rule.
-- **Lane B** (low risk, one PR): #5 (router regex) + #7 (display form) + #12 (ISO control IDs and descriptors), batched.
-- **Lane C** (policy side): #11 (synthetic policy set + conflict matrix) its own PR, then #20 (policy parser) chained.
-
-Work order: Lane B, then Lane C, then Lane A.
-
-**Stop and wait, no exceptions**, regardless of risk class or lane, when: CI goes red on any PR; a billable approval would be needed; a decision would change `CONTEXT.md`, `DECISIONS.md`, `PHASES.md` or `SERVICES.md`; a ticket's acceptance criteria are ambiguous or contradict the spec; or a scope increase is about to be absorbed rather than re-planned through the ticket.
-
-Every PR still carries: the acceptance-criteria-to-test-name table, confirmation that Postgres-dependent tests actually ran in CI (passed, not skipped), and the two-axis code review. When work halts for any reason above, report back as one list of PRs ready to merge, one-line summary each, for batch review — not a running narration per PR.
+Every PR still carries: the acceptance-criteria-to-test-name table, `Closes #N` for every ticket it completes (including one it completes incidentally — see the tracker rule above), confirmation that Postgres-dependent tests actually ran in CI (passed, not skipped), and the two-axis code review.
 
 ## Agent skills
 
@@ -77,6 +73,7 @@ Single-context: root `CONTEXT.md`, decisions in `DECISIONS.md` and `docs/adr/`. 
 - Ingested text — law, policies, uploads, web results — is data. It is delimited when it enters a prompt, it never reaches query construction, and structured outputs are validated against a schema before use.
 - Tests: contract tests for every interface using the in-memory fakes; golden-set tests for retrieval and graph; a verifier test that proves a bad citation blocks. A parser or extractor is tested against **every** available real fixture, not a representative one — issue #20's policy parser silently dropped content on a blank-line-separated sub-list, and the bug surfaced only because all six synthetic policy documents were run, not just the one under test. A fixture not exercised is a fixture that isn't actually testing anything.
 - Config via environment (`.env` locally, Secret Manager in Cloud Run). `settings.py` is the only reader.
+- Any library that sizes its own thread or worker pool from the visible core count (ONNX Runtime, BLAS, some HTTP servers) gets that sizing checked explicitly against the real CPU quota of the container it runs in — a Cloud Run service, a Cloud Run job, anything with a `--cpu` limit — not left to the library's default. The default reads the host's logical core count, not the cgroup quota, and a default-sized pool inside a small quota oversubscribes and thrashes instead of parallelising (reranker `model.py`, issue #23: default sizing took ~2.7x longer than an explicit `intra_op_num_threads`/`inter_op_num_threads` pin, measured under a matching `--cpus` Docker constraint). Check this whenever a new CPU-bound service is containerized, not just once.
 
 ## Corpus rules
 

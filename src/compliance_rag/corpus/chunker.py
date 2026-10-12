@@ -21,6 +21,9 @@ tracked separately from this issue).
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
+
+from compliance_rag.corpus.models import Chunk, ClauseRecord
 from compliance_rag.settings import Settings
 
 RERANKER_MAX_TOKENS: int = Settings.model_fields["reranker_max_tokens"].default
@@ -60,4 +63,83 @@ def ensure_within_reranker_window(*, chunk_tokens: int, query_tokens: int) -> No
         raise ValueError(
             f"chunk ({chunk_tokens} tokens) plus query ({query_tokens} tokens) would exceed "
             f"the reranker's {RERANKER_MAX_TOKENS}-token window"
+        )
+
+
+def _ensure_within_window_named(
+    label: str, subject_id: str, *, chunk_tokens: int, query_tokens: int
+) -> None:
+    """`ensure_within_reranker_window`, naming whatever broke it — shared by
+    `chunk_clause` (a clause over budget) and `assert_chunks_fit_reranker_window`
+    (a chunk over budget), which differ only in what they call the thing and
+    which id they have on hand."""
+    try:
+        ensure_within_reranker_window(chunk_tokens=chunk_tokens, query_tokens=query_tokens)
+    except ValueError as exc:
+        raise ValueError(f"{label} {subject_id!r}: {exc}") from exc
+
+
+def chunk_clause(clause: ClauseRecord, *, count_tokens: Callable[[str], int]) -> Chunk:
+    """One clause becomes one chunk (issue #18).
+
+    Phase 1's parsers (#17, #20) already emit clauses at the smallest
+    citable unit — a subsection, a paragraph, a policy's numbered item —
+    so there is no sub-clause splitting to do: a clause whose own text is
+    over budget is a parser-side problem to fix upstream, not something
+    this function truncates or silently divides. `count_tokens` is a
+    parameter, never a model this function loads itself, so calling it
+    needs no tokenizer download; the real XLM-R tokenizer over real
+    Schedule 1 chunks is issue #21.
+
+    Raises with the clause's own path named, per `ensure_within_reranker_window`
+    (issue #6) — never emits a chunk over budget.
+    """
+    text = clause.canonical_text
+    _ensure_within_window_named(
+        "clause", clause.clause_path, chunk_tokens=count_tokens(text), query_tokens=0
+    )
+    return Chunk(
+        # A consequence of the 1:1 clause-to-chunk mapping above, not an
+        # assumed identity: reusing the clause's own stable id needs no
+        # second id scheme precisely because a chunk can never span more
+        # than one clause. If a later change ever lets one clause become
+        # several chunks, this equality stops holding and must be revisited.
+        chunk_id=clause.clause_id,
+        clause_id=clause.clause_id,
+        text=text,
+        scope=clause.scope,
+        tenant_id=clause.tenant_id,
+    )
+
+
+def chunk_clauses(
+    clauses: Iterable[ClauseRecord], *, count_tokens: Callable[[str], int]
+) -> tuple[Chunk, ...]:
+    """`chunk_clause()` over a collection — clause records become chunks."""
+    return tuple(chunk_clause(clause, count_tokens=count_tokens) for clause in clauses)
+
+
+def assert_chunks_fit_reranker_window(
+    chunks: Iterable[Chunk], *, query_tokens: int, count_tokens: Callable[[str], int]
+) -> None:
+    """Every chunk fits the reranker's window against a representative
+    query (issue #21) — checked longest-first, by `count_tokens`'s own
+    count, so the worst case is what actually fails first rather than
+    whichever chunk happened to come first in iteration order.
+
+    `count_tokens` is a parameter here too, same reasoning as `chunk_clause`:
+    a stub proves the mechanism (`tests/test_chunk_token_cap.py`), the real
+    `BAAI/bge-reranker-v2-m3` tokenizer proves the assumption
+    (`corpus/reranker_tokenizer.py`, issue #21) — this function doesn't care
+    which.
+
+    On failure, names the offending chunk's `chunk_id` — issue #18's 1:1
+    clause-to-chunk mapping means this *is* the clause's own stable id, not
+    a separate lookup the caller has to do to find out which clause broke.
+    """
+    counted = [(count_tokens(chunk.text), chunk) for chunk in chunks]
+    counted.sort(key=lambda pair: pair[0], reverse=True)
+    for token_count, chunk in counted:
+        _ensure_within_window_named(
+            "chunk", chunk.chunk_id, chunk_tokens=token_count, query_tokens=query_tokens
         )

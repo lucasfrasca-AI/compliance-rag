@@ -8,6 +8,7 @@ filter (D-03), a bad citation fails the verifier (D-02).
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 
 import pytest
 
@@ -22,6 +23,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.interfaces import (
+    Candidate,
     Channel,
     CitationVerifier,
     ClauseStore,
@@ -45,8 +47,10 @@ from compliance_rag.corpus.models import (
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
 
-APP11 = "privacy-act-1988:TEST-FIXTURE-001:sch1/app11/1"
-APP12 = "privacy-act-1988:TEST-FIXTURE-001:sch1/app12/1"
+LIBRARY_INSTRUMENT = "privacy-act-1988"
+APP11 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app11/1"
+APP12 = f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app12/1"
+LIBRARY_CHUNK_IDS = frozenset({"c1", "c2"})  # the `chunks` fixture's public-scope chunks
 
 
 @pytest.fixture
@@ -81,6 +85,12 @@ def graph() -> FakeGraphStore:
 
 @pytest.fixture
 def chunks() -> tuple[Chunk, ...]:
+    return contract_chunks()
+
+
+def contract_chunks() -> tuple[Chunk, ...]:
+    """The retrieval contract's seed records — a plain function as well as
+    the `chunks` fixture, so other backends' tests can seed the same set."""
     return (
         Chunk(
             chunk_id="c1",
@@ -149,13 +159,21 @@ async def test_crosswalks_respect_the_depth_cap(graph: FakeGraphStore) -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_retrieval_store_is_a_retrieval_store(chunks: tuple[Chunk, ...]) -> None:
-    assert isinstance(FakeRetrievalStore(chunks), RetrievalStore)
+async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerStore) -> None:
+    """The `RetrievalStore` contract itself, against a store already seeded
+    with the `chunks` fixture's three records and reading subscriptions from
+    `ledger` (D-08). Shared by `FakeRetrievalStore` here and by
+    `QdrantRetrievalStore` against a real, self-hosted, CI-only Qdrant server
+    (`tests/test_qdrant_retrieval_store.py`, issue #22) — one definition of
+    the contract, not two independently written tests that could silently
+    diverge, same reasoning as `assert_reranker_contract` below.
+    """
+    assert isinstance(store, RetrievalStore)
+    await ledger.subscribe(
+        tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT, subscribed_by="contract-test"
+    )
 
-
-async def test_track_b_never_escapes_track_a(chunks: tuple[Chunk, ...]) -> None:
-    """D-03: filtered to Track A's obligation IDs, whatever the text similarity."""
-    store = FakeRetrievalStore(chunks)
+    # D-03: filtered to Track A's obligation IDs, whatever the text similarity.
     result = await store.search(
         "steps to protect the information",
         obligation_ids=("OB-APP11",),
@@ -166,10 +184,7 @@ async def test_track_b_never_escapes_track_a(chunks: tuple[Chunk, ...]) -> None:
     )
     assert {c.chunk_id for c in result.fused} == {"c1"}
 
-
-async def test_both_channels_are_returned_before_fusion(chunks: tuple[Chunk, ...]) -> None:
-    """Both channel candidate lists are logged before fusion (CLAUDE.md)."""
-    store = FakeRetrievalStore(chunks)
+    # Both channel candidate lists are logged before fusion (CLAUDE.md).
     result = await store.search(
         "access to the information",
         obligation_ids=(),
@@ -181,10 +196,8 @@ async def test_both_channels_are_returned_before_fusion(chunks: tuple[Chunk, ...
     assert set(result.per_channel) == {Channel.DENSE, Channel.SPARSE}
     assert result.fused
 
-
-async def test_tenant_scope_is_enforced(chunks: tuple[Chunk, ...]) -> None:
-    """D-14 / D-09: another tenant never sees a tenant-scoped chunk."""
-    store = FakeRetrievalStore(chunks)
+    # D-14 / D-09: another tenant never sees a tenant-scoped chunk, even
+    # when they ask for tenant-scope results at all (cross-tenant leakage).
     result = await store.search(
         "retains customer records",
         obligation_ids=(),
@@ -195,14 +208,118 @@ async def test_tenant_scope_is_enforced(chunks: tuple[Chunk, ...]) -> None:
     )
     assert all(c.chunk_id != "c3" for c in result.fused)
 
+    # Scope leakage: a public-only request never sees a tenant-scoped chunk,
+    # even for the tenant that owns it.
+    result = await store.search(
+        "retains customer records",
+        obligation_ids=(),
+        tenant_id="acme",
+        scopes=(Scope.PUBLIC,),
+        as_of=TODAY,
+        limit=10,
+    )
+    assert all(c.chunk_id != "c3" for c in result.fused)
 
-async def test_clause_id_lookup_skips_ranking(chunks: tuple[Chunk, ...]) -> None:
-    """D-04 / D-12: the router's only decision, and it returns the keyword channel."""
-    store = FakeRetrievalStore(chunks)
+    # D-04 / D-12: the router's only decision, and it returns the keyword channel.
     hit = await store.lookup_clause(APP11, tenant_id="acme", as_of=TODAY)
     assert hit is not None
     assert hit.channel is Channel.KEYWORD
     assert hit.clause_id == APP11
+
+    # Cross-tenant lookup: acme can never look up beta's clause by ID either,
+    # not just by ranked search.
+    hit = await store.lookup_clause("acme-policy:v3:sec2/1", tenant_id="other-corp", as_of=TODAY)
+    assert hit is None
+
+    # ADR-0020. Positive control first: with the same probe, a subscribed
+    # tenant gets every library chunk in every channel — so the "unreachable"
+    # assertions below can't pass just because a channel never returns them.
+    reached = await _library_reach(store, tenant_id="acme")
+    assert all(found == LIBRARY_CHUNK_IDS for found in reached.values()), reached
+
+    # A tenant that never subscribed can't reach them through any channel.
+    await assert_library_unreachable(store, tenant_id="other-corp")
+
+    # `_public` owns every library chunk: it sees the library with no rows.
+    result = await store.search(
+        "steps to protect the information",
+        obligation_ids=(),
+        tenant_id="_public",
+        scopes=(Scope.PUBLIC,),
+        as_of=TODAY,
+        limit=10,
+    )
+    assert "c1" in {c.chunk_id for c in result.fused}
+
+    # Unsubscribe removes the row and nothing else: acme loses the library
+    # through every channel but keeps its own documents...
+    await ledger.unsubscribe(tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT)
+    await assert_library_unreachable(store, tenant_id="acme")
+    own = await store.search(
+        "retains customer records",
+        obligation_ids=(),
+        tenant_id="acme",
+        scopes=(Scope.PUBLIC, Scope.TENANT),
+        as_of=TODAY,
+        limit=10,
+    )
+    assert "c3" in {c.chunk_id for c in own.fused}
+    # ...and another tenant's view of the shared library is untouched.
+    still_public = await store.lookup_clause(APP11, tenant_id="_public", as_of=TODAY)
+    assert still_public is not None
+
+    # Resubscribing is another row, with nothing re-upserted: the same
+    # stored points become visible again.
+    await ledger.subscribe(
+        tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT, subscribed_by="contract-test"
+    )
+    hit = await store.lookup_clause(APP11, tenant_id="acme", as_of=TODAY)
+    assert hit is not None
+    assert hit.clause_id == APP11
+
+
+async def _library_reach(store: RetrievalStore, *, tenant_id: str) -> dict[str, frozenset[str]]:
+    """Which of the `chunks` fixture's library chunks reach `tenant_id` by
+    each of the four routes a chunk can take to a caller: the dense and
+    sparse channels, the fused list, and an exact-ID lookup."""
+    result = await store.search(
+        "An APP entity must take steps to protect and give access to the information",
+        obligation_ids=(),
+        tenant_id=tenant_id,
+        scopes=(Scope.PUBLIC, Scope.TENANT),
+        as_of=LATER,
+        limit=10,
+    )
+
+    def library(candidates: tuple[Candidate, ...]) -> frozenset[str]:
+        return frozenset(c.chunk_id for c in candidates) & LIBRARY_CHUNK_IDS
+
+    looked_up = [
+        await store.lookup_clause(clause_id, tenant_id=tenant_id, as_of=LATER)
+        for clause_id in (APP11, APP12)
+    ]
+    return {
+        Channel.DENSE.value: library(result.per_channel.get(Channel.DENSE, ())),
+        Channel.SPARSE.value: library(result.per_channel.get(Channel.SPARSE, ())),
+        "fused": library(result.fused),
+        Channel.KEYWORD.value: frozenset(h.chunk_id for h in looked_up if h is not None),
+    }
+
+
+async def assert_library_unreachable(store: RetrievalStore, *, tenant_id: str) -> None:
+    reached = await _library_reach(store, tenant_id=tenant_id)
+    assert all(not found for found in reached.values()), reached
+
+
+async def test_retrieval_store_is_a_retrieval_store(chunks: tuple[Chunk, ...]) -> None:
+    assert isinstance(FakeRetrievalStore(chunks, ledger=FakeLedgerStore()), RetrievalStore)
+
+
+async def test_fake_retrieval_store_satisfies_the_shared_contract(
+    chunks: tuple[Chunk, ...],
+) -> None:
+    ledger = FakeLedgerStore()
+    await assert_retrieval_store_contract(FakeRetrievalStore(chunks, ledger=ledger), ledger)
 
 
 # --------------------------------------------------------------------------
@@ -242,21 +359,63 @@ async def test_assessment_records_versions_and_trace_id() -> None:
     assert await ledger.get_assessment("other-corp", "a1") is None
 
 
+async def test_subscriptions_are_per_tenant_and_idempotent() -> None:
+    ledger = FakeLedgerStore()
+    await ledger.subscribe(tenant_id="acme", instrument_id="privacy-act-1988", subscribed_by="u1")
+    await ledger.subscribe(tenant_id="acme", instrument_id="privacy-act-1988", subscribed_by="u2")
+    assert await ledger.subscribed_instruments("acme") == frozenset({"privacy-act-1988"})
+    assert await ledger.subscribed_instruments("other-corp") == frozenset()
+
+
+async def test_unsubscribe_removes_only_that_row() -> None:
+    ledger = FakeLedgerStore()
+    for tenant in ("acme", "other-corp"):
+        await ledger.subscribe(
+            tenant_id=tenant, instrument_id="privacy-act-1988", subscribed_by="u"
+        )
+    await ledger.subscribe(tenant_id="acme", instrument_id="iso-27001", subscribed_by="u")
+    await ledger.unsubscribe(tenant_id="acme", instrument_id="privacy-act-1988")
+    assert await ledger.subscribed_instruments("acme") == frozenset({"iso-27001"})
+    assert await ledger.subscribed_instruments("other-corp") == frozenset({"privacy-act-1988"})
+    await ledger.unsubscribe(tenant_id="acme", instrument_id="never-subscribed")  # no-op
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "instrument_id"),
+    [("acme", "acme/privacy-policy"), ("acme", "beta/privacy-policy"), ("_public", "gdpr")],
+    ids=["own-document", "other-tenants-document", "reserved-tenant"],
+)
+async def test_only_a_real_tenant_can_subscribe_and_only_to_library_law(
+    tenant_id: str, instrument_id: str
+) -> None:
+    with pytest.raises(ValueError):
+        await FakeLedgerStore().subscribe(
+            tenant_id=tenant_id, instrument_id=instrument_id, subscribed_by="u"
+        )
+
+
 # --------------------------------------------------------------------------
 # Reranker, Embedder, Generator
 # --------------------------------------------------------------------------
 
 
-async def test_reranker_is_a_reranker_and_truncates_to_top_k() -> None:
-    reranker = FakeReranker()
+async def assert_reranker_contract(reranker: Reranker) -> None:
+    """The `Reranker` contract itself — top_k truncation, descending score
+    order, valid indices — shared by every implementation regardless of
+    how it actually scores. `RerankerClient` against the real local
+    service (issue #14) calls this same function, not a second,
+    independently-written test, so the two can't silently diverge
+    (`tests/test_reranker_service.py`)."""
     assert isinstance(reranker, Reranker)
-    scored = await reranker.rerank(
-        "protect the information",
-        ("protect the information now", "unrelated text", "the information"),
-        top_k=2,
-    )
+    documents = ("protect the information now", "unrelated text", "the information")
+    scored = await reranker.rerank("protect the information", documents, top_k=2)
     assert len(scored) == 2
     assert scored[0].score >= scored[1].score
+    assert all(0 <= s.index < len(documents) for s in scored)
+
+
+async def test_reranker_is_a_reranker_and_truncates_to_top_k() -> None:
+    await assert_reranker_contract(FakeReranker())
 
 
 async def test_embedder_returns_configured_dimensions() -> None:
@@ -618,6 +777,49 @@ async def test_manifest_excludes_a_different_tenant() -> None:
     manifest = await store.get_manifest("acme-hr-policy", "v1", tenant_id="acme")
 
     assert manifest == {"sec1": canonical_sha256(acme_clause.canonical_text)}
+
+
+async def test_manifest_metadata_round_trips_and_is_absent_before_first_write() -> None:
+    """`put_manifest` records `canonicalisation_version` and
+    `source_html`'s own sha256 once at the manifest level (issue #19),
+    alongside the per-clause paths `get_manifest` already returns."""
+    from compliance_rag.corpus.models import PUBLIC_TENANT_ID
+
+    store = FakeClauseStore()
+    assert (
+        await store.get_manifest_metadata(
+            "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+        )
+        is None
+    )
+    assert (
+        await store.get_source_html(
+            "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+        )
+        is None
+    )
+
+    html = '<p id="clause-sch1-app11-1">An APP entity must take reasonable steps.</p>'
+    await store.put_manifest(
+        "privacy-act-1988",
+        "TEST-FIXTURE-001",
+        tenant_id=PUBLIC_TENANT_ID,
+        canonicalisation_version=CANONICALISATION_VERSION,
+        source_html=html,
+    )
+
+    metadata = await store.get_manifest_metadata(
+        "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+    )
+    assert metadata is not None
+    assert metadata.canonicalisation_version == CANONICALISATION_VERSION
+    assert metadata.source_html_sha256 == hashlib.sha256(html.encode("utf-8")).hexdigest()
+    assert (
+        await store.get_source_html(
+            "privacy-act-1988", "TEST-FIXTURE-001", tenant_id=PUBLIC_TENANT_ID
+        )
+        == html
+    )
 
 
 async def test_get_clause_is_scoped_to_its_tenant() -> None:

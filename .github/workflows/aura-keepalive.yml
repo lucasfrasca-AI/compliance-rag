@@ -1,0 +1,46 @@
+name: aura-keepalive
+
+# Aura Free pauses an instance after 3 days idle and deletes it after 30
+# (BUILD_LOG 2026-10-01). Phase 2 is the first phase that depends on the
+# deployed graph, so this runs from its start: one query a day keeps
+# compliance-rag-neo awake.
+#
+# The query writes, because a read may not count as activity on Aura's idle
+# timer: it MERGEs a throwaway :KeepAlive node with a timestamp and DELETEs it
+# in the same statement — one committed write transaction, nothing left behind
+# even if the job dies, nothing real touched. The step fails unless Aura
+# reports the query as a write ("queryType":"rw").
+#
+# Runs no repository code — no checkout, no install — just one HTTPS POST to
+# Aura's Query API. On Aura Free the username and the database
+# are both the instance ID. A failed run (paused, deleted, or the password
+# rotated) emails the repository owner: that is the alert to resume or fix it.
+#
+# The only workflow that holds Aura credentials (tests/test_neo4j_graph.py:
+# test_ci_never_holds_aura_credentials). CI never does.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: One write-and-delete against compliance-rag-neo
+        env:
+          INSTANCE: ${{ secrets.AURA_KEEPALIVE_INSTANCE_ID }}
+          PASSWORD: ${{ secrets.AURA_KEEPALIVE_PASSWORD }}
+        # Credentials go to curl on stdin (printf is a shell builtin), so the
+        # password never appears in a process's argv.
+        run: |
+          printf 'user = "%s:%s"\n' "$INSTANCE" "$PASSWORD" | curl -fsS --max-time 60 -K - \
+            -H 'Content-Type: application/json' \
+            -d '{"statement":"MERGE (k:KeepAlive {id: \"keepalive\"}) SET k.at = datetime() WITH k DELETE k RETURN 1 AS ok"}' \
+            "https://$INSTANCE.databases.neo4j.io/db/$INSTANCE/query/v2" > response.json
+          # The response holds only the result, query metadata and a bookmark.
+          grep -Eq '"queryType" *: *"rw"' response.json || { cat response.json; exit 1; }

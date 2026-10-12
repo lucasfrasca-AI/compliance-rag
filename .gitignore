@@ -30,3 +30,16 @@ corpus/instruments/**/raw/
 *.sqlite
 data/
 docs/handoffs/*.tmp
+
+# the converted reranker ONNX artifact is built, not committed (issue #14):
+# 2.27GB fp32 weights in, ~500-600MB int8 out — an order of magnitude past
+# anything this repo vendors elsewhere. scripts/export_reranker_onnx.py
+# rebuilds it; CI restores it from an Actions cache keyed on that script's
+# own contents plus the pinned upstream revision.
+models/reranker-onnx/
+
+# fastembed's downloaded BM25 stopword files (issue #22) — fetched from
+# Hugging Face on first use, cached in CI (.github/workflows/ci.yml)
+.fastembed_cache/
+models/candidates/
+out/

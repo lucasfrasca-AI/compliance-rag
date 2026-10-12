@@ -44,16 +44,17 @@ Deliverables
 - Router: clause-ID regex → keyword lookup, skip rerank; else hybrid → rerank
 - **Reranker service** on Cloud Run (`australia-southeast1`): FastAPI + ONNX Runtime, `POST /rerank {query, documents[]}` → scores; models benchmarked: `BAAI/bge-reranker-v2-m3` (default), `mixedbread-ai/mxbai-rerank-base-v2`, `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - **ColBERT rescoring** in Qdrant (multivector, HNSW off) as the A/B; Vertex Ranking API adapter kept for CI only, hard-gated to `TENANT_ID == dev-tenant`
-- Generator adapter (Claude on Vertex) with structured output; prompt caching on the system prefix
+- Generator adapter (Claude on Vertex — `claude-sonnet-5` at the US multi-region endpoint during build, ADR-0023/ADR-0024) with structured output; prompt caching on the system prefix
 - **Citation verifier**: canonical-form comparison against Cloud Storage; fail → targeted repair
-- **Eval harness**: 60+ labelled queries (exact ID, paraphrase, cross-clause); recall@k per channel and fused; verifier pass rate; runs in CI as a regression gate
+- **Eval harness**: 25 labelled queries to start (exact ID, paraphrase, cross-clause) — enough to catch a regression, expanded when a real failure shows a gap rather than padded to a count; recall@k per channel and fused; verifier pass rate; runs in CI as a regression gate
 - ISO 27001 Annex A **control IDs only** (`A.8.3`), each with our own one-line descriptor. Not ISO's titles: a title like "Information access restriction" is ISO's authored wording, not a fact, and reproducing all 93 is arguably substantial reproduction of a paid standard. An ID is a reference; our gloss is our text. A crosswalk targets the ID, so nothing is lost functionally. Real titles are something a licensed customer supplies. This is a flagged legal risk, not legal advice — if the titles are wanted, get a written view first
 
 Exit criteria
-- recall@10 on exact-ID queries = 1.0; on paraphrase ≥ 0.9 (numbers are the starting bar — revise with evidence)
+- recall@10 on exact-ID queries = 1.0; on paraphrase ≥ 0.9; on cross-clause ≥ 0.8 (numbers are the starting bar — revise with evidence)
+  - Measured (2026-10-08) on what `retrieve()` delivers — the cross-encoder over the top 20 fused candidates (ADR-0022): exact-ID 1.000, paraphrase 1.000, cross-clause **0.896 — met**, enforced in CI's `reranker-fidelity` job (`tests/test_recall_gate_reranked.py`). Fusion alone measures 0.792 on cross-clause (#28); exact-ID and paraphrase are also gated on fusion, with a per-query baseline, on every build
 - Verifier pass rate 100% on the golden set, with at least one deliberately bad citation proven to block
 - Cost per query logged; projected monthly under $60 at 2,000 queries
-- Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG
+- Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG (ColBERT dropped from scope with #26; benchmarked instead: candidate count and a smaller cross-encoder)
 
 Sequencing: **nothing writes to Cloud Storage or Qdrant until #2, #3 and #4 are merged.** Those three shape `ClauseRecord` and the stable-ID grammar, so a parser run before them produces records that must be rewritten and embeddings that must be paid for twice. Order: #3 → #4 → #2 → format spike → parser → #6 → chunker → #5 → router.
 
@@ -62,6 +63,8 @@ Unlocks: Cloud Storage bucket, Vertex Embeddings, Claude on Vertex, Cloud Run `r
 ## Phase 2 — Graph and Track A
 
 Goal: "does this apply to us, as of this date" answered by traversal, not by the LLM.
+
+First task, before any of the below: verify `compliance-rag-neo` still exists and the credentials in `.env` are current (on Aura Free the username and database are both the instance ID — SETUP.md §3), **and turn on the keep-alive** (`.github/workflows/aura-keepalive.yml`, pulled forward from Phase 4 on 2026-10-12 because this is the first phase that depends on the deployed graph). Aura Free pauses after 3 days idle and is deleted after 30 days of inactivity (BUILD_LOG, 2026-10-01) — if Phase 2 starts weeks after Phase 1 ends, as is likely, the instance has almost certainly paused at least once in the gap, and may need resuming (console only) or, in the worst case, recreating.
 
 Deliverables
 - Neo4j schema: `Instrument`, `InstrumentVersion`, `Clause`, `Obligation`, `Condition`, `Actor`, `Control`, `Jurisdiction`, `Sector`; edges `PART_OF`, `VERSION_OF`, `SUPERSEDES`, `APPLIES_TO`, `REQUIRES`, `CROSSWALKS_TO`; bitemporal properties on every node
@@ -89,7 +92,9 @@ Deliverables
 - Web fallback (external tier, shown after grounded answer, never blended)
 - API on Cloud Run (SSE streaming); Cloud SQL ledger; Secret Manager; Firebase Auth (single tenant, `tenant_id` fixed)
 - Frontend: chat with history, citation panel with click-to-clause (PDF.js + positions), admin panel (profile fields, policy upload/version, mapping approval queue, framework scope)
+- Library and document lifecycle UI: subscription checkboxes over the library (ADR-0020); upload of a new policy version; withdraw; purge behind a typed confirmation that shows the findings-citing count (ADR-0021). All of it over adapter operations already built and tested in Phase 1 — the UI adds no enforcement of its own; the guardrails are in the adapter.
 - Prompt-injection controls: delimiting, schema validation, no retrieved text in query construction; adversarial test set in CI
+- **Blocker before any external upload (#78, ADR-0026):** the upload API takes no `synthetic` field and writes only through `CorpusLifecycle`, which derives the flag from the operator's registry; a test proves an API upload cannot mark its own content synthetic
 - Egress audit script checked into `docs/research/` proving no request-path byte leaves AU
 - Trace UI decision point: if Logs Explorer has proven insufficient for a named debugging task, write the ADR and add Phoenix (planned) — otherwise stay on Logging
 
@@ -107,7 +112,7 @@ Goal: the corpus keeps itself current with a human in the loop.
 Deliverables
 - Feed poller (Federal Register, EUR-Lex Cellar) on Cloud Scheduler → Cloud Run job
 - Clause-level diff → GitHub PR naming affected mappings
-- Keep-alive job for Aura and Qdrant
+- Keep-alive job for Qdrant (Aura's moved to the start of Phase 2)
 - Regression gate re-runs golden set on corpus change; re-runs affected assessments
 - EU AI Act + Regulation 2026/1744 ingested; Omnibus commencement shifts as eval fixtures
 
@@ -119,4 +124,4 @@ Unlocks: Cloud Scheduler, Cloud Workflows.
 
 ## Phase 5 — Hardening (outside build budget; decisions only)
 
-Residency move for the graph (Aura Pro in AU — Qdrant is already in Sydney), trace UI (Phoenix on Cloud Run, or self-hosted Langfuse if prompt management is ever needed), real multi-tenancy (RLS, per-tenant labels, scope filters enforced in adapters), SSO via OIDC/SAML. Each is an ADR before it is a task.
+**AU-resident generation**: Claude on Vertex is not served from Sydney (ADR-0023); generation runs at the US multi-region endpoint during build (ADR-0024), gated to public law plus synthetic data. Before the first real customer document, generation must move to Australia. On GCP today that means `gemini-3.5-flash` on Single Zone Provisioned Throughput, **~$2.2–3k/month**, a real pricing fact about this market that a first customer has to fund, plus a new `Generator` adapter and its own ADR. **The comparison to make then:** AWS Bedrock publishes an Australian geo inference profile, `au.anthropic.claude-sonnet-5`, that keeps processing in Australian regions on **pay-per-token** pricing. That's ~$2.2–3k/month committed on GCP versus per-token on Bedrock AU, and it would also keep the model unchanged. Recorded 2026-10-10 for the decision, not acted on: the stack stays on GCP. Residency move for the graph (Aura Pro in AU — Qdrant is already in Sydney), trace UI (Phoenix on Cloud Run, or self-hosted Langfuse if prompt management is ever needed), real multi-tenancy (RLS, per-tenant labels, scope filters enforced in adapters), SSO via OIDC/SAML. Each is an ADR before it is a task.

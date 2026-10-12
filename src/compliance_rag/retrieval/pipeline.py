@@ -5,6 +5,10 @@ this tracer bullet proves the retrieve -> rerank -> generate -> verify shape
 end to end (Loop B, `CONTEXT.md`), not the full loop. `obligation_ids` is
 always passed empty to `RetrievalStore.search`, which is D-03's "no filter"
 case, not a bypass of it.
+
+`RetrievalPipeline.from_settings` is the real composition (issue #25): the
+Qdrant store, the Vertex embedder and the reranker client, with no LLM
+anywhere in the path.
 """
 
 from __future__ import annotations
@@ -15,13 +19,21 @@ from dataclasses import dataclass
 from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
+    LedgerStore,
     Reranker,
     RetrievalStore,
     ScoredDocument,
 )
 from compliance_rag.corpus.models import Scope
 from compliance_rag.retrieval.router import is_clause_id_query
+from compliance_rag.settings import Settings
 from compliance_rag.telemetry import span
+
+RERANK_CANDIDATES = 20
+"""Fused candidates handed to the cross-encoder (ADR-0022, revising D-04's
+"~50"). Measured on the golden set (#32): 20 keeps every recall@10 exit bar
+(cross-clause 0.896 vs 0.938 at 50) at about a third of the warm Cloud Run
+latency (6.4 s median vs 16.1 s)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +73,31 @@ class RetrievalPipeline:
         self.retrieval_store = retrieval_store
         self.reranker = reranker
 
+    @classmethod
+    def from_settings(cls, settings: Settings, *, ledger: LedgerStore) -> RetrievalPipeline:
+        """The real adapters behind the same `retrieve()` the fakes proved
+        (issue #25). The reranker endpoint's residency is asserted when its
+        client is built (`build_reranker_http_client`, D-15)."""
+        # Imported here, not at module level: these pull in qdrant-client,
+        # fastembed and the Vertex SDK, which nothing that only composes
+        # fakes (every unit test) should pay for.
+        from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
+        from compliance_rag.adapters.reranker_client import RerankerClient
+        from compliance_rag.adapters.reranker_http_client import build_reranker_http_client
+        from compliance_rag.adapters.vertex_embedder import VertexEmbedder
+
+        # Residency first: a reranker endpoint outside Sydney is refused
+        # before any cloud client is constructed (D-15).
+        reranker = RerankerClient(
+            build_reranker_http_client(
+                settings.reranker_url, timeout_seconds=settings.reranker_timeout_seconds
+            )
+        )
+        store = QdrantRetrievalStore.from_settings(
+            settings, embedder=VertexEmbedder.from_settings(settings), ledger=ledger
+        )
+        return cls(store, reranker)
+
     async def retrieve(
         self,
         query: str,
@@ -68,7 +105,7 @@ class RetrievalPipeline:
         as_of: dt.date,
         *,
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
-        limit: int = 50,
+        limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
     ) -> RetrievalTrace:
         """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank)."""
@@ -108,7 +145,7 @@ class RetrievalPipeline:
         as_of: dt.date,
         *,
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
-        limit: int = 50,
+        limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
     ) -> RetrievalTrace:
         """The router's fixed decision (`CONTEXT.md`: Router, D-04, D-12):

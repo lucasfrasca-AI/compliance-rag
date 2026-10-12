@@ -8,19 +8,17 @@ test locks down (`retrieve()` -> rerank -> generate -> verify).
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Iterator
+import json
 from unittest.mock import AsyncMock
 
 import pytest
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.fakes import (
     FakeCitationVerifier,
     FakeClauseStore,
     FakeGenerator,
+    FakeLedgerStore,
     FakeReranker,
     FakeRetrievalStore,
 )
@@ -28,37 +26,18 @@ from compliance_rag.adapters.interfaces import Candidate, Channel, ScoredDocumen
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.verifier.citations import Verifier
 
 TENANT_ID = "acme"
 AS_OF = dt.date(2026, 1, 1)
 QUERY = "reasonable steps information misuse"
-
-_EXPORTER = InMemorySpanExporter()
-
-
-def _install_tracer_provider() -> None:
-    """Runs once at collection: only the first `set_tracer_provider` call in
-    a process sticks, so this must not run per-test."""
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
-    trace.set_tracer_provider(provider)
-
-
-_install_tracer_provider()
-
-
-@pytest.fixture(autouse=True)
-def _clear_spans() -> Iterator[None]:
-    _EXPORTER.clear()
-    yield
-    _EXPORTER.clear()
 
 
 @pytest.fixture
 def clause() -> ClauseRecord:
     """The one hand-written clause the whole tracer bullet runs on."""
     return ClauseRecord.build(
-        instrument_id="privacy-act-1988",
+        instrument_id="acme/privacy-policy",
         version_id="TEST-FIXTURE-001",
         clause_path="sch1/app11/1",
         text="An APP entity must take such steps as are reasonable in the circumstances "
@@ -78,16 +57,32 @@ async def assessment(clause: ClauseRecord) -> AssessmentPipeline:
         tenant_id=clause.tenant_id,
     )
     retrieval = RetrievalPipeline(
-        retrieval_store=FakeRetrievalStore((chunk,)),
+        retrieval_store=FakeRetrievalStore((chunk,), ledger=FakeLedgerStore()),
         reranker=FakeReranker(),
     )
     clause_store = FakeClauseStore()
     await clause_store.put_clause(clause)
+    ledger = FakeLedgerStore()
+    await ledger.record_version(
+        tenant_id=TENANT_ID,
+        instrument_id=clause.instrument_id,
+        version_id=clause.version_id,
+        valid_from=dt.date(2025, 1, 1),
+        supersedes=None,
+    )
+    reply = json.dumps(
+        {
+            "answer": "Take reasonable steps to protect it.",
+            "citations": [
+                {"clause_id": clause.clause_id, "quote": "reasonable in the circumstances"}
+            ],
+        }
+    )
     return AssessmentPipeline(
         retrieval=retrieval,
-        generator=FakeGenerator(),
-        clause_store=clause_store,
-        citation_verifier=FakeCitationVerifier(),
+        generator=FakeGenerator(reply=reply),
+        verifier=Verifier(clause_store, ledger, FakeCitationVerifier()),
+        ledger=ledger,
     )
 
 
@@ -150,21 +145,19 @@ async def test_answer_runs_with_fakes_only(assessment: AssessmentPipeline) -> No
         assessment.retrieval.retrieval_store,
         assessment.retrieval.reranker,
         assessment.generator,
-        assessment.clause_store,
-        assessment.citation_verifier,
     ):
         assert type(adapter).__name__.startswith("Fake")
 
 
 async def test_spans_are_emitted_at_every_stage_with_required_attributes(
-    assessment: AssessmentPipeline,
+    assessment: AssessmentPipeline, span_exporter: InMemorySpanExporter
 ) -> None:
     """CLAUDE.md: every function touching an LLM or a retriever emits a span
     with structured attributes — proving the trace shape, not just that the
     pipeline runs."""
     await assessment.answer(QUERY, TENANT_ID, AS_OF)
 
-    spans = {s.name: s for s in _EXPORTER.get_finished_spans()}
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
     assert "retrieve" in spans
     assert "answer" in spans
 

@@ -11,11 +11,29 @@ import datetime as dt
 import hashlib
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable
 from enum import StrEnum
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+NO_END_DATE = dt.date.max
+"""Sentinel for an open-ended `valid_to` — bitemporal validity never carries
+`None` (`CONTEXT.md`: Bitemporal). A real, comparable date lets every
+`as_of` check and every Qdrant payload filter (issue #22) be one
+unconditional `Range` on `valid_to`, not a range-or-is-null pair."""
+
+
+def epoch_days(d: dt.date) -> int:
+    """`d` as an integer day count — the "epoch days" a Qdrant payload
+    index sorts and range-filters on (`valid_from`/`valid_to`, issue #22).
+    `date.toordinal()` (proleptic Gregorian, day 1 = 0001-01-01) rather than
+    a Unix-epoch offset: monotonic and collision-free is all a `Range`
+    filter needs, and `NO_END_DATE.toordinal()` is a real finite int either
+    way, so there's no special-casing at the boundary."""
+    return d.toordinal()
+
 
 # One path segment: letters, digits, and the separators legislation actually uses.
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
@@ -118,6 +136,35 @@ def validate_instrument_id(value: str) -> str:
     return value
 
 
+MODEL_AUTHOR_PREFIX = "model:"
+"""How a reviewed artefact records that a model drafted it
+(`corpus/mappings/README.md`: Review)."""
+
+
+def validate_review(author: str, reviewed_by: str) -> None:
+    """The one review rule for every artefact with `author`/`reviewed_by`
+    front matter — mapping YAML, selection manifests, the golden set
+    (`corpus/mappings/README.md`: Review). A model-drafted file needs a
+    distinct human reviewer: the human's review is the judgement D-01
+    requires. A human may review their own file, recorded as single-author
+    review. A model never reviews — which is also what makes a model author
+    need someone distinct."""
+    if reviewed_by.startswith(MODEL_AUTHOR_PREFIX):
+        raise ValueError("reviewed_by must be a person, never a model (D-01)")
+    if not author.strip():
+        raise ValueError("author must name who drafted the file")
+
+
+def validate_library_instrument_id(value: str) -> str:
+    """Validate an id a tenant may subscribe to (ADR-0020): a well-formed
+    instrument id with no tenant prefix. A tenant's own documents need no
+    subscription, and another tenant's are never subscribable."""
+    validate_instrument_id(value)
+    if instrument_tenant_prefix(value) is not None:
+        raise ValueError(f"only library instruments can be subscribed to, not {value!r}")
+    return value
+
+
 def instrument_tenant_prefix(value: str) -> str | None:
     """The tenant prefix of a tenant-prefixed instrument id, or `None` if
     unprefixed (or not a well-formed instrument id — callers that need
@@ -127,6 +174,12 @@ def instrument_tenant_prefix(value: str) -> str | None:
     if match is None:
         return None
     return match.group("tenant")
+
+
+def instrument_owner(instrument_id: str) -> str:
+    """The tenant an instrument's clauses are stored under: its prefix, or
+    `_public` for an unprefixed library instrument (ADR-0020)."""
+    return instrument_tenant_prefix(instrument_id) or PUBLIC_TENANT_ID
 
 
 class Scope(StrEnum):
@@ -187,6 +240,18 @@ def canonicalise(text: str) -> str:
     return " ".join(text.split())
 
 
+def sha256_hex(text: str) -> str:
+    """Hex-encoded SHA-256 of `text`, UTF-8 encoded.
+
+    The one place this encoding decision is made — `canonical_sha256` below
+    and issue #19's `manifest.json` (`source_html_sha256`, `ClauseStore`'s
+    `put_manifest`/`GCSClauseStore`) all hash a piece of stored text the same
+    way, so a future change to the encoding is one edit, not three that can
+    silently drift apart.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def canonical_sha256(canonical_text: str) -> str:
     """Hex-encoded SHA-256 of already-canonical text.
 
@@ -195,7 +260,7 @@ def canonical_sha256(canonical_text: str) -> str:
     single deterministic value to compare without fetching every clause
     object — the same reasoning D-02 gives the verifier's own read path.
     """
-    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
+    return sha256_hex(canonical_text)
 
 
 def stable_id(instrument_id: str, version_id: str, clause_path: str) -> str:
@@ -272,6 +337,15 @@ def definition_slug(term: str) -> str:
     return slug
 
 
+def assert_unique_clause_ids(clause_ids: Iterable[str]) -> None:
+    """Raise if one stable ID is produced twice. Two provisions on one path
+    would make a citation ambiguous — the stable ID is what the verifier
+    looks up (`CONTEXT.md`: Instrument id, issue #97)."""
+    duplicates = sorted(k for k, n in Counter(clause_ids).items() if n > 1)
+    if duplicates:
+        raise ValueError(f"{len(duplicates)} clause id(s) produced twice: {duplicates[:5]}")
+
+
 def assert_unique_definition_slugs(terms: Iterable[str]) -> None:
     """Raise if two distinct terms in one section produce the same
     `definition_slug` (`CONTEXT.md`: Definition).
@@ -317,23 +391,18 @@ class InstrumentVersion(BaseModel):
     title: str
     status: Status
     valid_from: dt.date
-    valid_to: dt.date | None = None
+    valid_to: dt.date = NO_END_DATE
     recorded_at: dt.datetime
     source_url: str | None = None
     supersedes: str | None = Field(
         default=None, description="version_id of the version this one supersedes (D-05)"
     )
 
-    @field_validator("valid_to")
-    @classmethod
-    def _check_interval(cls, v: dt.date | None, info: object) -> dt.date | None:
-        return v
-
     def is_current(self, as_of: dt.date) -> bool:
         """Whether this version is in force on `as_of` (D-05)."""
         if as_of < self.valid_from:
             return False
-        if self.valid_to is not None and as_of >= self.valid_to:
+        if as_of >= self.valid_to:
             return False
         return self.status is Status.IN_FORCE
 
@@ -445,8 +514,12 @@ class Chunk(BaseModel):
     text: str
     scope: Scope = Scope.PUBLIC
     tenant_id: TenantSegment = PUBLIC_TENANT_ID
-    valid_from: dt.date | None = None
-    valid_to: dt.date | None = None
+    valid_from: dt.date = dt.date.min
+    valid_to: dt.date = NO_END_DATE
+    synthetic: bool = False
+    """Invented test data, not a customer's document (ADR-0023). Defaults to
+    False on purpose: an unmarked tenant chunk counts as real customer data,
+    which closes the offshore-generation gate."""
 
     @field_validator("clause_id")
     @classmethod

@@ -18,6 +18,16 @@ jobs:
     # Ledger schema tests connect here. Fresh per run, so migrations always
     # apply to an empty database — the same thing CI proves on every future
     # schema ticket, not just this one.
+    #
+    # qdrant: a real, self-hosted, ephemeral server for
+    # tests/test_qdrant_retrieval_store.py (issue #22) — the cross-tenant
+    # and cross-scope leakage tests run against the real adapter's real
+    # filter-building here, not the Qdrant Cloud free-tier cluster. No
+    # QDRANT_URL/QDRANT_API_KEY secrets, no cloud account touched, no
+    # throwaway collection to tear down on shared infrastructure: this
+    # container and everything in it disappears when the job ends. Pinned
+    # to the exact version installed (`qdrant-client==1.19.1`) — a wider
+    # version gap trips the client's own compatibility warning.
     services:
       postgres:
         image: postgres:16
@@ -32,9 +42,39 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
+      qdrant:
+        image: qdrant/qdrant:v1.19.1
+        ports:
+          - 6333:6333
+      # neo4j: the graph tests (issue #87) run against a real, ephemeral
+      # Community server — never Aura, which holds public law only (D-09)
+      # and whose credentials no workflow carries. Community refuses
+      # property-existence constraints; the adapter reports them by name and
+      # the writer enforces the same invariant. Pinned to the version tested
+      # locally; heap capped so it sits beside Postgres and Qdrant.
+      neo4j:
+        image: neo4j:5.26.31-community
+        env:
+          NEO4J_AUTH: neo4j/testpassword
+          NEO4J_server_memory_heap_max__size: 512m
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd="cypher-shell -u neo4j -p testpassword 'RETURN 1'"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=20
 
     env:
       DATABASE_URL: postgresql://compliance:compliance@localhost:5432/compliance_rag
+      QDRANT_URL: http://localhost:6333
+      # The recall gate (issue #28) fails rather than skips without Qdrant.
+      # It runs here, with no GCP identity at all: real gemini-embedding-001
+      # vectors come from the checked-in cache, BM25 is local, no reranker.
+      REQUIRE_RECALL_GATE: "1"
+      # The graph tests fail rather than skip without the Neo4j container.
+      NEO4J_TEST_URI: bolt://localhost:7687
+      REQUIRE_NEO4J: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +86,18 @@ jobs:
 
       - name: Set up Python
         run: uv python install 3.12
+
+      # Qdrant/bm25 (fastembed) is a ~10MB, model-free artifact (pure
+      # hashing-trick BM25) fetched from Hugging Face on first use —
+      # cached across runs rather than left as a network dependency inside
+      # a gate that must be deterministic (issue #21's own standard for
+      # the reranker tokenizer). Keyed on a fixed string: the model never
+      # changes unless this line does.
+      - name: Cache the fastembed BM25 model
+        uses: actions/cache@v4
+        with:
+          path: .fastembed_cache
+          key: fastembed-qdrant-bm25-v1
 
       - name: Sync dependencies
         run: uv sync --all-extras --dev
@@ -76,6 +128,115 @@ jobs:
 
       - name: Tests
         run: uv run pytest
+
+  reranker-fidelity:
+    name: reranker-fidelity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Converting BAAI/bge-reranker-v2-m3 to ONNX in this job was tried and
+    # abandoned (BUILD_LOG.md 2026-09-28): the fp32 download (2.27GB) plus
+    # its own ONNX export plus onnxruntime's own internal reload-with-
+    # external-data step during quantize_dynamic together outran the
+    # runner's disk even after freeing stock preinstalled toolchains — one
+    # run failed outright with `OSError: [Errno 28] No space left on
+    # device`, two more were killed by the host ("the runner has received a
+    # shutdown signal") at the identical point, consistent with the same
+    # cause rather than three unrelated failures. Conversion now happens
+    # once, locally (`scripts/export_reranker_onnx.py`), and the verified
+    # int8 artifact is uploaded to the corpus bucket
+    # (`scripts/upload_reranker_artifact.py`). This job only fetches it and
+    # re-checks its fidelity — no torch, no optimum, no 2.27GB download.
+    #
+    # A fork PR gets no GCP token, same reasoning as the `trace` job below.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      id-token: write # mint the OIDC token for Workload Identity Federation
+      contents: read
+
+    # The one job with the converted model, so retrieve() end to end — real
+    # Qdrant, real router, real cross-encoder (issue #25) — runs here too.
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.19.1
+        ports:
+          - 6333:6333
+
+    env:
+      QDRANT_URL: http://localhost:6333
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      - name: Cache the fastembed BM25 model
+        uses: actions/cache@v4
+        with:
+          path: .fastembed_cache
+          key: fastembed-qdrant-bm25-v1
+
+      # Same account as the `trace` job, scoped separately: compliance-rag-ci
+      # otherwise holds only logging.* roles (SERVICES.md: Workload Identity
+      # Federation row, "deliberately separate from compliance-rag-runtime so
+      # CI cannot reach Storage"). Reading the reranker artifact needs a
+      # narrow, additional storage.objectViewer grant conditioned to the
+      # `reranker/` prefix only — the rest of the corpus bucket (clause text)
+      # stays unreadable to CI.
+      - name: Authenticate to GCP (keyless, Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      # Keyed on the pinned upstream revision (BAAI_REVISION, baked into
+      # artifact_storage.OBJECT_PREFIX) — a revision bump changes the key
+      # and re-fetches. Hit: skip the download and sha256 verification
+      # entirely.
+      - name: Cache the fetched ONNX artifact
+        id: artifact-cache
+        uses: actions/cache@v4
+        with:
+          path: models/reranker-onnx
+          key: reranker-onnx-${{ hashFiles('src/compliance_rag/reranker_service/fidelity.py') }}
+
+      - name: Fetch + verify the converted artifact (cache miss only)
+        if: steps.artifact-cache.outputs.cache-hit != 'true'
+        run: uv run python scripts/fetch_reranker_artifact.py
+
+      # The token was only for fetching the artifact. Delete it, and the
+      # OIDC request variables that could mint a fresh one, before any test
+      # code runs: compliance-rag-ci can read the _Default log bucket, and
+      # code that doesn't need that access shouldn't run holding it (issue
+      # #10's standing constraint). REQUIRE_REAL_RETRIEVE turns a missing
+      # Qdrant or model into a failure here instead of a silent skip.
+      # test_recall_gate_reranked.py is the recall gate on what retrieve()
+      # delivers — the cross-encoder over the top 20 (ADR-0022) — so the
+      # cross-clause exit bar is enforced here, where the model is.
+      - name: Re-verify fidelity, reranker service, retrieve() and reranked recall
+        run: |
+          rm -f "$GOOGLE_GHA_CREDS_PATH"
+          env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE \
+              -u GOOGLE_GHA_CREDS_PATH \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              REQUIRE_REAL_RETRIEVE=1 \
+            uv run pytest -v -rs \
+              tests/test_reranker_onnx_fidelity.py \
+              tests/test_reranker_service.py \
+              tests/test_retrieve_real_adapters.py \
+              tests/test_recall_gate_reranked.py
 
   trace:
     name: trace-check

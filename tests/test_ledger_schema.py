@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 from collections.abc import Iterator
+from typing import LiteralString
 
 import psycopg
 import pytest
@@ -215,6 +216,139 @@ def test_finding_citations_check_rejects_an_invalid_version(
         _insert_finding(conn, "acme", "finding-1", assessment_id, citations)
 
 
+def _library_instrument(conn: psycopg.Connection[tuple[object, ...]], instrument_id: str) -> None:
+    conn.execute(
+        "INSERT INTO instrument (tenant_id, instrument_id, title, jurisdiction) "
+        "VALUES ('_public', %s, %s, 'AU') ON CONFLICT DO NOTHING",
+        (instrument_id, instrument_id),
+    )
+
+
+def _subscribe(
+    conn: psycopg.Connection[tuple[object, ...]], tenant_id: str, instrument_id: str
+) -> None:
+    if instrument_id and "/" not in instrument_id and ":" not in instrument_id:
+        _library_instrument(conn, instrument_id)  # 0006: a subscription names a held instrument
+    conn.execute(
+        "INSERT INTO tenant_instrument (tenant_id, instrument_id, subscribed_by) "
+        "VALUES (%s, %s, %s)",
+        (tenant_id, instrument_id, "user-1"),
+    )
+
+
+def test_tenant_instrument_records_a_subscription(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """db/ledger/0004_tenant_instrument.sql, proven — not inferred from reading it."""
+    _insert_tenant(conn, "acme")
+    _subscribe(conn, "acme", "privacy-act-1988")
+    row = conn.execute(
+        "SELECT subscribed_by, subscribed_at IS NOT NULL FROM tenant_instrument "
+        "WHERE tenant_id = %s AND instrument_id = %s",
+        ("acme", "privacy-act-1988"),
+    ).fetchone()
+    assert row == ("user-1", True)
+
+
+@pytest.mark.parametrize(
+    "instrument_id",
+    ["acme/privacy-policy", "privacy-act-1988:C2026C00227", ""],
+    ids=["tenant-prefixed", "stable-id-not-instrument-id", "empty"],
+)
+def test_tenant_instrument_accepts_library_ids_only(
+    conn: psycopg.Connection[tuple[object, ...]], instrument_id: str
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _subscribe(conn, "acme", instrument_id)
+
+
+def test_the_library_never_subscribes(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """`_public` is a tenant row since 0006, but it sees the library by
+    ownership (ADR-0020) — it can never hold a subscription."""
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _subscribe(conn, "_public", "privacy-act-1988")
+
+
+def test_a_subscriber_must_be_a_real_tenant(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        _subscribe(conn, "nobody", "privacy-act-1988")
+
+
+# ---- 0006: the library owner (issue #67, ADR-0025) -------------------------
+
+
+def test_a_public_law_instrument_and_its_versions_can_be_recorded(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _library_instrument(conn, "privacy-act-1988")
+    for version, valid_from, valid_to in (
+        ("C2025C00100", "2025-01-01", "2026-01-01"),
+        ("C2026C00227", "2026-01-01", None),
+    ):
+        conn.execute(
+            "INSERT INTO instrument_version "
+            "(tenant_id, instrument_id, version_id, title, status, valid_from, valid_to) "
+            "VALUES ('_public', 'privacy-act-1988', %s, 'Privacy Act 1988', 'in_force', %s, %s)",
+            (version, valid_from, valid_to),
+        )
+    count = conn.execute(
+        "SELECT count(*) FROM instrument_version WHERE tenant_id = '_public'"
+    ).fetchone()
+    assert count == (2,)
+
+
+def test_the_library_owner_is_one_seeded_row(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    rows = conn.execute("SELECT tenant_id FROM tenant WHERE is_library").fetchall()
+    assert rows == [("_public",)]
+
+
+@pytest.mark.parametrize("is_library", [False, True], ids=["plain", "claiming-library"])
+def test_no_company_can_register_as_public(
+    conn: psycopg.Connection[tuple[object, ...]], is_library: bool
+) -> None:
+    """Either the CHECK (not flagged) or the seeded row's primary key (flagged)
+    refuses it — there is no way in."""
+    with pytest.raises((psycopg.errors.CheckViolation, psycopg.errors.UniqueViolation)):
+        conn.execute(
+            "INSERT INTO tenant (tenant_id, name, is_library) VALUES ('_public', 'Evil', %s)",
+            (is_library,),
+        )
+
+
+def test_no_other_tenant_can_be_the_library(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("INSERT INTO tenant (tenant_id, name, is_library) VALUES ('evil', 'E', true)")
+
+
+def test_a_subscription_must_name_an_instrument_the_library_holds(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "INSERT INTO tenant_instrument (tenant_id, instrument_id, subscribed_by) "
+            "VALUES ('acme', 'spam-act-2003', 'u1')"
+        )
+
+
+def test_tenant_instrument_is_one_row_per_tenant_and_instrument(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    _subscribe(conn, "acme", "privacy-act-1988")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        _subscribe(conn, "acme", "privacy-act-1988")
+
+
 def test_finding_citations_check_allows_a_citation_carrying_the_version(
     conn: psycopg.Connection[tuple[object, ...]], assessment_id: str
 ) -> None:
@@ -231,3 +365,107 @@ def test_finding_citations_check_allows_a_citation_carrying_the_version(
             }
         ],
     )  # must not raise
+
+
+# --------------------------------------------------------------------------
+# db/ledger/0005_version_removal.sql (ADR-0021)
+# --------------------------------------------------------------------------
+
+
+def _seed_version(
+    conn: psycopg.Connection[tuple[object, ...]], tenant_id: str, instrument_id: str
+) -> None:
+    _insert_tenant(conn, tenant_id)
+    conn.execute(
+        "INSERT INTO instrument (tenant_id, instrument_id, title, jurisdiction, scope) "
+        "VALUES (%s, %s, %s, %s, 'tenant')",
+        (tenant_id, instrument_id, "Retention policy", "AU"),
+    )
+    conn.execute(
+        "INSERT INTO instrument_version "
+        "(tenant_id, instrument_id, version_id, title, status, valid_from) "
+        "VALUES (%s, %s, 'v1', 'v1', 'in_force', %s)",
+        (tenant_id, instrument_id, dt.date(2025, 1, 1)),
+    )
+
+
+def test_withdrawn_and_purged_markers_keep_the_version_row(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _seed_version(conn, "acme", "acme/retention-policy")
+    conn.execute(
+        "UPDATE instrument_version SET withdrawn_at = now(), withdrawn_by = 'u1', "
+        "purged_at = now(), purged_by = 'u1', purge_reason = 'legal hold lifted' "
+        "WHERE tenant_id = 'acme' AND instrument_id = 'acme/retention-policy'"
+    )
+    row = conn.execute(
+        "SELECT withdrawn_by, purged_by, purge_reason FROM instrument_version "
+        "WHERE tenant_id = 'acme' AND instrument_id = 'acme/retention-policy'"
+    ).fetchone()
+    assert row == ("u1", "u1", "legal hold lifted")
+
+
+def test_a_removal_marker_records_who_when_and_why_together(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _seed_version(conn, "acme", "acme/retention-policy")
+    incomplete: tuple[LiteralString, ...] = (
+        "UPDATE instrument_version SET withdrawn_at = now() WHERE tenant_id = 'acme'",
+        "UPDATE instrument_version SET purged_at = now(), purged_by = 'u1' "
+        "WHERE tenant_id = 'acme'",
+        "UPDATE instrument_version SET purged_by = 'u1', purge_reason = 'r' "
+        "WHERE tenant_id = 'acme'",
+    )
+    for statement in incomplete:
+        with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+            conn.execute(statement)
+
+
+def test_removal_audit_records_a_refusal_for_a_non_tenant(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """No FK to `tenant`: a refused request naming `_public` must still be auditable."""
+    conn.execute(
+        "INSERT INTO corpus_removal_audit "
+        "(audit_id, tenant_id, instrument_id, action, outcome, actor, reason) "
+        "VALUES ('a1', '_public', 'privacy-act-1988', 'purge', 'refused', 'admin', 'typo')"
+    )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO corpus_removal_audit "
+            "(audit_id, tenant_id, instrument_id, action, outcome, actor, reason) "
+            "VALUES ('a2', 'acme', 'acme/x', 'delete', 'completed', 'u1', 'r')"
+        )
+
+
+def test_count_findings_citing_matches_by_stable_id_prefix(
+    conn: psycopg.Connection[tuple[object, ...]], assessment_id: str
+) -> None:
+    def cite(finding_id: str, *clause_ids: str) -> None:
+        _insert_finding(
+            conn,
+            "acme",
+            finding_id,
+            assessment_id,
+            [
+                {"clause_id": c, "quoted_text": "t", "canonicalisation_version": 2}
+                for c in clause_ids
+            ],
+        )
+
+    cite("f1", "acme/retention_policy:v1:3/1")
+    cite("f2", "acme/retention_policy:v1:3/2", "acme/retention_policy:v2:3/1")
+    cite("f3", "acme/retention_policy:v2:3/1")
+    cite("f4", "acme/retentionXpolicy:v1:3/1")  # '_' must not act as a LIKE wildcard
+
+    def count(prefix: str) -> object:
+        row = conn.execute("SELECT count_findings_citing('acme', %s)", (prefix,)).fetchone()
+        assert row is not None
+        return row[0]
+
+    assert count("acme/retention_policy:v1:") == 2
+    assert count("acme/retention_policy:v2:") == 2
+    assert count("acme/retention_policy:") == 3
+    assert conn.execute(
+        "SELECT count_findings_citing('other-corp', 'acme/retention_policy:')"
+    ).fetchone() == (0,)

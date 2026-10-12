@@ -16,13 +16,42 @@ Every file in this directory starts with:
 
 ```yaml
 author: jane.doe@example.com
-reviewed_by: sam.smith@example.com   # must differ from author
+reviewed_by: sam.smith@example.com   # a person, never a model (see Review)
 date: 2026-09-20                     # ISO date the mapping was authored
 source_clause_ids:                   # every clause the mapping is derived from
   - privacy-act-1988:C2026C00227:sch1/app11/1
 ```
 
 A file missing any of these four fields fails the loader and the CI check.
+
+## Review
+
+One rule for every reviewed artefact with this front matter — mapping YAML,
+selection manifests (`corpus/instruments/{instrument_id}/{version_id}/manifest.yaml`,
+which carry `author`/`reviewed_by`/`date` minus `source_clause_ids`) and the
+golden set (`corpus/golden/`). It is enforced by `validate_review` in
+`compliance_rag.corpus.models`, which every loader calls:
+
+- **Who reviewed is always a person, never a model.** That review is the
+  human judgement D-01 requires of anything authoritative.
+- **A model-drafted file needs a distinct human reviewer.** A model records
+  itself in `author` with a `model:` prefix
+  (`author: "model: Claude Opus 5.5 — …"`); since a model never reviews, the
+  reviewer is necessarily someone else. The golden set is drafted this way:
+  the model proposed, the reviewer's correction is the label.
+- **A human may review their own file — single-author review.** The project
+  has one builder, and a `reviewed_by` naming a second person who didn't
+  review it would be a fiction, worse than an honest single name. Selection
+  manifests are reviewed this way today (`author == reviewed_by`).
+
+The rule depends on the `model:` prefix being written honestly — a model
+recorded without it would pass as a human self-review. That is a review
+discipline, not something a loader can detect.
+
+**A distinct human reviewer is required before any corpus or mapping is used
+for a real customer**, whoever authored it. When a second reviewer exists,
+tighten `validate_review` so `reviewed_by != author` always, and update this
+section — don't leave it standing beside a rule nobody follows.
 
 ## Obligations
 

@@ -13,7 +13,17 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REGION = "australia-southeast1"
-"""Every query-time byte stays here (D-07, D-15, D-16)."""
+"""Every store, every telemetry sink, and every query-time byte except
+build-phase generation stays here (D-07, D-15, D-16, ADR-0023)."""
+
+BUILD_PHASE_OFFSHORE_REGION = "us"
+"""The US multi-region endpoint (`aiplatform.us.rep.googleapis.com`), where
+`claude-sonnet-5` is served and enabled for this project (ADR-0024; it has no
+Sydney or Singapore endpoint). Allowed for generation only, and only while
+the corpus is public law plus synthetic data —
+`adapters/generation_residency.py` enforces that (ADR-0023)."""
+
+GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 
 
 class Settings(BaseSettings):
@@ -38,6 +48,9 @@ class Settings(BaseSettings):
 
     # --- Vertex ------------------------------------------------------------
     vertex_claude_model: str = ""
+    vertex_claude_region: str = REGION
+    """Sydney by default — fail closed. The build phase opts into the US
+    multi-region explicitly (`VERTEX_CLAUDE_REGION=us`, ADR-0024)."""
     vertex_embedding_model: str = "gemini-embedding-001"
     vertex_embedding_dims: int = 1536
     vertex_ranking_model: str = "semantic-ranker-default"
@@ -51,7 +64,10 @@ class Settings(BaseSettings):
     neo4j_uri: str = ""
     neo4j_username: str = ""
     neo4j_password: SecretStr = SecretStr("")
-    neo4j_database: str = "neo4j"
+    neo4j_database: str = ""
+    """On Aura Free the database name is the instance ID, and so is the
+    username — never "neo4j". No default, so a missing value fails loudly
+    instead of addressing a database that doesn't exist."""
     database_url: SecretStr = SecretStr("")
 
     # --- Reranker ----------------------------------------------------------
@@ -61,6 +77,9 @@ class Settings(BaseSettings):
     reranker_url: str = ""
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_max_tokens: int = 512
+    # Above the measured cold-start p95 for a 50-candidate rerank (37 s on
+    # Cloud Run, BUILD_LOG 2026-10-06) — the latency decision is #32's.
+    reranker_timeout_seconds: float = 60.0
 
     # --- Telemetry ---------------------------------------------------------
     otel_service_name: str = "compliance-rag"
@@ -78,6 +97,16 @@ class Settings(BaseSettings):
     def _region_is_sydney(cls, v: str) -> str:
         if v != REGION:
             raise ValueError(f"gcp_region must be {REGION} (D-07); got {v!r}")
+        return v
+
+    @field_validator("vertex_claude_region")
+    @classmethod
+    def _generation_region(cls, v: str) -> str:
+        if v not in GENERATION_REGIONS:
+            raise ValueError(
+                f"vertex_claude_region must be one of {sorted(GENERATION_REGIONS)} — never "
+                f"`global` or any other region (ADR-0023); got {v!r}"
+            )
         return v
 
     @field_validator("vertex_embedding_dims")

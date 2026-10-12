@@ -15,10 +15,24 @@ from __future__ import annotations
 
 import datetime as dt
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from compliance_rag.corpus.models import ClauseRecord, Scope, validate_tenant_id
+from compliance_rag.adapters.graph_query import BuiltQuery
+from compliance_rag.adapters.graph_schema import (
+    Bitemporal,
+    EdgeWrite,
+    GraphCounts,
+    GraphRow,
+    NodeRef,
+    NodeWrite,
+    Scalar,
+    Status,
+    refuse_duplicates,
+)
+from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, validate_tenant_id
 
 # --------------------------------------------------------------------------
 # Shared value objects
@@ -114,9 +128,80 @@ class Generation:
 
     text: str
     input_tokens: int
+    """Every input token the request was billed for, cached ones included."""
     output_tokens: int
     cached_prefix_hit: bool = False
     stop_reason: str | None = None
+    cache_read_input_tokens: int = 0
+    """Of `input_tokens`, those served from the cached prefix (D-11)."""
+    cache_creation_input_tokens: int = 0
+    """Of `input_tokens`, those written to the cache by this request."""
+    cost_usd: float = 0.0
+    """From the real token counts at the adapter's published rates."""
+    model: str = ""
+    """The model that answered, as the adapter called it."""
+
+
+@dataclass(frozen=True, slots=True)
+class UsageRecord:
+    """One generation call's real token counts and cost — ledger `usage`, keyed
+    to the request's `trace_id` (#31; CLAUDE.md: every ledger row that results
+    from a request stores its `trace_id`)."""
+
+    tenant_id: str
+    usage_id: str
+    trace_id: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cached_prefix_hit: bool
+    cost_usd: float
+
+
+class RemovalAction(StrEnum):
+    """The removal operations that are audited (ADR-0021). Unsubscribe isn't
+    one: it touches no store (ADR-0020)."""
+
+    WITHDRAW = "withdraw"
+    PURGE = "purge"
+    REPLACE_IN_PLACE = "replace_in_place"
+
+
+class RemovalOutcome(StrEnum):
+    REFUSED = "refused"
+    AUTHORIZED = "authorized"
+    """Written before any store is touched, so a crash mid-removal still
+    leaves a trace."""
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class RemovalAuditEntry:
+    audit_id: str
+    tenant_id: str
+    instrument_id: str
+    version_id: str | None
+    action: RemovalAction
+    outcome: RemovalOutcome
+    actor: str
+    reason: str
+    findings_citing: int | None
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestMetadata:
+    """The version-level fields of a `manifest.json` that aren't a
+    per-clause hash (issue #19): the canonicalisation rule every in-scope
+    clause was hashed under, and the sha256 of the exact `source.html`
+    bytes the parser injected anchors into. `ClauseStore.get_manifest`'s
+    own `dict[str, str]` return stays the per-clause view; this is the
+    rest of the same manifest.json.
+    """
+
+    canonicalisation_version: int
+    source_html_sha256: str
 
 
 # --------------------------------------------------------------------------
@@ -159,8 +244,82 @@ class GraphStore(ABC):
         """Obligations reachable by `CROSSWALKS_TO` within `max_depth` hops."""
 
 
+class GraphAdmin(ABC):
+    """Writes to the persisted graph, and builder-built reads (Phase 2).
+
+    The loaders (`graph/loader.py`) talk to this, never to the Neo4j adapter.
+    Every write keeps D-05: nodes immutable except `valid_to`, set once;
+    identical re-writes are no-ops. Every read is a `BuiltQuery`, so it
+    carries `as_of` and a depth cap.
+    """
+
+    @abstractmethod
+    async def put_node(
+        self, node: NodeRef, bitemporal: Bitemporal, properties: Mapping[str, Scalar] | None = None
+    ) -> bool:
+        """True if created, False if an identical node existed."""
+
+    @abstractmethod
+    async def put_edge(
+        self,
+        edge_type: str,
+        source: NodeRef,
+        target: NodeRef,
+        properties: Mapping[str, Scalar] | None = None,
+    ) -> bool:
+        """True if created, False if an identical edge existed."""
+
+    async def put_nodes(self, writes: Sequence[NodeWrite]) -> int:
+        """Many nodes, with `put_node`'s guarantees; returns how many were
+        created. By default one at a time — an adapter overrides it to batch
+        (issue #108). A batch naming one node twice is refused."""
+        refuse_duplicates("node", [(w.node.label, w.node.stable_id) for w in writes])
+        return sum([await self.put_node(w.node, w.bitemporal, w.properties) for w in writes])
+
+    async def put_edges(self, writes: Sequence[EdgeWrite]) -> int:
+        """Many edges, with `put_edge`'s guarantees; returns how many were
+        created. A batch naming one edge twice is refused."""
+        refuse_duplicates(
+            "edge", [(w.edge_type, w.source.stable_id, w.target.stable_id) for w in writes]
+        )
+        return sum(
+            [await self.put_edge(w.edge_type, w.source, w.target, w.properties) for w in writes]
+        )
+
+    @abstractmethod
+    async def retire_node(self, node: NodeRef, *, valid_to: dt.date) -> None:
+        """Set `valid_to` once, from the open sentinel."""
+
+    @abstractmethod
+    async def amend(
+        self,
+        *,
+        old: NodeRef,
+        new: NodeRef,
+        effective: dt.date,
+        status: Status,
+        properties: Mapping[str, Scalar] | None = None,
+        retire_with: tuple[NodeRef, ...] = (),
+    ) -> None:
+        """New node, `SUPERSEDES`, old retired — and `retire_with` retired on
+        the same date — in one transaction."""
+
+    @abstractmethod
+    async def read(self, query: BuiltQuery) -> tuple[GraphRow, ...]:
+        """Run one builder-built query."""
+
+    @abstractmethod
+    async def counts(self) -> GraphCounts:
+        """Whole-graph node and edge totals."""
+
+
 class RetrievalStore(ABC):
-    """Track B: hybrid retrieval over chunks, filtered to Track A's IDs (D-03)."""
+    """Track B: hybrid retrieval over chunks, filtered to Track A's IDs (D-03).
+
+    Every implementation restricts a tenant to its own documents plus the
+    library instruments it subscribes to (ADR-0020), on every method — the
+    caller cannot pass that filter in, so it cannot leave it out.
+    """
 
     @abstractmethod
     async def search(
@@ -184,6 +343,42 @@ class RetrievalStore(ABC):
         as_of: dt.date,
     ) -> Candidate | None:
         """Exact clause-ID lookup. The router sends ID queries here (D-12)."""
+
+
+class RetrievalAdmin(ABC):
+    """The write side of a retrieval store (ADR-0021): never replace in
+    place, never delete on update. A new version is upserted next to the old
+    one and the old one is retired with `valid_to`; withdrawal and deletion
+    need a `RemovalAuthorization`, which only `CorpusLifecycle` issues."""
+
+    @abstractmethod
+    async def upsert_chunks(self, chunks: tuple[Chunk, ...]) -> None: ...
+
+    @abstractmethod
+    async def holds_real_tenant_data(self) -> bool:
+        """Whether any stored chunk is tenant-scoped and not marked synthetic
+        — what closes offshore generation (ADR-0023). A chunk stored before
+        the `synthetic` flag existed counts as real."""
+
+    @abstractmethod
+    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
+        """Whether any chunk of this version is stored, visible or not —
+        publishing over an existing version would be a replace in place."""
+
+    @abstractmethod
+    async def retire_version(
+        self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date
+    ) -> None:
+        """Set `valid_to` on every chunk of this version. Nothing is removed."""
+
+    @abstractmethod
+    async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
+        """Exclude the target from retrieval at every `as_of`, keeping its
+        text and vectors so prior citations still verify."""
+
+    @abstractmethod
+    async def delete_chunks(self, authorization: RemovalAuthorization) -> None:
+        """Actually delete the target's chunks."""
 
 
 class LedgerStore(ABC):
@@ -213,6 +408,99 @@ class LedgerStore(ABC):
         self, tenant_id: str, assessment_id: str
     ) -> dict[str, object] | None: ...
 
+    @abstractmethod
+    async def subscribe(self, *, tenant_id: str, instrument_id: str, subscribed_by: str) -> None:
+        """Tick one library instrument for a tenant (ADR-0020). Library ids
+        only — a tenant's own documents are already in its environment.
+        Idempotent: subscribing twice leaves one row."""
+
+    @abstractmethod
+    async def unsubscribe(self, *, tenant_id: str, instrument_id: str) -> None:
+        """Remove the subscription row and nothing else (ADR-0020): no store
+        is touched, so another tenant's view never changes and this tenant's
+        prior citations still resolve."""
+
+    @abstractmethod
+    async def subscribed_instruments(self, tenant_id: str) -> frozenset[str]:
+        """Library instrument ids this tenant may retrieve from. Empty for
+        `_public`, which sees the library by ownership, not subscription."""
+
+    @abstractmethod
+    async def count_findings_citing(self, tenant_id: str, stable_id_prefix: str) -> int:
+        """Findings of this tenant with at least one citation whose
+        `clause_id` starts with `stable_id_prefix` — `instrument:` for every
+        version, `instrument:version:` for one (ADR-0021)."""
+
+    @abstractmethod
+    async def record_usage(self, usage: UsageRecord) -> None: ...
+
+    @abstractmethod
+    async def usage(self, tenant_id: str) -> tuple[UsageRecord, ...]: ...
+
+    @abstractmethod
+    async def record_version(
+        self,
+        *,
+        tenant_id: str,
+        instrument_id: str,
+        version_id: str,
+        valid_from: dt.date,
+        supersedes: str | None,
+    ) -> None:
+        """A version comes into force (ledger `instrument_version`). The
+        record the verifier checks a cited version against, independently of
+        what retrieval returned (ADR-0021 mechanism 3)."""
+
+    @abstractmethod
+    async def end_version(
+        self, *, tenant_id: str, instrument_id: str, version_id: str, valid_to: dt.date
+    ) -> None:
+        """A version stops being in force on `valid_to` (exclusive)."""
+
+    @abstractmethod
+    async def version_validity(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> tuple[dt.date, dt.date | None] | None:
+        """`(valid_from, valid_to)` — `valid_to` None while in force — or
+        `None` for a version the ledger has never recorded."""
+
+    @abstractmethod
+    async def mark_withdrawn(
+        self, *, tenant_id: str, instrument_id: str, version_id: str, withdrawn_by: str
+    ) -> None: ...
+
+    @abstractmethod
+    async def is_withdrawn(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> bool: ...
+
+    @abstractmethod
+    async def mark_purged(
+        self,
+        *,
+        tenant_id: str,
+        instrument_id: str,
+        version_id: str | None,
+        purged_by: str,
+        reason: str,
+    ) -> None:
+        """The ledger keeps the version row with a purged marker; nothing
+        about who, when and why is ever deleted (ADR-0021). `version_id`
+        None marks every version row of the instrument."""
+
+    @abstractmethod
+    async def purge_marker(
+        self, *, tenant_id: str, instrument_id: str, version_id: str
+    ) -> tuple[str, str] | None:
+        """`(purged_by, reason)` if this version was purged — by itself or as
+        part of its whole instrument — else None."""
+
+    @abstractmethod
+    async def record_removal_audit(self, entry: RemovalAuditEntry) -> None: ...
+
+    @abstractmethod
+    async def removal_audit(self, tenant_id: str) -> tuple[RemovalAuditEntry, ...]: ...
+
 
 class ClauseStore(ABC):
     """Canonical text and per-version manifests (`PHASES.md`: Cloud Storage
@@ -228,6 +516,13 @@ class ClauseStore(ABC):
     async def put_clause(self, clause: ClauseRecord) -> None:
         """Store one clause, keyed by its stable ID and `clause.tenant_id`."""
 
+    async def put_clauses(self, clauses: Sequence[ClauseRecord]) -> None:
+        """Store many clauses — what an ingest uses. By default one at a time;
+        an adapter whose `put_clause` also rewrites a shared per-version
+        object overrides this to write that object once (issue #99)."""
+        for clause in clauses:
+            await self.put_clause(clause)
+
     @abstractmethod
     async def get_manifest(
         self, instrument_id: str, version_id: str, *, tenant_id: str
@@ -236,6 +531,45 @@ class ClauseStore(ABC):
         `canonical_sha256` — one `manifest.json` per instrument version
         (`PHASES.md`).
         """
+
+    @abstractmethod
+    async def put_manifest(
+        self,
+        instrument_id: str,
+        version_id: str,
+        *,
+        tenant_id: str,
+        canonicalisation_version: int,
+        source_html: str,
+    ) -> None:
+        """Store the exact HTML the parser injected anchors into as
+        `source.html`, and record `canonicalisation_version` plus its
+        sha256 in this instrument version's `manifest.json` (issue #19),
+        alongside the clause paths `put_clause` already makes visible via
+        `get_manifest`. A re-parse that changes the anchors without this
+        being called again would leave a stale `source.html` on disk with
+        no way to detect it — which is why the hash is recorded here, not
+        only the bytes themselves.
+        """
+
+    @abstractmethod
+    async def get_manifest_metadata(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> ManifestMetadata | None:
+        """The version-level fields last written by `put_manifest`, or
+        `None` if this instrument version has never been ingested."""
+
+    @abstractmethod
+    async def get_source_html(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> str | None:
+        """The exact HTML last stored by `put_manifest` for this instrument
+        version, or `None` if none has been stored yet."""
+
+    @abstractmethod
+    async def purge(self, authorization: RemovalAuthorization) -> None:
+        """Delete every stored object under the target — clauses, source,
+        manifest, and every noncurrent version of each (ADR-0021)."""
 
 
 class Reranker(ABC):
@@ -276,6 +610,11 @@ class Generator(ABC):
         max_tokens: int,
     ) -> Generation:
         """Generate with a cached prompt prefix for the tenant policy corpus (D-11)."""
+
+
+class CanonicalisationVersionMismatch(ValueError):
+    """A citation and a clause canonicalised under different versions — never
+    comparable, however similar the text looks (issue #2)."""
 
 
 class CitationVerifier(ABC):
