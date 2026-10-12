@@ -24,7 +24,7 @@ import pytest
 from neo4j import AsyncDriver
 from neo4j.exceptions import ConstraintError
 
-from compliance_rag.adapters.graph_schema import GraphSchemaRefused
+from compliance_rag.adapters.graph_schema import EdgeWrite, GraphSchemaRefused, NodeWrite
 from compliance_rag.adapters.neo4j_graph import (
     PERSISTED_LABELS,
     Bitemporal,
@@ -402,3 +402,86 @@ def test_the_settings_database_has_no_neo4j_default() -> None:
     from compliance_rag.settings import Settings
 
     assert Settings.model_fields["neo4j_database"].default == ""
+
+
+# ---- batched writes (issue #108) ---------------------------------------------
+
+
+def _clauses_batch(n: int) -> list[NodeWrite]:
+    return [NodeWrite(NodeRef("Clause", f"c{i}"), OPEN, {"text_sha256": f"h{i}"}) for i in range(n)]
+
+
+@needs_neo4j
+async def test_a_batch_spanning_several_transactions_writes_every_node_once(
+    graph: Neo4jGraph, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import compliance_rag.adapters.neo4j_graph as module
+
+    monkeypatch.setattr(module, "BATCH_SIZE", 7)
+    await graph.apply_schema()
+    assert await graph.put_nodes(_clauses_batch(30)) == 30
+    assert await graph.put_nodes(_clauses_batch(30)) == 0  # idempotent
+    rows = await cypher(
+        graph,
+        "MATCH (n:Clause) WHERE n.valid_from IS NULL OR n.valid_to IS NULL "
+        "OR n.status IS NULL OR n.recorded_at IS NULL RETURN count(n) AS missing",
+    )
+    assert rows[0]["missing"] == 0
+    assert await graph.counts() == GraphCounts(nodes=30, edges=0)
+
+
+@needs_neo4j
+async def test_a_changed_node_refuses_its_whole_batch(graph: Neo4jGraph) -> None:
+    await graph.apply_schema()
+    await graph.put_nodes(_clauses_batch(3))
+    batch = [*_clauses_batch(3), NodeWrite(NodeRef("Clause", "new"), OPEN)]
+    batch[1] = NodeWrite(NodeRef("Clause", "c1"), OPEN, {"text_sha256": "changed"})
+    with pytest.raises(GraphWriteRefused, match="immutable"):
+        await graph.put_nodes(batch)
+    assert await graph.counts() == GraphCounts(nodes=3, edges=0)  # "new" rolled back too
+
+
+@needs_neo4j
+async def test_a_batch_can_retire_and_cannot_move_a_date(graph: Neo4jGraph) -> None:
+    await graph.apply_schema()
+    await graph.put_nodes([NodeWrite(V1, OPEN)])
+    retired = Bitemporal(valid_from=JAN, status=Status.IN_FORCE, valid_to=JUN)
+    assert await graph.put_nodes([NodeWrite(V1, retired)]) == 0
+    (row,) = await cypher(graph, "MATCH (n:InstrumentVersion) RETURN n.valid_to AS v")
+    assert row["v"].to_native() == JUN
+    with pytest.raises(GraphWriteRefused, match="already retired"):
+        await graph.put_nodes(
+            [NodeWrite(V1, Bitemporal(valid_from=JAN, status=Status.IN_FORCE, valid_to=DEC))]
+        )
+
+
+async def test_a_batch_naming_one_node_twice_is_refused() -> None:
+    with pytest.raises(GraphWriteRefused, match="twice"):
+        await _offline().put_nodes([NodeWrite(C1, OPEN), NodeWrite(C1, OPEN)])
+
+
+@needs_neo4j
+async def test_an_edge_batch_with_a_missing_end_writes_nothing(graph: Neo4jGraph) -> None:
+    await graph.apply_schema()
+    await graph.put_nodes([NodeWrite(V1, OPEN), *_clauses_batch(3)])
+    edges = [EdgeWrite("PART_OF", NodeRef("Clause", f"c{i}"), V1) for i in range(3)]
+    with pytest.raises(GraphWriteRefused, match="does not exist"):
+        await graph.put_edges([*edges, EdgeWrite("PART_OF", NodeRef("Clause", "ghost"), V1)])
+    assert (await graph.counts()).edges == 0
+    assert await graph.put_edges(edges) == 3
+    assert await graph.put_edges(edges) == 0  # idempotent
+    with pytest.raises(GraphWriteRefused, match="immutable"):
+        await graph.put_edges([EdgeWrite("PART_OF", edges[0].source, V1, {"kind": "x"})])
+
+
+async def test_a_batch_naming_one_edge_twice_is_refused_not_collapsed() -> None:
+    """Two PART_OF c0->v1 with different properties: which wins? Neither — the
+    batch is refused (the review found it silently kept the last)."""
+    source = NodeRef("Clause", "c0")
+    with pytest.raises(GraphWriteRefused, match="same edge twice"):
+        await _offline().put_edges(
+            [
+                EdgeWrite("PART_OF", source, V1, {"kind": "a"}),
+                EdgeWrite("PART_OF", source, V1, {"kind": "b"}),
+            ]
+        )

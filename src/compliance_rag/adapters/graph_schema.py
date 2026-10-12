@@ -8,8 +8,8 @@ and the query builder (`graph_query`) take them only from these sets.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Hashable, Mapping, Sequence
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from compliance_rag.corpus.models import NO_END_DATE
@@ -112,3 +112,29 @@ class GraphRow:
 class GraphCounts:
     nodes: int
     edges: int
+
+
+@dataclass(frozen=True, slots=True)
+class NodeWrite:
+    """One node for a batched write (`GraphAdmin.put_nodes`)."""
+
+    node: NodeRef
+    bitemporal: Bitemporal
+    properties: Mapping[str, Scalar] = field(default_factory=dict[str, Scalar])
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeWrite:
+    """One edge for a batched write (`GraphAdmin.put_edges`)."""
+
+    edge_type: str
+    source: NodeRef
+    target: NodeRef
+    properties: Mapping[str, Scalar] = field(default_factory=dict[str, Scalar])
+
+
+def refuse_duplicates(kind: str, keys: Sequence[Hashable]) -> None:
+    """A batch naming one node or edge twice is ambiguous — which content
+    wins? — so it is refused, never collapsed to the last one (issue #108)."""
+    if len(keys) != len(set(keys)):
+        raise GraphWriteRefused(f"a batch names the same {kind} twice")
