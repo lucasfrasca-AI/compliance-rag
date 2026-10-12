@@ -472,3 +472,16 @@ async def test_an_edge_batch_with_a_missing_end_writes_nothing(graph: Neo4jGraph
     assert await graph.put_edges(edges) == 0  # idempotent
     with pytest.raises(GraphWriteRefused, match="immutable"):
         await graph.put_edges([EdgeWrite("PART_OF", edges[0].source, V1, {"kind": "x"})])
+
+
+async def test_a_batch_naming_one_edge_twice_is_refused_not_collapsed() -> None:
+    """Two PART_OF c0->v1 with different properties: which wins? Neither — the
+    batch is refused (the review found it silently kept the last)."""
+    source = NodeRef("Clause", "c0")
+    with pytest.raises(GraphWriteRefused, match="same edge twice"):
+        await _offline().put_edges(
+            [
+                EdgeWrite("PART_OF", source, V1, {"kind": "a"}),
+                EdgeWrite("PART_OF", source, V1, {"kind": "b"}),
+            ]
+        )

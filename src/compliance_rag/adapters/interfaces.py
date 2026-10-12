@@ -29,6 +29,7 @@ from compliance_rag.adapters.graph_schema import (
     NodeWrite,
     Scalar,
     Status,
+    refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, validate_tenant_id
@@ -271,12 +272,16 @@ class GraphAdmin(ABC):
     async def put_nodes(self, writes: Sequence[NodeWrite]) -> int:
         """Many nodes, with `put_node`'s guarantees; returns how many were
         created. By default one at a time — an adapter overrides it to batch
-        (issue #108)."""
+        (issue #108). A batch naming one node twice is refused."""
+        refuse_duplicates("node", [(w.node.label, w.node.stable_id) for w in writes])
         return sum([await self.put_node(w.node, w.bitemporal, w.properties) for w in writes])
 
     async def put_edges(self, writes: Sequence[EdgeWrite]) -> int:
         """Many edges, with `put_edge`'s guarantees; returns how many were
-        created."""
+        created. A batch naming one edge twice is refused."""
+        refuse_duplicates(
+            "edge", [(w.edge_type, w.source.stable_id, w.target.stable_id) for w in writes]
+        )
         return sum(
             [await self.put_edge(w.edge_type, w.source, w.target, w.properties) for w in writes]
         )

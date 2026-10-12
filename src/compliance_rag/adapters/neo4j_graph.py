@@ -59,6 +59,7 @@ from compliance_rag.adapters.graph_schema import (
     Status,
     checked_edge_type,
     checked_label,
+    refuse_duplicates,
 )
 from compliance_rag.adapters.interfaces import GraphAdmin
 from compliance_rag.corpus.models import NO_END_DATE
@@ -216,7 +217,7 @@ class Neo4jGraph(GraphAdmin):
     async def _write[T](
         self,
         span: str,
-        attributes: Mapping[str, str],
+        attributes: Mapping[str, str | int],
         work: Callable[[AsyncManagedTransaction], Awaitable[T]],
     ) -> T:
         """One write transaction in one span: committed whole or not at all."""
@@ -294,10 +295,12 @@ class Neo4jGraph(GraphAdmin):
         `UNWIND` statement each (issue #108: 780 single-node transactions to
         offshore Aura took 14.5 minutes). Every guarantee holds per row: a
         changed node is refused and its whole batch rolls back; a retirement
-        goes through `_retire`'s lock-then-read. Returns the number created."""
-        ids = [(w.node.label, w.node.stable_id) for w in writes]
-        if len(ids) != len(set(ids)):
-            raise GraphWriteRefused("a batch names the same node twice")
+        goes through `_retire`'s lock-then-read. Returns the number created.
+
+        Each batch commits on its own: a refusal in one leaves the batches
+        before it committed. Every write is idempotent, so re-running the same
+        call after fixing the refused row completes it."""
+        refuse_duplicates("node", [(w.node.label, w.node.stable_id) for w in writes])
         created = 0
         for label in sorted({w.node.label for w in writes}):
             same_label = [w for w in writes if w.node.label == label]
@@ -340,14 +343,17 @@ class Neo4jGraph(GraphAdmin):
                     await self._retire(tx, write.node, write.bitemporal.valid_to)
             return created
 
-        attributes = {"graph.label": label, "graph.batch": str(len(batch))}
+        attributes: dict[str, str | int] = {"graph.label": label, "graph.batch": len(batch)}
         return await self._write("neo4j_graph.put_nodes", attributes, work)
 
     async def put_edges(self, writes: Sequence[EdgeWrite]) -> int:
         """`put_edge` for many edges in `BATCH_SIZE`-row transactions. Both
         ends of every edge in a batch are checked before any is merged, so a
         missing end refuses the batch with nothing written. Returns the
-        number created."""
+        number created. Batches commit on their own, as for `put_nodes`."""
+        refuse_duplicates(
+            "edge", [(w.edge_type, w.source.stable_id, w.target.stable_id) for w in writes]
+        )
         created = 0
         shapes = sorted({(w.edge_type, w.source.label, w.target.label) for w in writes})
         for edge_type, source_label, target_label in shapes:
@@ -403,7 +409,7 @@ class Neo4jGraph(GraphAdmin):
                     raise GraphWriteRefused(f"{edge_type} {key[0]!r}->{key[1]!r} is immutable")
             return created
 
-        attributes = {"graph.edge_type": edge_type, "graph.batch": str(len(batch))}
+        attributes: dict[str, str | int] = {"graph.edge_type": edge_type, "graph.batch": len(batch)}
         return await self._write("neo4j_graph.put_edges", attributes, work)
 
     async def retire_node(self, node: NodeRef, *, valid_to: dt.date) -> None:
