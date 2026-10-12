@@ -24,6 +24,18 @@ from compliance_rag.corpus.models import ClauseRecord, validate_review
 _REQUIRED_FIELDS = ("author", "reviewed_by", "date", "prefixes")
 
 
+def _selects(entry: str, clause_path: str) -> bool:
+    """A manifest entry ending in `/` is a prefix (`s6d/` selects `s6d/1`,
+    never `s6da/1`). An entry without one names a whole clause: that exact
+    path and everything under it (`s15` selects the one-sentence section
+    `s15`, and `s14` selects `s14/1`) — never a sibling that merely shares its
+    characters, like `s150` or `s15a` (issue #97 gave unnumbered sections a
+    path with no slash)."""
+    if entry.endswith("/"):
+        return clause_path.startswith(entry)
+    return clause_path == entry or clause_path.startswith(f"{entry}/")
+
+
 @dataclass(frozen=True, slots=True)
 class SelectionManifest:
     """A reviewed `manifest.yaml`: who authored and reviewed it, and which
@@ -38,8 +50,8 @@ class SelectionManifest:
         validate_review(self.author, self.reviewed_by)
 
     def select(self, clauses: tuple[ClauseRecord, ...]) -> tuple[ClauseRecord, ...]:
-        """Every clause whose path equals or starts with one of `prefixes`,
-        sorted by clause path.
+        """Every clause one of `prefixes` selects (`_selects`), sorted by
+        clause path.
 
         A prefix that matches nothing is a hard failure, not a silent
         no-op (`CLAUDE.md`: "a fixture not exercised is a fixture that
@@ -53,7 +65,7 @@ class SelectionManifest:
         hits = dict.fromkeys(self.prefixes, 0)
         for clause in clauses:
             for prefix in self.prefixes:
-                if clause.clause_path == prefix or clause.clause_path.startswith(prefix):
+                if _selects(prefix, clause.clause_path):
                     matched[clause.clause_path] = clause
                     hits[prefix] += 1
                     break
