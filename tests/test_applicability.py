@@ -419,9 +419,12 @@ async def test_a_provision_loaded_ahead_of_commencement_applies_only_from_it(
     evidence = (fact("annual_turnover_aud", 4000, LAST_FY),)
     before = await assess(*evidence, as_of=dt.date(2026, 12, 9), store=store)
     after = await assess(*evidence, as_of=commencement, store=store)
-    assert "OB-T-AUTOMATED-DECISIONS" not in {o.obligation_id for o in before.obligations}
-    assert after.obligation("OB-T-AUTOMATED-DECISIONS").outcome is Outcome.APPLICABLE
+    new = "OB-T-AUTOMATED-DECISIONS"
+    assert new not in {o.obligation_id for o in before.obligations}
+    assert after.obligation(new).outcome is Outcome.APPLICABLE
+    assert new_clause in after.obligation(new).citations  # the text that commenced with it
     unchanged = {o.obligation_id: o.outcome for o in before.obligations}
-    assert {
-        k: v for k, v in ((o.obligation_id, o.outcome) for o in after.obligations) if k in unchanged
-    } == unchanged
+    assert len(unchanged) == 3
+    assert {o.obligation_id: o.outcome for o in after.obligations if o.obligation_id != new} == (
+        unchanged
+    )
