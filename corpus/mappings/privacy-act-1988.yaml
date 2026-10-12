@@ -27,9 +27,14 @@
 #                  AND NOT (registered political party OR agency
 #                           OR State/Territory authority)            s6C(1)
 #                  AND (NOT small business operator
-#                       OR deemed an organisation (s6E)
+#                       OR treated as an organisation as a whole
+#                          (s6E(1), (1C))
 #                       OR opted in (s6EA))                          s6C(1), s6E, s6EA
-#   small business operator = small business (s6D(1)/(2), turnover per s6DA)
+#   (s6E(1A), (1B), (1D), (2) apply the Act only to some activities: a
+#    separate role no obligation binds yet — a reviewer decision)
+#   small business operator = carries on a business                 s6D(3)(a)
+#                  AND small business (s6D(1)/(2), turnover per s6DA, s6DA(2)
+#                      for a part year)
 #                  AND carries on no business that isn't small       s6D(3)
 #                  AND NOT any s6D(4) exception (a)-(f), with the
 #                      (5)-(8) carve-backs folded into the questions s6D(4)-(8)
@@ -156,6 +161,21 @@ actors:
       - privacy-act-1988:C2026C00227:s6/1/organisation
       - privacy-act-1988:C2026C00227:s6c/1
     qualified_by: COND-PA-ORGANISATION
+    valid_from: 2014-03-12
+  - id: privacy-act-1988/actor/small-business-operator-in-part
+    name: Small business operator treated as an organisation for some activities
+    description: >
+      A small business operator the Act applies to only for particular
+      activities, information or practices (s6E(1A), (1B), (1D), (2)). No
+      obligation binds this role yet: how the APPs apply "in relation to the
+      activities" is a reviewer decision. Evaluated so the tenant subgraph
+      shows it.
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6e/1a
+      - privacy-act-1988:C2026C00227:s6e/1b
+      - privacy-act-1988:C2026C00227:s6e/1d
+      - privacy-act-1988:C2026C00227:s6e/2
+    qualified_by: COND-PA-S6E-FOR-SOME-ACTIVITIES
     valid_from: 2014-03-12
   - id: privacy-act-1988/actor/agency
     name: Agency
@@ -292,10 +312,22 @@ conditions:
       - privacy-act-1988:C2026C00227:s6d/3/a
     valid_from: 2014-03-12
     all_of:
+      - COND-PA-CARRIES-ON-A-BUSINESS
       - COND-PA-SMALL-BUSINESS
       - COND-PA-NO-OTHER-BUSINESS-NOT-SMALL
       - COND-PA-NO-S6D4-EXCEPTION
       - COND-PA-NOT-RELATED-TO-NON-SMALL
+
+  - id: COND-PA-CARRIES-ON-A-BUSINESS
+    description: >
+      The entity carries on a business (s6D(3)(a): a small business operator
+      carries on one or more small businesses — an entity that carries on no
+      business is not one).
+    clause_ids: [privacy-act-1988:C2026C00227:s6d/3/a]
+    valid_from: 2014-03-12
+    leaf: {field: carries_on_a_business, test: eq, value: true}
+    question: Does the entity carry on a business?
+    unassessable_reason: Nobody has said whether the entity carries on a business (s6D(3)(a)).
 
   # ---- s6D(1), (2), s6DA: the turnover threshold -------------------------------
   - id: COND-PA-SMALL-BUSINESS
@@ -317,7 +349,10 @@ conditions:
     all_of: [COND-PA-CARRIED-ON-LAST-YEAR, COND-PA-TURNOVER-PREVIOUS-YEAR-UNDER]
 
   - id: COND-PA-CARRIED-ON-LAST-YEAR
-    description: The business was carried on at some time in the previous financial year.
+    description: >
+      The business was carried on at some time in the previous financial
+      year — read from when it started, taking it as carried on since without
+      a break.
     clause_ids: [privacy-act-1988:C2026C00227:s6d/2]
     valid_from: 2014-03-12
     leaf:
@@ -334,6 +369,7 @@ conditions:
     clause_ids:
       - privacy-act-1988:C2026C00227:s6d/1
       - privacy-act-1988:C2026C00227:s6da/1
+      - privacy-act-1988:C2026C00227:s6da/2
       - privacy-act-1988:C2026C00227:s6/1/annual-turnover
     valid_from: 2014-03-12
     leaf:
@@ -345,7 +381,8 @@ conditions:
       What was the business's annual turnover for the previous financial year,
       worked out as s6DA(1) says (sales, commission, repair and service, rent
       and hire, government subsidies, interest, royalties and dividends, and
-      other operating income)?
+      other operating income) — and, for a year it was carried on for only
+      part of, by the s6DA(2) formula?
     unassessable_reason: No annual turnover is recorded for the previous financial year (s6D(1), s6DA).
 
   - id: COND-PA-SMALL-BY-CURRENT-YEAR
@@ -391,8 +428,10 @@ conditions:
     valid_from: 2014-03-12
     leaf: {field: carries_on_another_business_not_small, test: eq, value: true}
     question: >
-      Does the entity carry on any other business that is not a small business
-      (annual turnover over $3,000,000)?
+      Does the entity carry on any other business that is not a small
+      business — one whose annual turnover was over $3,000,000 for the
+      previous financial year, or for the current year if it wasn't carried
+      on in the previous one (s6D(1), (2))?
     unassessable_reason: Nobody has said whether the entity carries on another business that is not small (s6D(3)(b)).
 
   # ---- s6D(4): the six exceptions, with the (5)-(8) carve-backs -------------------
@@ -418,7 +457,7 @@ conditions:
 
   - id: COND-PA-S6D4A-EVER-OVER-THRESHOLD
     description: >
-      It carries on a business that has had an annual turnover of more than
+      It carries on any business that has had an annual turnover of more than
       $3,000,000 for a financial year that has ended after the later of when it
       started to carry on the business and the commencement of s6D
       (21 December 2001).
@@ -427,6 +466,7 @@ conditions:
       - privacy-act-1988:C2026C00227:s6d/4/a/i
       - privacy-act-1988:C2026C00227:s6d/4/a/ii
       - privacy-act-1988:C2026C00227:s6da/1
+      - privacy-act-1988:C2026C00227:s6da/2
     valid_from: 2014-03-12
     leaf:
       field: annual_turnover_aud
@@ -436,7 +476,8 @@ conditions:
       since_field: business_started_on
       not_before: 2001-12-21
     question: >
-      What was the business's annual turnover (s6DA) for each financial year
+      For any business the entity carries on, what was its annual turnover
+      (s6DA, with the s6DA(2) formula for a part year) for each financial year
       that has ended since it started (or since 21 December 2001, if later)?
     unassessable_reason: >
       Annual turnover is not recorded for every financial year since the
@@ -458,12 +499,15 @@ conditions:
     description: In the course of a business it carries on, it provides a health service to another individual.
     clause_ids:
       - privacy-act-1988:C2026C00227:s6d/4/b
+      - privacy-act-1988:C2026C00227:s6d/5
       - privacy-act-1988:C2026C00227:s6d/6
       - privacy-act-1988:C2026C00227:s6/1/health-service
     valid_from: 2014-03-12
     leaf: {field: provides_health_service, test: eq, value: true}
     question: >
-      In the course of a business it carries on, does the entity provide a
+      In the course of a business it carries on — or, for an individual,
+      in any capacity except only for personal, family or household affairs
+      outside a business (s6D(5), (6)) — does the entity provide a
       health service (s6FB) to another individual?
     unassessable_reason: Nobody has said whether the entity provides a health service (s6D(4)(b)).
 
@@ -490,12 +534,15 @@ conditions:
       required or authorised by or under legislation (s6D(7)).
     clause_ids:
       - privacy-act-1988:C2026C00227:s6d/4/c
+      - privacy-act-1988:C2026C00227:s6d/5
       - privacy-act-1988:C2026C00227:s6d/6
       - privacy-act-1988:C2026C00227:s6d/7
     valid_from: 2014-03-12
     leaf: {field: discloses_personal_information_for_benefit, test: eq, value: true}
     question: >
-      In the course of a business it carries on, does the entity disclose
+      In the course of a business it carries on — or, for an individual,
+      in any capacity except only for personal, family or household affairs
+      outside a business (s6D(5), (6)) — does the entity disclose
       personal information about another individual to anyone else for a
       benefit, service or advantage — leaving out disclosures made with that
       individual's consent, or as required or authorised by or under
@@ -512,12 +559,15 @@ conditions:
       required or authorised by or under legislation (s6D(8)).
     clause_ids:
       - privacy-act-1988:C2026C00227:s6d/4/d
+      - privacy-act-1988:C2026C00227:s6d/5
       - privacy-act-1988:C2026C00227:s6d/6
       - privacy-act-1988:C2026C00227:s6d/8
     valid_from: 2014-03-12
     leaf: {field: provides_benefit_to_collect_personal_information, test: eq, value: true}
     question: >
-      In the course of a business it carries on, does the entity provide a
+      In the course of a business it carries on — or, for an individual,
+      in any capacity except only for personal, family or household affairs
+      outside a business (s6D(5), (6)) — does the entity provide a
       benefit, service or advantage to collect personal information about
       another individual from anyone else — leaving out collection with that
       individual's consent, or as required or authorised by or under
@@ -585,7 +635,9 @@ conditions:
     leaf: {field: related_body_corporate_not_small, test: eq, value: true}
     question: >
       Is the entity related (s6(8), Corporations Act s50) to a body corporate
-      that carries on a business with annual turnover over $3,000,000?
+      that carries on a business that is not a small business — annual
+      turnover over $3,000,000 for the previous financial year, or the current
+      year if new (s6D(1), (2))?
     unassessable_reason: >
       Nobody has said whether a related body corporate carries on a business
       that is not small (s6D(9)).
@@ -593,16 +645,31 @@ conditions:
   # ---- s6E: small business operators treated as organisations ------------------------
   - id: COND-PA-S6E-TREATED-AS-ORGANISATION
     description: >
-      The Act applies to it as if it were an organisation under s6E — wholly
-      (s6E(1), (1C)) or for particular activities, information or practices
-      (s6E(1A), (1B), (1D), (2)).
+      The Act applies to it as if it were an organisation, as a whole: it is
+      prescribed for s6E(1), or a registered association of employees
+      (s6E(1C)).
     clause_ids: [privacy-act-1988:C2026C00227:s6e/1]
     valid_from: 2014-03-12
+    any_of: [COND-PA-S6E1-PRESCRIBED, COND-PA-S6E1C-EMPLOYEE-ASSOCIATION]
+
+  - id: COND-PA-S6E-FOR-SOME-ACTIVITIES
+    description: >
+      The Act applies to it as if it were an organisation only for particular
+      activities, information or practices: AML/CTF activities (s6E(1A)), a
+      protected action ballot (s6E(1B)), non-CDR personal information
+      (s6E(1D)), or prescribed acts and practices (s6E(2)). Kept apart from
+      the whole-entity routes: a yes here doesn't make every APP apply to
+      everything it does. Which APPs bind it, and for what, is a reviewer
+      decision (see the PR).
+    clause_ids:
+      - privacy-act-1988:C2026C00227:s6e/1a
+      - privacy-act-1988:C2026C00227:s6e/1b
+      - privacy-act-1988:C2026C00227:s6e/1d
+      - privacy-act-1988:C2026C00227:s6e/2
+    valid_from: 2014-03-12
     any_of:
-      - COND-PA-S6E1-PRESCRIBED
       - COND-PA-S6E1A-AML-CTF
       - COND-PA-S6E1B-BALLOT-AGENT
-      - COND-PA-S6E1C-EMPLOYEE-ASSOCIATION
       - COND-PA-S6E1D-CDR-ACCREDITED
       - COND-PA-S6E2-PRESCRIBED-ACTS
 
@@ -819,7 +886,8 @@ obligations:
     clause_ids: [privacy-act-1988:C2026C00227:sch1/app7/7]
     summary: >
       As an organisation, give effect free of charge, within a reasonable
-      period, to an individual's APP 7.6 request about direct marketing.
+      period, to an individual's APP 7.6 request about direct marketing, and
+      on request notify them of the information's source.
     valid_from: 2014-03-12
     applies_to: {actors: [privacy-act-1988/actor/organisation]}
   - id: OB-PA-APP8-1

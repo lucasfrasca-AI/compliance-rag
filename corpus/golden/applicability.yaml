@@ -36,6 +36,7 @@ cases:
       - {field: is_registered_political_party, value: false, since: 2015-03-02}
       - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
       - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_a_business, value: true, since: 2015-03-02}
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 4000000, financial_year: 2025}
     expected:
@@ -61,8 +62,10 @@ cases:
     description: >
       Acme at $2.5M for FY2025-26, nothing else known: under the threshold
       (s6D(1)), so possibly — four routes could still bring it under the APPs
-      (s6D(4), s6D(9), s6E, s6EA), each unresolved, and every question that
-      would settle them is asked. Agency-only APPs still don't apply.
+      (s6D(4), s6D(9), s6E as a whole, s6EA), each unresolved, and every
+      question that would settle them is asked. Agency-only APPs still don't
+      apply. Whether s6E's activity-limited limbs (1A), (1B), (1D), (2) apply is
+      shown on its own role, not asked as an APP question (reviewer decision).
     tenant_id: acme
     as_of: 2026-10-12
     facts:
@@ -71,6 +74,7 @@ cases:
       - {field: is_registered_political_party, value: false, since: 2015-03-02}
       - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
       - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_a_business, value: true, since: 2015-03-02}
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
     expected:
@@ -81,6 +85,7 @@ cases:
         privacy-act-1988/actor/app-entity: unknown
         privacy-act-1988/actor/organisation: unknown
         privacy-act-1988/actor/agency: "false"
+        privacy-act-1988/actor/small-business-operator-in-part: unknown
       questions:
         # s6D(4)
         - COND-PA-S6D4A-EVER-OVER-THRESHOLD
@@ -92,13 +97,9 @@ cases:
         - COND-PA-S6D4F-CREDIT-REPORTING-BODY
         # s6D(9)
         - COND-PA-RELATED-BODY-NOT-SMALL
-        # s6E
+        # s6E, as a whole
         - COND-PA-S6E1-PRESCRIBED
-        - COND-PA-S6E1A-AML-CTF
-        - COND-PA-S6E1B-BALLOT-AGENT
         - COND-PA-S6E1C-EMPLOYEE-ASSOCIATION
-        - COND-PA-S6E1D-CDR-ACCREDITED
-        - COND-PA-S6E2-PRESCRIBED-ACTS
         # s6EA
         - COND-PA-S6EA-OPTED-IN
       cites:
@@ -125,6 +126,7 @@ cases:
       - {field: is_registered_political_party, value: false, since: 2015-03-02}
       - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
       - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_a_business, value: true, since: 2015-03-02}
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 400000, financial_year: 2014}
       - {field: annual_turnover_aud, value: 900000, financial_year: 2015}
@@ -156,6 +158,8 @@ cases:
       acts_as:
         privacy-act-1988/actor/app-entity: unknown
         privacy-act-1988/actor/organisation: unknown
+        privacy-act-1988/actor/agency: "false"
+        privacy-act-1988/actor/small-business-operator-in-part: "false"
       questions:
         - COND-PA-PROVIDES-HEALTH-SERVICE
         - COND-PA-HOLDS-HEALTH-INFORMATION
@@ -164,8 +168,10 @@ cases:
   - id: GA-04
     description: >
       Acme at $2.5M with every question answered no: a small business operator,
-      so not an organisation, and the APPs don't apply — "the Privacy Act
-      doesn't apply to you", cited just as fully as "it does".
+      so not an organisation, and the APPs don't bind it — "the APPs don't
+      apply to you", cited just as fully as "they do". (Only the APPs: small
+      business status doesn't switch off the rest of the Act, such as the TFN
+      rules or the Schedule 2 statutory tort, which this corpus doesn't hold.)
     tenant_id: acme
     as_of: 2026-10-12
     facts:
@@ -174,6 +180,7 @@ cases:
       - {field: is_registered_political_party, value: false, since: 2015-03-02}
       - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
       - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_a_business, value: true, since: 2015-03-02}
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 400000, financial_year: 2014}
       - {field: annual_turnover_aud, value: 900000, financial_year: 2015}
@@ -212,8 +219,14 @@ cases:
       cites:
         OB-PA-APP11-1:
           - privacy-act-1988:C2026C00227:s15
+          - privacy-act-1988:C2026C00227:s6c/1
           - privacy-act-1988:C2026C00227:s6d/1
           - privacy-act-1988:C2026C00227:s6d/3
+          - privacy-act-1988:C2026C00227:s6d/3/a
+          - privacy-act-1988:C2026C00227:s6d/4
+          - privacy-act-1988:C2026C00227:s6d/9
+          - privacy-act-1988:C2026C00227:s6e/1
+          - privacy-act-1988:C2026C00227:s6ea/1
 
   - id: GA-05
     description: >
@@ -228,6 +241,7 @@ cases:
       - {field: is_registered_political_party, value: false, since: 2015-03-02}
       - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
       - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_a_business, value: true, since: 2015-03-02}
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 3200000, financial_year: 2023}
       - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
@@ -256,6 +270,7 @@ cases:
       - {field: is_registered_political_party, value: false, since: 2015-03-02}
       - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
       - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_a_business, value: true, since: 2015-03-02}
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 2500000, financial_year: 2025}
       - {field: opted_in_under_s6ea, value: true, since: 2020-01-01}
@@ -285,6 +300,7 @@ cases:
       - {field: is_registered_political_party, value: false, since: 2015-03-02}
       - {field: is_state_or_territory_authority, value: false, since: 2015-03-02}
       - {field: business_started_on, value: 2015-03-02, since: 2015-03-02}
+      - {field: carries_on_a_business, value: true, since: 2015-03-02}
       - {field: carries_on_another_business_not_small, value: false, since: 2015-03-02}
       - {field: annual_turnover_aud, value: 4000000, financial_year: 2024}
     expected:

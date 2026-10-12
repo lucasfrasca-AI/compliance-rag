@@ -7,8 +7,8 @@ over a real Neo4j — the same path the live trace takes on Aura.
   s 6C(1)(b) -> s 6D(1).
 - Acme at $2.5M: possibly. Under the threshold (s 6D(1), cited: it is why the
   answer isn't "no"), with all four routes back under the APPs unresolved and
-  named — s 6D(4), s 6D(9), s 6E, s 6EA — each with its clauses, and every
-  question that would settle them asked.
+  named — s 6D(4), s 6D(9), s 6E as a whole, s 6EA — each with its clauses,
+  and every question that would settle them asked.
 - Acme at $2.5M with the questionnaire answered: s 6D(4)(b) and (c) remain,
   asked rather than inferred from the policies that speak to them.
 """
@@ -65,7 +65,7 @@ async def test_at_2_5m_possibly_with_four_routes_named_and_cited(graph: Neo4jGra
     met = app11.explanation.find("COND-PA-TURNOVER-PREVIOUS-YEAR-UNDER")
     assert met is not None and met.truth is Truth.TRUE
     assert f"{P}s6d/1" in app11.citations  # why it's "possibly", not "no"
-    assert len(app11.questions) == 15
+    assert len(app11.questions) == 11
 
 
 @needs_neo4j
