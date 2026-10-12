@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -495,6 +495,13 @@ class ClauseStore(ABC):
     @abstractmethod
     async def put_clause(self, clause: ClauseRecord) -> None:
         """Store one clause, keyed by its stable ID and `clause.tenant_id`."""
+
+    async def put_clauses(self, clauses: Sequence[ClauseRecord]) -> None:
+        """Store many clauses — what an ingest uses. By default one at a time;
+        an adapter whose `put_clause` also rewrites a shared per-version
+        object overrides this to write that object once (issue #99)."""
+        for clause in clauses:
+            await self.put_clause(clause)
 
     @abstractmethod
     async def get_manifest(

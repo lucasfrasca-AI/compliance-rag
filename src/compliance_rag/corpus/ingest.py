@@ -113,9 +113,14 @@ async def ingest_compilation(
         clause.clause_path: canonical_sha256(clause.canonical_text) for clause in in_scope
     }
     old_manifest = await store.get_manifest(instrument_id, version_id, tenant_id=tenant_id)
-    first_ingest = not old_manifest
+    completed = (
+        await store.get_manifest_metadata(instrument_id, version_id, tenant_id=tenant_id)
+        is not None
+    )
+    first_ingest = not completed
 
-    if not first_ingest:
+    source_html_sha256 = sha256_hex(parsed.annotated_html)
+    if completed:
         diff = _diff_manifests(old_manifest, new_manifest)
         if diff is not None:
             raise IngestDriftError(
@@ -123,11 +128,30 @@ async def ingest_compilation(
                 f"manifest — canonical text must never be edited after write "
                 f"({diff})"
             )
+        # Complete and unchanged: write nothing. The bucket is versioned, so
+        # re-uploading identical objects would leave a noncurrent generation
+        # of each one on every run, forever (library law is never purged).
+        return IngestResult(
+            instrument_id=instrument_id,
+            version_id=version_id,
+            clauses_written=0,
+            source_html_sha256=source_html_sha256,
+            first_ingest=False,
+        )
+    elif old_manifest:
+        # A first ingest that stopped before `put_manifest` (its last step):
+        # it may resume only if everything already stored is part of this
+        # selection, byte-identical. Anything else is drift (issue #99).
+        partial = {p: h for p, h in new_manifest.items() if p in old_manifest}
+        diff = _diff_manifests(old_manifest, partial)
+        if diff is not None:
+            raise IngestDriftError(
+                f"{instrument_id}:{version_id} interrupted first ingest does not match "
+                f"this selection — resuming would mix two sources ({diff})"
+            )
 
-    for clause in in_scope:
-        await store.put_clause(clause)
+    await store.put_clauses(in_scope)
 
-    source_html_sha256 = sha256_hex(parsed.annotated_html)
     await store.put_manifest(
         instrument_id,
         version_id,

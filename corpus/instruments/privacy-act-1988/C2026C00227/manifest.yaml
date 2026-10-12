@@ -9,6 +9,8 @@
 # small business exemption (docs/research/graph-ontology-options.md) — s6D
 # reads annual turnover as s6DA defines it, and s6EA is the opt-in. Pending
 # the human's review: on approval, set reviewed_by to the reviewer's name.
+# PR #101 was merged by the human (2026-10-12), who then instructed the
+# ingest; the reviewer's name is theirs to record here, not the model's.
 # The original 2026-09-24 selection was single-author reviewed by Piero Frasca.
 author: "model: Claude Opus 5.5 — added s6da/ and s6ea/ to Piero Frasca's 2026-09-24 selection"
 reviewed_by: "PENDING — Piero Frasca"
