@@ -47,7 +47,6 @@ Deliverables
 - Generator adapter (Claude on Vertex — `claude-sonnet-5` at the US multi-region endpoint during build, ADR-0023/ADR-0024) with structured output; prompt caching on the system prefix
 - **Citation verifier**: canonical-form comparison against Cloud Storage; fail → targeted repair
 - **Eval harness**: 25 labelled queries to start (exact ID, paraphrase, cross-clause) — enough to catch a regression, expanded when a real failure shows a gap rather than padded to a count; recall@k per channel and fused; verifier pass rate; runs in CI as a regression gate
-- ISO 27001 Annex A **control IDs only** (`A.8.3`), each with our own one-line descriptor. Not ISO's titles: a title like "Information access restriction" is ISO's authored wording, not a fact, and reproducing all 93 is arguably substantial reproduction of a paid standard. An ID is a reference; our gloss is our text. A crosswalk targets the ID, so nothing is lost functionally. Real titles are something a licensed customer supplies. This is a flagged legal risk, not legal advice — if the titles are wanted, get a written view first
 
 Exit criteria
 - recall@10 on exact-ID queries = 1.0; on paraphrase ≥ 0.9; on cross-clause ≥ 0.8 (numbers are the starting bar — revise with evidence)
@@ -115,6 +114,7 @@ Deliverables
 - Keep-alive jobs: both moved to Phase 2 and run as GitHub Actions (`aura-keepalive.yml`, `qdrant-keepalive.yml`) rather than Cloud Scheduler; this phase confirms them over 30 days (the exit criterion below)
 - Regression gate re-runs golden set on corpus change; re-runs affected assessments
 - EU AI Act + Regulation 2026/1744 ingested; Omnibus commencement shifts as eval fixtures
+- ISO 27001 Annex A **control IDs only** (#12, moved from Phase 1 on 2026-10-12: the human won't have the control list soon enough to hold a phase for it; ISO/IEC 42001 controls alongside it, #136) (`A.8.3`), each with our own one-line descriptor. Not ISO's titles: a title like "Information access restriction" is ISO's authored wording, not a fact, and reproducing all 93 is arguably substantial reproduction of a paid standard. An ID is a reference; our gloss is our text. A crosswalk targets the ID, so nothing is lost functionally. Real titles are something a licensed customer supplies. This is a flagged legal risk, not legal advice — if the titles are wanted, get a written view first
 
 Exit criteria
 - A simulated amendment produces a PR listing exactly the changed mappings and nothing else
