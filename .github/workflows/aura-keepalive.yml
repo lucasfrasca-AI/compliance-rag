@@ -42,4 +42,5 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"statement":"MERGE (k:KeepAlive {id: \"keepalive\"}) SET k.at = datetime() WITH k DELETE k RETURN 1 AS ok"}' \
             "https://$INSTANCE.databases.neo4j.io/db/$INSTANCE/query/v2" > response.json
-          grep -q '"queryType":"rw"' response.json
+          # The response holds only the result, query metadata and a bookmark.
+          grep -Eq '"queryType" *: *"rw"' response.json || { cat response.json; exit 1; }

@@ -308,7 +308,7 @@ def test_the_keepalive_runs_no_repository_code_and_leaves_nothing_behind() -> No
     assert statement.startswith("MERGE (k:KeepAlive ")
     assert "DELETE k" in statement and "DETACH" not in statement
     assert re.findall(r"\((\w+):(\w+)", statement) == [("k", "KeepAlive")]  # nothing else matched
-    assert '"queryType":"rw"' in text  # fails unless Aura counted a write
+    assert '"queryType" *: *"rw"' in text  # fails unless Aura counted a write
 
 
 def test_no_cypher_outside_adapters() -> None:
