@@ -22,6 +22,7 @@ from enum import StrEnum
 from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
     Bitemporal,
+    CorrectionWrite,
     EdgeWrite,
     EndReason,
     GraphCounts,
@@ -285,18 +286,12 @@ class GraphAdmin(GraphReader):
 
     @abstractmethod
     async def correct(
-        self,
-        node: NodeRef,
-        changes: Mapping[str, Scalar],
-        *,
-        by: str,
-        reason: str,
-        edge: tuple[str, NodeRef] | None = None,
+        self, corrections: Sequence[CorrectionWrite], *, by: str, reason: str
     ) -> None:
-        """A cosmetic correction in place (ADR-0031): change only `COSMETIC`
-        properties of `node` — or, with `edge` = (type, target), of that
-        outgoing edge — and append the previous values, who and why to its
-        `corrections` trail, in one transaction."""
+        """Cosmetic corrections in place (ADR-0031), all in one transaction:
+        each changes only `COSMETIC` properties its node (or crosswalk edge)
+        already has, and appends the previous wording, who and why to that
+        node's or edge's `corrections` trail. All land, or none does."""
 
     @abstractmethod
     async def counts(self) -> GraphCounts:

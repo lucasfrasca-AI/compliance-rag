@@ -129,7 +129,10 @@ class GraphCounts:
     edges: int
 
 
-WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason", "corrections"})
+CORRECTIONS = "corrections"
+"""The writer-kept trail of cosmetic corrections on a node or edge (ADR-0031)."""
+
+WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason", CORRECTIONS})
 """Stored properties a loader doesn't author: the stable ID, transaction time,
 the end of valid time, which only a retirement sets (D-05, ADR-0029), and the
 audit trail of cosmetic corrections (ADR-0031)."""
@@ -165,6 +168,20 @@ class StoredNode:
 
     def targets(self, edge_type: str) -> frozenset[NodeRef]:
         return frozenset(e.target for e in self.edges if e.edge_type == edge_type)
+
+
+CORRECTABLE_EDGES = frozenset({"CROSSWALKS_TO"})
+"""The only edges with wording of their own: a crosswalk's note."""
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectionWrite:
+    """One cosmetic correction (ADR-0031): new wording for properties a node
+    — or, with `edge` = (type, target), its outgoing edge — already has."""
+
+    node: NodeRef
+    changes: Mapping[str, Scalar]
+    edge: tuple[str, NodeRef] | None = None
 
 
 @dataclass(frozen=True, slots=True)

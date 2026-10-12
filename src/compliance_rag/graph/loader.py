@@ -40,9 +40,11 @@ from opentelemetry.trace import Span
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
 from compliance_rag.adapters.graph_schema import (
+    CORRECTIONS,
     COSMETIC,
     WRITER_KEYS,
     Bitemporal,
+    CorrectionWrite,
     EdgeWrite,
     GraphCounts,
     NodeRef,
@@ -285,7 +287,8 @@ MEANING = frozenset({"HAS_OPERAND", "QUALIFIED_BY", "APPLIES_TO", "REQUIRES", "S
 """Edges that carry an item's meaning: once loaded, the set a node has is as
 immutable as its properties (D-05) — a different set is a new id.
 `DERIVED_FROM` may grow (a new compilation, ADR-0028) but never shrink;
-`CROSSWALKS_TO` may grow, but a stored crosswalk's kind and note are fixed."""
+`CROSSWALKS_TO` may grow, but a stored crosswalk's kind is fixed and its note
+changes only by an acknowledged correction (ADR-0031)."""
 
 
 def _last_visible(item: Dated, today: dt.date) -> dt.date:
@@ -342,17 +345,7 @@ def _refuse(item: Dated, label: str, what: str) -> MappingError:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class Correction:
-    """A cosmetic difference between a loaded item and its YAML (ADR-0031):
-    the node (or its crosswalk edge) and the wording to set."""
-
-    node: NodeRef
-    changes: dict[str, Scalar]
-    edge: tuple[str, NodeRef] | None = None
-
-
-async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Correction, ...]:
+async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[CorrectionWrite, ...]:
     """An item already loaded is unchanged in meaning — its non-cosmetic
     properties, its valid time (retiring an open node is the one change
     allowed), and the edges that carry its meaning (`MEANING`); its
@@ -361,7 +354,7 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Cor
     A change of wording only (`COSMETIC`) is returned as a `Correction`,
     applied only if acknowledged (ADR-0031). One read for every item, at no
     date (`stored`)."""
-    corrections: list[Correction] = []
+    corrections: list[CorrectionWrite] = []
     edges = _edges(mappings)
     refs = [NodeRef(label, item.id) for label, items in mappings.by_label.items() for item in items]
     loaded = await graph.stored(refs)
@@ -383,7 +376,7 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Cor
                 raise _refuse(item, label, str(meaning))
             if changed:
                 corrections.append(
-                    Correction(stored.node, {k: cast("Scalar", wanted[k]) for k in changed})
+                    CorrectionWrite(stored.node, {k: cast("Scalar", wanted[k]) for k in changed})
                 )
             end, why = stored.properties["valid_to"], stored.properties.get("end_reason")
             if end != NO_END_DATE and (end, why) != (item.valid_until, item.end_reason):
@@ -401,7 +394,7 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Cor
                 if edge.edge_type != "CROSSWALKS_TO" or edge.target not in crosswalks:
                     continue
                 wanted_edge = dict(crosswalks[edge.target])
-                have_edge = {k: v for k, v in edge.properties.items() if k != "corrections"}
+                have_edge = {k: v for k, v in edge.properties.items() if k != CORRECTIONS}
                 differs = sorted(
                     k
                     for k in set(wanted_edge) | set(have_edge)
@@ -411,7 +404,7 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Cor
                     raise _refuse(item, label, f"crosswalk to {edge.target.stable_id}")
                 if differs:
                     corrections.append(
-                        Correction(
+                        CorrectionWrite(
                             stored.node,
                             {k: wanted_edge[k] for k in differs},
                             ("CROSSWALKS_TO", edge.target),
@@ -465,14 +458,7 @@ async def load_mappings(
                 f"acknowledged {sorted(acknowledged)}"
             )
         if corrections is not None:
-            for correction in found:
-                await graph.correct(
-                    correction.node,
-                    correction.changes,
-                    by=corrections.by,
-                    reason=corrections.reason,
-                    edge=correction.edge,
-                )
+            await graph.correct(found, by=corrections.by, reason=corrections.reason)
         span.set_attribute("graph.corrected", sorted(touched))
         created_nodes = await graph.put_nodes(
             [

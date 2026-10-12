@@ -36,12 +36,20 @@ wording an issued assessment showed can always be recovered from git.
   `CorrectionAcknowledgement` names exactly those item ids, plus who made the
   correction and why. Missing or extra acknowledgements are refused, as
   `acknowledged_additions` refuses for ingest.
-- **Audited on the node.** `GraphAdmin.correct` locks the node (or crosswalk
-  edge), checks every key is cosmetic, sets the new wording, and appends to the
-  node's own `corrections` trail: when, by whom, why, and the previous wording.
-  It is one transaction, and repeating the same correction is a no-op. The
-  trail is writer-kept like `recorded_at`, so a loader never authors it and
-  comparisons ignore it.
+- **Audited on the node.** `GraphAdmin.correct` applies every correction of a
+  load in one transaction, all or none. For each node (or crosswalk edge) it
+  takes the lock, checks that every key is cosmetic and already present (a
+  correction rewords, it never adds), sets the new wording, and appends when,
+  by whom, why and the previous wording to the node's own `corrections` trail.
+  Repeating the same correction is a no-op. The trail is writer-kept like
+  `recorded_at`, so a loader never authors it and comparisons ignore it.
+- **Where the line falls.**
+  - A leaf's `question` is cosmetic only while it asks for the same fact.
+    Rewording it so that it asks something else changes what the tenant
+    answers, which is a change of meaning and a new id; the reviewer decides
+    which it is.
+  - An actor's `name` is display-only: actors are matched by id, never by
+    name.
 
 ## Consequences
 

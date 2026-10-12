@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from compliance_rag.adapters.graph_schema import GraphWriteRefused, NodeRef
+from compliance_rag.adapters.graph_schema import CorrectionWrite, GraphWriteRefused, NodeRef
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.graph.loader import CorrectionAcknowledgement, load_mappings
 from compliance_rag.graph.mappings import MappingError, load_mapping_set
@@ -127,6 +127,62 @@ async def test_the_adapter_corrects_wording_only_and_names_who_and_why(graph: Ne
     await _loaded(graph)
     node = NodeRef("Obligation", "OB-TEST-2")
     with pytest.raises(GraphWriteRefused, match="meaning, not wording"):
-        await graph.correct(node, {"instrument_id": "other-act"}, by="Piero Frasca", reason="r")
+        await graph.correct(
+            [CorrectionWrite(node, {"instrument_id": "other-act"})], by="P", reason="r"
+        )
     with pytest.raises(GraphWriteRefused, match="who made it and why"):
-        await graph.correct(node, {"summary": FIXED}, by=" ", reason="r")
+        await graph.correct([CorrectionWrite(node, {"summary": FIXED})], by=" ", reason="r")
+    with pytest.raises(GraphWriteRefused, match="never adds"):  # an obligation has no question
+        await graph.correct([CorrectionWrite(node, {"question": "q?"})], by="P", reason="r")
+    clause = NodeRef("Clause", "test-act:v1:s2/1")
+    with pytest.raises(GraphWriteRefused, match="DERIVED_FROM carries no wording"):
+        await graph.correct(
+            [CorrectionWrite(node, {"note": "n"}, ("DERIVED_FROM", clause))], by="P", reason="r"
+        )
+
+
+@needs_neo4j
+async def test_corrections_land_together_or_not_at_all(graph: Neo4jGraph) -> None:
+    """One transaction: a refused correction leaves the others unapplied."""
+    await _loaded(graph)
+    good = CorrectionWrite(NodeRef("Obligation", "OB-TEST-2"), {"summary": FIXED})
+    bad = CorrectionWrite(NodeRef("Obligation", "OB-TEST-1B"), {"question": "q?"})
+    with pytest.raises(GraphWriteRefused, match="never adds"):
+        await graph.correct([good, bad], by="P", reason="r")
+    (row,) = await cypher(
+        graph, "MATCH (o:Obligation {stable_id:'OB-TEST-2'}) RETURN o.summary AS s"
+    )
+    assert row["s"] != FIXED
+
+
+@needs_neo4j
+async def test_a_partial_acknowledgement_is_refused_before_any_write(
+    graph: Neo4jGraph, tmp_path: Path
+) -> None:
+    await _loaded(graph)
+    before = await graph.counts()
+    document = fixture_document()
+    document["obligations"][2]["summary"] = FIXED
+    document["crosswalks"][0]["note"] = "Reworded."
+    with pytest.raises(MappingError, match="acknowledged exactly"):
+        await load_mappings(
+            graph,
+            load_mapping_set([write_yaml(tmp_path, document)]),
+            today=SEP,
+            corrections=ack("OB-TEST-2"),
+        )
+    rows = await cypher(graph, "MATCH (n) WHERE n.corrections IS NOT NULL RETURN count(n) AS c")
+    assert rows[0]["c"] == 0 and await graph.counts() == before
+
+
+@needs_neo4j
+async def test_after_a_crosswalk_correction_the_same_yaml_reloads_as_a_no_op(
+    graph: Neo4jGraph, tmp_path: Path
+) -> None:
+    await _loaded(graph)
+    document = fixture_document()
+    document["crosswalks"][0]["note"] = "Invented relation, reworded."
+    mappings = load_mapping_set([write_yaml(tmp_path, document)])
+    await load_mappings(graph, mappings, today=SEP, corrections=ack("OB-TEST-1B"))
+    report = await load_mappings(graph, mappings, today=SEP)
+    assert (report.nodes_created, report.edges_created) == (0, 0)
