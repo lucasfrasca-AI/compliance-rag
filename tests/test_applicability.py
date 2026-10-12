@@ -301,3 +301,89 @@ async def test_track_b_gets_the_clauses_of_what_applies_or_might_and_nothing_els
 def test_a_citation_reads_as_a_reader_cites_it() -> None:
     assert cite("privacy-act-1988:C2026C00227:s6d/4/b") == "s 6D(4)(b)"
     assert cite("privacy-act-1988:C2026C00227:sch1/app11/1") == "APP 11.1"
+
+
+# ---- review of #125 ----------------------------------------------------------------
+
+
+async def test_possibly_cites_the_conditions_already_met() -> None:
+    """#93 Trace 2: "under the small-business threshold (s6D(1)), but…" — the
+    met threshold is why the answer is possibly, not no, so it is cited."""
+    coverage = await assess(fact("annual_turnover_aud", 900, LAST_FY))
+    keep = coverage.obligation("OB-T-KEEP")
+    met = keep.explanation.find("COND-T-UNDER-THRESHOLD")
+    assert met is not None and met.truth is Truth.TRUE
+    assert "COND-T-UNDER-THRESHOLD" not in {q.condition_id for q in keep.questions}
+
+
+async def test_the_tenant_subgraph_is_projected_not_stored() -> None:
+    coverage = await assess(
+        fact("annual_turnover_aud", 900, LAST_FY),
+        fact("operates_in", ("AU-NSW",)),
+        fact("data_categories", ("health", "contact")),
+        fact("regulators", ("OAIC",)),
+    )
+    subgraph = coverage.subgraph
+    assert subgraph is not None
+    assert subgraph.organisation == "acme"
+    assert subgraph.operates_in == ("AU-NSW",)
+    assert subgraph.handles == ("health", "contact")
+    assert subgraph.regulated_by == ("OAIC",)
+    assert subgraph.acts_as == (("test-act/actor/keeper", Truth.UNKNOWN),)  # might hold it
+
+
+async def test_the_report_pairs_each_missing_fact_with_its_clause() -> None:
+    report = render(await assess(fact("annual_turnover_aud", 900, LAST_FY)))
+    assert "Missing: Nobody has said whether the business opted in. (s 2(1))" in report
+
+
+async def test_an_operand_amended_twice_resolves_to_its_latest_version(tmp_path: Path) -> None:
+    """A → B → C: on C's dates, A (the id the parent names) is C — never
+    "absent" because B, the middle link, is no longer in force."""
+    document = fixture_document()
+    first = next(c for c in document["conditions"] if c["id"] == "COND-T-UNDER-THRESHOLD")
+    first |= {"valid_to": "2026-04-01", "end_reason": "superseded"}
+    second = dict(
+        first,
+        id="COND-T-UNDER-2",
+        valid_from="2026-04-01",
+        valid_to="2026-07-01",
+        end_reason="superseded",
+        supersedes="COND-T-UNDER-THRESHOLD",
+        leaf=first["leaf"] | {"value": 2000},
+    )
+    third = dict(
+        first,
+        id="COND-T-UNDER-3",
+        valid_from="2026-07-01",
+        valid_to=None,
+        end_reason=None,
+        supersedes="COND-T-UNDER-2",
+        leaf=first["leaf"] | {"value": 5000},
+    )
+    document["conditions"] += [second, third]
+    facts = Facts.of([fact("annual_turnover_aud", 4000, LAST_FY)])
+    resolved = explain(snapshot(mappings(document, tmp_path)), facts, "COND-T-UNDER-THRESHOLD")
+    assert (resolved.condition_id, resolved.truth) == ("COND-T-UNDER-3", Truth.TRUE)
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    [
+        # Start unknown, but every year since not_before (2022-07-01) known and
+        # under: the real floor is never earlier, so "no" is sound.
+        ((*SMALL_HISTORY[1:], fact("annual_turnover_aud", 900, LAST_FY)), Truth.FALSE),
+        # Started on the last day of FY2022-23: that year ended after it, so it counts.
+        (
+            (
+                fact("business_started_on", dt.date(2023, 6, 30), Period(dt.date(2023, 6, 30))),
+                fact("annual_turnover_aud", 1500, Period.financial_year(2022)),
+            ),
+            Truth.TRUE,
+        ),
+    ],
+)
+async def test_any_year_since_it_started_edges(
+    history: tuple[Evidence, ...], expected: Truth
+) -> None:
+    assert explain(snapshot(), Facts.of(history), "COND-T-EVER-OVER").truth is expected

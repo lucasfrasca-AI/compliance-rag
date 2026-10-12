@@ -36,6 +36,10 @@ class Outcome(StrEnum):
     NOT_APPLICABLE = "not_applicable"
     UNASSESSABLE = "unassessable"
 
+    @property
+    def label(self) -> str:
+        return self.value.replace("_", " ")
+
     @classmethod
     def of(cls, truth: Truth) -> Outcome:
         return {
@@ -61,6 +65,9 @@ class Question:
     question is which answer is right, not a new one."""
     evidence_ids: tuple[str, ...] = ()
     missing_periods: tuple[str, ...] = ()
+    also_needs: tuple[str, ...] = ()
+    """Other fields that would narrow the question (a start date that
+    decides which years count)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,11 +142,33 @@ class ObligationCoverage:
 
 
 @dataclass(frozen=True, slots=True)
+class TenantSubgraph:
+    """The small graph of one company (CONTEXT.md: Tenant subgraph),
+    projected per request from its evidence and Track A's result and
+    discarded with the request — never persisted (D-14).
+
+    - `organisation`: the tenant itself.
+    - `operates_in` / `handles` / `regulated_by`: its current facts
+      (`operates_in`, `data_categories`, `regulators`).
+    - `acts_as`: the roles it holds (`true`) or might hold (`unknown`) on the
+      date — a result of evaluation, never a declaration (ADR-0027).
+
+    Approved policy-to-law mappings join it in Phase 3, from the ledger (#93 Q5)."""
+
+    organisation: str
+    operates_in: tuple[str, ...]
+    handles: tuple[str, ...]
+    regulated_by: tuple[str, ...]
+    acts_as: tuple[tuple[str, Truth], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Coverage:
     tenant_id: str
     as_of: dt.date
     obligations: tuple[ObligationCoverage, ...]
     actors: tuple[ActorCoverage, ...] = field(default_factory=tuple[ActorCoverage, ...])
+    subgraph: TenantSubgraph | None = None
 
     def with_outcome(self, outcome: Outcome) -> tuple[ObligationCoverage, ...]:
         return tuple(o for o in self.obligations if o.outcome is outcome)
@@ -204,6 +233,7 @@ def question_json(question: Question) -> dict[str, object]:
         "conflict": question.conflict,
         "evidence_ids": list(question.evidence_ids),
         "missing_periods": list(question.missing_periods),
+        "also_needs": list(question.also_needs),
     }
 
 
@@ -221,6 +251,7 @@ def question_of_json(raw: Mapping[str, object]) -> Question:
         conflict=bool(raw.get("conflict", False)),
         evidence_ids=strings("evidence_ids"),
         missing_periods=strings("missing_periods"),
+        also_needs=strings("also_needs"),
     )
 
 

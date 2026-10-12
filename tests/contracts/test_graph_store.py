@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
@@ -108,4 +109,45 @@ async def test_neo4j_and_the_fake_agree_exactly(loaded: Neo4jGraph) -> None:
         facts = Facts.of(evidence)
         assert await real.coverage(facts, tenant_id="acme", as_of=AS_OF) == await fake.coverage(
             facts, tenant_id="acme", as_of=AS_OF
+        )
+
+
+@needs_neo4j
+async def test_neo4j_and_the_fake_agree_across_amendment_and_repeal(
+    graph: Neo4jGraph, tmp_path: Path
+) -> None:
+    """Where the two read differently — operands and lineage from node
+    properties versus YAML — on dates either side of a supersession and a
+    repeal."""
+    import yaml
+
+    document = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
+    conditions = {c["id"]: c for c in document["conditions"]}
+    conditions["COND-T-OPTED-IN"] |= {"valid_to": "2026-07-01", "end_reason": "repealed"}
+    old = conditions["COND-T-UNDER-THRESHOLD"]
+    old |= {"valid_to": "2026-07-01", "end_reason": "superseded"}
+    document["conditions"].append(
+        dict(
+            old,
+            id="COND-T-UNDER-2",
+            valid_from="2026-07-01",
+            valid_to=None,
+            end_reason=None,
+            supersedes="COND-T-UNDER-THRESHOLD",
+            leaf=old["leaf"] | {"value": 5000},
+        )
+    )
+    path = tmp_path / "amended.yaml"
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    mappings = load_mapping_set([path])
+    await graph.apply_schema()
+    await load_instrument_version(
+        graph, V1, instrument_since=SINCE, effective=dt.date(2026, 1, 1), supersedes=None
+    )
+    await load_mappings(graph, mappings, today=AS_OF)
+    fake, real = FakeGraphStore(mappings, clause_validity=CLAUSES), GraphTrackA(graph)
+    facts = Facts.of([fact("annual_turnover_aud", 4000, LAST_FY), fact("opted_in", True)])
+    for as_of in (dt.date(2026, 6, 1), AS_OF):
+        assert await real.coverage(facts, tenant_id="acme", as_of=as_of) == await fake.coverage(
+            facts, tenant_id="acme", as_of=as_of
         )

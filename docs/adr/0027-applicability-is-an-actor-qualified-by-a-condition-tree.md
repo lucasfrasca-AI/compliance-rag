@@ -49,6 +49,11 @@ itself, with no reasons and no citations.
    It carries the question to ask and the unassessable reason to report when
    the fact is missing (D-06). Evaluation is three-valued, so a missing fact is
    *unknown*, never assumed (#115).
+
+   For the history period, a year with turnover recorded is taken as a year
+   the business was carried on. With the start date unknown, the floor is
+   still never earlier than `not_before`, so every year since then known and
+   none passing is a sound "no".
 4. **Conditions and actors carry their own valid time (Q1).** Each is derived
    from its clauses and dated like an obligation. An actor's qualifying tree,
    and an obligation's actors, jurisdictions, sectors, required conditions and
@@ -58,8 +63,12 @@ itself, with no reasons and no citations.
    dated retirement, with no new ids up the tree. For example, if exemption
    reform repealed the small business operator concept, `COND-PA-SBO` would
    retire on commencement, and its parent's `not` would then read false →
-   true. `as_of` answers both sides of the change. Adding an operand still
-   changes the parent's structure, so that is a new parent id.
+   true. `as_of` answers both sides of the change. An amended operand is
+   one supersession: a node carries its `lineage` (every condition it
+   supersedes, through any chain), so the id a parent names resolves to
+   whatever stands in for it on the date, however many amendments ago.
+   Adding an operand still changes the parent's structure, so that is a new
+   parent id.
 5. **Jurisdictions and sectors are reference nodes (Q2).** They use ISO
    3166-1/2 codes (`AU`, `AU-NSW`) and ANZSIC divisions
    (`anzsic-2006:Q`), each naming its `source`. An obligation may be narrowed
