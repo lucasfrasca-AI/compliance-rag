@@ -129,9 +129,18 @@ class GraphCounts:
     edges: int
 
 
-WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason"})
+WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason", "corrections"})
 """Stored properties a loader doesn't author: the stable ID, transaction time,
-and the end of valid time, which only a retirement sets (D-05, ADR-0029)."""
+the end of valid time, which only a retirement sets (D-05, ADR-0029), and the
+audit trail of cosmetic corrections (ADR-0031)."""
+
+COSMETIC = frozenset(
+    {"summary", "description", "question", "unassessable_reason", "name", "descriptor", "note"}
+)
+"""The only properties a correction may change in place (ADR-0031, #93 Q4):
+wording a reader sees, never what applies. Everything else — a clause, a
+date, an actor, an operand, a test or its value, a crosswalk's kind — is
+meaning, and a change of meaning is a new id."""
 
 
 @dataclass(frozen=True, slots=True)

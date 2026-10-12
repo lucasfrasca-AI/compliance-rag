@@ -284,6 +284,21 @@ class GraphAdmin(GraphReader):
         `retire_with` retired on the same date — in one transaction."""
 
     @abstractmethod
+    async def correct(
+        self,
+        node: NodeRef,
+        changes: Mapping[str, Scalar],
+        *,
+        by: str,
+        reason: str,
+        edge: tuple[str, NodeRef] | None = None,
+    ) -> None:
+        """A cosmetic correction in place (ADR-0031): change only `COSMETIC`
+        properties of `node` — or, with `edge` = (type, target), of that
+        outgoing edge — and append the previous values, who and why to its
+        `corrections` trail, in one transaction."""
+
+    @abstractmethod
     async def counts(self) -> GraphCounts:
         """Whole-graph node and edge totals."""
 

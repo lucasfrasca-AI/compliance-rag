@@ -40,6 +40,7 @@ from opentelemetry.trace import Span
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
 from compliance_rag.adapters.graph_schema import (
+    COSMETIC,
     WRITER_KEYS,
     Bitemporal,
     EdgeWrite,
@@ -341,13 +342,26 @@ def _refuse(item: Dated, label: str, what: str) -> MappingError:
     )
 
 
-async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> None:
-    """An item already loaded is unchanged — its properties, its valid time
-    (retiring an open node is the one change allowed), and the edges that
-    carry its meaning (`MEANING`); its `DERIVED_FROM` may only grow, and a
-    stored crosswalk's kind and note are fixed. A correction in place would
-    mutate a node (D-05), so it is refused here, before any write, not
-    halfway through. One read for every item, at no date (`stored`)."""
+@dataclass(frozen=True, slots=True)
+class Correction:
+    """A cosmetic difference between a loaded item and its YAML (ADR-0031):
+    the node (or its crosswalk edge) and the wording to set."""
+
+    node: NodeRef
+    changes: dict[str, Scalar]
+    edge: tuple[str, NodeRef] | None = None
+
+
+async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Correction, ...]:
+    """An item already loaded is unchanged in meaning — its non-cosmetic
+    properties, its valid time (retiring an open node is the one change
+    allowed), and the edges that carry its meaning (`MEANING`); its
+    `DERIVED_FROM` may only grow, and a stored crosswalk's kind is fixed. A
+    change of meaning is refused here, before any write, not halfway through.
+    A change of wording only (`COSMETIC`) is returned as a `Correction`,
+    applied only if acknowledged (ADR-0031). One read for every item, at no
+    date (`stored`)."""
+    corrections: list[Correction] = []
     edges = _edges(mappings)
     refs = [NodeRef(label, item.id) for label, items in mappings.by_label.items() for item in items]
     loaded = await graph.stored(refs)
@@ -364,8 +378,13 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> None:
             changed = sorted(
                 k for k in set(wanted) | set(have) if have.get(k) != _comparable(wanted.get(k))
             )
+            meaning = [k for k in changed if k not in COSMETIC or k not in wanted]
+            if meaning:
+                raise _refuse(item, label, str(meaning))
             if changed:
-                raise _refuse(item, label, str(changed))
+                corrections.append(
+                    Correction(stored.node, {k: cast("Scalar", wanted[k]) for k in changed})
+                )
             end, why = stored.properties["valid_to"], stored.properties.get("end_reason")
             if end != NO_END_DATE and (end, why) != (item.valid_until, item.end_reason):
                 raise _refuse(item, label, "valid_to or end_reason")
@@ -379,12 +398,26 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> None:
                 raise _refuse(item, label, "DERIVED_FROM edges (a clause was removed)")
             crosswalks = {e.target: e.properties for e in mine if e.edge_type == "CROSSWALKS_TO"}
             for edge in stored.edges:
-                if (
-                    edge.edge_type == "CROSSWALKS_TO"
-                    and edge.target in crosswalks
-                    and dict(edge.properties) != dict(crosswalks[edge.target])
-                ):
+                if edge.edge_type != "CROSSWALKS_TO" or edge.target not in crosswalks:
+                    continue
+                wanted_edge = dict(crosswalks[edge.target])
+                have_edge = {k: v for k, v in edge.properties.items() if k != "corrections"}
+                differs = sorted(
+                    k
+                    for k in set(wanted_edge) | set(have_edge)
+                    if have_edge.get(k) != wanted_edge.get(k)
+                )
+                if [k for k in differs if k not in COSMETIC]:
                     raise _refuse(item, label, f"crosswalk to {edge.target.stable_id}")
+                if differs:
+                    corrections.append(
+                        Correction(
+                            stored.node,
+                            {k: wanted_edge[k] for k in differs},
+                            ("CROSSWALKS_TO", edge.target),
+                        )
+                    )
+    return tuple(corrections)
 
 
 def _comparable(value: object) -> object:
@@ -394,19 +427,53 @@ def _comparable(value: object) -> object:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class CorrectionAcknowledgement:
+    """A person's go-ahead for cosmetic corrections in place (ADR-0031):
+    exactly which items, by whom, and why."""
+
+    item_ids: frozenset[str]
+    by: str
+    reason: str
+
+
 async def load_mappings(
-    graph: GraphAdmin, mappings: MappingSet, *, today: dt.date | None = None
+    graph: GraphAdmin,
+    mappings: MappingSet,
+    *,
+    today: dt.date | None = None,
+    corrections: CorrectionAcknowledgement | None = None,
 ) -> LoadReport:
     """Every node and edge the mapping set describes, after checking the
-    graph: clauses present and in force, loaded items unchanged. Nodes first
-    (every kind, batched), then edges. Tenant policy mappings are validated
-    and reported, never written (D-09, D-14)."""
+    graph: clauses present and in force, loaded items unchanged in meaning.
+    A change of wording to a loaded item is applied in place only when
+    `corrections` acknowledges exactly the items it touches (ADR-0031).
+    Then nodes (every kind, batched), then edges. Tenant policy mappings are
+    validated and reported, never written (D-09, D-14)."""
     attributes = {
         f"graph.{label.lower()}s": len(items) for label, items in mappings.by_label.items()
     }
     with telemetry.span("graph_loader.load_mappings", **attributes) as span:
         await _check_grounding(graph, mappings, today or dt.date.today())
-        await _check_unchanged(graph, mappings)
+        found = await _check_unchanged(graph, mappings)
+        touched = frozenset(c.node.stable_id for c in found)
+        acknowledged = corrections.item_ids if corrections else frozenset[str]()
+        if touched != acknowledged:
+            raise MappingError(
+                f"wording changed in loaded items {sorted(touched)}: a correction in place is "
+                f"applied only when acknowledged exactly, with who and why (ADR-0031); "
+                f"acknowledged {sorted(acknowledged)}"
+            )
+        if corrections is not None:
+            for correction in found:
+                await graph.correct(
+                    correction.node,
+                    correction.changes,
+                    by=corrections.by,
+                    reason=corrections.reason,
+                    edge=correction.edge,
+                )
+        span.set_attribute("graph.corrected", sorted(touched))
         created_nodes = await graph.put_nodes(
             [
                 NodeWrite(
