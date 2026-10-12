@@ -9,9 +9,14 @@ name: qdrant-keepalive
 # throwaway point (a fixed id, no vectors, payload {keepalive: true}) into the
 # corpus collection and deletes it, then checks it is gone. A point with no
 # vectors can't match a dense or sparse query, and with no `scope`,
-# `tenant_id` or `clause_id` payload every retrieval filter already excludes
-# it — so even a run that died between the two calls leaves nothing any query
-# returns, and the next run deletes it.
+# `tenant_id`, `valid_from` or `valid_to` payload every retrieval filter's
+# `must` clauses exclude it — so even a run that died between the two calls
+# leaves nothing any query returns, and the next run deletes it.
+#
+# Secrets (set by the human, repository settings): QDRANT_KEEPALIVE_URL is the
+# cluster's REST endpoint as Qdrant Cloud shows it, with the port —
+# https://<cluster-id>.<region>.<provider>.cloud.qdrant.io:6333 —
+# and QDRANT_KEEPALIVE_API_KEY a key that may write points to `clauses`.
 #
 # Runs no repository code — no checkout, no install — just three HTTPS calls
 # to the cluster's REST API. A failed run (suspended, deleted, key rotated, or

@@ -13,11 +13,13 @@ QDRANT = WORKFLOWS / "qdrant-keepalive.yml"
 
 
 def test_only_the_qdrant_keepalive_holds_qdrant_cloud_credentials() -> None:
-    holders = [w.name for w in WORKFLOWS.glob("*.yml") if "QDRANT_KEEPALIVE_" in w.read_text()]
-    assert holders == ["qdrant-keepalive.yml"]
+    """CI's Qdrant is a service container: no other workflow names a Qdrant
+    secret or the Qdrant Cloud host (the same guard as Aura's)."""
+    cloud = re.compile(r"secrets\.\w*QDRANT|cloud\.qdrant\.io", re.IGNORECASE)
     for workflow in WORKFLOWS.glob("*.yml"):
         if workflow != QDRANT:
-            assert not re.search(r"secrets\.QDRANT", workflow.read_text()), workflow.name
+            assert not cloud.search(workflow.read_text()), workflow.name
+    assert "secrets.QDRANT_KEEPALIVE_API_KEY" in QDRANT.read_text()
 
 
 def test_the_qdrant_keepalive_runs_no_code_and_deletes_what_it_writes() -> None:
@@ -27,7 +29,7 @@ def test_the_qdrant_keepalive_runs_no_code_and_deletes_what_it_writes() -> None:
     point = re.search(r"POINT: (\S+)", text)
     assert point is not None
     # One fixed point: upserted without vectors, deleted, then checked gone.
-    assert '\\"vector\\":{}' in text
+    assert re.search(r"vector[^a-z]*:[^a-z]*\{\}", text)
     assert (
         text.index("-X PUT") < text.index("/delete?wait=true") < text.index('test "$status" = 404')
     )
