@@ -46,6 +46,7 @@ import datetime as dt
 import uuid
 from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import cast
 
@@ -141,6 +142,48 @@ async def ensure_collection(
             )
 
 
+def _client(settings: Settings) -> AsyncQdrantClient:
+    return AsyncQdrantClient(
+        url=settings.qdrant_url or None,
+        api_key=settings.qdrant_api_key.get_secret_value() or None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionStatus:
+    """What `bootstrap_collection` found or made: no URL, no key."""
+
+    name: str
+    created: bool
+    points: int
+    payload_indexes: tuple[str, ...]
+
+
+async def bootstrap_collection(settings: Settings) -> CollectionStatus:
+    """The configured cluster's corpus collection, created if it is missing
+    (issue #139) by the same idempotent `ensure_collection` a service runs on
+    start. The deployed cluster then has its collection, and the keep-alive
+    (`qdrant-keepalive.yml`) something to write to, before anything is
+    deployed. Never recreates or empties an existing collection."""
+    if not settings.qdrant_url:
+        # The client would otherwise default to localhost.
+        raise ValueError("QDRANT_URL is not set")
+    client = _client(settings)
+    name = settings.qdrant_collection
+    try:
+        existed = await client.collection_exists(name)
+        await ensure_collection(client, name, dense_dims=settings.vertex_embedding_dims)
+        info = await client.get_collection(name)
+    finally:
+        await client.close()
+    return CollectionStatus(
+        name=name,
+        created=not existed,
+        points=info.points_count or 0,
+        payload_indexes=tuple(sorted(info.payload_schema)),
+    )
+
+
 def _chunk_point_id(chunk_id: str) -> str:
     """Qdrant point IDs must be an unsigned int or a UUID; `chunk_id`
     (`{instrument_id}:{version_id}:{clause_path}` plus a split suffix, D-02)
@@ -171,12 +214,11 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
     def from_settings(
         cls, settings: Settings, *, embedder: Embedder, ledger: LedgerStore
     ) -> QdrantRetrievalStore:
-        client = AsyncQdrantClient(
-            url=settings.qdrant_url or None,
-            api_key=settings.qdrant_api_key.get_secret_value() or None,
-        )
         return cls(
-            client, collection_name=settings.qdrant_collection, embedder=embedder, ledger=ledger
+            _client(settings),
+            collection_name=settings.qdrant_collection,
+            embedder=embedder,
+            ledger=ledger,
         )
 
     @classmethod

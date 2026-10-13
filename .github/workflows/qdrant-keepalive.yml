@@ -18,9 +18,13 @@ name: qdrant-keepalive
 # https://<cluster-id>.<region>.<provider>.cloud.qdrant.io:6333 —
 # and QDRANT_KEEPALIVE_API_KEY a key that may write points to `clauses`.
 #
+# The collection must exist: scripts/bootstrap_qdrant_collection.py creates it
+# (#139) until a deployed service does so on start.
+#
 # Runs no repository code — no checkout, no install — just three HTTPS calls
-# to the cluster's REST API. A failed run (suspended, deleted, key rotated, or
-# the secrets not set yet) emails the repository owner: that is the alert.
+# to the cluster's REST API. A failed run emails the repository owner: that is
+# the alert, and its error says which failure it is (no HTTP answer: the
+# cluster is suspended or gone; 401/403: the key; 404: no collection).
 #
 # The only workflow that holds Qdrant Cloud credentials
 # (tests/test_keepalive_workflows.py). CI's Qdrant is a service container.
@@ -48,13 +52,26 @@ jobs:
         # The key goes to curl on stdin (printf is a shell builtin), so it never
         # appears in a process's argv.
         run: |
-          test -n "$URL" && test -n "$API_KEY" || { echo "QDRANT_KEEPALIVE_* secrets are not set"; exit 1; }
-          call() { printf 'header = "api-key: %s"\n' "$API_KEY" | curl -sS --max-time 30 -K - "$@"; }
+          fail() { echo "::error::$*"; exit 1; }
+          test -n "$URL" && test -n "$API_KEY" || fail "QDRANT_KEEPALIVE_* secrets are not set"
+          # Prints the HTTP status only. Without -f a 4xx is a status, not a curl
+          # error, so a curl error means the cluster gave no HTTP answer at all.
+          call() { printf 'header = "api-key: %s"\n' "$API_KEY" | curl -sS --max-time 30 -K - -o /dev/null -w '%{http_code}' "$@"; }
+          unreachable() { fail "no HTTP answer from the cluster (curl exit $1). Qdrant Cloud suspends an idle Free cluster: resume it in the Qdrant Cloud console (if it is gone, it was deleted and needs recreating)"; }
+          refused() {  # $1 what was tried, $2 the HTTP status
+            case "$2" in
+              401|403) fail "$1: the API key was refused (HTTP $2), rotated or read-only. QDRANT_KEEPALIVE_API_KEY must be able to write points to $COLLECTION" ;;
+              404) fail "$1: no collection $COLLECTION on the cluster (HTTP 404). Create it by running scripts/bootstrap_qdrant_collection.py" ;;
+              *) fail "$1: HTTP $2" ;;
+            esac
+          }
           base="${URL%/}/collections/$COLLECTION/points"
           now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          call -f -X PUT "$base?wait=true" -H 'Content-Type: application/json' \
-            -d "{\"points\":[{\"id\":\"$POINT\",\"vector\":{},\"payload\":{\"keepalive\":true,\"at\":\"$now\"}}]}"
-          call -f -X POST "$base/delete?wait=true" -H 'Content-Type: application/json' \
-            -d "{\"points\":[\"$POINT\"]}"
-          status=$(call -o /dev/null -w '%{http_code}' "$base/$POINT")
-          test "$status" = 404 || { echo "keep-alive point still present (HTTP $status)"; exit 1; }
+          status=$(call -X PUT "$base?wait=true" -H 'Content-Type: application/json' \
+            -d "{\"points\":[{\"id\":\"$POINT\",\"vector\":{},\"payload\":{\"keepalive\":true,\"at\":\"$now\"}}]}") || unreachable $?
+          test "$status" = 200 || refused upsert "$status"
+          status=$(call -X POST "$base/delete?wait=true" -H 'Content-Type: application/json' \
+            -d "{\"points\":[\"$POINT\"]}") || unreachable $?
+          test "$status" = 200 || refused delete "$status"
+          status=$(call "$base/$POINT") || unreachable $?
+          test "$status" = 404 || fail "keep-alive point still present (HTTP $status)"
