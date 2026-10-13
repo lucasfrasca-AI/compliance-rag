@@ -18,7 +18,7 @@ import os
 import pytest
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore, FakeRetrievalStore
-from compliance_rag.adapters.interfaces import NO_PREFIX, Channel, PolicyCorpus, RetrievalStore
+from compliance_rag.adapters.interfaces import NO_PREFIX, PolicyCorpus, RetrievalStore
 from compliance_rag.assessment.policies import tenant_policies
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, Scope
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
@@ -156,11 +156,10 @@ async def test_answer_leaves_the_prefix_out_and_its_slots_go_to_law() -> None:
     """#149's measurement, through `answer()`: Acme on GA-05's facts, Track
     A's scope, the question below. Before #156, seven of the top ten were Acme
     policy clauses already in the prefix, leaving three for law. Same store,
-    scope and question, with the prefix left out: only law, every law clause
-    from before among it, and none of the prefix. The fake scores by shared
-    words, and only four law clauses in Track A's scope share any with the
-    question, so four is all the law it can find; real Qdrant's dense channel
-    ranks every clause (the test below)."""
+    scope and question, with the prefix left out: ten law clauses, every law
+    clause from before among them, and none of the prefix. (Until #163 put a
+    cited subclause's paragraphs in scope, the fake found only four law
+    clauses in scope that shared a word with the question.)"""
     from compliance_rag.adapters.fakes import FakeGenerator, FakeReranker
     from compliance_rag.adapters.generation_residency import TenantTextGate
     from compliance_rag.adapters.interfaces import LawScope
@@ -201,9 +200,8 @@ async def test_answer_leaves_the_prefix_out_and_its_slots_go_to_law() -> None:
         await pipeline.answer(question, POLICY_TENANT_ID, day, law=law, policies=policies)
     ).retrieval
 
-    assert len(before.ranked_candidates()) == 10
-    assert (_law(before), _law(after)) == (3, 4)
-    assert len(after.ranked_candidates()) == len(after.per_channel[Channel.DENSE]) == 4
+    assert len(before.ranked_candidates()) == len(after.ranked_candidates()) == 10
+    assert (_law(before), _law(after)) == (3, 10)
     retrieved_before = {c.clause_id for c in before.ranked_candidates()}
     retrieved_after = {c.clause_id for c in after.ranked_candidates()}
     assert len(retrieved_before & prefix) == 7 and not retrieved_after & prefix

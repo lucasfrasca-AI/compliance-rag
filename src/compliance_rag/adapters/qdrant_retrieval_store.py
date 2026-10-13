@@ -69,7 +69,13 @@ from compliance_rag.adapters.interfaces import (
     RetrievalStore,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.corpus.models import Chunk, Scope, epoch_days, parse_stable_id
+from compliance_rag.corpus.models import (
+    Chunk,
+    Scope,
+    clause_ancestors,
+    epoch_days,
+    parse_stable_id,
+)
 from compliance_rag.settings import Settings
 
 DENSE_VECTOR_NAME = "dense"
@@ -79,6 +85,7 @@ _SPARSE_CACHE_DIR = ".fastembed_cache"
 
 _PAYLOAD_KEYWORD_FIELDS = (
     "clause_id",
+    "ancestors",
     "tenant_id",
     "scope",
     "instrument_id",
@@ -305,6 +312,9 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                 payload={
                     "chunk_id": chunk.chunk_id,
                     "clause_id": chunk.clause_id,
+                    # The clauses this one is inside, so a citation of a
+                    # subclause admits its paragraphs (#163, `LawScope.admits`).
+                    "ancestors": list(clause_ancestors(chunk.clause_id)),
                     "instrument_id": parse_stable_id(chunk.clause_id)[0],
                     "version_id": parse_stable_id(chunk.clause_id)[1],
                     "withdrawn": False,
@@ -381,16 +391,25 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                 )
             ]
             if law.clause_ids:
+                # A cited clause, or a clause inside one (#163): its paragraphs
+                # are its text. A point stored before `ancestors` existed
+                # matches on its own id only, which is narrower, never wider.
+                cited = sorted(law.clause_ids)
                 own_or_law.append(
                     models.Filter(
                         must=[
                             models.FieldCondition(
                                 key="scope", match=models.MatchValue(value=Scope.PUBLIC.value)
+                            )
+                        ],
+                        should=[
+                            models.FieldCondition(
+                                key="clause_id", match=models.MatchAny(any=cited)
                             ),
                             models.FieldCondition(
-                                key="clause_id", match=models.MatchAny(any=sorted(law.clause_ids))
+                                key="ancestors", match=models.MatchAny(any=cited)
                             ),
-                        ]
+                        ],
                     )
                 )
             must.append(models.Filter(should=own_or_law))
