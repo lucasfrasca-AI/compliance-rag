@@ -9,11 +9,12 @@ on `claude-sonnet-5` at the US multi-region endpoint (`us`, ADR-0024). Everythin
 The exception is closed by a gate, not a note, at both ends:
 
 - **Startup and every request.** `assert_generation_allowed` refuses an
-  offshore generation region if the retrieval store holds any tenant-scoped
-  chunk not marked synthetic. `VertexClaudeGenerator` asks before building a
-  client and again before every offshore request, so data written later — by
-  another process, or a path that skips `CorpusLifecycle` — still closes it.
-- **Ingest.** `assert_upload_allowed` refuses to store a tenant-scoped chunk
+  offshore generation region if the retrieval store holds any chunk that
+  isn't public law and isn't marked synthetic (tenant or user scope, #166).
+  `VertexClaudeGenerator` asks before building a client and again before
+  every offshore request, so data written later — by another process, or a
+  path that skips `CorpusLifecycle` — still closes it.
+- **Ingest.** `assert_upload_allowed` refuses to store a non-public chunk
   that is not marked synthetic while generation is offshore, so the first
   real policy upload fails loudly instead of being sent offshore on its first
   question. `CorpusLifecycle` calls it before touching any store.
@@ -40,7 +41,7 @@ from compliance_rag.settings import GENERATION_REGIONS, REGION, Settings
 
 
 class GenerationResidencyError(RuntimeError):
-    """Generation would process real tenant text outside Australia, or run
+    """Generation would process real customer text outside Australia, or run
     on an endpoint outside the allowed regions."""
 
 
@@ -59,9 +60,11 @@ def is_offshore(region: str) -> bool:
     return validate_generation_region(region) != REGION
 
 
-def is_real_tenant_data(chunk: Chunk) -> bool:
-    """Tenant-scoped and not marked synthetic. Unmarked counts as real."""
-    return chunk.scope is Scope.TENANT and not chunk.synthetic
+def is_real_customer_data(chunk: Chunk) -> bool:
+    """Not public law, and not marked synthetic: a tenant's documents and one
+    person's private additions (`user` scope) alike (#166). Unmarked counts
+    as real."""
+    return chunk.scope is not Scope.PUBLIC and not chunk.synthetic
 
 
 def assert_upload_allowed(
@@ -72,21 +75,22 @@ def assert_upload_allowed(
     unmarked chunk is."""
     if not is_offshore(generation_region):
         return
-    real = [c.chunk_id for c in chunks if is_real_tenant_data(c)] + list(real_clause_ids)
+    real = [c.chunk_id for c in chunks if is_real_customer_data(c)] + list(real_clause_ids)
     if real:
         raise GenerationResidencyError(
-            f"refusing to store {len(real)} real tenant chunk(s) (first: {real[0]!r}) while "
-            f"generation runs in {generation_region}, outside Australia. Real customer data "
+            f"refusing to store {len(real)} chunk(s) of real customer data "
+            f"(first: {real[0]!r}) while generation runs in {generation_region}, outside "
+            "Australia. Real customer data "
             "needs AU-resident generation first (ADR-0023; ~$2.2-3k/month via Provisioned "
             "Throughput, SERVICES.md)"
         )
 
 
-def assert_generation_allowed(*, generation_region: str, holds_real_tenant_data: bool) -> None:
-    if is_offshore(generation_region) and holds_real_tenant_data:
+def assert_generation_allowed(*, generation_region: str, holds_real_customer_data: bool) -> None:
+    if is_offshore(generation_region) and holds_real_customer_data:
         raise GenerationResidencyError(
             f"refusing to start the generator in {generation_region}: the corpus holds real "
-            "(tenant-scoped, non-synthetic) data, and generation outside Australia is "
+            "(non-public, non-synthetic) data, and generation outside Australia is "
             "allowed only while it holds public law and synthetic data (ADR-0023)"
         )
 

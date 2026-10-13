@@ -75,7 +75,7 @@ async def test_an_upload_cannot_mark_its_own_content_synthetic() -> None:
     with pytest.raises(SyntheticClaimRefused, match="cannot mark its own content synthetic"):
         await _upload(lifecycle, real)
     assert store.stored_chunk_ids == frozenset()  # refused before any write
-    assert not await store.holds_real_tenant_data()
+    assert not await store.holds_real_customer_data()
 
 
 async def test_a_claim_is_refused_on_replace_in_place_too() -> None:
@@ -103,14 +103,14 @@ async def test_a_claim_is_refused_on_replace_in_place_too() -> None:
             reason="typo",
             acknowledged_findings_citing=0,
         )
-    assert not await store.holds_real_tenant_data()
+    assert not await store.holds_real_customer_data()
 
 
 async def test_registered_fixture_text_is_synthetic_whatever_the_caller_sent() -> None:
     lifecycle, store = _lifecycle()
     fixture = synthetic_fixture_chunks()[0]
     await _upload(lifecycle, _chunk(fixture.text, synthetic=False))
-    assert not await store.holds_real_tenant_data()
+    assert not await store.holds_real_customer_data()
 
 
 async def test_registered_text_under_another_tenant_is_real() -> None:
@@ -118,7 +118,7 @@ async def test_registered_text_under_another_tenant_is_real() -> None:
     text uploaded as another tenant's document is that tenant's real data."""
     lifecycle, _ = _lifecycle()
     fixture = synthetic_fixture_chunks()[0]
-    with pytest.raises(GenerationResidencyError, match="real tenant chunk"):
+    with pytest.raises(GenerationResidencyError, match="of real customer data"):
         await _upload(lifecycle, _chunk(fixture.text, synthetic=False, tenant_id="beta"))
     with pytest.raises(SyntheticClaimRefused):
         await _upload(lifecycle, _chunk(fixture.text, synthetic=True, tenant_id="beta"))
@@ -126,7 +126,7 @@ async def test_registered_text_under_another_tenant_is_real() -> None:
 
 async def test_an_unclaimed_unregistered_upload_is_real_and_closes_the_gate() -> None:
     lifecycle, _ = _lifecycle()
-    with pytest.raises(GenerationResidencyError, match="real tenant chunk"):
+    with pytest.raises(GenerationResidencyError, match="of real customer data"):
         await _upload(lifecycle, _chunk("Acme keeps payroll for 7 years.", synthetic=False))
 
 
@@ -207,7 +207,7 @@ async def test_registered_clauses_pass_replace_in_place() -> None:
         reason="typo",
         acknowledged_findings_citing=0,
     )
-    assert not await store.holds_real_tenant_data()
+    assert not await store.holds_real_customer_data()
 
 
 WRITERS = {

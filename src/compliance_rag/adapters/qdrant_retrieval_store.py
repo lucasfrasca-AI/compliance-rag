@@ -456,19 +456,19 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             ),
         )
 
-    async def holds_real_tenant_data(self) -> bool:
+    async def holds_real_customer_data(self) -> bool:
         # must_not synthetic=true, not must synthetic=false: a point written
         # before the field existed has no `synthetic` key and counts as real.
+        # Anything but public law is customer data: a tenant's documents and
+        # one person's private additions alike (#166).
         result = await self._client.count(
             self._collection_name,
             count_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="scope", match=models.MatchValue(value=Scope.TENANT.value)
-                    )
-                ],
                 must_not=[
-                    models.FieldCondition(key="synthetic", match=models.MatchValue(value=True))
+                    models.FieldCondition(
+                        key="scope", match=models.MatchValue(value=Scope.PUBLIC.value)
+                    ),
+                    models.FieldCondition(key="synthetic", match=models.MatchValue(value=True)),
                 ],
             ),
             exact=True,

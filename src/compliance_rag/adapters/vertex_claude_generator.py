@@ -86,7 +86,7 @@ class VertexClaudeGenerator(Generator):
         if is_offshore(self._region):
             assert_generation_allowed(
                 generation_region=self._region,
-                holds_real_tenant_data=await self._corpus.holds_real_tenant_data(),
+                holds_real_customer_data=await self._corpus.holds_real_customer_data(),
             )
 
     @classmethod
@@ -100,7 +100,7 @@ class VertexClaudeGenerator(Generator):
         if is_offshore(region):
             assert_generation_allowed(
                 generation_region=region,
-                holds_real_tenant_data=await corpus.holds_real_tenant_data(),
+                holds_real_customer_data=await corpus.holds_real_customer_data(),
             )
         from anthropic.lib.vertex import AsyncAnthropicVertex  # only the real path needs it
 

@@ -176,7 +176,7 @@ async def test_the_us_endpoint_is_allowed_while_the_corpus_is_law_and_synthetic(
     assert built == {"region": "us", "project_id": "p"}
 
 
-async def test_the_us_endpoint_is_refused_once_any_real_tenant_data_is_stored(
+async def test_the_us_endpoint_is_refused_once_any_real_customer_data_is_stored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ADR-0023's gate: one real (unmarked) tenant chunk closes offshore
