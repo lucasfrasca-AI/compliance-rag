@@ -142,7 +142,9 @@ async def test_answer_calls_retrieve_rather_than_duplicating_the_pipeline(
 
     await assessment.answer(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
 
-    spy.assert_awaited_once_with(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
+    spy.assert_awaited_once_with(
+        QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION, in_prefix=frozenset()
+    )
 
 
 async def test_answer_runs_with_fakes_only(assessment: AssessmentPipeline) -> None:

@@ -377,6 +377,11 @@ class RetrievalStore(ABC):
     caller cannot pass that filter in, so it cannot leave it out. Library law
     is further restricted to `law` (Track A's clauses, D-03), which every
     method requires.
+
+    `in_prefix` names the tenant clauses already sent as the cached prefix
+    (D-11). No method returns one of them, by any channel: the prefix is the
+    authoritative copy, and the slots they'd take go to law (ADR-0033). It
+    excludes tenant-scoped chunks only, so it can never narrow the law.
     """
 
     @abstractmethod
@@ -389,6 +394,7 @@ class RetrievalStore(ABC):
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
+        in_prefix: frozenset[str] = frozenset(),
     ) -> RetrievalResult:
         """Dense + sparse channels fused with RRF inside the store (D-04)."""
 
@@ -400,6 +406,7 @@ class RetrievalStore(ABC):
         law: LawScope,
         tenant_id: str,
         as_of: dt.date,
+        in_prefix: frozenset[str] = frozenset(),
     ) -> Candidate | None:
         """Exact clause-ID lookup. The router sends ID queries here (D-12)."""
 

@@ -118,6 +118,11 @@ def _authorized(chunk: Chunk, authorization: RemovalAuthorization) -> bool:
     )
 
 
+def _in_prefix(chunk: Chunk, in_prefix: frozenset[str]) -> bool:
+    """A tenant clause already sent as the cached prefix (ADR-0033). Never law."""
+    return chunk.scope is Scope.TENANT and chunk.clause_id in in_prefix
+
+
 class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
     """Token-overlap 'dense' and 'sparse' channels with a deterministic fusion.
 
@@ -199,15 +204,19 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
+        in_prefix: frozenset[str] = frozenset(),
     ) -> RetrievalResult:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
+        trace.get_current_span().set_attribute("retrieval.in_prefix", len(in_prefix))
         pool = [
             c
             for c in self._chunks.values()
             if self._visible(c, tenant_id, scopes, subscribed)
             # D-03: library law only from the clauses Track A cites.
             and law.admits(c.scope, c.clause_id)
+            # ADR-0033: the prefix's clauses are already in front of the model.
+            and not _in_prefix(c, in_prefix)
             and as_of >= c.valid_from
             and as_of < c.valid_to
         ]
@@ -261,6 +270,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         law: LawScope,
         tenant_id: str,
         as_of: dt.date,
+        in_prefix: frozenset[str] = frozenset(),
     ) -> Candidate | None:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         every_scope = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
@@ -271,6 +281,8 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                 continue
             if not law.admits(c.scope, c.clause_id):
                 continue  # D-03: the keyword channel is a channel too
+            if _in_prefix(c, in_prefix):
+                continue
             if not (c.valid_from <= as_of < c.valid_to):
                 continue
             return Candidate(
