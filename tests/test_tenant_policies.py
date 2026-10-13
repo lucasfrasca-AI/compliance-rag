@@ -11,9 +11,9 @@ import datetime as dt
 import pytest
 
 from compliance_rag.adapters.fakes import FakeClauseStore
-from compliance_rag.assessment.policies import tenant_policies
+from compliance_rag.assessment.policies import document_order, tenant_policies
 from compliance_rag.assessment.prompt import SourceClause
-from compliance_rag.corpus.models import ClauseRecord, DocumentClass
+from compliance_rag.corpus.models import ClauseRecord, DocumentClass, Scope
 from compliance_rag.eval.golden_corpus import POLICY_TENANT_ID, golden_clauses
 from compliance_rag.eval.harness import GOLDEN_VALID_FROM, golden_clause_store, golden_ledger
 
@@ -71,6 +71,47 @@ async def test_before_any_policy_is_in_force_the_prefix_is_empty() -> None:
     ledger, clauses = await golden_ledger(), await golden_clause_store()
     before = GOLDEN_VALID_FROM - dt.timedelta(days=1)
     assert await tenant_policies(ledger, clauses, tenant_id=POLICY_TENANT_ID, as_of=before) == ()
+
+
+async def test_document_order_is_numeric_whatever_order_the_manifest_comes_in() -> None:
+    """`GCSClauseStore` writes its manifest sorted as strings: `10/1` before
+    `9/1`. A policy with ten sections must still read in its own order."""
+    ledger = await golden_ledger()
+    policy = _acme_policies()[0].clause_id.split(":")[0]
+    version = _acme_policies()[0].clause_id.split(":")[1]
+
+    class StringSortedManifests(FakeClauseStore):
+        async def get_manifest(
+            self, instrument_id: str, version_id: str, *, tenant_id: str
+        ) -> dict[str, str]:
+            manifest = await super().get_manifest(instrument_id, version_id, tenant_id=tenant_id)
+            return dict(sorted(manifest.items()))
+
+    store = StringSortedManifests()
+    for clause in golden_clauses():
+        if clause.instrument_id != policy:
+            await store.put_clause(clause)
+    for section in (9, 10, 11, 2):
+        await store.put_clause(
+            ClauseRecord.build(
+                instrument_id=policy,
+                version_id=version,
+                clause_path=f"{section}/1",
+                text=f"Section {section}.",
+                scope=Scope.TENANT,
+                tenant_id=POLICY_TENANT_ID,
+            )
+        )
+    prefix = await tenant_policies(ledger, store, tenant_id=POLICY_TENANT_ID, as_of=AS_OF)
+    sections = [c.clause_id.split(":")[2] for c in prefix if c.clause_id.startswith(policy + ":")]
+    assert sections == ["2/1", "9/1", "10/1", "11/1"]
+    assert sorted(["10/1", "9/1", "2/1", "app10/1", "app9/1"], key=document_order) == [
+        "2/1",
+        "9/1",
+        "10/1",
+        "app10/1",
+        "app9/1",
+    ]
 
 
 async def test_a_clause_missing_from_the_store_is_an_error_not_a_gap() -> None:

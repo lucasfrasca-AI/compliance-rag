@@ -432,8 +432,10 @@ class FakeLedgerStore(LedgerStore):
             and (valid_to is None or as_of < valid_to)
             and (tenant, instrument_id, version_id) not in self.withdrawn
             and (tenant, instrument_id, version_id) not in self.purged
-            and (tenant, instrument_id, None) not in self.purged
         )
+
+    async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
+        return self._classes.get((tenant_id, instrument_id))
 
     async def end_version(
         self, *, tenant_id: str, instrument_id: str, version_id: str, valid_to: dt.date
@@ -486,14 +488,16 @@ class FakeLedgerStore(LedgerStore):
         reason: str,
     ) -> None:
         self._require_removable(tenant_id, instrument_id, version_id, "purged")
-        self.purged[(tenant_id, instrument_id, version_id)] = (purged_by, reason)
+        # As Postgres: `None` marks every version the instrument has now, and
+        # a version recorded later (a fresh upload) carries no marker.
+        for tenant, instrument, version in list(self._versions):
+            if (tenant, instrument) == (tenant_id, instrument_id) and version_id in (None, version):
+                self.purged[(tenant, instrument, version)] = (purged_by, reason)
 
     async def purge_marker(
         self, *, tenant_id: str, instrument_id: str, version_id: str
     ) -> tuple[str, str] | None:
-        return self.purged.get((tenant_id, instrument_id, version_id)) or self.purged.get(
-            (tenant_id, instrument_id, None)
-        )
+        return self.purged.get((tenant_id, instrument_id, version_id))
 
     async def record_removal_audit(self, entry: RemovalAuditEntry) -> None:
         self._audit.append(entry)

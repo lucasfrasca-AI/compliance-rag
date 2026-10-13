@@ -128,8 +128,14 @@ class CorpusLifecycle:
         retire `supersedes` from the same date. The old chunks stay where
         they are — that is what keeps an issued assessment verifiable.
         `document_class` is the instrument's (#148): it decides whether the
-        version joins the tenant's cached policy prefix (D-11)."""
+        version joins the tenant's cached policy prefix (D-11). A class that
+        disagrees with the instrument's is refused before anything is written."""
         check_document_class(tenant_id, document_class)
+        recorded = await self._ledger.document_class(
+            tenant_id=tenant_id, instrument_id=instrument_id
+        )
+        if recorded is not None and recorded is not document_class:
+            raise ValueError(f"{instrument_id} is {recorded.value}, not {document_class.value}")
         _check_payload(
             chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )

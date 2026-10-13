@@ -323,10 +323,50 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     assert PolicyVersion("beta/remote-work", "v1") in await ledger.policy_versions(
         "beta-corp", as_of=next_year
     )
+    # valid_to is exclusive: on the day v2 takes over, v1 is gone.
+    assert await ledger.policy_versions("beta-corp", as_of=JUN) == (
+        PolicyVersion("beta/acceptable-use", "v1"),
+        PolicyVersion("beta/handbook", "v2"),
+    )
     assert await ledger.policy_versions("nobody", as_of=mar) == ()
+    # A purge marks the versions there are; a later upload of the same
+    # instrument is a fresh version, unmarked and in force.
+    await record("beta/old-policy", "v2", JUN)
+    assert PolicyVersion("beta/old-policy", "v2") in await ledger.policy_versions(
+        "beta-corp", as_of=jul
+    )
+    assert await ledger.purge_marker(
+        tenant_id="beta-corp", instrument_id="beta/old-policy", version_id="v1"
+    ) == ("u", "test")
+    assert (
+        await ledger.purge_marker(
+            tenant_id="beta-corp", instrument_id="beta/old-policy", version_id="v2"
+        )
+        is None
+    )
+    # The ledger answers with each instrument's class.
+    for instrument_id, document_class in (
+        ("beta/handbook", DocumentClass.INTERNAL_POLICY),
+        ("beta/iso-extract", DocumentClass.EXTERNAL_UPLOAD),
+    ):
+        assert (
+            await ledger.document_class(tenant_id="beta-corp", instrument_id=instrument_id)
+            is document_class
+        )
+    assert (
+        await ledger.document_class(tenant_id="_public", instrument_id=LAW)
+        is DocumentClass.LIBRARY_LAW
+    )
+    assert await ledger.document_class(tenant_id="beta-corp", instrument_id="beta/none") is None
     # The class is the instrument's, and library law is `_public`'s alone.
     with pytest.raises(ValueError, match="internal_policy, not external_upload"):
         await record("beta/handbook", "v3", next_year, DocumentClass.EXTERNAL_UPLOAD)
+    assert (
+        await ledger.version_validity(
+            tenant_id="beta-corp", instrument_id="beta/handbook", version_id="v3"
+        )
+        is None
+    )
     with pytest.raises(ValueError, match="library law"):
         await record("beta/a-statute", "v1", JAN, DocumentClass.LIBRARY_LAW)
     with pytest.raises(ValueError, match="library law"):

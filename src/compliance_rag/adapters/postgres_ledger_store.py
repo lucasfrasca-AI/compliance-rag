@@ -447,7 +447,7 @@ class PostgresLedgerStore(LedgerStore):
             "AND (v.valid_to IS NULL OR %s < v.valid_to) "
             "AND v.withdrawn_at IS NULL AND v.purged_at IS NULL "
             "AND (i.document_class = 'internal_policy' OR i.document_class IS NULL) "
-            "ORDER BY v.instrument_id, v.version_id",
+            'ORDER BY v.instrument_id COLLATE "C", v.version_id COLLATE "C"',
             (tenant_id, as_of, as_of),
         )
         unclassified = sorted({str(r[0]) for r in rows if r[2] is None})
@@ -457,6 +457,13 @@ class PostgresLedgerStore(LedgerStore):
                 "0011): record the next version with its class, never a guessed one"
             )
         return tuple(PolicyVersion(str(r[0]), str(r[1])) for r in rows)
+
+    async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
+        row = await self._fetchone(
+            "SELECT document_class FROM instrument WHERE tenant_id = %s AND instrument_id = %s",
+            (tenant_id, instrument_id),
+        )
+        return DocumentClass(str(row[0])) if row and row[0] is not None else None
 
     async def version_validity(
         self, *, tenant_id: str, instrument_id: str, version_id: str

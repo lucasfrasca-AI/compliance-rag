@@ -537,9 +537,16 @@ class LedgerStore(ABC):
 
     @abstractmethod
     async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:
-        """The tenant's internal policies in force on `as_of` (#148): one
-        version each, never withdrawn or purged, sorted by instrument. What
-        `answer()` sends as the cached prefix (D-11)."""
+        """The tenant's internal policy versions in force on `as_of` (#148):
+        `valid_from <= as_of < valid_to`, never withdrawn or purged, sorted by
+        instrument then version, bytewise. What `answer()` sends as the cached
+        prefix (D-11). An instrument recorded before document classes existed
+        (ledger 0011) is a `ValueError` naming it, never a guess."""
+
+    @abstractmethod
+    async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
+        """The instrument's class, or None if it has never been recorded (or
+        was recorded before classes existed)."""
 
     @abstractmethod
     async def end_version(
