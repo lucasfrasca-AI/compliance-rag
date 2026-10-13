@@ -200,6 +200,7 @@ async def test_bootstrap_creates_the_production_shape_once_and_never_empties_it(
     assert first.created and first.points == 0
     assert set(first.payload_indexes) == {
         "clause_id",
+        "ancestors",  # ADR-0035
         "tenant_id",
         "scope",
         "instrument_id",
