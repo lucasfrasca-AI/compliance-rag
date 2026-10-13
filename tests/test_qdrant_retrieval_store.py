@@ -243,3 +243,11 @@ async def test_the_residency_gate_query_on_real_qdrant() -> None:
     ) as store:
         await store.upsert_chunks((tenant("r1", synthetic=False),))
         assert await store.holds_real_tenant_data()
+
+    # One person's private addition is customer data too (#166).
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="gate"
+    ) as store:
+        mine = tenant("u1", synthetic=False).model_copy(update={"scope": Scope.USER})
+        await store.upsert_chunks((mine,))
+        assert await store.holds_real_tenant_data()

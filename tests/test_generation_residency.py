@@ -23,6 +23,8 @@ from compliance_rag.adapters.generation_residency import (
     GenerationResidencyError,
     TenantTextGate,
     assert_question_allowed,
+    assert_upload_allowed,
+    is_real_tenant_data,
     validate_generation_region,
 )
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
@@ -101,6 +103,30 @@ async def test_a_real_policy_is_accepted_once_generation_is_in_sydney() -> None:
     lifecycle, store = _lifecycle("australia-southeast1")
     await _publish(lifecycle, _real_chunk())
     assert await store.holds_real_tenant_data()
+
+
+async def test_a_users_private_chunk_counts_as_real_too() -> None:
+    """`user` scope is one person's private additions: customer data as much
+    as a tenant's policy (#166). Unregistered, it closes the gate in the store
+    and is refused at the door while generation is offshore."""
+    mine = _chunk(synthetic=False, scope=Scope.USER).model_copy(
+        update={"text": "My notes on Acme's payroll."}
+    )
+    assert is_real_tenant_data(mine)
+    store = FakeRetrievalStore((mine,), ledger=FakeLedgerStore())
+    assert await store.holds_real_tenant_data()
+    with pytest.raises(GenerationResidencyError, match="real tenant chunk"):
+        assert_upload_allowed((mine,), generation_region="us")
+    record = ClauseRecord(
+        instrument_id="acme/my-notes",
+        version_id="v1",
+        clause_path="1/1",
+        text="My notes on Acme's payroll.",
+        canonical_text="My notes on Acme's payroll.",
+        scope=Scope.USER,
+        tenant_id="acme",
+    )
+    assert REGISTERED.real_clauses((record,)) == (record.clause_id,)
 
 
 def test_an_unmarked_chunk_counts_as_real() -> None:

@@ -85,11 +85,12 @@ class SyntheticRegistry:
         return tuple(i for i, text in texts if synthetic_key(tenant_id, text) not in self.keys)
 
     def real_clauses(self, clauses: Iterable[ClauseRecord]) -> tuple[str, ...]:
-        """Ids of tenant clauses the registry doesn't vouch for — real data."""
+        """Ids of clauses that aren't public law and that the registry doesn't
+        vouch for — real data, a person's private additions included (#166)."""
         return tuple(
             c.clause_id
             for c in clauses
-            if c.scope is Scope.TENANT
+            if c.scope is not Scope.PUBLIC
             and self.unregistered(c.tenant_id, ((c.clause_id, c.canonical_text),))
         )
 
