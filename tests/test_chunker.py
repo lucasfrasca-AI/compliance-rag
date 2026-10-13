@@ -20,9 +20,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
+from pydantic import ValidationError
 
 from compliance_rag.corpus.chunker import CHUNK_MAX_TOKENS, chunk_clause, chunk_clauses
-from compliance_rag.corpus.models import ClauseRecord
+from compliance_rag.corpus.models import Chunk, ClauseRecord
 
 WORD_COUNT: Callable[[str], int] = lambda text: len(text.split())  # noqa: E731
 
@@ -52,12 +53,15 @@ def test_a_chunk_carries_the_clause_it_was_derived_from() -> None:
     assert chunk.tenant_id == clause.tenant_id
 
 
-def test_a_chunk_belongs_to_at_most_one_obligation_by_construction() -> None:
-    """No obligation is assigned here — Track A does that in Phase 2 — but
-    the 1:1 clause-to-chunk mapping means a chunk can never span more than
-    one clause, so it can never span more than one obligation either."""
-    chunk = chunk_clause(_law_clause(), count_tokens=WORD_COUNT)
-    assert chunk.obligation_id is None
+def test_a_chunk_carries_its_clause_never_an_obligation() -> None:
+    """Which obligations derive from a clause is the graph's (ADR-0030, #129):
+    a chunk names its clause and nothing else, and can't be given an
+    obligation."""
+    clause = _law_clause()
+    chunk = chunk_clause(clause, count_tokens=WORD_COUNT)
+    assert chunk.clause_id == clause.clause_id
+    with pytest.raises(ValidationError, match="obligation_id"):
+        Chunk.model_validate({**chunk.model_dump(), "obligation_id": "OB-APP11"})
 
 
 def test_chunk_clauses_maps_each_clause_to_exactly_one_chunk() -> None:

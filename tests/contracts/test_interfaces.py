@@ -64,19 +64,16 @@ def contract_chunks() -> tuple[Chunk, ...]:
         Chunk(
             chunk_id="c1",
             clause_id=APP11,
-            obligation_id="OB-APP11",
             text="An APP entity must take such steps as are reasonable to protect the information.",
         ),
         Chunk(
             chunk_id="c2",
             clause_id=APP12,
-            obligation_id="OB-APP12",
             text="An APP entity must give the individual access to the information.",
         ),
         Chunk(
             chunk_id="c3",
             clause_id="acme-policy:v3:sec2/1",
-            obligation_id=None,
             text="Acme retains customer records for seven years to protect the information.",
             scope=Scope.TENANT,
             tenant_id="acme",

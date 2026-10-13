@@ -217,7 +217,6 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                     text=c.text,
                     score=self._overlap(query, c.text),
                     channel=channel,
-                    obligation_id=c.obligation_id,
                 )
                 for c in pool
             ]
@@ -244,7 +243,6 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                         text=holder[cid].text,
                         score=score,
                         channel=None,
-                        obligation_id=holder[cid].obligation_id,
                     )
                     for cid, score in rrf.items()
                 ),
@@ -278,7 +276,6 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                 text=c.text,
                 score=1.0,
                 channel=Channel.KEYWORD,
-                obligation_id=c.obligation_id,
             )
         return None
 
