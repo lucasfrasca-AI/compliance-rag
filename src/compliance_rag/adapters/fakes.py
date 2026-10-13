@@ -287,6 +287,7 @@ class FakeLedgerStore(LedgerStore):
         self._profiles: dict[str, Profile] = {}
         self._assessments: dict[tuple[str, str], dict[str, object]] = {}
         self._subscriptions: dict[tuple[str, str], str] = {}  # (tenant, instrument) -> by
+        self.subscription_traces: dict[tuple[str, str], str | None] = {}
         self._findings: list[tuple[str, tuple[str, ...]]] = []  # (tenant, cited clause_ids)
         self.withdrawn: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version) -> by
         self._usage: list[UsageRecord] = []
@@ -366,10 +367,14 @@ class FakeLedgerStore(LedgerStore):
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> dict[str, object] | None:
         return self._assessments.get((tenant_id, assessment_id))
 
-    async def subscribe(self, *, tenant_id: str, instrument_id: str, subscribed_by: str) -> None:
+    async def subscribe(
+        self, *, tenant_id: str, instrument_id: str, subscribed_by: str, trace_id: str | None = None
+    ) -> None:
         validate_tenant_id(tenant_id)
         validate_library_instrument_id(instrument_id)
-        self._subscriptions.setdefault((tenant_id, instrument_id), subscribed_by)
+        if (tenant_id, instrument_id) not in self._subscriptions:
+            self._subscriptions[(tenant_id, instrument_id)] = subscribed_by
+            self.subscription_traces[(tenant_id, instrument_id)] = trace_id
 
     async def unsubscribe(self, *, tenant_id: str, instrument_id: str) -> None:
         self._subscriptions.pop((tenant_id, instrument_id), None)

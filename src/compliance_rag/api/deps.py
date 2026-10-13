@@ -6,6 +6,7 @@ on, and who is asking, for which tenant. The tenant is always
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Annotated
 
@@ -32,15 +33,25 @@ class ApiServices:
     verifier: TokenVerifier
     ledger: LedgerStore
     graph: GraphStore
+    checks: tuple[Callable[[], Awaitable[None]], ...] = field(
+        default_factory=tuple[Callable[[], Awaitable[None]], ...]
+    )
+    """Run at startup; one that raises stops the app starting (the graph's
+    connectivity: bad credentials fail the deploy, not the first request)."""
     closers: tuple[Callable[[], Awaitable[None]], ...] = field(
         default_factory=tuple[Callable[[], Awaitable[None]], ...]
     )
     """What to close on shutdown besides the verifier (the graph's driver)."""
 
+    async def start(self) -> None:
+        for check in self.checks:
+            await check()
+
     async def aclose(self) -> None:
-        await self.verifier.aclose()
-        for close in self.closers:
-            await close()
+        """Every closer runs, whichever raises."""
+        async with AsyncExitStack() as stack:
+            for close in (self.verifier.aclose, *self.closers):
+                stack.push_async_callback(close)
 
 
 @dataclass(frozen=True, slots=True)

@@ -35,6 +35,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             verifier=verifier,
             ledger=PostgresLedgerStore.from_settings(settings),
             graph=GraphTrackA(graph),
+            checks=(graph.verify,),
             closers=(graph.aclose,),
         )
     )

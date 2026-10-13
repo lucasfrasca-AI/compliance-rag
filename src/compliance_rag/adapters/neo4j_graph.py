@@ -275,6 +275,10 @@ class Neo4jGraph(GraphAdmin):
             database=settings.neo4j_database,
         )
 
+    async def verify(self) -> None:
+        """Reach the server now, so a bad URI or credential fails at startup."""
+        await self._driver.verify_connectivity()
+
     async def aclose(self) -> None:
         await self._driver.close()
 

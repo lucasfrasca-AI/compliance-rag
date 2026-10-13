@@ -16,7 +16,9 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -55,6 +57,7 @@ def create_app(services: ApiServices) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         try:
+            await services.start()
             yield
         finally:
             await services.aclose()
@@ -69,6 +72,18 @@ def create_app(services: ApiServices) -> FastAPI:
     )
     app.state.services = services
     app.add_middleware(RequestSpan)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, error: RequestValidationError) -> JSONResponse:
+        """Where and what, never the input: FastAPI's default echoes it, which
+        fails to encode a NaN (a 500) and copies whatever a client sent into
+        the response."""
+        detail = [
+            {"loc": list(e.get("loc", ())), "msg": str(e.get("msg", "")), "type": e.get("type")}
+            for e in error.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": detail})
+
     app.include_router(tenant.router)
 
     # Not /healthz: Cloud Run reserves paths ending in "z".

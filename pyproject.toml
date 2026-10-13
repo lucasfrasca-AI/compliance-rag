@@ -25,6 +25,7 @@ dependencies = [
     "onnxruntime>=1.19,<1.21",
     "transformers>=4.45,<5",
     "fastembed>=0.4,<1",
+    "tzdata>=2025.2",
 ]
 
 [dependency-groups]

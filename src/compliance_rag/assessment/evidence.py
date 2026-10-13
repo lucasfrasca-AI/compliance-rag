@@ -22,6 +22,7 @@ system and on whose word (CONTEXT.md: Evidence).
 from __future__ import annotations
 
 import datetime as dt
+import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -129,6 +130,8 @@ class Evidence:
             raise ValueError(f"evidence field {self.field!r} is not snake_case")
         if isinstance(self.value, dt.datetime):
             raise ValueError("a fact is a date, never a datetime")
+        if isinstance(self.value, float) and not math.isfinite(self.value):
+            raise ValueError("a fact is a finite number, never NaN or infinity")
         if not self.source.strip():
             raise ValueError("evidence names its source: who said so, or what it was parsed from")
         if self.provenance is EvidenceProvenance.ASSERTED and not self.asserted_by:
@@ -215,5 +218,7 @@ def check_evidence_write(evidence: Evidence) -> None:
     """What the ledger requires of evidence it records, beyond its shape:
     an assertion arrives in a request, so it carries that request's
     `trace_id` (CLAUDE.md)."""
-    if evidence.provenance is EvidenceProvenance.ASSERTED and not evidence.trace_id:
+    if evidence.provenance is EvidenceProvenance.ASSERTED and not (
+        evidence.trace_id and evidence.trace_id.strip("0")
+    ):
         raise ValueError("asserted evidence is recorded with the trace_id of its request")
