@@ -41,7 +41,7 @@ from compliance_rag.settings import GENERATION_REGIONS, REGION, Settings
 
 
 class GenerationResidencyError(RuntimeError):
-    """Generation would process real tenant text outside Australia, or run
+    """Generation would process real customer text outside Australia, or run
     on an endpoint outside the allowed regions."""
 
 
@@ -60,7 +60,7 @@ def is_offshore(region: str) -> bool:
     return validate_generation_region(region) != REGION
 
 
-def is_real_tenant_data(chunk: Chunk) -> bool:
+def is_real_customer_data(chunk: Chunk) -> bool:
     """Not public law, and not marked synthetic: a tenant's documents and one
     person's private additions (`user` scope) alike (#166). Unmarked counts
     as real."""
@@ -75,18 +75,19 @@ def assert_upload_allowed(
     unmarked chunk is."""
     if not is_offshore(generation_region):
         return
-    real = [c.chunk_id for c in chunks if is_real_tenant_data(c)] + list(real_clause_ids)
+    real = [c.chunk_id for c in chunks if is_real_customer_data(c)] + list(real_clause_ids)
     if real:
         raise GenerationResidencyError(
-            f"refusing to store {len(real)} real tenant chunk(s) (first: {real[0]!r}) while "
-            f"generation runs in {generation_region}, outside Australia. Real customer data "
+            f"refusing to store {len(real)} chunk(s) of real customer data "
+            f"(first: {real[0]!r}) while generation runs in {generation_region}, outside "
+            "Australia. Real customer data "
             "needs AU-resident generation first (ADR-0023; ~$2.2-3k/month via Provisioned "
             "Throughput, SERVICES.md)"
         )
 
 
-def assert_generation_allowed(*, generation_region: str, holds_real_tenant_data: bool) -> None:
-    if is_offshore(generation_region) and holds_real_tenant_data:
+def assert_generation_allowed(*, generation_region: str, holds_real_customer_data: bool) -> None:
+    if is_offshore(generation_region) and holds_real_customer_data:
         raise GenerationResidencyError(
             f"refusing to start the generator in {generation_region}: the corpus holds real "
             "(non-public, non-synthetic) data, and generation outside Australia is "

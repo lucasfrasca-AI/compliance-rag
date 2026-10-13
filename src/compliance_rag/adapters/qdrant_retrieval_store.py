@@ -456,7 +456,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             ),
         )
 
-    async def holds_real_tenant_data(self) -> bool:
+    async def holds_real_customer_data(self) -> bool:
         # must_not synthetic=true, not must synthetic=false: a point written
         # before the field existed has no `synthetic` key and counts as real.
         # Anything but public law is customer data: a tenant's documents and

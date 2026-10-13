@@ -24,7 +24,7 @@ from compliance_rag.adapters.generation_residency import (
     TenantTextGate,
     assert_question_allowed,
     assert_upload_allowed,
-    is_real_tenant_data,
+    is_real_customer_data,
     validate_generation_region,
 )
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
@@ -86,9 +86,9 @@ def _real_chunk() -> Chunk:
 
 async def test_the_first_real_policy_upload_fails_while_generation_is_offshore() -> None:
     lifecycle, store = _lifecycle("us")
-    with pytest.raises(GenerationResidencyError, match="real tenant chunk"):
+    with pytest.raises(GenerationResidencyError, match="of real customer data"):
         await _publish(lifecycle, _real_chunk())
-    assert not await store.holds_real_tenant_data()  # refused before any write
+    assert not await store.holds_real_customer_data()  # refused before any write
     assert store.stored_chunk_ids == frozenset()
 
 
@@ -96,13 +96,13 @@ async def test_a_registered_synthetic_policy_is_accepted_while_generation_is_off
     lifecycle, store = _lifecycle("us")
     await _publish(lifecycle, _chunk(synthetic=False))  # synthetic because registered
     assert store.stored_chunk_ids == frozenset({f"{POLICY}:v1:1/1"})
-    assert not await store.holds_real_tenant_data()
+    assert not await store.holds_real_customer_data()
 
 
 async def test_a_real_policy_is_accepted_once_generation_is_in_sydney() -> None:
     lifecycle, store = _lifecycle("australia-southeast1")
     await _publish(lifecycle, _real_chunk())
-    assert await store.holds_real_tenant_data()
+    assert await store.holds_real_customer_data()
 
 
 async def test_a_users_private_chunk_counts_as_real_too() -> None:
@@ -112,11 +112,16 @@ async def test_a_users_private_chunk_counts_as_real_too() -> None:
     mine = _chunk(synthetic=False, scope=Scope.USER).model_copy(
         update={"text": "My notes on Acme's payroll."}
     )
-    assert is_real_tenant_data(mine)
+    assert is_real_customer_data(mine)
     store = FakeRetrievalStore((mine,), ledger=FakeLedgerStore())
-    assert await store.holds_real_tenant_data()
-    with pytest.raises(GenerationResidencyError, match="real tenant chunk"):
+    assert await store.holds_real_customer_data()
+    with pytest.raises(GenerationResidencyError, match="of real customer data"):
         assert_upload_allowed((mine,), generation_region="us")
+    # Through the write path, which derives the flag from the registry first.
+    lifecycle, lifecycle_store = _lifecycle("us")
+    with pytest.raises(GenerationResidencyError, match="of real customer data"):
+        await _publish(lifecycle, mine)
+    assert lifecycle_store.stored_chunk_ids == frozenset()
     record = ClauseRecord(
         instrument_id="acme/my-notes",
         version_id="v1",
@@ -127,6 +132,15 @@ async def test_a_users_private_chunk_counts_as_real_too() -> None:
         tenant_id="acme",
     )
     assert REGISTERED.real_clauses((record,)) == (record.clause_id,)
+
+
+async def test_a_registered_user_scoped_chunk_is_accepted_offshore() -> None:
+    """The positive control: the registry keys on the tenant and the text,
+    not the scope, so registered text is synthetic in either scope."""
+    lifecycle, store = _lifecycle("us")
+    await _publish(lifecycle, _chunk(synthetic=False, scope=Scope.USER))
+    assert store.stored_chunk_ids == frozenset({f"{POLICY}:v1:1/1"})
+    assert not await store.holds_real_customer_data()
 
 
 def test_an_unmarked_chunk_counts_as_real() -> None:

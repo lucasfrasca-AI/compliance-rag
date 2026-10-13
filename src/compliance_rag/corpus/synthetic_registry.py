@@ -1,8 +1,9 @@
-"""Which tenant content is synthetic — decided by the operator, never by the
-uploader (issue #78).
+"""Which customer content is synthetic — decided by the operator, never by
+the uploader (issue #78).
 
 The build-phase residency gate (ADR-0023) lets generation run offshore only
-while every tenant chunk is synthetic. A `synthetic` flag the uploader sets
+while every chunk that isn't public law (tenant or user scope, #166) is
+synthetic. A `synthetic` flag the uploader sets
 would make that gate self-attested: a careless or hostile ingester could mark
 a real policy synthetic and send it offshore. So the flag is not an input.
 
