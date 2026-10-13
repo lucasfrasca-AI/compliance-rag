@@ -54,11 +54,13 @@ def test_a_chunk_carries_the_clause_it_was_derived_from() -> None:
 
 
 def test_a_chunk_carries_its_clause_never_an_obligation() -> None:
-    """Which obligations cite a clause is the graph's (ADR-0030, #129): a
-    chunk names its clause and nothing else, and can't be given an obligation."""
-    chunk = chunk_clause(_law_clause(), count_tokens=WORD_COUNT)
-    assert chunk.clause_id == _law_clause().clause_id
-    with pytest.raises(ValidationError):
+    """Which obligations derive from a clause is the graph's (ADR-0030, #129):
+    a chunk names its clause and nothing else, and can't be given an
+    obligation."""
+    clause = _law_clause()
+    chunk = chunk_clause(clause, count_tokens=WORD_COUNT)
+    assert chunk.clause_id == clause.clause_id
+    with pytest.raises(ValidationError, match="obligation_id"):
         Chunk.model_validate({**chunk.model_dump(), "obligation_id": "OB-APP11"})
 
 

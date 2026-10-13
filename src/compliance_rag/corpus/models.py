@@ -544,8 +544,8 @@ class Chunk(BaseModel):
     (420) as counted by the reranker's own tokenizer, not a word count
     (`CONTEXT.md`: Chunk, issue #6).
 
-    A chunk carries its clause, never an obligation: which obligations cite a
-    clause is the graph's (ADR-0030, #129). Chunks live in Qdrant; clauses live
+    A chunk carries its clause, never an obligation: which obligations derive
+    from a clause is the graph's (ADR-0030, #129). Chunks live in Qdrant; clauses live
     in Cloud Storage.
     """
 

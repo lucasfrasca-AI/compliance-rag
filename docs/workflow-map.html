@@ -122,7 +122,7 @@ footer{margin-top:28px;color:var(--mute);font-size:12.5px;max-width:78ch}
     <div class="step a">
       <div class="dot"><b></b></div>
       <div class="name">Chunk and embed<small>Clause-level chunks under the reranker cap</small></div>
-      <div class="svc"><em>Cloud Run · Vertex AI Embeddings</em><br><span class="p">≤500-token chunks · gemini-embedding dense vectors · payload: clause_id, obligation_id, version, valid_from/to, scope</span></div>
+      <div class="svc"><em>Cloud Run · Vertex AI Embeddings</em><br><span class="p">≤500-token chunks · gemini-embedding dense vectors · payload: clause_id, instrument_id, version, valid_from/to, scope</span></div>
       <div class="cost">&lt;$1<small>~2M tokens once</small></div>
     </div>
 
@@ -178,7 +178,7 @@ footer{margin-top:28px;color:var(--mute);font-size:12.5px;max-width:78ch}
     <div class="step b">
       <div class="dot"><b></b></div>
       <div class="name">Track B — find the supporting text<small>Only within what Track A identified</small></div>
-      <div class="svc"><em>Qdrant Query API</em><br><span class="p">prefetch dense (cosine) + sparse (BM25) → RRF fusion → 50 candidates · filter: obligation_id, valid window, scope · exact clause-ID queries hit the keyword index and skip reranking</span></div>
+      <div class="svc"><em>Qdrant Query API</em><br><span class="p">prefetch dense (cosine) + sparse (BM25) → RRF fusion → 50 candidates · filter: the clauses Track A cites (law scope, ADR-0030), valid window, scope · exact clause-ID queries hit the keyword index and skip reranking</span></div>
       <div class="cost">$0<small></small></div>
     </div>
 
