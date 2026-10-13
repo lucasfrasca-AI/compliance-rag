@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
 import os
 import re
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, LiteralString, cast
@@ -591,3 +593,32 @@ async def test_stored_returns_named_nodes_with_their_edges_at_no_date(graph: Neo
     assert found[V1].targets("VERSION_OF") == {ACT}
     assert dict(found[V1].edges[0].properties) == {"note": "n"}
     assert found[ACT].edges == ()
+
+
+# ---- server notifications (#141) ------------------------------------------
+
+
+@needs_neo4j
+async def test_reading_a_kind_of_data_not_yet_loaded_logs_no_warning(
+    graph: Neo4jGraph, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A label or relationship type with no data yet is "unrecognised" to the
+    server, which warned on every Track A read on Aura (no `REQUIRES` edge).
+    Neo4j keeps a type's token once any data has used it, even after the data
+    is gone, so a long-lived test database already knows every type the
+    builder names: the query uses names it has never seen, through the same
+    driver."""
+    caplog.set_level(logging.DEBUG, logger="neo4j.notifications")
+    unseen = uuid.uuid4().hex[:8].upper()
+    await cypher(graph, f"MATCH (a:UNSEEN_{unseen})-[:UNSEEN_{unseen}]->(b) RETURN b LIMIT 1")
+    assert [r.getMessage() for r in caplog.records if r.name == "neo4j.notifications"] == []
+
+
+@needs_neo4j
+async def test_other_notifications_still_reach_the_log(
+    graph: Neo4jGraph, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="neo4j.notifications")
+    await cypher(graph, "MATCH (n) RETURN id(n) LIMIT 1")  # id() is deprecated in 5.x
+    logged = [r.getMessage() for r in caplog.records if r.name == "neo4j.notifications"]
+    assert any("Deprecat" in m for m in logged), logged
