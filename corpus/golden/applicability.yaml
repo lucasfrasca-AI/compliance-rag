@@ -66,7 +66,8 @@ cases:
       (s6D(4), s6D(9), s6E as a whole, s6EA), each unresolved, and every
       question that would settle them is asked. Agency-only APPs still don't
       apply. Whether s6E's activity-limited limbs (1A), (1B), (1D), (2) apply is
-      shown on its own role, not asked as an APP question (reviewer decision).
+      shown on its own role, not asked as an APP question (the reviewer's
+      decision; #138).
     tenant_id: acme
     as_of: 2026-10-12
     facts:

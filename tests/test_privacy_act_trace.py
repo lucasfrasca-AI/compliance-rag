@@ -1,7 +1,8 @@
 """ "Does the Privacy Act apply to us?" end to end (issue #118, the #93 worked
-example), on the drafted mapping and labels (`corpus/mappings/
-privacy-act-1988.yaml`, `corpus/golden/applicability.yaml`) through Track A
-over a real Neo4j — the same path the live trace takes on Aura.
+example), on the signed mapping and labels (`corpus/mappings/
+privacy-act-1988.yaml`, `corpus/golden/applicability.yaml`): the first three
+through Track A over a real Neo4j, the same path the live trace takes on Aura;
+GA-05's variants on the fake, which runs the same evaluator.
 
 - Acme at $4M: applies, with the citation chain s15 -> s 6(1) "app-entity" ->
   s 6C(1)(b) -> s 6D(1).
@@ -141,25 +142,25 @@ async def test_ga05_applies_because_of_the_fy2023_24_figure() -> None:
 
 
 @pytest.mark.parametrize(
-    "case",
+    ("turnover", "started"),
     [
-        pytest.param(_ga05(turnover=[_turnover(2025, 2_500_000)]), id="no-fy2023-24-figure"),
+        pytest.param([(2025, 2_500_000)], None, id="no-fy2023-24-figure"),
         pytest.param(
-            _ga05(turnover=[_turnover(2025, 2_500_000), _turnover(2026, 3_200_000)]),
-            id="over-3m-only-in-a-year-not-yet-ended",
+            [(2025, 2_500_000), (2026, 3_200_000)], None, id="over-3m-only-in-a-year-not-yet-ended"
         ),
-        pytest.param(_ga05(started=dt.date(2024, 8, 1)), id="fy2023-24-ended-before-it-started"),
+        pytest.param(None, dt.date(2024, 8, 1), id="fy2023-24-ended-before-it-started"),
         pytest.param(
-            _ga05(
-                turnover=[_turnover(2000, 3_200_000), _turnover(2025, 2_500_000)],
-                started=dt.date(1999, 1, 1),
-            ),
+            [(2000, 3_200_000), (2025, 2_500_000)],
+            dt.date(1999, 1, 1),
             id="over-3m-only-before-s6d-commenced",
         ),
     ],
 )
-async def test_a_year_s6d4a_does_not_count_leaves_it_asked(case: ApplicabilityCase) -> None:
-    app11, asked = await _app11(case)
+async def test_a_year_s6d4a_does_not_count_leaves_it_asked(
+    turnover: list[tuple[int, int]] | None, started: dt.date | None
+) -> None:
+    figures = None if turnover is None else [_turnover(fy, aud) for fy, aud in turnover]
+    app11, asked = await _app11(_ga05(turnover=figures, started=started))
     assert app11.outcome is Outcome.UNASSESSABLE
     assert S6D4A in asked
 

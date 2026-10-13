@@ -164,11 +164,14 @@ async def test_the_fixture_labels_pass_on_neo4j(graph: Neo4jGraph) -> None:
 # ---- the gate, on the corpus labels -----------------------------------------------
 
 REQUIRED = bool(os.environ.get("REQUIRE_APPLICABILITY_GATE"))
-"""Set in CI: a missing labels file fails the gate instead of skipping it, as
-REQUIRE_RECALL_GATE does for recall, and unsigned labels are refused (D-01).
-Without it — a local run over a model-drafted change — pending labels are
-checked as a draft: that the draft agrees with the code, never that it's
-right."""
+"""Set in CI once the corpus labels exist: from then a missing file fails the
+gate instead of skipping it, as REQUIRE_RECALL_GATE does for recall."""
+
+DRAFT = bool(os.environ.get("APPLICABILITY_DRAFT"))
+"""Unsigned labels are refused (D-01), as the recall gate refuses an unsigned
+golden set, unless this is set: by the model, locally, while it drafts labels
+for review, and then they are checked only for agreeing with the code, never
+for being right. No workflow sets it, so CI fails closed."""
 
 corpus_labels = pytest.mark.skipif(
     not APPLICABILITY_PATH.exists() and not REQUIRED,
@@ -180,7 +183,7 @@ corpus_labels = pytest.mark.skipif(
 async def test_the_corpus_labels_pass_on_the_fake() -> None:
     labels = load_applicability_set()
     mappings = load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml")))
-    mismatches = await check(fake_for(mappings, labels), labels, allow_draft=not REQUIRED)
+    mismatches = await check(fake_for(mappings, labels), labels, allow_draft=DRAFT)
     assert mismatches == (), "\n".join(str(m) for m in mismatches)
 
 
@@ -189,5 +192,10 @@ async def test_the_corpus_labels_pass_on_the_fake() -> None:
 async def test_the_corpus_labels_pass_on_neo4j(graph: Neo4jGraph) -> None:
     labels = load_applicability_set()
     store = await graph_for(graph, load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
-    mismatches = await check(store, labels, allow_draft=not REQUIRED)
+    mismatches = await check(store, labels, allow_draft=DRAFT)
     assert mismatches == (), "\n".join(str(m) for m in mismatches)
+
+
+def test_no_workflow_lets_ci_check_a_draft() -> None:
+    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+        assert "APPLICABILITY_DRAFT" not in workflow.read_text(), workflow.name
