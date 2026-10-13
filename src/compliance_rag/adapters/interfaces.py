@@ -142,6 +142,34 @@ class LawScope:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyCorpus:
+    """The clauses of a tenant's policy corpus already sent as the CAG prefix
+    (D-11). Retrieval never returns one of them, by any channel: the prefix is
+    their authoritative copy, and the slots they'd take go to law (ADR-0033).
+
+    It excludes tenant-scoped chunks only, so it can never narrow the law, and
+    an external upload (never in the prefix) stays retrievable. Empty
+    (`NO_PREFIX`) for a call that sends no prefix: the recall gate, a library
+    question. Unlike `LawScope`, leaving it out can't widen what a tenant
+    sees, only spend slots on clauses the model already has, so it isn't
+    required (ADR-0033)."""
+
+    clause_ids: frozenset[str] = frozenset()
+
+    def excludes(self, scope: Scope, clause_id: str) -> bool:
+        return scope is Scope.TENANT and clause_id in self.clause_ids
+
+    @property
+    def described(self) -> str:
+        """For a span: how many clauses retrieval leaves out."""
+        return f"{len(self.clause_ids)} clause(s) already in the CAG prefix"
+
+
+NO_PREFIX = PolicyCorpus()
+"""No CAG prefix sent: nothing is left out."""
+
+
+@dataclass(frozen=True, slots=True)
 class RetrievalResult:
     """Both channel candidate lists plus the fused list.
 
@@ -377,6 +405,9 @@ class RetrievalStore(ABC):
     caller cannot pass that filter in, so it cannot leave it out. Library law
     is further restricted to `law` (Track A's clauses, D-03), which every
     method requires.
+
+    `policy_corpus` names the tenant clauses already sent as the CAG prefix:
+    no method returns one of them, by any channel (ADR-0033).
     """
 
     @abstractmethod
@@ -389,6 +420,7 @@ class RetrievalStore(ABC):
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> RetrievalResult:
         """Dense + sparse channels fused with RRF inside the store (D-04)."""
 
@@ -400,6 +432,7 @@ class RetrievalStore(ABC):
         law: LawScope,
         tenant_id: str,
         as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> Candidate | None:
         """Exact clause-ID lookup. The router sends ID queries here (D-12)."""
 

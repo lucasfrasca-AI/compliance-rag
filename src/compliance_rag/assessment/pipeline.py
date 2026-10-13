@@ -23,6 +23,7 @@ from compliance_rag.adapters.interfaces import (
     Generator,
     LawScope,
     LedgerStore,
+    PolicyCorpus,
     UsageRecord,
 )
 from compliance_rag.assessment.draft import (
@@ -136,8 +137,9 @@ class AssessmentPipeline:
         for an assessment, `LIBRARY_QUESTION` for a question about the library
         with no tenant profile — required, so no call skips Track A unseen.
         `policies` is the tenant's policy corpus, sent as the cached prefix
-        (D-11). The retriever's query is `query` and only `query`: it is fixed
-        here, before any text is retrieved, and nothing retrieved or generated
+        (D-11) and never retrieved as well (ADR-0033). The retriever's query
+        is `query` and only `query`: it is fixed here, before any text is
+        retrieved, and nothing retrieved or generated
         flows back into it (#29's injection control) — repair included, which
         re-reads one clause and never retrieves. The system prompt is fixed
         (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries the
@@ -153,7 +155,12 @@ class AssessmentPipeline:
                 ((p.clause_id, p.text) for p in policies),
                 what="clause(s) of the CAG prefix",
             )
-            trace = await self.retrieval.retrieve(query, tenant_id, as_of, law=law)
+            # The prefix is the policies' authoritative copy, so retrieval
+            # leaves them out and their slots go to law (ADR-0033).
+            sent = PolicyCorpus(frozenset(p.clause_id for p in policies))
+            trace = await self.retrieval.retrieve(
+                query, tenant_id, as_of, law=law, policy_corpus=sent
+            )
             if on_retrieved is not None:
                 await on_retrieved(trace)
 
@@ -183,9 +190,7 @@ class AssessmentPipeline:
 
             # The context is what this request showed the model: the retrieved
             # set plus the cached policy set. Nothing else is citable.
-            context = frozenset(c.clause_id for c in retrieved) | frozenset(
-                p.clause_id for p in policies
-            )
+            context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
             checked = await self.verifier.check_all(draft.citations, context=context, as_of=as_of)
             repairs: list[Generation] = []
             final: list[CheckedCitation] = []

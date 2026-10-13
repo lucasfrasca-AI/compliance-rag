@@ -16,10 +16,12 @@ import datetime as dt
 from dataclasses import dataclass
 
 from compliance_rag.adapters.interfaces import (
+    NO_PREFIX,
     Candidate,
     Channel,
     LawScope,
     LedgerStore,
+    PolicyCorpus,
     Reranker,
     RetrievalStore,
     ScoredDocument,
@@ -108,8 +110,11 @@ class RetrievalPipeline:
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
         limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> RetrievalTrace:
-        """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank)."""
+        """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank).
+        `policy_corpus`: the tenant clauses already sent as the CAG prefix,
+        never retrieved again (ADR-0033)."""
         # The law scope is recorded on this span by the store's filter.
         with span("retrieve", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             result = await self.retrieval_store.search(
@@ -119,6 +124,7 @@ class RetrievalPipeline:
                 scopes=scopes,
                 as_of=as_of,
                 limit=limit,
+                policy_corpus=policy_corpus,
             )
             # Both retrieval channels are logged before fusion (CLAUDE.md).
             for channel, candidates in result.per_channel.items():
@@ -150,6 +156,7 @@ class RetrievalPipeline:
         scopes: tuple[Scope, ...] = (Scope.PUBLIC, Scope.TENANT),
         limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> RetrievalTrace:
         """The router's fixed decision (`CONTEXT.md`: Router, D-04, D-12):
         a clause-ID query goes straight to `lookup_clause` on the keyword
@@ -158,14 +165,25 @@ class RetrievalPipeline:
         """
         if not is_clause_id_query(query):
             return await self.retrieve(
-                query, tenant_id, as_of, law=law, scopes=scopes, limit=limit, top_k=top_k
+                query,
+                tenant_id,
+                as_of,
+                law=law,
+                scopes=scopes,
+                limit=limit,
+                top_k=top_k,
+                policy_corpus=policy_corpus,
             )
 
         with span(
             "retrieve.router_hit", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()
         ) as current:
             hit = await self.retrieval_store.lookup_clause(
-                query.strip(), law=law, tenant_id=tenant_id, as_of=as_of
+                query.strip(),
+                law=law,
+                tenant_id=tenant_id,
+                as_of=as_of,
+                policy_corpus=policy_corpus,
             )
             fused = (hit,) if hit is not None else ()
             current.set_attribute("retrieval.channel.keyword", _scored(fused))

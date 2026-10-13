@@ -17,6 +17,7 @@ from opentelemetry import trace
 
 from compliance_rag.adapters.generation_residency import is_real_tenant_data
 from compliance_rag.adapters.interfaces import (
+    NO_PREFIX,
     Candidate,
     Channel,
     ClauseStore,
@@ -27,6 +28,7 @@ from compliance_rag.adapters.interfaces import (
     LawScope,
     LedgerStore,
     ManifestMetadata,
+    PolicyCorpus,
     PolicyVersion,
     Profile,
     RemovalAuditEntry,
@@ -199,15 +201,19 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> RetrievalResult:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
+        trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
         pool = [
             c
             for c in self._chunks.values()
             if self._visible(c, tenant_id, scopes, subscribed)
             # D-03: library law only from the clauses Track A cites.
             and law.admits(c.scope, c.clause_id)
+            # ADR-0033: the prefix's clauses are already in front of the model.
+            and not policy_corpus.excludes(c.scope, c.clause_id)
             and as_of >= c.valid_from
             and as_of < c.valid_to
         ]
@@ -261,8 +267,10 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         law: LawScope,
         tenant_id: str,
         as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> Candidate | None:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
+        trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
         every_scope = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
         for c in self._chunks.values():
             if c.clause_id != clause_id:
@@ -271,6 +279,8 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                 continue
             if not law.admits(c.scope, c.clause_id):
                 continue  # D-03: the keyword channel is a channel too
+            if policy_corpus.excludes(c.scope, c.clause_id):
+                continue  # ADR-0033
             if not (c.valid_from <= as_of < c.valid_to):
                 continue
             return Candidate(
