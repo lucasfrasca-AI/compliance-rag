@@ -22,10 +22,13 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import Candidate, Channel, ScoredDocument
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.settings import REGION
 from compliance_rag.verifier.citations import Verifier
 from tests.conftest import ALL_LAW
 
@@ -85,6 +88,7 @@ async def assessment(clause: ClauseRecord) -> AssessmentPipeline:
         generator=FakeGenerator(reply=reply),
         verifier=Verifier(clause_store, ledger, FakeCitationVerifier()),
         ledger=ledger,
+        tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
     )
 
 

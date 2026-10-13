@@ -31,10 +31,10 @@ from compliance_rag.adapters.firebase_auth import (
     SigningKeys,
     SigningKeySource,
 )
+from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import VerifierUnavailable
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.pipeline import AssessmentPipeline
-from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings
@@ -162,8 +162,9 @@ def fake_api_services(**fields: Any) -> ApiServices:  # Any: ApiServices fields
     can be replaced."""
     ledger = fields.pop("ledger", None) or FakeLedgerStore()
     clauses = fields.pop("clauses", None) or FakeClauseStore()
+    settings = fields.get("settings") or api_settings()
     defaults: dict[str, Any] = {  # Any: ApiServices fields
-        "settings": api_settings(),
+        "settings": settings,
         "verifier": verifier_for(),
         "ledger": ledger,
         "graph": FakeGraphStore(MappingSet(files=()), clause_validity={}),
@@ -173,7 +174,7 @@ def fake_api_services(**fields: Any) -> ApiServices:  # Any: ApiServices fields
             FakeGenerator(),
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
+            tenant_text=TenantTextGate.from_settings(settings),
         ),
-        "synthetic": SyntheticRegistry.load(),
     }
     return ApiServices(**{**defaults, **fields})

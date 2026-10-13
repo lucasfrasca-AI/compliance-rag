@@ -7,18 +7,31 @@ which never pass through the stores the startup gate asks."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import pytest
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
-from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore, FakeRetrievalStore
+from compliance_rag.adapters.fakes import (
+    FakeClauseStore,
+    FakeGenerator,
+    FakeLedgerStore,
+    FakeReranker,
+    FakeRetrievalStore,
+)
 from compliance_rag.adapters.generation_residency import (
     GenerationResidencyError,
-    assert_request_allowed,
+    TenantTextGate,
+    assert_question_allowed,
     validate_generation_region,
 )
-from compliance_rag.corpus.models import Chunk, DocumentClass, Scope
+from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
+from compliance_rag.assessment.prompt import SourceClause
+from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+from compliance_rag.eval.golden_corpus import golden_chunks, golden_clauses
+from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
 
 POLICY = "acme/retention-policy"
 
@@ -112,51 +125,114 @@ def test_offshore_a_question_from_a_member_who_isnt_a_registered_tester_is_refus
     """A member can type anything, real customer data included, so a question
     counts as real unless the operator registered its asker (ADR-0032)."""
     with pytest.raises(GenerationResidencyError, match="registered build-phase tester"):
-        assert_request_allowed(
-            generation_region="us", member_email="lead@acme.example", testers=TESTERS
-        )
+        assert_question_allowed(generation_region="us", asker="lead@acme.example", testers=TESTERS)
     with pytest.raises(GenerationResidencyError, match="registered build-phase tester"):
-        assert_request_allowed(generation_region="us", member_email="anyone", testers=frozenset())
+        assert_question_allowed(generation_region="us", asker="anyone", testers=frozenset())
 
 
 def test_offshore_a_registered_tester_is_allowed_whatever_the_case_of_their_email() -> None:
-    assert_request_allowed(
-        generation_region="us", member_email="tester@acme.EXAMPLE", testers=TESTERS
+    assert_question_allowed(generation_region="us", asker="tester@acme.EXAMPLE", testers=TESTERS)
+
+
+def test_in_sydney_any_question_is_allowed() -> None:
+    assert_question_allowed(
+        generation_region="australia-southeast1", asker="lead@acme.example", testers=frozenset()
     )
 
 
-def test_offshore_a_prefix_clause_the_registry_doesnt_vouch_for_is_refused_even_for_a_tester() -> (
-    None
-):
-    with pytest.raises(GenerationResidencyError, match="1 policy clause"):
-        assert_request_allowed(
-            generation_region="us",
-            member_email="tester@acme.example",
-            testers=TESTERS,
-            real_prefix_clause_ids=(f"{POLICY}:v2:1/1",),
+def test_offshore_tenant_text_the_registry_doesnt_vouch_for_is_refused() -> None:
+    gate = TenantTextGate("us", REGISTERED)
+    registered = (f"{POLICY}:v1:1/1", _chunk(synthetic=False).text)
+    gate.check("acme", (registered,), what="clause(s) of the CAG prefix")
+    with pytest.raises(GenerationResidencyError, match="1 clause\\(s\\) of the CAG prefix"):
+        gate.check(
+            "acme",
+            (registered, (f"{POLICY}:v2:1/1", "Acme keeps payroll for 7 years.")),
+            what="clause(s) of the CAG prefix",
         )
+    # The key binds the tenant as well as the words (ADR-0026).
+    with pytest.raises(GenerationResidencyError):
+        gate.check("globex", (registered,), what="clause to repair")
 
 
-def test_in_sydney_neither_the_asker_nor_the_prefix_is_checked() -> None:
-    assert_request_allowed(
-        generation_region="australia-southeast1",
-        member_email="lead@acme.example",
-        testers=frozenset(),
-        real_prefix_clause_ids=(f"{POLICY}:v2:1/1",),
+def test_in_sydney_tenant_text_is_not_checked() -> None:
+    TenantTextGate("australia-southeast1", REGISTERED).check(
+        "acme", ((f"{POLICY}:v2:1/1", "Real."),), what="clause to repair"
     )
 
 
-def test_the_registry_vouches_for_a_clause_text_under_its_own_tenant_only() -> None:
-    text = _chunk(synthetic=False).text
-    assert REGISTERED.vouches_for_text("acme", text)
-    assert not REGISTERED.vouches_for_text("globex", text)
-    assert not REGISTERED.vouches_for_text("acme", text + " ")
+def test_a_tenant_text_gate_refuses_a_region_that_is_never_allowed() -> None:
+    with pytest.raises(GenerationResidencyError):
+        TenantTextGate("global", REGISTERED)
 
 
 def test_the_golden_corpus_marks_every_tenant_chunk_synthetic() -> None:
     """The six Acme policies are invented; if this marking were dropped, the
     recall gate's corpus would close offshore generation for everyone."""
-    from compliance_rag.eval.golden_corpus import golden_chunks
-
     tenant = [c for c in golden_chunks() if c.scope is Scope.TENANT]
     assert tenant and all(c.synthetic for c in tenant)
+
+
+# ---- inside answer(): text read from the bucket (ADR-0032) --------------------
+
+
+async def _offshore_pipeline(
+    reply: str,
+) -> tuple[AssessmentPipeline, FakeGenerator, FakeClauseStore]:
+    from compliance_rag.eval.harness import golden_clause_store, golden_ledger
+
+    ledger, clauses = await golden_ledger(), await golden_clause_store()
+    generator = FakeGenerator(reply)
+    pipeline = AssessmentPipeline(
+        RetrievalPipeline(FakeRetrievalStore(golden_chunks(), ledger=ledger), FakeReranker()),
+        generator,
+        Verifier(clauses, ledger, CanonicalCitationVerifier()),
+        ledger,
+        tenant_text=TenantTextGate("us", SyntheticRegistry.load()),
+    )
+    return pipeline, generator, clauses
+
+
+def _acme_clause() -> ClauseRecord:
+    return next(c for c in golden_clauses() if c.instrument_id == "acme/privacy-policy")
+
+
+async def test_offshore_answer_refuses_an_unregistered_prefix_before_retrieving() -> None:
+    """Whoever calls `answer()`, the API or a script: the prefix is checked
+    before anything is retrieved or generated."""
+    pipeline, generator, _ = await _offshore_pipeline('{"answer": "-", "citations": []}')
+    clause = _acme_clause()
+    retrieved: list[RetrievalTrace] = []
+
+    async def seen(trace: RetrievalTrace) -> None:
+        retrieved.append(trace)
+
+    with pytest.raises(GenerationResidencyError, match="CAG prefix"):
+        await pipeline.answer(
+            "What does Acme do with personal information?",
+            "acme",
+            dt.date(2026, 10, 12),
+            law=LIBRARY_QUESTION,
+            policies=(SourceClause(clause.clause_id, "Acme keeps payroll for 7 years."),),
+            on_retrieved=seen,
+        )
+    assert retrieved == [] and generator.calls == []
+
+
+async def test_offshore_a_clause_to_repair_the_registry_doesnt_vouch_for_is_never_sent() -> None:
+    """A repair sends a clause's canonical text, read from the bucket, which
+    the generator's store gate never asks. The retrieved chunk is registered;
+    the bucket's text for the same clause isn't, so it is real data."""
+    clause = _acme_clause()
+    reply = json.dumps(
+        {"answer": "-", "citations": [{"clause_id": clause.clause_id, "quote": "not in it"}]}
+    )
+    pipeline, generator, clauses = await _offshore_pipeline(reply)
+    real = "Acme keeps the payroll of every employee for seven years."
+    await clauses.put_clause(clause.model_copy(update={"canonical_text": real}))
+    question = next(c.text for c in golden_chunks() if c.clause_id == clause.clause_id)
+
+    with pytest.raises(GenerationResidencyError, match="clause to repair"):
+        await pipeline.answer(question, "acme", dt.date(2026, 10, 12), law=LIBRARY_QUESTION)
+    assert len(generator.calls) == 1  # the answer; never the repair
+    assert all(real not in str(call) for call in generator.calls)

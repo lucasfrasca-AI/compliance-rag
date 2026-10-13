@@ -154,9 +154,10 @@ class Settings(BaseSettings):
 
     @property
     def offshore_testers(self) -> frozenset[str]:
-        """`offshore_generation_testers` as a set (compared case-insensitively)."""
+        """`offshore_generation_testers` as a set, lowercased as the sign-in
+        verifier lowercases members."""
         return frozenset(
-            e.strip() for e in self.offshore_generation_testers.split(",") if e.strip()
+            e.strip().lower() for e in self.offshore_generation_testers.split(",") if e.strip()
         )
 
     @property

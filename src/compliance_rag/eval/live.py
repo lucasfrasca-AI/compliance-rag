@@ -11,9 +11,11 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.harness import (
     golden_clause_store,
     golden_ledger,
@@ -50,9 +52,18 @@ async def live_answer_pipeline(
         if extra_chunks:
             await store.upsert_chunks(extra_chunks)
         generator = await VertexClaudeGenerator.create(settings, corpus=store)
+        # The injection probe is invented by this operator script, so it is
+        # registered here, in memory, for this run only (ADR-0026's operator
+        # path); every other tenant text must already be registered.
+        registry = SyntheticRegistry.load()
+        probe = SyntheticRegistry.of(extra_chunks, extra_clauses, source="the injection probe")
         yield AssessmentPipeline(
             RetrievalPipeline(store, reranker),
             generator,
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
+            tenant_text=TenantTextGate(
+                settings.vertex_claude_region,
+                SyntheticRegistry(registry.keys | probe.keys, f"{registry.source}; {probe.source}"),
+            ),
         )

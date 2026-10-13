@@ -12,9 +12,9 @@ names the tenant, the scope or the date.
 
 While generation runs outside Australia (the build phase, ADR-0023), the
 request is checked before anything is retrieved or generated (ADR-0032): the
-member must be a registered build-phase tester, and every clause of the
-policy prefix registered synthetic. A refusal is an `error` event naming the
-rule.
+member must be a registered build-phase tester (here, first), and every
+clause of the CAG prefix registered synthetic (`answer()`). A refusal is an
+`error` event naming the rule.
 
 The stream carries stages and a verified result, never unverified text
 (D-02):
@@ -41,11 +41,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from compliance_rag.adapters.generation_residency import (
     GenerationResidencyError,
-    assert_request_allowed,
+    assert_question_allowed,
 )
 from compliance_rag.adapters.interfaces import LawScope
 from compliance_rag.api.deps import (
@@ -154,20 +155,18 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
 
     async def stages() -> AsyncIterator[str]:
         try:
+            # Before anything else: offshore, only a registered tester's
+            # question leaves Australia (ADR-0032). The prefix is checked by
+            # `answer()` itself.
+            assert_question_allowed(
+                generation_region=services.settings.vertex_claude_region,
+                asker=who.member.email,
+                testers=services.settings.offshore_testers,
+            )
             coverage = await coverage_on(services, who.tenant_id, day)
             yield event("coverage", {"as_of": day.isoformat(), "counts": counts(coverage)})
             policies = await tenant_policies(
                 services.ledger, services.clauses, tenant_id=who.tenant_id, as_of=day
-            )
-            assert_request_allowed(
-                generation_region=services.settings.vertex_claude_region,
-                member_email=who.member.email,
-                testers=services.settings.offshore_testers,
-                real_prefix_clause_ids=[
-                    p.clause_id
-                    for p in policies
-                    if not services.synthetic.vouches_for_text(who.tenant_id, p.text)
-                ],
             )
             retrieved: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
@@ -198,6 +197,7 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
             yield event("answer", _answer_json(answer))
         except GenerationResidencyError as refused:
             log.warning("an answer was refused by the residency gate: %s", refused)
+            trace.get_current_span().set_attribute("answer.refused", "residency")
             yield event("error", {"error": "residency", "message": str(refused)})
         except MalformedGeneration:
             yield event("error", MALFORMED)

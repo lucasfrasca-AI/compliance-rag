@@ -27,7 +27,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
-from compliance_rag.adapters.generation_residency import GenerationResidencyError
+from compliance_rag.adapters.generation_residency import GenerationResidencyError, TenantTextGate
 from compliance_rag.adapters.interfaces import LawScope, Profile
 from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
@@ -93,6 +93,7 @@ async def _client(
             generator,
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
+            tenant_text=TenantTextGate.from_settings(settings or api_settings()),
         ),
     )
     return httpx.AsyncClient(
@@ -231,6 +232,7 @@ async def test_retrieval_is_reported_before_generation_starts() -> None:
         generator,
         Verifier(await golden_clause_store(), ledger, CanonicalCitationVerifier()),
         ledger,
+        tenant_text=TenantTextGate.from_settings(api_settings()),
     )
     seen: list[int] = []
 
@@ -293,7 +295,7 @@ async def test_offshore_a_member_who_isnt_a_registered_tester_is_refused_before_
     vouch for: a member can type real customer data into it."""
     generator = FakeGenerator(_reply())
     response, events = await _ask(generator, settings=api_settings(**OFFSHORE))
-    assert [name for name, _ in events] == ["coverage", "error"]
+    assert [name for name, _ in events] == ["error"]  # before any work
     error = events[-1][1]
     assert error["error"] == "residency" and "ADR-0032" in error["message"]
     assert generator.calls == []
@@ -323,7 +325,9 @@ async def test_offshore_a_policy_clause_the_registry_doesnt_vouch_for_is_refused
     generator = FakeGenerator(_reply())
     response, events = await _ask(generator, clauses=clauses, settings=settings)
     assert [name for name, _ in events] == ["coverage", "error"]
-    assert events[-1][1]["error"] == "residency"
+    error = events[-1][1]
+    assert error["error"] == "residency" and "CAG prefix" in error["message"]
+    assert edited.clause_id in error["message"]
     assert generator.calls == [] and real not in response.text
 
 

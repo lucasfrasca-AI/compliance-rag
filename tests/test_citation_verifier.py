@@ -18,11 +18,14 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import Generation
 from compliance_rag.assessment.draft import DraftCitation
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
+from compliance_rag.settings import REGION
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Outcome, Verifier
 
 TENANT = "acme"
@@ -119,6 +122,7 @@ async def _setup(
         generator,
         Verifier(clauses, ledger, CanonicalCitationVerifier()),
         ledger,
+        tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
     )
     return pipeline, ledger, clauses
 

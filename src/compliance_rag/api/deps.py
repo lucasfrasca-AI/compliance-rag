@@ -28,7 +28,6 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.assessment.coverage import Coverage, Outcome
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.assessment.pipeline import AssessmentPipeline
-from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.settings import Settings
 
 
@@ -44,9 +43,6 @@ class ApiServices:
     """Canonical text: the tenant's policies for the cached prefix (#148)."""
     pipeline: AssessmentPipeline
     """`answer()`: retrieval, generation, verification (#149)."""
-    synthetic: SyntheticRegistry
-    """Which policy text is synthetic: offshore, every clause of the prefix
-    must be registered (ADR-0026, ADR-0032)."""
     checks: tuple[Callable[[], Awaitable[None]], ...] = field(
         default_factory=tuple[Callable[[], Awaitable[None]], ...]
     )
