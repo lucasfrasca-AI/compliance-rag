@@ -226,6 +226,27 @@ class Scope(StrEnum):
     USER = "user"
 
 
+class DocumentClass(StrEnum):
+    """Which kind of document an instrument is (`CONTEXT.md`: Document class,
+    #148). Every version of an instrument has its class. Only internal policies
+    are `answer()`'s cached prefix (D-11); external uploads are retrieval-only."""
+
+    LIBRARY_LAW = "library_law"
+    EXTERNAL_UPLOAD = "external_upload"
+    INTERNAL_POLICY = "internal_policy"
+
+
+def check_document_class(tenant_id: str, document_class: DocumentClass) -> None:
+    """The library is `_public`'s and only `_public`'s (ADR-0020): it holds
+    library law and nothing else, and a tenant's documents are never library
+    law."""
+    if (tenant_id == PUBLIC_TENANT_ID) != (document_class is DocumentClass.LIBRARY_LAW):
+        raise ValueError(
+            f"{document_class.value} can't belong to {tenant_id}: library law is "
+            f"{PUBLIC_TENANT_ID}'s alone, and everything {PUBLIC_TENANT_ID} owns is library law"
+        )
+
+
 CANONICALISATION_VERSION = 2
 """The current canonicalisation transformation (`CONTEXT.md`: Canonicalisation
 version, issue #2). `ClauseRecord` and `Citation` default to this, but the

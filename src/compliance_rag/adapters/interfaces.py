@@ -36,7 +36,13 @@ from compliance_rag.adapters.graph_schema import (
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.assessment.coverage import Coverage, CoverageRow
 from compliance_rag.assessment.evidence import Evidence, Facts
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, validate_tenant_id
+from compliance_rag.corpus.models import (
+    Chunk,
+    ClauseRecord,
+    DocumentClass,
+    Scope,
+    validate_tenant_id,
+)
 
 # --------------------------------------------------------------------------
 # Shared value objects
@@ -209,6 +215,14 @@ class RemovalOutcome(StrEnum):
     leaves a trace."""
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyVersion:
+    """One version of a tenant's internal policy (#148)."""
+
+    instrument_id: str
+    version_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -513,10 +527,26 @@ class LedgerStore(ABC):
         version_id: str,
         valid_from: dt.date,
         supersedes: str | None,
+        document_class: DocumentClass,
     ) -> None:
         """A version comes into force (ledger `instrument_version`). The
         record the verifier checks a cited version against, independently of
-        what retrieval returned (ADR-0021 mechanism 3)."""
+        what retrieval returned (ADR-0021 mechanism 3). `document_class` is
+        the instrument's (#148): the same for every version, and library law
+        if and only if the tenant is `_public` (`check_document_class`)."""
+
+    @abstractmethod
+    async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:
+        """The tenant's internal policy versions in force on `as_of` (#148):
+        `valid_from <= as_of < valid_to`, never withdrawn or purged, sorted by
+        instrument then version, bytewise. What `answer()` sends as the cached
+        prefix (D-11). An instrument recorded before document classes existed
+        (ledger 0011) is a `ValueError` naming it, never a guess."""
+
+    @abstractmethod
+    async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
+        """The instrument's class, or None if it has never been recorded (or
+        was recorded before classes existed)."""
 
     @abstractmethod
     async def end_version(

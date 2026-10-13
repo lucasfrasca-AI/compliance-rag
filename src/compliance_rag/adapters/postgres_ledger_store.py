@@ -28,6 +28,7 @@ from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
     LedgerStore,
+    PolicyVersion,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
@@ -50,6 +51,8 @@ from compliance_rag.assessment.evidence import (
 )
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
+    DocumentClass,
+    check_document_class,
     validate_library_instrument_id,
     validate_tenant_id,
 )
@@ -376,17 +379,29 @@ class PostgresLedgerStore(LedgerStore):
         version_id: str,
         valid_from: dt.date,
         supersedes: str | None,
+        document_class: DocumentClass,
     ) -> None:
+        check_document_class(tenant_id, document_class)
         scope = "public" if tenant_id == PUBLIC_TENANT_ID else "tenant"
         try:
             async with self._connection() as conn:
                 await conn.execute(
                     "INSERT INTO instrument "
-                    "(tenant_id, instrument_id, title, jurisdiction, scope) "
-                    "VALUES (%s, %s, %s, 'AU', %s) "
+                    "(tenant_id, instrument_id, title, jurisdiction, scope, document_class) "
+                    "VALUES (%s, %s, %s, 'AU', %s, %s) "
                     "ON CONFLICT (tenant_id, instrument_id) DO NOTHING",
-                    (tenant_id, instrument_id, instrument_id, scope),
+                    (tenant_id, instrument_id, instrument_id, scope, document_class.value),
                 )
+                # An instrument recorded before 0011 has no class: this
+                # version states it. One already classified must agree.
+                cursor = await conn.execute(
+                    "UPDATE instrument SET document_class = COALESCE(document_class, %s) "
+                    "WHERE tenant_id = %s AND instrument_id = %s RETURNING document_class",
+                    (document_class.value, tenant_id, instrument_id),
+                )
+                stored = await cursor.fetchone()
+                if stored is not None and stored[0] != document_class.value:
+                    raise ValueError(f"{instrument_id} is {stored[0]}, not {document_class.value}")
                 await conn.execute(
                     "INSERT INTO instrument_version "
                     "(tenant_id, instrument_id, version_id, title, valid_from, supersedes) "
@@ -423,6 +438,32 @@ class PostgresLedgerStore(LedgerStore):
                 f"{instrument_id}:{version_id} already ended on {validity[1]}; "
                 "valid_to is set once (D-05)"
             )
+
+    async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:
+        rows = await self._fetchall(
+            "SELECT v.instrument_id, v.version_id, i.document_class "
+            "FROM instrument_version v JOIN instrument i USING (tenant_id, instrument_id) "
+            "WHERE v.tenant_id = %s AND v.valid_from <= %s "
+            "AND (v.valid_to IS NULL OR %s < v.valid_to) "
+            "AND v.withdrawn_at IS NULL AND v.purged_at IS NULL "
+            "AND (i.document_class = 'internal_policy' OR i.document_class IS NULL) "
+            'ORDER BY v.instrument_id COLLATE "C", v.version_id COLLATE "C"',
+            (tenant_id, as_of, as_of),
+        )
+        unclassified = sorted({str(r[0]) for r in rows if r[2] is None})
+        if unclassified:
+            raise ValueError(
+                f"{tenant_id}: {unclassified} have no document class (recorded before "
+                "0011): record the next version with its class, never a guessed one"
+            )
+        return tuple(PolicyVersion(str(r[0]), str(r[1])) for r in rows)
+
+    async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
+        row = await self._fetchone(
+            "SELECT document_class FROM instrument WHERE tenant_id = %s AND instrument_id = %s",
+            (tenant_id, instrument_id),
+        )
+        return DocumentClass(str(row[0])) if row and row[0] is not None else None
 
     async def version_validity(
         self, *, tenant_id: str, instrument_id: str, version_id: str
