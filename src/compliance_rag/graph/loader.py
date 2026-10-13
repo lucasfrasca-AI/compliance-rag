@@ -27,11 +27,17 @@ loaded into the graph (D-09, D-14: tenant content has no persisted node), so a
 Correcting a loaded item in place changes a node, which D-05 forbids: such a
 load is refused before any write, naming the item. A change of meaning is a
 new id with `supersedes` (#93 Q4).
+
+**Recording a load** (`recorded_load`, #153): a loader run is wrapped so the
+graph records which corpus or mapping version it wrote, from which commit,
+and whether it finished. A load that raised stays unfinished.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import cast
 
@@ -52,7 +58,7 @@ from compliance_rag.adapters.graph_schema import (
     Scalar,
     StoredNode,
 )
-from compliance_rag.adapters.interfaces import GraphAdmin
+from compliance_rag.adapters.interfaces import GraphAdmin, SourceVersion
 from compliance_rag.corpus.models import NO_END_DATE, ClauseRecord, Scope, canonical_sha256
 from compliance_rag.graph.mappings import (
     Actor,
@@ -486,3 +492,21 @@ def _record(span: Span, report: LoadReport) -> None:
     span.set_attribute("graph.nodes", report.counts.nodes)
     span.set_attribute("graph.edges", report.counts.edges)
     span.set_attribute("graph.not_loaded", list(report.not_loaded))
+
+
+@asynccontextmanager
+async def recorded_load(graph: GraphAdmin, version: SourceVersion) -> AsyncGenerator[str]:
+    """Stamp a load with the version it loads (#153, ADR-0034): `begin_load`
+    before the body, `finish_load` only if the body returns. A body that
+    raises leaves the load unfinished, deliberately: the graph may be
+    part-written, so `loaded_sources()` reports it as loading and nothing is
+    assessed against it until a load of that kind finishes. Yields the load's
+    id.
+
+        async with recorded_load(graph, version):
+            await load_mappings(graph, mappings)
+    """
+    with telemetry.span("graph_loader.recorded_load", **{"graph.load_version": version.described}):
+        load_id = await graph.begin_load(version)
+        yield load_id
+        await graph.finish_load(load_id)

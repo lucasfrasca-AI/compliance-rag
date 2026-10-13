@@ -21,7 +21,9 @@ only from the closed sets below; every value is a bound parameter.
 
 Reads go through the query builder (issue #88), which requires `as_of` and a
 depth cap. `counts()` is the one exception, and it reads no node: whole-graph
-totals for the Aura capacity check (PHASES.md Phase 2 exit).
+totals for the Aura capacity check (PHASES.md Phase 2 exit). `loaded_sources()`
+is the other: it reads the `Load` records (#153, `graph_schema.LOAD_LABEL`),
+which say what a loader wrote, not what the law said.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -71,7 +74,13 @@ from compliance_rag.adapters.graph_schema import (
     checked_label,
     refuse_duplicates,
 )
-from compliance_rag.adapters.interfaces import GraphAdmin
+from compliance_rag.adapters.interfaces import (
+    GraphAdmin,
+    LoadedSource,
+    LoadedSources,
+    SourceKind,
+    SourceVersion,
+)
 from compliance_rag.corpus.models import NO_END_DATE
 from compliance_rag.settings import Settings
 
@@ -847,11 +856,98 @@ class Neo4jGraph(GraphAdmin):
                     found[node] = StoredNode(node, _stored_from(record, "props"), edges)
         return found
 
+    # ---- loads: which version a loader wrote (#153, ADR-0034) ----------------
+
+    async def begin_load(self, version: SourceVersion) -> str:
+        """Record that a load started: a `Load` node (`graph_schema.LOAD_LABEL`)
+        with its kind, tag, commit and start. Written once and given its end
+        once by `finish_load`; never rewritten or removed."""
+        load_id = uuid.uuid4().hex
+        props: dict[str, object] = {
+            "load_id": load_id,
+            "kind": version.kind.value,
+            "sha": version.sha,
+            "started_at": self._clock(),
+        }
+        if version.tag is not None:  # Neo4j stores no null: untagged has no tag
+            props["tag"] = version.tag
+
+        async def work(tx: AsyncManagedTransaction) -> str:
+            await tx.run("CREATE (l:Load) SET l = $props", props=props)
+            return load_id
+
+        attributes = {
+            "graph.load_kind": version.kind.value,
+            "graph.load_version": version.described,
+        }
+        return await self._write("neo4j_graph.begin_load", attributes, work)
+
+    async def finish_load(self, load_id: str) -> None:
+        """Set `finished_at` on a load, once: lock, then read, then set — as a
+        retirement does, so two concurrent finishes can't both win. An unknown
+        load, or one already finished, is refused."""
+        now = self._clock()
+
+        async def work(tx: AsyncManagedTransaction) -> None:
+            locked = await tx.run(
+                "MATCH (l:Load {load_id: $load_id}) SET l._lock = true RETURN count(l) AS found",
+                load_id=load_id,
+            )
+            if (await locked.single(strict=True))["found"] == 0:
+                raise GraphWriteRefused(f"no load {load_id!r} to finish")
+            result = await tx.run(
+                "MATCH (l:Load {load_id: $load_id}) REMOVE l._lock "
+                "RETURN l.finished_at AS finished",
+                load_id=load_id,
+            )
+            if (await result.single(strict=True))["finished"] is not None:
+                raise GraphWriteRefused(
+                    f"load {load_id!r} already finished; finished_at is set once"
+                )
+            await tx.run(
+                "MATCH (l:Load {load_id: $load_id}) SET l.finished_at = $now",
+                load_id=load_id,
+                now=now,
+            )
+
+        await self._write("neo4j_graph.finish_load", {"graph.load_id": load_id}, work)
+
+    async def loaded_sources(self) -> LoadedSources:
+        """The latest finished load of each kind, and whether a newer one
+        hasn't finished. Latest is by start: a failed load followed by a
+        successful one is no longer loading. Like `counts()`, a read outside
+        the query builder that returns no node of the law."""
+        with telemetry.span("neo4j_graph.loaded_sources") as s:
+            found = {kind: await self._loaded(kind) for kind in SourceKind}
+            for kind, state in found.items():
+                version = state.version.described if state.version else "none"
+                s.set_attribute(f"graph.{kind.value}_version", version)
+                s.set_attribute(f"graph.{kind.value}_loading", state.loading)
+            return LoadedSources(corpus=found[SourceKind.CORPUS], mapping=found[SourceKind.MAPPING])
+
+    async def _loaded(self, kind: SourceKind) -> LoadedSource:
+        records, _, _ = await self._driver.execute_query(
+            "OPTIONAL MATCH (f:Load {kind: $kind}) WHERE f.finished_at IS NOT NULL "
+            "WITH f ORDER BY f.started_at DESC, f.load_id DESC LIMIT 1 "
+            "OPTIONAL MATCH (u:Load {kind: $kind}) "
+            "WHERE u.finished_at IS NULL AND (f IS NULL OR u.started_at > f.started_at) "
+            "RETURN f.tag AS tag, f.sha AS sha, count(u) AS unfinished",
+            kind=kind.value,
+            database_=self._database,
+            routing_=RoutingControl.READ,
+        )
+        (record,) = records
+        version = None
+        if record["sha"] is not None:
+            version = SourceVersion(kind, sha=str(record["sha"]), tag=record["tag"])
+        return LoadedSource(version=version, loading=int(record["unfinished"]) > 0)
+
     # ---- counts (Phase 2 exit: Aura usage under 10% of its limits) ----------
 
     async def counts(self) -> GraphCounts:
-        """Whole-graph totals. Not a traversal and returns no node, so it is
-        the one read outside the query builder (module docstring)."""
+        """Whole-graph totals, `Load` records included. Not a traversal and
+        returns no node, so it is the one read outside the query builder
+        (module docstring)."""
         with telemetry.span("neo4j_graph.counts") as s:
             nodes, _, _ = await self._driver.execute_query(
                 "MATCH (n) RETURN count(n) AS c", database_=self._database

@@ -56,6 +56,13 @@ FOR (n:Jurisdiction) REQUIRE n.stable_id IS UNIQUE;
 CREATE CONSTRAINT sector_stable_id IF NOT EXISTS
 FOR (n:Sector) REQUIRE n.stable_id IS UNIQUE;
 
+// Load is the record that a loader ran (#153, ADR-0034): metadata, not law, so
+// it has a load_id rather than a stable_id and no valid time. It is in no
+// vocabulary the query builder reads.
+
+CREATE CONSTRAINT load_id IF NOT EXISTS
+FOR (n:Load) REQUIRE n.load_id IS UNIQUE;
+
 // --- existence of the bitemporal properties ---------------------------------
 // Property-existence constraints are an Enterprise/Aura feature. Community
 // (the CI service container) refuses them; apply_schema reports each refused

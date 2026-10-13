@@ -14,6 +14,7 @@ Two rules are encoded in the signatures rather than left to convention:
 from __future__ import annotations
 
 import datetime as dt
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -34,7 +35,7 @@ from compliance_rag.adapters.graph_schema import (
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.assessment.coverage import Coverage, CoverageRow
+from compliance_rag.assessment.coverage import Coverage, CoverageRow, Outcome
 from compliance_rag.assessment.evidence import Evidence, Facts
 from compliance_rag.corpus.models import (
     Chunk,
@@ -253,6 +254,124 @@ class ManifestMetadata:
     source_html_sha256: str
 
 
+class SourceKind(StrEnum):
+    """The two parts of the repository an assessment is reproducible from: the
+    corpus and the mappings (`CONTEXT.md`: Corpus version, Mapping version).
+    Each is a tag over one path, named with one prefix (ADR-0034)."""
+
+    CORPUS = "corpus"
+    MAPPING = "mapping"
+
+    @property
+    def path(self) -> str:
+        """The repository path the version is a tag over."""
+        return "corpus/instruments" if self is SourceKind.CORPUS else "corpus/mappings"
+
+    @property
+    def tag_prefix(self) -> str:
+        """What a tag over `path` is called: `corpus-2026.10`, `mappings-2026.10`."""
+        return "corpus-" if self is SourceKind.CORPUS else "mappings-"
+
+
+_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceVersion:
+    """A corpus or mapping version as a load recorded it (#153, ADR-0034): the
+    commit the content was resolved to, and the tag that named it, if any.
+
+    A tag can move; a commit can't, and reproducibility is the point, so the
+    SHA is always present and the tag is the name it was known by. `tag` None
+    means untagged: no tag over this path's content existed at load time, and
+    the SHA alone names it."""
+
+    kind: SourceKind
+    sha: str
+    tag: str | None = None
+
+    def __post_init__(self) -> None:
+        if not _SHA.fullmatch(self.sha):
+            raise ValueError(f"a source version's sha is 40 lowercase hex characters: {self.sha!r}")
+        if self.tag is not None and not self.tag.strip():
+            raise ValueError("a source version's tag is a name, or None for untagged")
+
+    @property
+    def untagged(self) -> bool:
+        return self.tag is None
+
+    @property
+    def described(self) -> str:
+        """For a log line or a span: `mappings-2026.10 @ 1a2b3c4`."""
+        return f"{self.tag or 'untagged'} @ {self.sha[:7]}"
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedSource:
+    """What the graph holds of one kind: the latest load that finished, and
+    whether a newer one hasn't. `loading` is true while a load runs, and stays
+    true if it failed: a failed load may have left the graph part-written, so
+    nothing is assessed against it until a load of that kind finishes."""
+
+    version: SourceVersion | None = None
+    """None if no load of this kind has ever finished."""
+    loading: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedSources:
+    """What the graph holds, per kind (#153). The default is a graph nothing
+    has been loaded into."""
+
+    corpus: LoadedSource = LoadedSource()
+    mapping: LoadedSource = LoadedSource()
+
+    def of(self, kind: SourceKind) -> LoadedSource:
+        return self.corpus if kind is SourceKind.CORPUS else self.mapping
+
+
+@dataclass(frozen=True, slots=True)
+class AssessmentRecord:
+    """A recorded assessment (ledger `assessment`): for whom, for what date,
+    against which corpus and mapping versions, in which request. Reproducible
+    only with both versions (`CONTEXT.md`)."""
+
+    tenant_id: str
+    assessment_id: str
+    user_id: str
+    """Who asked: the member's email, as a subscription's `subscribed_by`."""
+    corpus: SourceVersion
+    mapping: SourceVersion
+    as_of: dt.date
+    trace_id: str
+
+
+def check_assessment_write(
+    *,
+    user_id: str,
+    corpus: SourceVersion,
+    mapping: SourceVersion,
+    trace_id: str,
+    rows: tuple[CoverageRow, ...],
+) -> None:
+    """What every `LedgerStore` refuses before writing an assessment and its
+    coverage (`record_coverage_assessment`); the database's own constraints
+    refuse the same again."""
+    if not trace_id:
+        raise ValueError("an assessment and its coverage carry the trace_id of their request")
+    if not user_id.strip():
+        raise ValueError("an assessment names who asked")
+    if corpus.kind is not SourceKind.CORPUS or mapping.kind is not SourceKind.MAPPING:
+        raise ValueError("an assessment records a corpus version and a mapping version")
+    if len({row.obligation_id for row in rows}) != len(rows):
+        raise ValueError("coverage names an obligation twice")
+    for row in rows:
+        if not row.reason.strip():
+            raise ValueError(f"{row.obligation_id}: a coverage row says why")
+        if row.outcome is not Outcome.UNASSESSABLE and not row.citations:
+            raise ValueError(f"{row.obligation_id}: a decided obligation cites its clauses")
+
+
 # --------------------------------------------------------------------------
 # Interfaces
 # --------------------------------------------------------------------------
@@ -280,6 +399,12 @@ class GraphStore(ABC):
         """Obligation and control ids reachable by `CROSSWALKS_TO` within
         `max_depth` hops, in force on `as_of`."""
 
+    @abstractmethod
+    async def loaded_sources(self) -> LoadedSources:
+        """The corpus and mapping versions the graph holds, and whether a load
+        is unfinished (#153): what an assessment records, and the reason it
+        isn't recorded while a load runs."""
+
 
 class GraphReader(ABC):
     """Builder-built reads of the persisted graph — all Track A needs."""
@@ -287,6 +412,12 @@ class GraphReader(ABC):
     @abstractmethod
     async def read(self, query: BuiltQuery) -> tuple[GraphRow, ...]:
         """Run one builder-built query."""
+
+    @abstractmethod
+    async def loaded_sources(self) -> LoadedSources:
+        """The latest finished load of each kind, and whether a newer one
+        hasn't finished (#153). Not a traversal and returns no node of the
+        law: it reads the record of the loads."""
 
 
 class GraphAdmin(GraphReader):
@@ -356,6 +487,20 @@ class GraphAdmin(GraphReader):
         each changes only `COSMETIC` properties its node (or crosswalk edge)
         already has, and appends the previous wording, who and why to that
         node's or edge's `corrections` trail. All land, or none does."""
+
+    @abstractmethod
+    async def begin_load(self, version: SourceVersion) -> str:
+        """Record that a load of `version.kind` from `version` has started
+        (#153); returns its id. Append-only, like the law the loads write: a
+        record is never rewritten, and `finish_load` sets its end once. Not a
+        node of the ontology and not bitemporal: it says what was loaded, not
+        what was true."""
+
+    @abstractmethod
+    async def finish_load(self, load_id: str) -> None:
+        """Mark the load finished, once. An unknown load, or one already
+        finished, is refused. A load that never reaches this stays unfinished,
+        which is how a failed load is told from a successful one."""
 
     @abstractmethod
     async def counts(self) -> GraphCounts:
@@ -461,33 +606,36 @@ class LedgerStore(ABC):
         record of what an earlier assessment read), in recording order."""
 
     @abstractmethod
-    async def record_coverage(
-        self, *, tenant_id: str, assessment_id: str, coverage: Coverage, trace_id: str
+    async def record_coverage_assessment(
+        self,
+        *,
+        tenant_id: str,
+        assessment_id: str,
+        user_id: str,
+        corpus: SourceVersion,
+        mapping: SourceVersion,
+        as_of: dt.date,
+        trace_id: str,
+        rows: tuple[CoverageRow, ...],
     ) -> None:
-        """One row per obligation for a recorded assessment (D-06): outcome,
-        reason, citations and, for an unassessable one, its questions."""
+        """An assessment and its coverage, in one transaction (#153): the
+        assessment against the corpus and mapping versions it was computed
+        from, and one row per obligation (D-06) — outcome, reason, citations
+        and, for an unassessable one, its questions. All of it lands or none
+        of it does, so an assessment is never left without its coverage.
+        Every row carries the request's `trace_id`. A repeated assessment id,
+        an unregistered tenant, a blank user, or a decided obligation citing
+        nothing is a `ValueError`."""
 
     @abstractmethod
     async def coverage_rows(self, tenant_id: str, assessment_id: str) -> tuple[CoverageRow, ...]:
         """An assessment's coverage, by obligation id."""
 
     @abstractmethod
-    async def record_assessment(
-        self,
-        *,
-        tenant_id: str,
-        assessment_id: str,
-        corpus_version: str,
-        mapping_version: str,
-        as_of: dt.date,
-        trace_id: str,
-    ) -> None:
-        """Every ledger row that results from a request stores its `trace_id`."""
-
-    @abstractmethod
-    async def get_assessment(
-        self, tenant_id: str, assessment_id: str
-    ) -> dict[str, object] | None: ...
+    async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
+        """The recorded assessment, or None if this tenant has none by that id.
+        One recorded before source versions were (#153) is a `ValueError`,
+        never a guess."""
 
     @abstractmethod
     async def subscribe(

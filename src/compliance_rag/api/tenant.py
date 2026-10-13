@@ -10,9 +10,14 @@ themselves.
   the request body can't name one.
 - **Coverage.** Track A over the tenant's evidence on `as_of`: every obligation
   applicable / not applicable / unassessable, each unassessable one with what
-  would settle it. Computed, not recorded: an assessment is recorded with the
-  corpus and mapping versions (git tags, CONTEXT.md) of what was loaded, and
-  nothing records those yet (#153).
+  would settle it. `GET /v1/coverage` computes it; nothing is recorded.
+  `POST /v1/coverage` records it as an assessment (#153, ADR-0034): the
+  corpus and mapping versions the graph's loads recorded (a tag and the commit
+  it pointed at, CONTEXT.md), and every obligation's row, in one ledger
+  transaction, in the member's name. It refuses (503) while the graph holds no
+  finished load of either kind, while one is unfinished, and if a load
+  starts or finishes while the coverage is computed. `GET /v1/coverage/{id}`
+  reads a recorded assessment back, row for row.
 - **Subscriptions.** Subscribe and unsubscribe; unsubscribing deletes the
   subscription row only (D-17).
 """
@@ -23,9 +28,16 @@ import datetime as dt
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
+    LoadedSources,
+    SourceKind,
+    SourceVersion,
+)
 from compliance_rag.api.deps import (
     EARLIEST,
     LATEST,
@@ -35,7 +47,14 @@ from compliance_rag.api.deps import (
     services_of,
     today,
 )
-from compliance_rag.assessment.coverage import Coverage, Question, question_json
+from compliance_rag.assessment.coverage import (
+    Coverage,
+    CoverageRow,
+    ObligationCoverage,
+    Outcome,
+    Question,
+    question_json,
+)
 from compliance_rag.assessment.coverage_report import cite
 from compliance_rag.assessment.evidence import (
     Evidence,
@@ -157,23 +176,35 @@ def _question_json(q: Question) -> dict[str, object]:
     return {**question_json(q), "cites": [cite(c) for c in q.clause_ids]}
 
 
+def _row_json(row: CoverageRow) -> dict[str, object]:
+    """An obligation as the ledger keeps it: the outcome, why, the clauses it
+    rests on and, if unassessable, what would settle it."""
+    return {
+        "obligation_id": row.obligation_id,
+        "outcome": row.outcome.value,
+        "reason": row.reason,
+        "citations": [{"clause_id": c, "cite": cite(c)} for c in row.citations],
+        "questions": [_question_json(q) for q in row.questions],
+    }
+
+
+def _obligation_json(o: ObligationCoverage) -> dict[str, object]:
+    """Computed coverage also says whose obligation it is and in what words:
+    the ledger keeps neither (`coverage` has no such column)."""
+    return {
+        "obligation_id": o.obligation_id,
+        "instrument_id": o.instrument_id,
+        "summary": o.summary,
+        **_row_json(CoverageRow.of(o)),
+    }
+
+
 def _coverage_json(coverage: Coverage) -> dict[str, object]:
     return {
         "tenant_id": coverage.tenant_id,
         "as_of": coverage.as_of.isoformat(),
         "counts": counts(coverage),
-        "obligations": [
-            {
-                "obligation_id": o.obligation_id,
-                "instrument_id": o.instrument_id,
-                "summary": o.summary,
-                "outcome": o.outcome.value,
-                "reason": o.reason,
-                "citations": [{"clause_id": c, "cite": cite(c)} for c in o.citations],
-                "questions": [_question_json(q) for q in o.questions],
-            }
-            for o in coverage.obligations
-        ],
+        "obligations": [_obligation_json(o) for o in coverage.obligations],
         "roles": [
             {"actor_id": a.actor_id, "name": a.name, "truth": a.truth.value}
             for a in coverage.actors
@@ -249,6 +280,133 @@ async def get_coverage(
     if not EARLIEST <= day <= LATEST:
         raise HTTPException(422, f"as_of must be between {EARLIEST} and {LATEST}")
     return _coverage_json(await coverage_on(services_of(request), who.tenant_id, day))
+
+
+# ---- recorded assessments (#153) ---------------------------------------------------
+
+ASSESSMENT_ID = r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$"
+"""What `uuid.uuid4().hex` makes."""
+
+RETRY_AFTER = "30"
+"""Seconds: a guess at how long a load takes, and asking sooner is harmless."""
+
+LOADERS = {
+    SourceKind.CORPUS: "scripts.load_graph_structure",
+    SourceKind.MAPPING: "scripts.load_mappings",
+}
+
+
+class AssessmentIn(BaseModel):
+    """What a member says about an assessment: the date, and nothing else. The
+    versions it records are what the graph holds, never what a request names."""
+
+    model_config = ConfigDict(extra="forbid")
+    as_of: dt.date | None = Field(default=None, ge=EARLIEST, le=LATEST)
+
+
+def _version_json(version: SourceVersion) -> dict[str, object]:
+    return {"tag": version.tag, "sha": version.sha, "untagged": version.untagged}
+
+
+def _recorded_json(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> dict[str, object]:
+    return {
+        "assessment_id": record.assessment_id,
+        "tenant_id": record.tenant_id,
+        "as_of": record.as_of.isoformat(),
+        "corpus_version": _version_json(record.corpus),
+        "mapping_version": _version_json(record.mapping),
+        "recorded_by": record.user_id,
+        "counts": {o.value: sum(1 for r in rows if r.outcome is o) for o in Outcome},
+        "obligations": [_row_json(r) for r in rows],
+    }
+
+
+def _held(sources: LoadedSources) -> tuple[SourceVersion, SourceVersion]:
+    """The corpus and mapping versions the graph holds, or the 503 saying why
+    there is nothing to record an assessment against."""
+    unfinished = [k.value for k in SourceKind if sources.of(k).loading]
+    if unfinished:
+        raise HTTPException(
+            503,
+            f"a {' and a '.join(unfinished)} load hasn't finished (it is running, or it failed): "
+            "nothing is assessed against a graph that may be part-written. Try again when it "
+            "has, or re-run the loader",
+            headers={"Retry-After": RETRY_AFTER},
+        )
+    corpus, mapping = sources.corpus.version, sources.mapping.version
+    if corpus is None or mapping is None:
+        absent = [k for k in SourceKind if sources.of(k).version is None]
+        raise HTTPException(
+            503,
+            "no finished load records which "
+            + " and ".join(f"{k.value} version" for k in absent)
+            + " the graph holds, so an assessment couldn't name them (#153): run "
+            + " and ".join(LOADERS[k] for k in absent),
+        )
+    return corpus, mapping
+
+
+@router.post("/coverage", status_code=201)
+async def record_coverage(
+    request: Request, who: CurrentCaller, body: AssessmentIn | None = None
+) -> dict[str, object]:
+    """Track A's coverage on `as_of`, recorded as an assessment against the
+    corpus and mapping versions the graph holds. The graph's loads are read
+    before and after the coverage is computed: if they differ, a load began or
+    ended in between and the coverage may mix two versions, so nothing is
+    recorded."""
+    day = (body.as_of if body else None) or today()
+    services = services_of(request)
+    before = await services.graph.loaded_sources()
+    corpus, mapping = _held(before)
+    coverage = await coverage_on(services, who.tenant_id, day)
+    if await services.graph.loaded_sources() != before:
+        raise HTTPException(
+            503,
+            "a load started or finished while the coverage was computed, so it may mix two "
+            "versions: nothing was recorded. Try again",
+            headers={"Retry-After": RETRY_AFTER},
+        )
+    rows = tuple(
+        sorted((CoverageRow.of(o) for o in coverage.obligations), key=lambda r: r.obligation_id)
+    )
+    record = AssessmentRecord(
+        tenant_id=who.tenant_id,
+        assessment_id=uuid.uuid4().hex,
+        user_id=who.member.email,
+        corpus=corpus,
+        mapping=mapping,
+        as_of=day,
+        trace_id=current_trace_id(),
+    )
+    await services.ledger.record_coverage_assessment(
+        tenant_id=record.tenant_id,
+        assessment_id=record.assessment_id,
+        user_id=record.user_id,
+        corpus=record.corpus,
+        mapping=record.mapping,
+        as_of=record.as_of,
+        trace_id=record.trace_id,
+        rows=rows,
+    )
+    current = trace.get_current_span()
+    current.set_attribute("assessment.id", record.assessment_id)
+    current.set_attribute("assessment.corpus_version", corpus.described)
+    current.set_attribute("assessment.mapping_version", mapping.described)
+    return _recorded_json(record, rows)
+
+
+@router.get("/coverage/{assessment_id}")
+async def get_recorded_coverage(
+    request: Request, who: CurrentCaller, assessment_id: Annotated[str, Path(pattern=ASSESSMENT_ID)]
+) -> dict[str, object]:
+    """A recorded assessment as it was written: its versions, who asked, and
+    each obligation's row. Another tenant's is not found, not forbidden."""
+    ledger = services_of(request).ledger
+    record = await ledger.get_assessment(who.tenant_id, assessment_id)
+    if record is None:
+        raise HTTPException(404, "no such assessment")
+    return _recorded_json(record, await ledger.coverage_rows(who.tenant_id, assessment_id))
 
 
 # ---- subscriptions ----------------------------------------------------------------

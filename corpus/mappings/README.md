@@ -24,6 +24,24 @@ source_clause_ids:                   # every clause the mapping is derived from
 
 A file missing any of these four fields fails the loader and the CI check.
 
+## Versions
+
+The **mapping version** is a git tag over this directory, named
+`mappings-<version>` (for example `mappings-2026.10.14`). It is resolved when
+`scripts/load_mappings.py` runs, not set in configuration:
+
+- The tag is the newest `mappings-*` tag whose commit holds the same content
+  for `corpus/mappings/` as the checkout. A commit that changes only code
+  leaves it where it was.
+- The graph records the tag and the commit it points at. A tag can move; the
+  commit can't. With no matching tag it records the commit alone, as untagged.
+  A missing tag never stops a load.
+- The load is refused while this directory has uncommitted changes, because
+  no commit holds what would be loaded.
+
+Every assessment records this and the corpus version (ADR-0034). To name a
+version: commit, `git tag mappings-<version>`, then load again.
+
 ## Review
 
 One rule for every reviewed artefact with this front matter — mapping YAML,
