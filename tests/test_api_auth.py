@@ -30,6 +30,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.firebase_auth import (
     FIREBASE_CERTS_URL,
     FirebaseTokenVerifier,
@@ -38,8 +39,10 @@ from compliance_rag.adapters.firebase_auth import (
     SigningKeySource,
 )
 from compliance_rag.adapters.interfaces import VerifierUnavailable
-from compliance_rag.api.app import ApiServices, create_app
+from compliance_rag.api.app import create_app
+from compliance_rag.api.deps import ApiServices
 from compliance_rag.api.main import build_app
+from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.settings import Settings
 from compliance_rag.telemetry import span
 
@@ -130,7 +133,7 @@ class Keys(SigningKeySource):
         pass
 
 
-def _settings(**overrides: Any) -> Settings:  # Any: settings field values
+def api_settings(**overrides: Any) -> Settings:  # Any: settings field values
     values: dict[str, Any] = {  # Any: settings field values
         "tenant_id": TENANT,
         "firebase_project_id": PROJECT,
@@ -140,12 +143,12 @@ def _settings(**overrides: Any) -> Settings:  # Any: settings field values
     return Settings(_env_file=None, **values)  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
 
 
-def _verifier(
+def verifier_for(
     keys: Keys | None = None,
     now: list[float] | None = None,
     **settings: Any,  # Any: settings field values
 ) -> FirebaseTokenVerifier:
-    configured = _settings(**settings)
+    configured = api_settings(**settings)
     clock = now if now is not None else [time.monotonic()]
     return FirebaseTokenVerifier(
         project_id=configured.firebase_project_id,
@@ -160,7 +163,14 @@ def _app(
     verifier: FirebaseTokenVerifier | None = None,
     **settings: Any,  # Any: settings field values
 ) -> FastAPI:
-    return create_app(ApiServices(settings=_settings(**settings), verifier=verifier or _verifier()))
+    return create_app(
+        ApiServices(
+            settings=api_settings(**settings),
+            verifier=verifier or verifier_for(),
+            ledger=FakeLedgerStore(),
+            graph=FakeGraphStore(MappingSet(files=()), clause_validity={}),
+        )
+    )
 
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
@@ -173,7 +183,7 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
         yield c
 
 
-def _bearer(token: str) -> dict[str, str]:
+def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -229,7 +239,7 @@ _NOT_AN_OBJECT: object = ["RS256"]
     ],
 )
 async def test_an_invalid_token_is_a_401_never_a_500(client: httpx.AsyncClient, token: str) -> None:
-    response = await client.get("/v1/me", headers=_bearer(token))
+    response = await client.get("/v1/me", headers=bearer(token))
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
 
@@ -251,7 +261,7 @@ async def test_a_valid_token_for_a_non_member_is_a_403(
     client: httpx.AsyncClient,
     claims: dict[str, Any],  # Any: JWT claim values
 ) -> None:
-    response = await client.get("/v1/me", headers=_bearer(mint(**claims)))
+    response = await client.get("/v1/me", headers=bearer(mint(**claims)))
     assert response.status_code == 403
 
 
@@ -261,7 +271,7 @@ async def test_a_member_acts_on_the_configured_tenant_whatever_the_request_says(
     response = await client.get(
         "/v1/me",
         params={"tenant_id": "other-tenant"},
-        headers={**_bearer(mint(email="SECOND@acme.example")), "X-Tenant-Id": "other-tenant"},
+        headers={**bearer(mint(email="SECOND@acme.example")), "X-Tenant-Id": "other-tenant"},
     )
     assert response.status_code == 200
     assert response.json() == {
@@ -275,12 +285,12 @@ async def test_an_email_password_sign_in_is_trusted_by_default(
     client: httpx.AsyncClient,
 ) -> None:
     token = mint(firebase={"sign_in_provider": "password"})
-    assert (await client.get("/v1/me", headers=_bearer(token))).status_code == 200
+    assert (await client.get("/v1/me", headers=bearer(token))).status_code == 200
 
 
 async def test_an_empty_member_list_admits_no_one() -> None:
-    async with _client(_app(_verifier(api_members=""))) as c:
-        assert (await c.get("/v1/me", headers=_bearer(mint()))).status_code == 403
+    async with _client(_app(verifier_for(api_members=""))) as c:
+        assert (await c.get("/v1/me", headers=bearer(mint()))).status_code == 403
 
 
 # ---- telemetry ----------------------------------------------------------------------
@@ -293,7 +303,7 @@ async def test_every_request_is_a_span_and_the_token_reaches_no_log_or_span(
 ) -> None:
     caplog.set_level(logging.DEBUG)
     for token in (mint(), mint(aud="another-project"), mint(email_verified=False), "a.b.c"):
-        response = await client.get("/v1/me", headers=_bearer(token))
+        response = await client.get("/v1/me", headers=bearer(token))
         trace_id = response.headers["x-trace-id"]
         assert len(trace_id) == 32 and trace_id != "0" * 32
         assert all(token not in r.getMessage() for r in caplog.records)
@@ -337,7 +347,7 @@ async def test_a_streamed_response_is_inside_its_request_span(
 async def test_keys_are_fetched_once_and_again_when_they_expire() -> None:
     now = [1000.0]
     keys = Keys(max_age=60)
-    verifier = _verifier(keys, now)
+    verifier = verifier_for(keys, now)
     await verifier.verify(mint())
     await verifier.verify(mint())
     assert keys.fetches == 1
@@ -348,7 +358,7 @@ async def test_keys_are_fetched_once_and_again_when_they_expire() -> None:
 
 async def test_a_malformed_token_never_costs_a_fetch() -> None:
     keys = Keys()
-    verifier = _verifier(keys)
+    verifier = verifier_for(keys)
     for junk in ("x", "a.b.c", forge({"alg": "ES256", "kid": KID}, _claims())):
         with pytest.raises(Exception, match="invalid token"):
             await verifier.verify(junk)
@@ -359,7 +369,7 @@ async def test_an_outage_backs_off_instead_of_fetching_per_request() -> None:
     now = [1000.0]
     keys = Keys()
     keys.failing = True
-    verifier = _verifier(keys, now)
+    verifier = verifier_for(keys, now)
     for _ in range(20):
         with pytest.raises(VerifierUnavailable):
             await verifier.verify(mint())
@@ -373,7 +383,7 @@ async def test_an_outage_backs_off_instead_of_fetching_per_request() -> None:
 async def test_the_last_good_keys_stand_in_during_an_outage_for_an_hour() -> None:
     now = [1000.0]
     keys = Keys(max_age=60)
-    verifier = _verifier(keys, now)
+    verifier = verifier_for(keys, now)
     await verifier.verify(mint())
     keys.failing = True
     now[0] += 61 + 1800  # stale, inside the grace
@@ -386,8 +396,8 @@ async def test_the_last_good_keys_stand_in_during_an_outage_for_an_hour() -> Non
 async def test_unfetchable_keys_are_a_503_not_a_401() -> None:
     keys = Keys()
     keys.failing = True
-    async with _client(_app(_verifier(keys))) as c:
-        assert (await c.get("/v1/me", headers=_bearer(mint()))).status_code == 503
+    async with _client(_app(verifier_for(keys))) as c:
+        assert (await c.get("/v1/me", headers=bearer(mint()))).status_code == 503
 
 
 async def test_google_signing_keys_reads_the_certificates_and_their_max_age() -> None:
@@ -426,7 +436,7 @@ async def test_google_signing_keys_failing_is_verifier_unavailable(
 
 def test_the_api_refuses_to_start_without_a_firebase_project() -> None:
     with pytest.raises(ValueError, match="FIREBASE_PROJECT_ID"):
-        build_app(_settings(firebase_project_id=""))
+        build_app(api_settings(firebase_project_id=""))
 
 
 def test_the_schema_is_served_only_when_asked_for() -> None:

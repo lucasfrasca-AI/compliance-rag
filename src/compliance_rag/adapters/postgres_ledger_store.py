@@ -336,14 +336,16 @@ class PostgresLedgerStore(LedgerStore):
 
     # ---- subscriptions (ADR-0020) -------------------------------------------
 
-    async def subscribe(self, *, tenant_id: str, instrument_id: str, subscribed_by: str) -> None:
+    async def subscribe(
+        self, *, tenant_id: str, instrument_id: str, subscribed_by: str, trace_id: str | None = None
+    ) -> None:
         validate_tenant_id(tenant_id)
         validate_library_instrument_id(instrument_id)
         try:
             await self._execute(
-                "INSERT INTO tenant_instrument (tenant_id, instrument_id, subscribed_by) "
-                "VALUES (%s, %s, %s) ON CONFLICT (tenant_id, instrument_id) DO NOTHING",
-                (tenant_id, instrument_id, subscribed_by),
+                "INSERT INTO tenant_instrument (tenant_id, instrument_id, subscribed_by, trace_id) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT (tenant_id, instrument_id) DO NOTHING",
+                (tenant_id, instrument_id, subscribed_by, trace_id),
             )
         except psycopg.errors.ForeignKeyViolation as exc:
             raise ValueError(

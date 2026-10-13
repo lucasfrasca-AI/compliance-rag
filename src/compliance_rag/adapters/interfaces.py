@@ -490,7 +490,9 @@ class LedgerStore(ABC):
     ) -> dict[str, object] | None: ...
 
     @abstractmethod
-    async def subscribe(self, *, tenant_id: str, instrument_id: str, subscribed_by: str) -> None:
+    async def subscribe(
+        self, *, tenant_id: str, instrument_id: str, subscribed_by: str, trace_id: str | None = None
+    ) -> None:
         """Tick one library instrument for a tenant (ADR-0020). Library ids
         only — a tenant's own documents are already in its environment.
         Idempotent: subscribing twice leaves one row."""

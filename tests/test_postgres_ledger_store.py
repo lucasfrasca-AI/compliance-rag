@@ -46,8 +46,9 @@ _LEDGER_TABLES = (
 )
 
 
-@pytest.fixture
-async def ledger() -> AsyncIterator[PostgresLedgerStore]:
+async def empty_ledger() -> PostgresLedgerStore:
+    """The local/CI test ledger, emptied, with only the library owner seeded.
+    Refuses any other database."""
     url = urlparse(DATABASE_URL)
     if url.hostname not in {"localhost", "127.0.0.1"} or url.path != "/compliance_rag":
         raise RuntimeError(
@@ -60,7 +61,12 @@ async def ledger() -> AsyncIterator[PostgresLedgerStore]:
             "INSERT INTO tenant (tenant_id, name, is_library) "
             "VALUES ('_public', 'Library (public law)', TRUE)"
         )
-    yield PostgresLedgerStore(DATABASE_URL)
+    return PostgresLedgerStore(DATABASE_URL)
+
+
+@pytest.fixture
+async def ledger() -> AsyncIterator[PostgresLedgerStore]:
+    yield await empty_ledger()
 
 
 async def _seed_finding(tenant_id: str, clause_id: str) -> None:

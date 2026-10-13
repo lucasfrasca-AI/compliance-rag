@@ -215,13 +215,8 @@ class Neo4jGraph(GraphAdmin):
         self._database = database
         self._clock = clock
 
-    @classmethod
-    @asynccontextmanager
-    async def connect(
-        cls, uri: str, *, username: str, password: str, database: str
-    ) -> AsyncGenerator[Neo4jGraph]:
-        """`database` has no default: on Aura Free it is the instance ID, not
-        "neo4j", and every query names it explicitly."""
+    @staticmethod
+    def _new_driver(uri: str, *, username: str, password: str, database: str) -> AsyncDriver:
         if not (uri and username and database):
             raise ValueError("Neo4j uri, username and database are all required")
         # Every label and relationship type a query names comes from the closed
@@ -232,11 +227,20 @@ class Neo4jGraph(GraphAdmin):
         # literals in this module; a misspelt one is caught by the tests that
         # assert what queries return, not by a server warning. Every other
         # notification category stays on (#141).
-        driver = AsyncGraphDatabase.driver(
+        return AsyncGraphDatabase.driver(
             uri,
             auth=(username, password),
             notifications_disabled_categories=[NotificationDisabledCategory.UNRECOGNIZED],
         )
+
+    @classmethod
+    @asynccontextmanager
+    async def connect(
+        cls, uri: str, *, username: str, password: str, database: str
+    ) -> AsyncGenerator[Neo4jGraph]:
+        """`database` has no default: on Aura Free it is the instance ID, not
+        "neo4j", and every query names it explicitly."""
+        driver = cls._new_driver(uri, username=username, password=password, database=database)
         try:
             await driver.verify_connectivity()
             yield cls(driver, database=database)
@@ -255,6 +259,28 @@ class Neo4jGraph(GraphAdmin):
             password=settings.neo4j_password.get_secret_value(),
             database=settings.neo4j_database,
         )
+
+    @classmethod
+    def open(cls, settings: Settings) -> Neo4jGraph:
+        """The deployed graph for a long-lived process (the API, #147), which
+        closes it with `aclose()` on shutdown; scripts use `from_settings`,
+        which closes on exit. The driver connects on first use."""
+        return cls(
+            cls._new_driver(
+                settings.neo4j_uri,
+                username=settings.neo4j_username,
+                password=settings.neo4j_password.get_secret_value(),
+                database=settings.neo4j_database,
+            ),
+            database=settings.neo4j_database,
+        )
+
+    async def verify(self) -> None:
+        """Reach the server now, so a bad URI or credential fails at startup."""
+        await self._driver.verify_connectivity()
+
+    async def aclose(self) -> None:
+        await self._driver.close()
 
     async def _write[T](
         self,

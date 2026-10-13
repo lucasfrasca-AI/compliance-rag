@@ -1,7 +1,8 @@
 """Uvicorn entrypoint, in factory mode so importing this module builds
 nothing: `uvicorn --factory compliance_rag.api.main:build_app` (#146). Builds
-the API from `Settings` with telemetry configured (the one sink, D-16) and the
-real Firebase verifier; tests build it with `create_app` instead.
+the API from `Settings` with telemetry configured (the one sink, D-16), the
+real Firebase verifier, the Postgres ledger and Track A over the deployed
+graph; tests build it with `create_app` and fakes instead.
 """
 
 from __future__ import annotations
@@ -10,7 +11,11 @@ from fastapi import FastAPI
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.firebase_auth import FirebaseTokenVerifier, GoogleSigningKeys
-from compliance_rag.api.app import ApiServices, create_app
+from compliance_rag.adapters.neo4j_graph import Neo4jGraph
+from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
+from compliance_rag.api.app import create_app
+from compliance_rag.api.deps import ApiServices
+from compliance_rag.graph.track_a import GraphTrackA
 from compliance_rag.settings import Settings, get_settings
 
 
@@ -23,4 +28,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         keys=GoogleSigningKeys(),
     )
     telemetry.configure(settings)
-    return create_app(ApiServices(settings=settings, verifier=verifier))
+    graph = Neo4jGraph.open(settings)
+    return create_app(
+        ApiServices(
+            settings=settings,
+            verifier=verifier,
+            ledger=PostgresLedgerStore.from_settings(settings),
+            graph=GraphTrackA(graph),
+            checks=(graph.verify,),
+            closers=(graph.aclose,),
+        )
+    )
