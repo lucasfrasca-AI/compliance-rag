@@ -24,7 +24,7 @@ from compliance_rag.adapters.fakes import (
 )
 from compliance_rag.adapters.interfaces import Candidate, Channel, ScoredDocument
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
+from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.verifier.citations import Verifier
 from tests.conftest import ALL_LAW
@@ -70,6 +70,7 @@ async def assessment(clause: ClauseRecord) -> AssessmentPipeline:
         version_id=clause.version_id,
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     reply = json.dumps(
         {

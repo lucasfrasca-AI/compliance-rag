@@ -19,7 +19,7 @@ from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.generation_residency import GenerationResidencyError
 from compliance_rag.corpus.ingest import ingest_compilation
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, parse_stable_id
+from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope, parse_stable_id
 from compliance_rag.corpus.synthetic_registry import (
     SyntheticClaimRefused,
     SyntheticRegistry,
@@ -65,6 +65,7 @@ async def _upload(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
         version_id="v2",
         effective_from=dt.date(2026, 10, 1),
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
 
 
@@ -193,6 +194,7 @@ async def test_registered_clauses_pass_replace_in_place() -> None:
         version_id=version,
         effective_from=dt.date(2026, 10, 1),
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     await lifecycle.replace_in_place(
         (chunk,),

@@ -19,6 +19,7 @@ import pytest
 from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
     LedgerStore,
+    PolicyVersion,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
@@ -27,6 +28,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
 from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
+from compliance_rag.corpus.models import DocumentClass
 from compliance_rag.graph.mappings import load_mapping_set
 from tests.test_applicability import AS_OF as APPLICABILITY_AS_OF
 from tests.test_applicability import CLAUSES as APPLICABILITY_CLAUSES
@@ -199,6 +201,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             version_id="v1",
             valid_from=JAN,
             supersedes=None,
+            document_class=DocumentClass.LIBRARY_LAW,
         )
     await ledger.subscribe(tenant_id="acme", instrument_id=LAW, subscribed_by="u1")
     await ledger.subscribe(tenant_id="acme", instrument_id=LAW, subscribed_by="u2")  # idempotent
@@ -216,10 +219,20 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
 
     # ---- version validity is a record of its own (ADR-0021 mechanism 3)
     await ledger.record_version(
-        tenant_id="acme", instrument_id=POLICY, version_id="v1", valid_from=JAN, supersedes=None
+        tenant_id="acme",
+        instrument_id=POLICY,
+        version_id="v1",
+        valid_from=JAN,
+        supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     await ledger.record_version(
-        tenant_id="acme", instrument_id=POLICY, version_id="v2", valid_from=JUN, supersedes="v1"
+        tenant_id="acme",
+        instrument_id=POLICY,
+        version_id="v2",
+        valid_from=JUN,
+        supersedes="v1",
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     await ledger.end_version(tenant_id="acme", instrument_id=POLICY, version_id="v1", valid_to=JUN)
     assert await ledger.version_validity(
@@ -242,6 +255,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             version_id="v1",
             valid_from=JAN,
             supersedes=None,
+            document_class=DocumentClass.INTERNAL_POLICY,
         )
     with pytest.raises(KeyError):
         await ledger.end_version(
@@ -252,6 +266,77 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     with pytest.raises(ValueError, match="set once"):
         await ledger.end_version(
             tenant_id="acme", instrument_id=POLICY, version_id="v1", valid_to=JAN
+        )
+
+    # ---- document class, and a tenant's in-force policies (#148)
+    await ledger.put_profile(Profile("beta-corp"))
+    mar, jul, next_year = dt.date(2026, 3, 1), dt.date(2026, 7, 1), dt.date(2027, 1, 1)
+
+    async def record(
+        instrument_id: str,
+        version_id: str,
+        valid_from: dt.date,
+        document_class: DocumentClass = DocumentClass.INTERNAL_POLICY,
+        supersedes: str | None = None,
+    ) -> None:
+        await ledger.record_version(
+            tenant_id="beta-corp",
+            instrument_id=instrument_id,
+            version_id=version_id,
+            valid_from=valid_from,
+            supersedes=supersedes,
+            document_class=document_class,
+        )
+
+    await record("beta/handbook", "v1", JAN)
+    await record("beta/handbook", "v2", JUN, supersedes="v1")
+    await ledger.end_version(
+        tenant_id="beta-corp", instrument_id="beta/handbook", version_id="v1", valid_to=JUN
+    )
+    await record("beta/code-of-conduct", "v1", JAN)
+    await ledger.mark_withdrawn(
+        tenant_id="beta-corp",
+        instrument_id="beta/code-of-conduct",
+        version_id="v1",
+        withdrawn_by="u",
+    )
+    await record("beta/old-policy", "v1", JAN)
+    await ledger.mark_purged(
+        tenant_id="beta-corp",
+        instrument_id="beta/old-policy",
+        version_id=None,
+        purged_by="u",
+        reason="test",
+    )
+    await record("beta/iso-extract", "v1", JAN, DocumentClass.EXTERNAL_UPLOAD)
+    await record("beta/remote-work", "v1", next_year)
+    await record("beta/acceptable-use", "v1", JAN)
+    # In force, not withdrawn or purged, an internal policy, sorted by instrument.
+    assert await ledger.policy_versions("beta-corp", as_of=mar) == (
+        PolicyVersion("beta/acceptable-use", "v1"),
+        PolicyVersion("beta/handbook", "v1"),
+    )
+    assert await ledger.policy_versions("beta-corp", as_of=jul) == (
+        PolicyVersion("beta/acceptable-use", "v1"),
+        PolicyVersion("beta/handbook", "v2"),
+    )
+    assert PolicyVersion("beta/remote-work", "v1") in await ledger.policy_versions(
+        "beta-corp", as_of=next_year
+    )
+    assert await ledger.policy_versions("nobody", as_of=mar) == ()
+    # The class is the instrument's, and library law is `_public`'s alone.
+    with pytest.raises(ValueError, match="internal_policy, not external_upload"):
+        await record("beta/handbook", "v3", next_year, DocumentClass.EXTERNAL_UPLOAD)
+    with pytest.raises(ValueError, match="library law"):
+        await record("beta/a-statute", "v1", JAN, DocumentClass.LIBRARY_LAW)
+    with pytest.raises(ValueError, match="library law"):
+        await ledger.record_version(
+            tenant_id="_public",
+            instrument_id="some-act",
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.INTERNAL_POLICY,
         )
 
     # ---- findings citing, by stable-id prefix

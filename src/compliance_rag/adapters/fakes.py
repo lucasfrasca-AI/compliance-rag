@@ -27,6 +27,7 @@ from compliance_rag.adapters.interfaces import (
     LawScope,
     LedgerStore,
     ManifestMetadata,
+    PolicyVersion,
     Profile,
     RemovalAuditEntry,
     Reranker,
@@ -43,9 +44,11 @@ from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     Chunk,
     ClauseRecord,
+    DocumentClass,
     Scope,
     canonical_sha256,
     canonicalise,
+    check_document_class,
     parse_stable_id,
     sha256_hex,
     validate_library_instrument_id,
@@ -291,6 +294,7 @@ class FakeLedgerStore(LedgerStore):
         self.withdrawn: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version) -> by
         self._usage: list[UsageRecord] = []
         self._versions: dict[tuple[str, str, str], tuple[dt.date, dt.date | None]] = {}
+        self._classes: dict[tuple[str, str], DocumentClass] = {}  # (tenant, instrument)
         self.purged: dict[tuple[str, str, str | None], tuple[str, str]] = {}  # -> (by, reason)
         self._audit: list[RemovalAuditEntry] = []
         self._evidence: list[Evidence] = []
@@ -404,12 +408,32 @@ class FakeLedgerStore(LedgerStore):
         version_id: str,
         valid_from: dt.date,
         supersedes: str | None,
+        document_class: DocumentClass,
     ) -> None:
+        check_document_class(tenant_id, document_class)
         key = (tenant_id, instrument_id, version_id)
         if key in self._versions:
             # Re-recording would reset valid_to and silently un-retire it.
             raise ValueError(f"{instrument_id}:{version_id} is already recorded for {tenant_id}")
+        known = self._classes.setdefault((tenant_id, instrument_id), document_class)
+        if known is not document_class:
+            raise ValueError(f"{instrument_id} is {known.value}, not {document_class.value}")
         self._versions[key] = (valid_from, None)
+
+    async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:
+        return tuple(
+            PolicyVersion(instrument_id, version_id)
+            for (tenant, instrument_id, version_id), (valid_from, valid_to) in sorted(
+                self._versions.items()
+            )
+            if tenant == tenant_id
+            and self._classes[(tenant, instrument_id)] is DocumentClass.INTERNAL_POLICY
+            and valid_from <= as_of
+            and (valid_to is None or as_of < valid_to)
+            and (tenant, instrument_id, version_id) not in self.withdrawn
+            and (tenant, instrument_id, version_id) not in self.purged
+            and (tenant, instrument_id, None) not in self.purged
+        )
 
     async def end_version(
         self, *, tenant_id: str, instrument_id: str, version_id: str, valid_to: dt.date

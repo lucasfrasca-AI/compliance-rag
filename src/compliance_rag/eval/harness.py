@@ -21,6 +21,7 @@ from compliance_rag.adapters.reranker_http_client import build_reranker_http_cli
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     ClauseRecord,
+    DocumentClass,
     Scope,
     clause_anchor_id,
 )
@@ -92,6 +93,9 @@ async def golden_ledger() -> FakeLedgerStore:
             version_id=version_id,
             valid_from=GOLDEN_VALID_FROM,
             supersedes=None,
+            document_class=DocumentClass.LIBRARY_LAW
+            if tenant_id == PUBLIC_TENANT_ID
+            else DocumentClass.INTERNAL_POLICY,
         )
     return ledger
 

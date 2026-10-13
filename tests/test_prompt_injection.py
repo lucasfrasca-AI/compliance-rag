@@ -31,7 +31,7 @@ from compliance_rag.assessment.prompt import (
     policy_prefix,
     user_prompt,
 )
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope, canonicalise
+from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope, canonicalise
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.verifier.citations import Verifier
 
@@ -102,6 +102,7 @@ async def _pipeline(generator: FakeGenerator) -> tuple[AssessmentPipeline, SpyRe
         version_id="v1",
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     pipeline = AssessmentPipeline(
         RetrievalPipeline(store, FakeReranker()),

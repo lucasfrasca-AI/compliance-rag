@@ -15,7 +15,7 @@ from compliance_rag.adapters.generation_residency import (
     GenerationResidencyError,
     validate_generation_region,
 )
-from compliance_rag.corpus.models import Chunk, Scope
+from compliance_rag.corpus.models import Chunk, DocumentClass, Scope
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 
 POLICY = "acme/retention-policy"
@@ -59,6 +59,7 @@ async def _publish(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
         version_id="v1",
         effective_from=dt.date(2026, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
 
 
