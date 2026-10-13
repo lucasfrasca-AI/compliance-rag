@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from compliance_rag.api import tenant
+from compliance_rag.api import answers, tenant
 from compliance_rag.api.deps import ApiServices, Caller, current_caller
 from compliance_rag.telemetry import current_trace_id, span
 
@@ -85,6 +85,7 @@ def create_app(services: ApiServices) -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": detail})
 
     app.include_router(tenant.router)
+    app.include_router(answers.router)
 
     # Not /healthz: Cloud Run reserves paths ending in "z".
     @app.get("/health")
