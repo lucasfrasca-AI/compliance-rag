@@ -17,6 +17,12 @@ The exception is closed by a gate, not a note, at both ends:
   that is not marked synthetic while generation is offshore, so the first
   real policy upload fails loudly instead of being sent offshore on its first
   question. `CorpusLifecycle` calls it before touching any store.
+- **Each answer request** (ADR-0032), for what never passes through the
+  store the startup gate asks. `assert_question_allowed` refuses a question
+  from a member the operator hasn't registered as a build-phase tester (the
+  API). `TenantTextGate` refuses tenant text read from the bucket, the CAG
+  prefix or a clause to repair, that the synthetic registry doesn't vouch for
+  (`AssessmentPipeline`, which can't be built without one).
 
 The `global` endpoint, and every region not listed here, is refused
 outright: it routes requests anywhere.
@@ -25,9 +31,12 @@ outright: it routes requests anywhere.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 
 from compliance_rag.corpus.models import Chunk, Scope
-from compliance_rag.settings import GENERATION_REGIONS, REGION
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+from compliance_rag.settings import GENERATION_REGIONS, REGION, Settings
 
 
 class GenerationResidencyError(RuntimeError):
@@ -80,3 +89,54 @@ def assert_generation_allowed(*, generation_region: str, holds_real_tenant_data:
             "(tenant-scoped, non-synthetic) data, and generation outside Australia is "
             "allowed only while it holds public law and synthetic data (ADR-0023)"
         )
+
+
+def assert_question_allowed(
+    *, generation_region: str, asker: str, testers: AbstractSet[str]
+) -> None:
+    """A member's question is typed fresh, so no registry can vouch for it:
+    offshore, it counts as real unless the operator registered its asker as a
+    build-phase tester (ADR-0032). `asker` is the member's email; `testers`
+    are compared lowercased, as the sign-in verifier compares members. Sydney
+    checks nothing."""
+    if not is_offshore(generation_region):
+        return
+    if asker.strip().lower() not in {t.strip().lower() for t in testers}:
+        raise GenerationResidencyError(
+            f"generation runs in {generation_region}, outside Australia, during the build "
+            "phase, so only a registered build-phase tester's question is sent there: anyone "
+            "else's may hold real customer data (ADR-0023, ADR-0032)"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TenantTextGate:
+    """Offshore, tenant text that reaches the model by a path the store gate
+    can't see must be registered synthetic (ADR-0026, ADR-0032): the CAG
+    prefix, and a clause read from the bucket to repair a citation. Both come
+    from `ClauseStore`, never from the vector store `assert_generation_allowed`
+    asks. A required part of `AssessmentPipeline`, so no caller of `answer()`
+    skips it."""
+
+    generation_region: str
+    registry: SyntheticRegistry
+
+    def __post_init__(self) -> None:
+        validate_generation_region(self.generation_region)
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> TenantTextGate:
+        return cls(settings.vertex_claude_region, SyntheticRegistry.load())
+
+    def check(self, tenant_id: str, texts: Iterable[tuple[str, str]], *, what: str) -> None:
+        """`texts`: `(clause id, text)` pairs owned by `tenant_id`, about to be
+        sent to the model as `what`."""
+        if not is_offshore(self.generation_region):
+            return
+        real = self.registry.unregistered(tenant_id, texts)
+        if real:
+            raise GenerationResidencyError(
+                f"generation runs in {self.generation_region}, outside Australia, during the "
+                f"build phase, and {len(real)} {what} (first: {real[0]!r}) isn't registered "
+                "synthetic, so it's real data (ADR-0026, ADR-0032)"
+            )

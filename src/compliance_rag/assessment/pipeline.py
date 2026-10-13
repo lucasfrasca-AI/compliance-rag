@@ -17,6 +17,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
+from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import (
     Generation,
     Generator,
@@ -38,6 +39,7 @@ from compliance_rag.assessment.prompt import (
     repair_prompt,
     user_prompt,
 )
+from compliance_rag.corpus.models import Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.telemetry import current_trace_id, span
 from compliance_rag.verifier.citations import CheckedCitation, Verifier
@@ -84,7 +86,9 @@ class Answer:
 
 class AssessmentPipeline:
     """Composes one `RetrievalPipeline`, one `Generator` and one `Verifier`
-    (D-08)."""
+    (D-08). `tenant_text` is required, like the generator's own store gate:
+    no way of building the pipeline sends unregistered tenant text from the
+    bucket offshore (ADR-0032)."""
 
     def __init__(
         self,
@@ -92,11 +96,14 @@ class AssessmentPipeline:
         generator: Generator,
         verifier: Verifier,
         ledger: LedgerStore,
+        *,
+        tenant_text: TenantTextGate,
     ) -> None:
         self.retrieval = retrieval
         self.generator = generator
         self.verifier = verifier
         self.ledger = ledger
+        self.tenant_text = tenant_text
 
     async def _record_usage(self, tenant_id: str, generation: Generation) -> None:
         """One ledger `usage` row per generation call — the answer and each
@@ -139,6 +146,13 @@ class AssessmentPipeline:
         (the API's stream reports it as it happens, #149); it sees, never
         changes, what the model is given."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
+            # Before anything is retrieved or generated: offshore, the prefix
+            # must be registered synthetic (ADR-0032).
+            self.tenant_text.check(
+                tenant_id,
+                ((p.clause_id, p.text) for p in policies),
+                what="clause(s) of the CAG prefix",
+            )
             trace = await self.retrieval.retrieve(query, tenant_id, as_of, law=law)
             if on_retrieved is not None:
                 await on_retrieved(trace)
@@ -208,6 +222,12 @@ class AssessmentPipeline:
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
         clause = SourceClause(failed.clause.clause_id, failed.clause.canonical_text)
+        if failed.clause.scope is not Scope.PUBLIC:
+            # Read from the bucket, which the generator's store gate never
+            # asks (ADR-0032).
+            self.tenant_text.check(
+                failed.clause.tenant_id, ((clause.clause_id, clause.text),), what="clause to repair"
+            )
         with span("answer.repair", **{"repair.clause_id": clause.clause_id}) as current:
             generation = await self.generator.generate(
                 system=REPAIR_SYSTEM_PROMPT,

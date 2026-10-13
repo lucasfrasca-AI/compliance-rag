@@ -27,7 +27,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
-from compliance_rag.adapters.generation_residency import GenerationResidencyError
+from compliance_rag.adapters.generation_residency import GenerationResidencyError, TenantTextGate
 from compliance_rag.adapters.interfaces import LawScope, Profile
 from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
@@ -39,9 +39,9 @@ from compliance_rag.eval.golden_corpus import POLICY_TENANT_ID, golden_chunks, g
 from compliance_rag.eval.harness import golden_clause_store, golden_ledger
 from compliance_rag.graph.mappings import load_mapping_set
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
-from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
+from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION, Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
-from tests.api_support import api_settings, bearer, fake_api_services, mint
+from tests.api_support import MEMBER, api_settings, bearer, fake_api_services, mint
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
 
 AS_OF = "2026-10-12"
@@ -78,9 +78,11 @@ async def _client(
     ledger: FakeLedgerStore,
     clauses: FakeClauseStore,
     store: FakeRetrievalStore | None = None,
+    settings: Settings | None = None,
 ) -> httpx.AsyncClient:
     labels = load_applicability_set()
     services = fake_api_services(
+        settings=settings or api_settings(),
         ledger=ledger,
         clauses=clauses,
         graph=fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels),
@@ -91,6 +93,7 @@ async def _client(
             generator,
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
+            tenant_text=TenantTextGate.from_settings(settings or api_settings()),
         ),
     )
     return httpx.AsyncClient(
@@ -114,10 +117,11 @@ async def _ask(
     ledger: FakeLedgerStore | None = None,
     clauses: FakeClauseStore | None = None,
     store: FakeRetrievalStore | None = None,
+    settings: Settings | None = None,
     **body: Any,  # Any: JSON
 ) -> tuple[httpx.Response, list[tuple[str, dict[str, Any]]]]:  # Any: JSON
     clauses = clauses or await golden_clause_store()
-    async with await _client(generator, ledger or await _ledger(), clauses, store) as c:
+    async with await _client(generator, ledger or await _ledger(), clauses, store, settings) as c:
         response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF, **body})
     return response, _events(response.text) if response.status_code == 200 else []
 
@@ -228,6 +232,7 @@ async def test_retrieval_is_reported_before_generation_starts() -> None:
         generator,
         Verifier(await golden_clause_store(), ledger, CanonicalCitationVerifier()),
         ledger,
+        tenant_text=TenantTextGate.from_settings(api_settings()),
     )
     seen: list[int] = []
 
@@ -278,6 +283,62 @@ async def test_law_outside_track_as_scope_never_reaches_the_model() -> None:
     response, _ = await _ask(generator, question=_canonical(outside))
     assert response.status_code == 200
     assert outside not in str(generator.calls[0]["user"])
+
+
+# ---- the residency gate, per request (#155, ADR-0032) -----------------------------
+
+OFFSHORE = {"vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
+
+
+async def test_offshore_a_member_who_isnt_a_registered_tester_is_refused_before_the_model() -> None:
+    """The question is the one input no store holds and no registry can
+    vouch for: a member can type real customer data into it."""
+    generator = FakeGenerator(_reply())
+    response, events = await _ask(generator, settings=api_settings(**OFFSHORE))
+    assert [name for name, _ in events] == ["error"]  # before any work
+    error = events[-1][1]
+    assert error["error"] == "residency" and "ADR-0032" in error["message"]
+    assert generator.calls == []
+    assert QUESTION not in response.text
+
+
+async def test_offshore_a_registered_tester_with_the_synthetic_prefix_is_answered(
+    quote: str,
+) -> None:
+    settings = api_settings(**OFFSHORE, offshore_generation_testers=MEMBER.upper())
+    generator = FakeGenerator(_reply((APP11, quote)))
+    _, events = await _ask(generator, settings=settings)
+    assert [name for name, _ in events] == ["coverage", "retrieval", "answer"]
+    assert len(generator.calls) == 1 and generator.calls[0]["cached_prefix"]
+
+
+async def test_offshore_a_policy_clause_the_registry_doesnt_vouch_for_is_refused_for_a_tester() -> (
+    None
+):
+    """The prefix is read from the bucket, which the startup gate never asks.
+    One clause edited away from its registered text is real data (ADR-0026)."""
+    clauses = await golden_clause_store()
+    edited = next(c for c in golden_clauses() if c.instrument_id == "acme/privacy-policy")
+    real = "Acme keeps payroll records for seven years, then shreds them on site."
+    await clauses.put_clause(edited.model_copy(update={"canonical_text": real}))
+    settings = api_settings(**OFFSHORE, offshore_generation_testers=MEMBER)
+    generator = FakeGenerator(_reply())
+    response, events = await _ask(generator, clauses=clauses, settings=settings)
+    assert [name for name, _ in events] == ["coverage", "error"]
+    error = events[-1][1]
+    assert error["error"] == "residency" and "CAG prefix" in error["message"]
+    assert edited.clause_id in error["message"]
+    assert generator.calls == [] and real not in response.text
+
+
+async def test_in_sydney_any_member_is_answered_over_any_prefix(quote: str) -> None:
+    clauses = await golden_clause_store()
+    edited = next(c for c in golden_clauses() if c.instrument_id == "acme/privacy-policy")
+    await clauses.put_clause(edited.model_copy(update={"canonical_text": "Real, unregistered."}))
+    generator = FakeGenerator(_reply((APP11, quote)))
+    _, events = await _ask(generator, clauses=clauses, settings=api_settings())
+    assert [name for name, _ in events] == ["coverage", "retrieval", "answer"]
+    assert "Real, unregistered." in str(generator.calls[0]["cached_prefix"])
 
 
 # ---- the generator the real app builds at startup ------------------------------

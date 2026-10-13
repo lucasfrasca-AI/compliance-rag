@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     api_docs: bool = False
     """Serve the OpenAPI schema and /docs. Off unless asked for, so a
     deployment missing `ENV` doesn't publish it."""
+    offshore_generation_testers: str = ""
+    """Comma-separated member emails the operator registers as build-phase
+    testers: people who ask only about public law and synthetic data. While
+    generation runs outside Australia, only their questions are sent to it
+    (ADR-0032). Empty: no member's question leaves Australia. Ignored when
+    generation runs in Sydney."""
 
     # --- Web fallback ------------------------------------------------------
     web_search_provider: Literal["brave", "tavily", "none"] = "none"
@@ -145,6 +151,14 @@ class Settings(BaseSettings):
     @property
     def sign_in_providers(self) -> frozenset[str]:
         return frozenset(p.strip() for p in self.api_sign_in_providers.split(",") if p.strip())
+
+    @property
+    def offshore_testers(self) -> frozenset[str]:
+        """`offshore_generation_testers` as a set, lowercased as the sign-in
+        verifier lowercases members."""
+        return frozenset(
+            e.strip().lower() for e in self.offshore_generation_testers.split(",") if e.strip()
+        )
 
     @property
     def sinks(self) -> tuple[str, ...]:

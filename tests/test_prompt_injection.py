@@ -20,6 +20,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import Candidate, Generation
 from compliance_rag.assessment import prompt
 from compliance_rag.assessment.draft import MalformedGeneration, parse_draft
@@ -32,7 +33,9 @@ from compliance_rag.assessment.prompt import (
     user_prompt,
 )
 from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope, canonicalise
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
+from compliance_rag.settings import REGION
 from compliance_rag.verifier.citations import Verifier
 
 TENANT = "acme"
@@ -109,6 +112,7 @@ async def _pipeline(generator: FakeGenerator) -> tuple[AssessmentPipeline, SpyRe
         generator,
         Verifier(clause_store, ledger, FakeCitationVerifier()),
         ledger,
+        tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
     )
     return pipeline, store
 

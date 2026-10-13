@@ -78,13 +78,19 @@ class SyntheticRegistry:
     def vouches_for(self, chunk: Chunk) -> bool:
         return synthetic_key(chunk.tenant_id, chunk.text) in self.keys
 
+    def unregistered(self, tenant_id: str, texts: Iterable[tuple[str, str]]) -> tuple[str, ...]:
+        """Ids of `(id, text)` pairs owned by `tenant_id` the registry doesn't
+        vouch for — real data. A text is a chunk's or a clause's canonical
+        text."""
+        return tuple(i for i, text in texts if synthetic_key(tenant_id, text) not in self.keys)
+
     def real_clauses(self, clauses: Iterable[ClauseRecord]) -> tuple[str, ...]:
         """Ids of tenant clauses the registry doesn't vouch for — real data."""
         return tuple(
             c.clause_id
             for c in clauses
             if c.scope is Scope.TENANT
-            and synthetic_key(c.tenant_id, c.canonical_text) not in self.keys
+            and self.unregistered(c.tenant_id, ((c.clause_id, c.canonical_text),))
         )
 
     def mark(self, chunks: tuple[Chunk, ...]) -> tuple[Chunk, ...]:

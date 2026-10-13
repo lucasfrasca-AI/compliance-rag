@@ -14,8 +14,12 @@ Two things run at startup, before anything is served:
 - the graph's connectivity check;
 - the generator, built through `VertexClaudeGenerator.create`, so the
   residency gate (ADR-0023) runs first. That gate asks whether the vector
-  store holds real tenant chunks. It doesn't see a member's question or the
-  policy prefix read from the bucket (#155).
+  store holds real tenant chunks.
+
+The inputs that store never sees are checked per request (ADR-0032): a
+member's question against the tester list (`api/answers.py`), and the CAG
+prefix and any clause to repair, read from the bucket, against the synthetic
+registry (`TenantTextGate`, built in here).
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from fastapi import FastAPI
 from compliance_rag import telemetry
 from compliance_rag.adapters.firebase_auth import FirebaseTokenVerifier, GoogleSigningKeys
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
+from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
@@ -86,7 +91,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             graph=GraphTrackA(graph),
             clauses=clauses,
             pipeline=AssessmentPipeline(
-                retrieval, generator, Verifier(clauses, ledger, CanonicalCitationVerifier()), ledger
+                retrieval,
+                generator,
+                Verifier(clauses, ledger, CanonicalCitationVerifier()),
+                ledger,
+                tenant_text=TenantTextGate.from_settings(settings),
             ),
             checks=(graph.verify, generator.start),
             closers=(graph.aclose,),
