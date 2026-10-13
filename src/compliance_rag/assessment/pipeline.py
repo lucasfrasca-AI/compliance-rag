@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from compliance_rag.adapters.interfaces import (
@@ -121,6 +121,7 @@ class AssessmentPipeline:
         law: LawScope,
         policies: Sequence[SourceClause] = (),
         max_tokens: int = 1024,
+        on_retrieved: Callable[[RetrievalTrace], Awaitable[None]] | None = None,
     ) -> Answer:
         """`law` is Track B's scope (D-03, ADR-0030): `LawScope.of(coverage)`
         for an assessment, `LIBRARY_QUESTION` for a question about the library
@@ -131,9 +132,14 @@ class AssessmentPipeline:
         flows back into it (#29's injection control) — repair included, which
         re-reads one clause and never retrieves. The system prompt is fixed
         (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries the
-        rule that fenced text is data, which no caller gets to drop."""
+        rule that fenced text is data, which no caller gets to drop.
+        `on_retrieved` is told what retrieval found before generation starts
+        (the API's stream reports it as it happens, #149); it sees, never
+        changes, what the model is given."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             trace = await self.retrieval.retrieve(query, tenant_id, as_of, law=law)
+            if on_retrieved is not None:
+                await on_retrieved(trace)
 
             retrieved = [SourceClause(c.clause_id, c.text) for c in trace.ranked_candidates()]
             generation = await self.generator.generate(

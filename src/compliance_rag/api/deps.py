@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from compliance_rag.adapters.interfaces import (
+    ClauseStore,
     GraphStore,
     LedgerStore,
     Member,
@@ -22,17 +23,22 @@ from compliance_rag.adapters.interfaces import (
     Unauthenticated,
     VerifierUnavailable,
 )
+from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.settings import Settings
 
 
 @dataclass(frozen=True, slots=True)
 class ApiServices:
-    """What the API runs on. Grows with each endpoint ticket (#149)."""
+    """What the API runs on (#146-#149)."""
 
     settings: Settings
     verifier: TokenVerifier
     ledger: LedgerStore
     graph: GraphStore
+    clauses: ClauseStore
+    """Canonical text: the tenant's policies for the cached prefix (#148)."""
+    answers: AssessmentPipeline
+    """`answer()`: retrieval, generation, verification (#149)."""
     checks: tuple[Callable[[], Awaitable[None]], ...] = field(
         default_factory=tuple[Callable[[], Awaitable[None]], ...]
     )

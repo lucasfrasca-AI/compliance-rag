@@ -10,11 +10,6 @@ named is reproduced here, not just asserted.
 
 from __future__ import annotations
 
-import base64
-import datetime as dt
-import hashlib
-import hmac
-import json
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -22,141 +17,35 @@ from typing import Any
 
 import httpx
 import pytest
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.x509.oid import NameOID
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.firebase_auth import (
     FIREBASE_CERTS_URL,
     FirebaseTokenVerifier,
     GoogleSigningKeys,
     SigningKeys,
-    SigningKeySource,
 )
 from compliance_rag.adapters.interfaces import VerifierUnavailable
 from compliance_rag.api.app import create_app
-from compliance_rag.api.deps import ApiServices
 from compliance_rag.api.main import build_app
-from compliance_rag.graph.mappings import MappingSet
-from compliance_rag.settings import Settings
 from compliance_rag.telemetry import span
-
-PROJECT = "compliance-rag-test"
-TENANT = "acme"
-MEMBER = "lead@acme.example"
-KID = "test-key-1"
-
-
-def _key_and_cert() -> tuple[rsa.RSAPrivateKey, str]:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test signer")])
-    now = dt.datetime.now(dt.UTC)
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - dt.timedelta(days=1))
-        .not_valid_after(now + dt.timedelta(days=1))
-        .sign(key, hashes.SHA256())
-    )
-    return key, cert.public_bytes(serialization.Encoding.PEM).decode()
-
-
-SIGNING_KEY, CERT = _key_and_cert()
-OTHER_KEY, _ = _key_and_cert()
-
-
-def _b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-
-def _claims(**overrides: Any) -> dict[str, Any]:  # Any: JWT claim values
-    now = int(time.time())
-    claims: dict[str, Any] = {  # Any: JWT claim values
-        "iss": f"https://securetoken.google.com/{PROJECT}",
-        "aud": PROJECT,
-        "sub": "uid-123",
-        "iat": now,
-        "exp": now + 3600,
-        "auth_time": now - 60,
-        "email": MEMBER,
-        "email_verified": True,
-        "firebase": {"sign_in_provider": "google.com", "identities": {}},
-    }
-    claims.update(overrides)
-    return {k: v for k, v in claims.items() if v is not None}
-
-
-def forge(
-    header: object,
-    claims: dict[str, Any],  # Any: JWT claim values
-    *,
-    key: rsa.RSAPrivateKey = SIGNING_KEY,
-    sign: str = "rs256",
-) -> str:
-    signing_input = f"{_b64(json.dumps(header).encode())}.{_b64(json.dumps(claims).encode())}"
-    if sign == "rs256":
-        signature = key.sign(signing_input.encode(), padding.PKCS1v15(), hashes.SHA256())
-    elif sign == "hs256-with-the-certificate":
-        signature = hmac.new(CERT.encode(), signing_input.encode(), hashlib.sha256).digest()
-    else:
-        signature = b""
-    return f"{signing_input}.{_b64(signature)}"
-
-
-def mint(*, key: rsa.RSAPrivateKey = SIGNING_KEY, **overrides: Any) -> str:  # Any: claims
-    return forge({"alg": "RS256", "kid": KID, "typ": "JWT"}, _claims(**overrides), key=key)
-
-
-class Keys(SigningKeySource):
-    """The stand-in for Google's certificates: counts fetches, can fail."""
-
-    def __init__(self, max_age: float = 3600.0) -> None:
-        self.fetches = 0
-        self.max_age = max_age
-        self.failing = False
-
-    async def fetch(self) -> SigningKeys:
-        self.fetches += 1
-        if self.failing:
-            raise VerifierUnavailable("down")
-        return SigningKeys(certificates={KID: CERT}, max_age=self.max_age)
-
-    async def aclose(self) -> None:
-        pass
-
-
-def api_settings(**overrides: Any) -> Settings:  # Any: settings field values
-    values: dict[str, Any] = {  # Any: settings field values
-        "tenant_id": TENANT,
-        "firebase_project_id": PROJECT,
-        "api_members": f"{MEMBER}, Second@Acme.example",
-    }
-    values.update(overrides)
-    return Settings(_env_file=None, **values)  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
-
-
-def verifier_for(
-    keys: Keys | None = None,
-    now: list[float] | None = None,
-    **settings: Any,  # Any: settings field values
-) -> FirebaseTokenVerifier:
-    configured = api_settings(**settings)
-    clock = now if now is not None else [time.monotonic()]
-    return FirebaseTokenVerifier(
-        project_id=configured.firebase_project_id,
-        members=configured.members,
-        sign_in_providers=configured.sign_in_providers,
-        keys=keys or Keys(),
-        clock=lambda: clock[0],
-    )
+from tests.api_support import (
+    CERT,
+    KID,
+    MEMBER,
+    OTHER_KEY,
+    TENANT,
+    Keys,
+    api_settings,
+    bearer,
+    claims_for,
+    fake_api_services,
+    forge,
+    mint,
+    verifier_for,
+)
 
 
 def _app(
@@ -164,12 +53,7 @@ def _app(
     **settings: Any,  # Any: settings field values
 ) -> FastAPI:
     return create_app(
-        ApiServices(
-            settings=api_settings(**settings),
-            verifier=verifier or verifier_for(),
-            ledger=FakeLedgerStore(),
-            graph=FakeGraphStore(MappingSet(files=()), clause_validity={}),
-        )
+        fake_api_services(settings=api_settings(**settings), verifier=verifier or verifier_for())
     )
 
 
@@ -181,10 +65,6 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 async def client() -> AsyncIterator[httpx.AsyncClient]:
     async with _client(_app()) as c:
         yield c
-
-
-def bearer(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 # ---- the routes ---------------------------------------------------------------------
@@ -224,18 +104,18 @@ _NOT_AN_OBJECT: object = ["RS256"]
             mint(firebase={"sign_in_provider": "google.com", "tenant": "t-1"}),
             id="identity-platform-tenant",
         ),
-        pytest.param(forge({"alg": "none", "kid": KID}, _claims(), sign="none"), id="alg-none"),
+        pytest.param(forge({"alg": "none", "kid": KID}, claims_for(), sign="none"), id="alg-none"),
         pytest.param(
-            forge({"alg": "HS256", "kid": KID}, _claims(), sign="hs256-with-the-certificate"),
+            forge({"alg": "HS256", "kid": KID}, claims_for(), sign="hs256-with-the-certificate"),
             id="hs256-keyed-with-the-public-certificate",
         ),
-        pytest.param(forge({"alg": "ES256", "kid": KID}, _claims()), id="es256-header"),
-        pytest.param(forge({"alg": ["RS256"], "kid": KID}, _claims()), id="alg-as-a-list"),
-        pytest.param(forge({"alg": "RS256", "kid": [KID]}, _claims()), id="kid-as-a-list"),
-        pytest.param(forge({"alg": "RS256", "kid": {"a": 1}}, _claims()), id="kid-as-an-object"),
-        pytest.param(forge({"alg": "RS256"}, _claims()), id="no-kid"),
-        pytest.param(forge({"alg": "RS256", "kid": "unknown"}, _claims()), id="unknown-kid"),
-        pytest.param(forge(_NOT_AN_OBJECT, _claims()), id="header-not-an-object"),
+        pytest.param(forge({"alg": "ES256", "kid": KID}, claims_for()), id="es256-header"),
+        pytest.param(forge({"alg": ["RS256"], "kid": KID}, claims_for()), id="alg-as-a-list"),
+        pytest.param(forge({"alg": "RS256", "kid": [KID]}, claims_for()), id="kid-as-a-list"),
+        pytest.param(forge({"alg": "RS256", "kid": {"a": 1}}, claims_for()), id="kid-as-an-object"),
+        pytest.param(forge({"alg": "RS256"}, claims_for()), id="no-kid"),
+        pytest.param(forge({"alg": "RS256", "kid": "unknown"}, claims_for()), id="unknown-kid"),
+        pytest.param(forge(_NOT_AN_OBJECT, claims_for()), id="header-not-an-object"),
     ],
 )
 async def test_an_invalid_token_is_a_401_never_a_500(client: httpx.AsyncClient, token: str) -> None:
@@ -359,7 +239,7 @@ async def test_keys_are_fetched_once_and_again_when_they_expire() -> None:
 async def test_a_malformed_token_never_costs_a_fetch() -> None:
     keys = Keys()
     verifier = verifier_for(keys)
-    for junk in ("x", "a.b.c", forge({"alg": "ES256", "kid": KID}, _claims())):
+    for junk in ("x", "a.b.c", forge({"alg": "ES256", "kid": KID}, claims_for())):
         with pytest.raises(Exception, match="invalid token"):
             await verifier.verify(junk)
     assert keys.fetches == 0

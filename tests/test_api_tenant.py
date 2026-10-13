@@ -28,7 +28,7 @@ from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Per
 from compliance_rag.corpus.models import DocumentClass
 from compliance_rag.eval.applicability import GoldenFact, load_applicability_set
 from compliance_rag.graph.mappings import load_mapping_set
-from tests.test_api_auth import api_settings, bearer, mint, verifier_for
+from tests.api_support import bearer, fake_api_services, mint
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
 
 TENANT = "acme"
@@ -39,9 +39,7 @@ GA05 = next(c for c in load_applicability_set().cases if c.id == "GA-05")
 
 def _services(ledger: LedgerStore, **extra: Any) -> ApiServices:  # Any: ApiServices fields
     labels = load_applicability_set()
-    return ApiServices(
-        settings=api_settings(),
-        verifier=verifier_for(),
+    return fake_api_services(
         ledger=ledger,
         graph=fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels),
         **extra,
