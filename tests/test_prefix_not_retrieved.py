@@ -162,9 +162,11 @@ async def test_answer_leaves_the_prefix_out_and_its_slots_go_to_law() -> None:
     question, so four is all the law it can find; real Qdrant's dense channel
     ranks every clause (the test below)."""
     from compliance_rag.adapters.fakes import FakeGenerator, FakeReranker
+    from compliance_rag.adapters.generation_residency import TenantTextGate
     from compliance_rag.adapters.interfaces import LawScope
     from compliance_rag.assessment.evidence import Facts
     from compliance_rag.assessment.pipeline import AssessmentPipeline
+    from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
     from compliance_rag.eval.applicability import load_applicability_set
     from compliance_rag.graph.mappings import load_mapping_set
     from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
@@ -191,6 +193,7 @@ async def test_answer_leaves_the_prefix_out_and_its_slots_go_to_law() -> None:
         FakeGenerator('{"answer": "-", "citations": []}'),
         Verifier(clauses, ledger, CanonicalCitationVerifier()),
         ledger,
+        tenant_text=TenantTextGate("us", SyntheticRegistry.load()),
     )
 
     before = await pipeline.retrieval.retrieve(question, POLICY_TENANT_ID, day, law=law)
