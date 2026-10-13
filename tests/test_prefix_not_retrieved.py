@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import uuid
 
 import pytest
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore, FakeRetrievalStore
-from compliance_rag.adapters.interfaces import Channel, RetrievalStore
+from compliance_rag.adapters.interfaces import NO_PREFIX, Channel, PolicyCorpus, RetrievalStore
 from compliance_rag.assessment.policies import tenant_policies
-from compliance_rag.corpus.models import Chunk, Scope
+from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, Scope
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
 from compliance_rag.eval.golden import Category, load_golden_set
 from compliance_rag.eval.golden_corpus import LAW_INSTRUMENT_ID, POLICY_TENANT_ID, golden_chunks
@@ -58,7 +57,7 @@ CHUNKS = (
 
 
 async def _routes(
-    store: RetrievalStore, *, in_prefix: frozenset[str], lookup: str
+    store: RetrievalStore, *, sent: frozenset[str], lookup: str
 ) -> dict[str, set[str]]:
     """Every route a chunk can take to a caller."""
     result = await store.search(
@@ -68,14 +67,14 @@ async def _routes(
         scopes=(Scope.PUBLIC, Scope.TENANT),
         as_of=TODAY,
         limit=10,
-        in_prefix=in_prefix,
+        policy_corpus=PolicyCorpus(sent),
     )
     routes = {
         channel.value: {c.clause_id for c in hits} for channel, hits in result.per_channel.items()
     }
     routes["fused"] = {c.clause_id for c in result.fused}
     hit = await store.lookup_clause(
-        lookup, law=ALL_LAW, tenant_id="acme", as_of=TODAY, in_prefix=in_prefix
+        lookup, law=ALL_LAW, tenant_id="acme", as_of=TODAY, policy_corpus=PolicyCorpus(sent)
     )
     routes["lookup"] = {hit.clause_id} if hit else set()
     return routes
@@ -86,18 +85,18 @@ async def assert_prefix_contract(store: RetrievalStore, ledger: FakeLedgerStore)
 
     # Positive control: with nothing in the prefix, the policy comes back by
     # every route.
-    control = await _routes(store, in_prefix=frozenset(), lookup=POLICY)
+    control = await _routes(store, sent=frozenset(), lookup=POLICY)
     assert all(POLICY in ids for ids in control.values()), control
 
     # In the prefix: gone from every route. The law and the external upload
     # still come back.
-    routes = await _routes(store, in_prefix=frozenset({POLICY}), lookup=POLICY)
+    routes = await _routes(store, sent=frozenset({POLICY}), lookup=POLICY)
     assert all(POLICY not in ids for ids in routes.values()), routes
     assert {LAW, UPLOAD} <= routes["fused"]
 
     # The prefix holds tenant clauses only: a law id named in it never
     # narrows the law.
-    law = await _routes(store, in_prefix=frozenset({LAW}), lookup=LAW)
+    law = await _routes(store, sent=frozenset({LAW}), lookup=LAW)
     assert all(LAW in ids for ids in law.values()), law
 
 
@@ -115,25 +114,35 @@ _needs_qdrant = pytest.mark.skipif(
 
 @_needs_qdrant
 async def test_qdrant_leaves_out_the_prefix() -> None:
-    from qdrant_client import AsyncQdrantClient
-
     from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 
     ledger = FakeLedgerStore()
-    client = AsyncQdrantClient(url=QDRANT_URL)
-    store = QdrantRetrievalStore(
-        client,
-        collection_name=f"prefix-{uuid.uuid4().hex[:8]}",
-        embedder=FakeEmbedder(dimensions=8),
-        ledger=ledger,
-    )
-    try:
-        await store.ensure_ready()
+    async with QdrantRetrievalStore.ephemeral(
+        QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=ledger, prefix="prefix"
+    ) as store:
         await store.upsert_chunks(CHUNKS)
         await assert_prefix_contract(store, ledger)
-    finally:
-        await client.delete_collection(store._collection_name)  # pyright: ignore[reportPrivateUsage]
-        await client.close()
+
+
+async def test_the_router_leaves_out_the_prefix_on_both_of_its_paths() -> None:
+    """`route()`: a clause-id question goes to the lookup, anything else to
+    `retrieve()`. The prefix is left out either way."""
+    from compliance_rag.adapters.fakes import FakeReranker
+
+    ledger = FakeLedgerStore()
+    await ledger.subscribe(tenant_id="acme", instrument_id="test-act", subscribed_by="test")
+    pipeline = RetrievalPipeline(FakeRetrievalStore(CHUNKS, ledger=ledger), FakeReranker())
+    sent = PolicyCorpus(frozenset({POLICY}))
+
+    async def found(question: str, policy_corpus: PolicyCorpus) -> set[str]:
+        trace = await pipeline.route(
+            question, "acme", TODAY, law=ALL_LAW, policy_corpus=policy_corpus
+        )
+        return {c.clause_id for c in trace.ranked_candidates()}
+
+    assert POLICY in await found(POLICY, NO_PREFIX) and POLICY in await found(TEXT, NO_PREFIX)
+    assert await found(POLICY, sent) == set()
+    assert POLICY not in await found(TEXT, sent) and LAW in await found(TEXT, sent)
 
 
 # ---- the number it changes: law in the top ten --------------------------------
@@ -198,16 +207,32 @@ async def test_answer_leaves_the_prefix_out_and_its_slots_go_to_law() -> None:
     assert retrieved_before - prefix <= retrieved_after
 
 
+def _recall(trace: RetrievalTrace, expected: frozenset[str]) -> float:
+    found = {c.clause_id for c in trace.ranked_candidates()}
+    return len(expected & found) / len(expected)
+
+
 @_needs_qdrant
 async def test_on_real_qdrant_the_prefix_slots_go_to_law() -> None:
-    """Every golden question that isn't a clause id, asked as Acme subscribed
-    to the Act, over the whole library (the recall gate's scope). Before is
-    retrieval as `answer()` ran it until #156; after leaves out Acme's
-    policies, which the prefix already carries.
+    """Every golden question that isn't a clause id (17), asked as Acme
+    subscribed to the Act, over the whole library (the recall gate's scope).
+    Before is retrieval as `answer()` ran it until #156; after leaves out
+    Acme's policies, which the prefix already carries.
 
-    RRF scores a candidate by its own rank in each channel, so taking
-    candidates out can only move law up: no question may lose law, and none
-    may get a prefix clause back."""
+    Pinned, because deterministic:
+    - after, every question's top ten is law, with no prefix clause;
+    - after, it is what the library itself retrieves (the `_public` view the
+      recall gate measures), since all of Acme's own documents are in the
+      prefix: the same fused scores, and the same clauses above the tenth. So
+      the answer path's law recall is now the gate's own, which CI pins per
+      question. Qdrant orders candidates with equal RRF scores differently
+      from call to call, so tied places are compared by score, not by clause.
+
+    Printed, not pinned: before. Its tenth place sits on such ties between law
+    and policy candidates, so a question's before moves by a clause between
+    runs. A given law clause can
+    also drop out after, overtaken by other law once policy is gone, so
+    recall of expected law is reported per question, not asserted to rise."""
     from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 
     ledger = await golden_ledger()
@@ -217,36 +242,50 @@ async def test_on_real_qdrant_the_prefix_slots_go_to_law() -> None:
     golden = load_golden_set()
     asked = [q for q in golden.queries if q.category is not Category.EXACT_ID]
     as_of = asked[0].as_of
-    assert all(q.as_of == as_of for q in asked)
+    assert len(asked) == 17 and all(q.as_of == as_of for q in asked)
     policies = await tenant_policies(
         ledger, await golden_clause_store(), tenant_id=POLICY_TENANT_ID, as_of=as_of
     )
-    in_prefix = frozenset(p.clause_id for p in policies)
-    assert in_prefix
+    sent = PolicyCorpus(frozenset(p.clause_id for p in policies))
+    assert sent.clause_ids
 
+    def ids(trace: RetrievalTrace) -> list[str]:
+        return [c.clause_id for c in trace.ranked_candidates()]
+
+    def settled(trace: RetrievalTrace) -> tuple[list[float], set[str]]:
+        """What RRF ties can't move: the fused scores in order, and the clauses
+        scored strictly above the tenth."""
+        ranked = trace.ranked_candidates()
+        scores = [round(c.score, 9) for c in ranked]
+        return scores, {c.clause_id for c, s in zip(ranked, scores, strict=True) if s > scores[-1]}
+
+    print("\n#156 on real Qdrant, as Acme: law in the top 10; recall@10 of the law expected")
     async with QdrantRetrievalStore.ephemeral(
         QDRANT_URL,
         embedder=CachedEmbedder(EmbeddingCache.load()),
         ledger=ledger,
         prefix="prefix-slots",
     ) as store:
-        await store.upsert_chunks(golden_chunks())
         pipeline = RetrievalPipeline(store, NoRerank())
-        counts: list[tuple[str, int, int]] = []
+        await store.upsert_chunks(golden_chunks())
         for query in asked:
             before = await pipeline.retrieve(
                 query.query, POLICY_TENANT_ID, as_of, law=WHOLE_LIBRARY
             )
             after = await pipeline.retrieve(
-                query.query, POLICY_TENANT_ID, as_of, law=WHOLE_LIBRARY, in_prefix=in_prefix
+                query.query, POLICY_TENANT_ID, as_of, law=WHOLE_LIBRARY, policy_corpus=sent
             )
-            assert not in_prefix & {c.clause_id for c in after.ranked_candidates()}, query.id
-            counts.append((query.id, _law(before), _law(after)))
-
-    print("\nlaw chunks in the top 10, before -> after (#156)")
-    for query_id, law_before, law_after in counts:
-        print(f"  {query_id}: {law_before} -> {law_after}")
-    total_before, total_after = sum(c[1] for c in counts), sum(c[2] for c in counts)
-    print(f"  total: {total_before} -> {total_after} over {len(counts)} questions")
-    assert all(law_after >= law_before for _, law_before, law_after in counts), counts
-    assert total_after > total_before
+            library = await pipeline.retrieve(
+                query.query, PUBLIC_TENANT_ID, as_of, law=WHOLE_LIBRARY
+            )
+            assert _law(after) == len(ids(after)) == 10, query.id
+            assert settled(after) == settled(library), query.id
+            expected = frozenset(
+                c for c in query.expected_clause_ids if c.startswith(f"{LAW_INSTRUMENT_ID}:")
+            )
+            recall = (
+                f"  recall {_recall(before, expected):.3f} -> {_recall(after, expected):.3f}"
+                if expected
+                else ""
+            )
+            print(f"  {query.id}: law {_law(before)} -> {_law(after)}{recall}")

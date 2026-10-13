@@ -23,6 +23,7 @@ from compliance_rag.adapters.interfaces import (
     Generator,
     LawScope,
     LedgerStore,
+    PolicyCorpus,
     UsageRecord,
 )
 from compliance_rag.assessment.draft import (
@@ -156,8 +157,9 @@ class AssessmentPipeline:
             )
             # The prefix is the policies' authoritative copy, so retrieval
             # leaves them out and their slots go to law (ADR-0033).
+            sent = PolicyCorpus(frozenset(p.clause_id for p in policies))
             trace = await self.retrieval.retrieve(
-                query, tenant_id, as_of, law=law, in_prefix=frozenset(p.clause_id for p in policies)
+                query, tenant_id, as_of, law=law, policy_corpus=sent
             )
             if on_retrieved is not None:
                 await on_retrieved(trace)
@@ -188,9 +190,7 @@ class AssessmentPipeline:
 
             # The context is what this request showed the model: the retrieved
             # set plus the cached policy set. Nothing else is citable.
-            context = frozenset(c.clause_id for c in retrieved) | frozenset(
-                p.clause_id for p in policies
-            )
+            context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
             checked = await self.verifier.check_all(draft.citations, context=context, as_of=as_of)
             repairs: list[Generation] = []
             final: list[CheckedCitation] = []
