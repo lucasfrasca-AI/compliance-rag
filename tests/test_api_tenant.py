@@ -25,6 +25,7 @@ from compliance_rag.api import tenant
 from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Period
+from compliance_rag.corpus.models import DocumentClass
 from compliance_rag.eval.applicability import GoldenFact, load_applicability_set
 from compliance_rag.graph.mappings import load_mapping_set
 from tests.test_api_auth import api_settings, bearer, mint, verifier_for
@@ -384,6 +385,7 @@ async def test_evidence_and_subscriptions_round_trip_on_postgres() -> None:
             version_id="C2026C00227",
             valid_from=dt.date(2026, 6, 4),
             supersedes=None,
+            document_class=DocumentClass.LIBRARY_LAW,
         )
         async with await _client_for(postgres) as c:
             for fact in GA05.facts:

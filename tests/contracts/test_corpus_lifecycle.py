@@ -33,7 +33,13 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.chunker import chunk_clause
-from compliance_rag.corpus.models import CANONICALISATION_VERSION, Chunk, ClauseRecord, Scope
+from compliance_rag.corpus.models import (
+    CANONICALISATION_VERSION,
+    Chunk,
+    ClauseRecord,
+    DocumentClass,
+    Scope,
+)
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry, synthetic_key
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
@@ -119,6 +125,7 @@ async def assert_corpus_lifecycle_contract(
         version_id="C2026C00227",
         valid_from=dt.date(2000, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.LIBRARY_LAW,
     )
     lifecycle = CorpusLifecycle(
         ledger=ledger,
@@ -148,6 +155,7 @@ async def assert_corpus_lifecycle_contract(
         version_id="v1",
         effective_from=V1_FROM,
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     await lifecycle.publish_version(
         (_chunk(v2),),
@@ -156,6 +164,7 @@ async def assert_corpus_lifecycle_contract(
         version_id="v2",
         effective_from=V2_FROM,
         supersedes="v1",
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     assert {V1, V2} <= await stored_chunk_ids()
 
@@ -189,7 +198,32 @@ async def assert_corpus_lifecycle_contract(
             version_id="v2",
             effective_from=V2_FROM,
             supersedes="v1",
+            document_class=DocumentClass.INTERNAL_POLICY,
         )
+
+    # The class is the instrument's (#148): a version claiming another is
+    # refused before anything is written, so a corrected retry still works.
+    v3 = _clause(f"{POLICY}:v3:3/1", "Acme keeps customer records for six years.", tenant_id="acme")
+    await clauses.put_clause(v3)
+    before = await stored_chunk_ids()
+    with pytest.raises(ValueError, match="internal_policy, not external_upload"):
+        await lifecycle.publish_version(
+            (_chunk(v3),),
+            instrument_id=POLICY,
+            tenant_id="acme",
+            version_id="v3",
+            effective_from=AFTER_V2,
+            supersedes="v2",
+            document_class=DocumentClass.EXTERNAL_UPLOAD,
+        )
+    assert await stored_chunk_ids() == before
+    assert (
+        await ledger.version_validity(tenant_id="acme", instrument_id=POLICY, version_id="v3")
+        is None
+    )
+    assert await ledger.version_validity(
+        tenant_id="acme", instrument_id=POLICY, version_id="v2"
+    ) == (V2_FROM, None)
 
     # --- Library law and other tenants' documents are refused, audited. ---
     refusals = [
@@ -342,6 +376,7 @@ async def assert_corpus_lifecycle_contract(
         version_id="v1",
         effective_from=V1_FROM,
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     # A malformed replacement is refused before anything is touched: the
     # target would otherwise be deleted with nothing put back.
@@ -442,6 +477,7 @@ async def test_a_version_cannot_supersede_itself() -> None:
             version_id="v1",
             effective_from=V1_FROM,
             supersedes="v1",
+            document_class=DocumentClass.INTERNAL_POLICY,
         )
 
 

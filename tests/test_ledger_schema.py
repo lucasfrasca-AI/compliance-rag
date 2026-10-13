@@ -610,3 +610,51 @@ def test_coverage_belongs_to_a_recorded_assessment(
             "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, reason, "
             "trace_id) VALUES ('acme', 'nope', 'OB-1', 'unassessable', 'r', 't1')"
         )
+
+
+# --------------------------------------------------------------------------
+# db/ledger/0011_document_class.sql (#148)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "instrument_id", "scope", "document_class"),
+    [
+        pytest.param("acme", "acme/handbook", "tenant", "library_law", id="tenant-claims-library"),
+        pytest.param("_public", "some-act", "public", "internal_policy", id="library-not-law"),
+        pytest.param("acme", "acme/handbook", "tenant", "a-guess", id="not-a-class"),
+    ],
+)
+def test_document_class_is_library_law_exactly_when_the_owner_is_public(
+    conn: psycopg.Connection[tuple[object, ...]],
+    tenant_id: str,
+    instrument_id: str,
+    scope: str,
+    document_class: str,
+) -> None:
+    if tenant_id != "_public":
+        _insert_tenant(conn, tenant_id)
+    with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+        conn.execute(
+            "INSERT INTO instrument "
+            "(tenant_id, instrument_id, title, jurisdiction, scope, document_class) "
+            "VALUES (%s, %s, 'x', 'AU', %s, %s)",
+            (tenant_id, instrument_id, scope, document_class),
+        )
+
+
+def test_each_class_is_accepted_for_its_owner(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    for tenant_id, instrument_id, scope, document_class in (
+        ("_public", "some-act", "public", "library_law"),
+        ("acme", "acme/handbook", "tenant", "internal_policy"),
+        ("acme", "acme/iso-extract", "tenant", "external_upload"),
+    ):
+        conn.execute(
+            "INSERT INTO instrument "
+            "(tenant_id, instrument_id, title, jurisdiction, scope, document_class) "
+            "VALUES (%s, %s, 'x', 'AU', %s, %s)",
+            (tenant_id, instrument_id, scope, document_class),
+        )

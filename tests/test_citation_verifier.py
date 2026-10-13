@@ -21,7 +21,7 @@ from compliance_rag.adapters.fakes import (
 from compliance_rag.adapters.interfaces import Generation
 from compliance_rag.assessment.draft import DraftCitation
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
-from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
+from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Outcome, Verifier
 
@@ -87,6 +87,7 @@ async def _setup(
         version_id="v1",
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     await ledger.record_version(
         tenant_id=TENANT,
@@ -94,6 +95,7 @@ async def _setup(
         version_id="v2",
         valid_from=V2_FROM,
         supersedes="v1",
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     await ledger.end_version(
         tenant_id=TENANT, instrument_id=POLICY, version_id="v1", valid_to=V2_FROM
@@ -161,7 +163,12 @@ async def test_curly_quotes_and_collapsed_whitespace_still_match() -> None:
     await clauses.put_clause(clause)
     ledger = FakeLedgerStore()
     await ledger.record_version(
-        tenant_id=TENANT, instrument_id=POLICY, version_id="v2", valid_from=V2_FROM, supersedes=None
+        tenant_id=TENANT,
+        instrument_id=POLICY,
+        version_id="v2",
+        valid_from=V2_FROM,
+        supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     verifier = Verifier(clauses, ledger, CanonicalCitationVerifier())
     checked = await verifier.check(
@@ -182,7 +189,12 @@ async def test_canonicalisation_versions_are_compared_like_for_like() -> None:
     await clauses.put_clause(old)
     ledger = FakeLedgerStore()
     await ledger.record_version(
-        tenant_id=TENANT, instrument_id=POLICY, version_id="v2", valid_from=V2_FROM, supersedes=None
+        tenant_id=TENANT,
+        instrument_id=POLICY,
+        version_id="v2",
+        valid_from=V2_FROM,
+        supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     checked = await Verifier(clauses, ledger, CanonicalCitationVerifier()).check(
         DraftCitation(clause_id=old.clause_id, quote="reasonable steps"),
@@ -289,6 +301,7 @@ async def test_library_law_is_read_from_the_public_store() -> None:
         version_id="C2026C00227",
         valid_from=dt.date(2026, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.LIBRARY_LAW,
     )
     checked = await Verifier(clauses, ledger, CanonicalCitationVerifier()).check(
         DraftCitation(clause_id=law.clause_id, quote="reasonable in the circumstances"),
@@ -328,7 +341,12 @@ async def test_verification_runs_through_the_real_cloud_storage_clause_store() -
     await store.put_clause(V2_PROTECT)
     ledger = FakeLedgerStore()
     await ledger.record_version(
-        tenant_id=TENANT, instrument_id=POLICY, version_id="v2", valid_from=V2_FROM, supersedes=None
+        tenant_id=TENANT,
+        instrument_id=POLICY,
+        version_id="v2",
+        valid_from=V2_FROM,
+        supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     verifier = Verifier(store, ledger, CanonicalCitationVerifier())
     context = frozenset({V2_PROTECT.clause_id})
@@ -385,6 +403,7 @@ async def test_a_version_cannot_be_recorded_twice() -> None:
         version_id="v1",
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
     )
     with pytest.raises(ValueError, match="already recorded"):
         await ledger.record_version(
@@ -393,6 +412,7 @@ async def test_a_version_cannot_be_recorded_twice() -> None:
             version_id="v1",
             valid_from=dt.date(2025, 1, 1),
             supersedes=None,
+            document_class=DocumentClass.INTERNAL_POLICY,
         )
 
 

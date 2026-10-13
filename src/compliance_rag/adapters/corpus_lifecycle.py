@@ -43,6 +43,8 @@ from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     Chunk,
     ClauseRecord,
+    DocumentClass,
+    check_document_class,
     instrument_tenant_prefix,
     parse_stable_id,
 )
@@ -120,10 +122,20 @@ class CorpusLifecycle:
         version_id: str,
         effective_from: dt.date,
         supersedes: str | None,
+        document_class: DocumentClass,
     ) -> None:
         """Upsert a new version's chunks, in force from `effective_from`, and
         retire `supersedes` from the same date. The old chunks stay where
-        they are — that is what keeps an issued assessment verifiable."""
+        they are — that is what keeps an issued assessment verifiable.
+        `document_class` is the instrument's (#148): it decides whether the
+        version joins the tenant's cached policy prefix (D-11). A class that
+        disagrees with the instrument's is refused before anything is written."""
+        check_document_class(tenant_id, document_class)
+        recorded = await self._ledger.document_class(
+            tenant_id=tenant_id, instrument_id=instrument_id
+        )
+        if recorded is not None and recorded is not document_class:
+            raise ValueError(f"{instrument_id} is {recorded.value}, not {document_class.value}")
         _check_payload(
             chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
@@ -152,6 +164,7 @@ class CorpusLifecycle:
             version_id=version_id,
             valid_from=effective_from,
             supersedes=supersedes,
+            document_class=document_class,
         )
         if supersedes is not None:
             # Ledger first: a crash between the two leaves the verifier

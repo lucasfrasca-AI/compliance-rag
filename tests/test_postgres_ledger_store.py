@@ -21,8 +21,9 @@ import psycopg
 import pytest
 
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
-from compliance_rag.adapters.interfaces import Profile
+from compliance_rag.adapters.interfaces import PolicyVersion, Profile
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
+from compliance_rag.corpus.models import DocumentClass
 from tests.contracts.test_corpus_lifecycle import assert_corpus_lifecycle_contract
 from tests.contracts.test_interfaces import (
     LIBRARY_INSTRUMENT,
@@ -121,6 +122,7 @@ async def test_postgres_satisfies_the_retrieval_store_contract(
         version_id="C2026C00227",
         valid_from=dt.date(2000, 1, 1),
         supersedes=None,
+        document_class=DocumentClass.LIBRARY_LAW,
     )
     await assert_retrieval_store_contract(
         FakeRetrievalStore(contract_chunks(), ledger=ledger), ledger
@@ -144,4 +146,38 @@ async def test_a_version_needs_its_tenant_registered(ledger: PostgresLedgerStore
             version_id="v1",
             valid_from=dt.date(2026, 1, 1),
             supersedes=None,
+            document_class=DocumentClass.INTERNAL_POLICY,
         )
+
+
+async def test_a_policy_recorded_before_document_class_is_refused_until_classified(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """0011 leaves a tenant's earlier rows unclassified rather than guessing:
+    reading them as policies is refused, naming them, until the next version
+    states the class."""
+    await ledger.put_profile(Profile("acme"))
+    jan, mar, jun = dt.date(2026, 1, 1), dt.date(2026, 3, 1), dt.date(2026, 6, 1)
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute(
+            "INSERT INTO instrument (tenant_id, instrument_id, title, jurisdiction, scope) "
+            "VALUES ('acme', 'acme/old-policy', 'acme/old-policy', 'AU', 'tenant')"
+        )
+        await conn.execute(
+            "INSERT INTO instrument_version (tenant_id, instrument_id, version_id, title, "
+            "valid_from) VALUES ('acme', 'acme/old-policy', 'v1', 'acme/old-policy', %s)",
+            (jan,),
+        )
+    with pytest.raises(ValueError, match=r"acme/old-policy.*no document class"):
+        await ledger.policy_versions("acme", as_of=mar)
+    await ledger.record_version(
+        tenant_id="acme",
+        instrument_id="acme/old-policy",
+        version_id="v2",
+        valid_from=jun,
+        supersedes="v1",
+        document_class=DocumentClass.INTERNAL_POLICY,
+    )
+    assert await ledger.policy_versions("acme", as_of=mar) == (
+        PolicyVersion("acme/old-policy", "v1"),
+    )
