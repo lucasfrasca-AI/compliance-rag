@@ -353,6 +353,10 @@ async def test_for_acme_the_app_11_2_paragraphs_are_in_scope() -> None:
     for paragraph in ("sch1/app11/2/b", "sch1/app11/2/d", "sch1/app11/1/a"):
         assert law.admits(Scope.PUBLIC, f"{act}:{paragraph}"), paragraph
     assert not law.admits(Scope.PUBLIC, f"{act}:s6/1/acc")
+    # GA-01's two obligations that don't apply (agency-only) stay out, with
+    # their paragraphs: no admitted citation contains them.
+    for out in ("sch1/app3/1", "sch1/app3/1/a", "sch1/app12/7", "sch1/app12/7/a"):
+        assert not law.admits(Scope.PUBLIC, f"{act}:{out}"), out
 
 
 async def test_every_expected_law_clause_the_golden_set_names_is_in_acmes_scope() -> None:
@@ -381,3 +385,109 @@ async def test_every_expected_law_clause_the_golden_set_names_is_in_acmes_scope(
     }
     left_out = {c.split(":")[2] for c in expected if not law.admits(Scope.PUBLIC, c)}
     assert left_out == {"sch1/app11/3"}
+
+
+async def test_a_quote_from_an_admitted_paragraph_verifies() -> None:
+    """Through `answer()` under Acme's scope: APP 11.2(b), admitted because
+    11.2 is cited, is retrieved, cited and verified against its canonical
+    text. The verifier's context is what was retrieved, so a paragraph in it
+    verifies like any clause (#163)."""
+    import json
+
+    from compliance_rag.adapters.fakes import FakeGenerator, FakeReranker
+    from compliance_rag.adapters.generation_residency import TenantTextGate
+    from compliance_rag.assessment.pipeline import AssessmentPipeline
+    from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+    from compliance_rag.eval.applicability import load_applicability_set
+    from compliance_rag.eval.golden_corpus import golden_chunks, golden_clauses
+    from compliance_rag.eval.harness import golden_clause_store, golden_ledger
+    from compliance_rag.graph.mappings import load_mapping_set
+    from compliance_rag.retrieval.pipeline import RetrievalPipeline
+    from compliance_rag.settings import REGION
+    from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
+    from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
+
+    paragraph = "privacy-act-1988:C2026C00227:sch1/app11/2/b"
+    canonical = next(c.canonical_text for c in golden_clauses() if c.clause_id == paragraph)
+    labels = load_applicability_set()
+    ga01 = next(c for c in labels.cases if c.id == "GA-01")
+    graph = fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
+    law = LawScope.of(
+        await graph.coverage(Facts.of(ga01.evidence()), tenant_id="acme", as_of=ga01.as_of)
+    )
+    ledger, clauses = await golden_ledger(), await golden_clause_store()
+    await ledger.subscribe(tenant_id="acme", instrument_id="privacy-act-1988", subscribed_by="test")
+    reply = {"answer": "-", "citations": [{"clause_id": paragraph, "quote": canonical[:50]}]}
+    pipeline = AssessmentPipeline(
+        RetrievalPipeline(FakeRetrievalStore(golden_chunks(), ledger=ledger), FakeReranker()),
+        FakeGenerator(json.dumps(reply)),
+        Verifier(clauses, ledger, CanonicalCitationVerifier()),
+        ledger,
+        tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
+    )
+    answer = await pipeline.answer(canonical, "acme", ga01.as_of, law=law)
+    assert paragraph in {c.clause_id for c in answer.retrieval.ranked_candidates()}
+    assert answer.verified
+    assert [c.clause.clause_id for c in answer.citations if c.clause] == [paragraph]
+
+
+@pytest.mark.skipif(not qdrant_reachable(QDRANT_URL), reason="needs a real Qdrant (QDRANT_URL)")
+async def test_on_real_qdrant_acmes_scope_now_retrieves_the_paragraphs_its_labels_expect() -> None:
+    """ADR-0035's measurement, reproducible: the nine golden questions whose
+    labels name law, asked as Acme under GA-01's Track A scope with its
+    policies left out (ADR-0033), over real cached vectors and no reranker.
+    Mean recall@10 of the expected law was 0.593 before #163 and 0.796 after.
+    Pinned: GQ-09 and GQ-13, which expect APP 11.1(a) and (b), now find them
+    (both were 0), and the mean stays above 0.75. Per question, a clause on
+    an RRF tie at the tenth place can move between runs (#160), so the rest
+    is printed, not pinned."""
+    from compliance_rag.adapters.interfaces import PolicyCorpus
+    from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
+    from compliance_rag.assessment.policies import tenant_policies
+    from compliance_rag.eval.applicability import load_applicability_set
+    from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
+    from compliance_rag.eval.golden import Category, load_golden_set
+    from compliance_rag.eval.golden_corpus import LAW_INSTRUMENT_ID, golden_chunks
+    from compliance_rag.eval.harness import golden_clause_store, golden_ledger
+    from compliance_rag.eval.recall import NoRerank
+    from compliance_rag.graph.mappings import load_mapping_set
+    from compliance_rag.retrieval.pipeline import RetrievalPipeline
+    from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
+
+    labels = load_applicability_set()
+    ga01 = next(c for c in labels.cases if c.id == "GA-01")
+    graph = fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
+    asked = [q for q in load_golden_set().queries if q.category is not Category.EXACT_ID]
+    as_of = asked[0].as_of
+    law = LawScope.of(
+        await graph.coverage(Facts.of(ga01.evidence()), tenant_id="acme", as_of=as_of)
+    )
+    ledger = await golden_ledger()
+    await ledger.subscribe(tenant_id="acme", instrument_id=LAW_INSTRUMENT_ID, subscribed_by="t")
+    policies = await tenant_policies(
+        ledger, await golden_clause_store(), tenant_id="acme", as_of=as_of
+    )
+    sent = PolicyCorpus(frozenset(p.clause_id for p in policies))
+    recall: dict[str, float] = {}
+    async with QdrantRetrievalStore.ephemeral(
+        QDRANT_URL,
+        embedder=CachedEmbedder(EmbeddingCache.load()),
+        ledger=ledger,
+        prefix="scoped-recall",
+    ) as store:
+        await store.upsert_chunks(golden_chunks())
+        pipeline = RetrievalPipeline(store, NoRerank())
+        for query in asked:
+            expected = {
+                c for c in query.expected_clause_ids if c.startswith(f"{LAW_INSTRUMENT_ID}:")
+            }
+            if not expected:
+                continue
+            trace = await pipeline.retrieve(query.query, "acme", as_of, law=law, policy_corpus=sent)
+            found = {c.clause_id for c in trace.ranked_candidates()}
+            recall[query.id] = len(expected & found) / len(expected)
+    mean = sum(recall.values()) / len(recall)
+    print(f"\n#163, Acme under GA-01's scope: recall@10 of expected law {recall}, mean {mean:.3f}")
+    assert len(recall) == 9
+    assert recall["GQ-09"] == recall["GQ-13"] == 1.0
+    assert mean > 0.75

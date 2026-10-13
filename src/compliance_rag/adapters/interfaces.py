@@ -144,10 +144,11 @@ class LawScope:
 
     @property
     def described(self) -> str:
-        """For a span: the reason, and how many clauses it admits."""
+        """For a span: the reason, and how many clauses it cites. Each also
+        admits the clauses inside it (#163), which this doesn't count."""
         if self.clause_ids is None:
             return self.reason
-        return f"{self.reason}: {len(self.clause_ids)} clause(s)"
+        return f"{self.reason}: {len(self.clause_ids)} cited clause(s) and those inside them"
 
 
 @dataclass(frozen=True, slots=True)

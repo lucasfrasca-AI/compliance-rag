@@ -55,16 +55,29 @@ scope for GA-01's facts, with its policies left out (ADR-0033):
 - **Mean recall@10 of the expected law: 0.593 before, 0.796 after.** GQ-09 and
   GQ-13 go from 0 to 1, and GQ-18 from 0.333 to 0.667. Each gains APP
   11.1(a) or (b).
-- **GQ-20 drops from 1.0 to 0.5.** It expects the definition of "agency", which
-  is cited, and whose 15 paragraphs are now admitted too. They compete for the
-  ten places. Admitting a clause's text can push its own head out; the
-  reranker, which this measurement leaves out, is what orders them.
+- **GQ-20 drops from 1.0 to 0.5.** Of its two expected clauses, the one that
+  drops out is the definition of "agency" (`s6/1/agency`). That definition is
+  cited, and its 15 paragraphs are now admitted with it, as are s6C(3)'s 17
+  paragraphs. They compete for the ten places.
+  - **0.5 is GQ-20's own figure in the recall gate's baseline,** which is
+    measured over the whole library. The old 1.0 came from the scope being too
+    narrow to hold the competing paragraphs.
+  - **Whether the reranker restores it isn't measured here.**
 - **APP 11.3 stays out for GQ-14,** as it should. The mapping lists it as a
   clause, not an obligation, so nothing cites it.
 
 That last point is a wider gap, and a separate one (#164). An obligation's
 exceptions (APP 7.2–7.6 for 7.1, 8.2 for 8.1, 11.3 for 11.2) are never cited,
 so they are never retrievable either.
+
+The measurement is a test:
+`test_on_real_qdrant_acmes_scope_now_retrieves_the_paragraphs_its_labels_expect`.
+- **What it pins:** GQ-09 and GQ-13 at 1.0, and the mean above 0.75.
+- **What it prints:** the rest. A clause on an RRF tie at the tenth place can
+  move from run to run (#160).
+
+#156's real-Qdrant measurement (ADR-0033) retrieved over the whole library, so
+this change leaves it as it was.
 
 ## Consequences
 
