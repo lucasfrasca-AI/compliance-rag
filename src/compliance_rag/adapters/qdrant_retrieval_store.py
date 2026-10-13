@@ -46,13 +46,16 @@ import datetime as dt
 import uuid
 from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import cast
 
 from fastembed import SparseTextEmbedding
 from opentelemetry import trace
 from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.http.exceptions import UnexpectedResponse
 
+from compliance_rag import telemetry
 from compliance_rag.adapters.interfaces import (
     Candidate,
     Channel,
@@ -101,17 +104,21 @@ def _encode_sparse(texts: Iterable[str]) -> list[models.SparseVector]:
 
 async def ensure_collection(
     client: AsyncQdrantClient, collection_name: str, *, dense_dims: int
-) -> None:
+) -> bool:
     """Idempotent bootstrap: create the collection with its dense+sparse
     vector config unless it already exists, then create any payload index
-    it's missing. Safe to call on every process start (production) and once
-    per test run (CI's throwaway self-hosted container) — never re-creates
-    an existing collection, so it never discards real data, but a collection
-    created before an index was added (`instrument_id`, ADR-0020) still gets
-    it. Points upserted before a field existed don't carry it and must be
-    re-upserted; upsert is idempotent on the deterministic point id."""
-    if await client.collection_exists(collection_name):
+    it's missing; True if it created the collection. Safe to call on every
+    process start (production) and once per test run (CI's throwaway
+    self-hosted container) — never re-creates an existing collection, so it
+    never discards real data, but a collection created before an index was
+    added (`instrument_id`, ADR-0020) still gets it. An existing collection of
+    another shape (dense size or distance, or no sparse vector) is refused,
+    not used. Points upserted before a field existed don't carry it and must
+    be re-upserted; upsert is idempotent on the deterministic point id."""
+    created = not await client.collection_exists(collection_name)
+    if not created:
         info = await client.get_collection(collection_name)
+        _check_shape(collection_name, info.config.params, dense_dims=dense_dims)
         existing = set(info.payload_schema)
     else:
         await client.create_collection(
@@ -139,6 +146,79 @@ async def ensure_collection(
             await client.create_payload_index(
                 collection_name, field_name=field, field_schema=models.PayloadSchemaType.BOOL
             )
+    return created
+
+
+def _check_shape(name: str, params: models.CollectionParams, *, dense_dims: int) -> None:
+    vectors = params.vectors if isinstance(params.vectors, dict) else {}
+    dense = vectors.get(DENSE_VECTOR_NAME)
+    if (
+        dense is None
+        or dense.size != dense_dims
+        or dense.distance != models.Distance.COSINE
+        or SPARSE_VECTOR_NAME not in (params.sparse_vectors or {})
+    ):
+        raise ValueError(
+            f"collection {name} exists with another shape: expected a {dense_dims}-dim cosine "
+            f"{DENSE_VECTOR_NAME!r} vector and a {SPARSE_VECTOR_NAME!r} sparse vector"
+        )
+
+
+def _client(settings: Settings) -> AsyncQdrantClient:
+    return AsyncQdrantClient(
+        url=settings.qdrant_url or None,
+        api_key=settings.qdrant_api_key.get_secret_value() or None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionStatus:
+    """What `bootstrap_collection` found or made: nothing about where the
+    cluster is or how to reach it."""
+
+    name: str
+    created: bool
+    points: int
+    payload_indexes: tuple[str, ...]
+
+
+async def bootstrap_collection(settings: Settings) -> CollectionStatus:
+    """The configured cluster's corpus collection, created if it is missing
+    (issue #139) by the same idempotent `ensure_collection` a service runs on
+    start. The deployed cluster then has its collection, and the keep-alive
+    (`qdrant-keepalive.yml`) something to write to, before anything is
+    deployed. Never recreates or empties an existing collection, and refuses
+    one of another shape. A key the cluster refuses (wrong, rotated, or
+    read-only: creating needs write) is a `PermissionError` that says so."""
+    if not settings.qdrant_url:
+        # The client would otherwise default to localhost.
+        raise ValueError("QDRANT_URL is not set")
+    name = settings.qdrant_collection
+    client = _client(settings)
+    with telemetry.span("qdrant.bootstrap_collection", **{"retrieval.collection": name}) as span:
+        try:
+            created = await ensure_collection(
+                client, name, dense_dims=settings.vertex_embedding_dims
+            )
+            info = await client.get_collection(name)
+        except UnexpectedResponse as refused:
+            if refused.status_code in (401, 403):
+                raise PermissionError(
+                    f"the cluster refused the API key (HTTP {refused.status_code}): wrong, "
+                    "rotated, or read-only — creating a collection needs a key that can write"
+                ) from None
+            raise
+        finally:
+            await client.close()
+        status = CollectionStatus(
+            name=name,
+            created=created,
+            points=info.points_count or 0,
+            payload_indexes=tuple(sorted(info.payload_schema)),
+        )
+        span.set_attribute("retrieval.collection_created", status.created)
+        span.set_attribute("retrieval.collection_points", status.points)
+    return status
 
 
 def _chunk_point_id(chunk_id: str) -> str:
@@ -171,12 +251,11 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
     def from_settings(
         cls, settings: Settings, *, embedder: Embedder, ledger: LedgerStore
     ) -> QdrantRetrievalStore:
-        client = AsyncQdrantClient(
-            url=settings.qdrant_url or None,
-            api_key=settings.qdrant_api_key.get_secret_value() or None,
-        )
         return cls(
-            client, collection_name=settings.qdrant_collection, embedder=embedder, ledger=ledger
+            _client(settings),
+            collection_name=settings.qdrant_collection,
+            embedder=embedder,
+            ledger=ledger,
         )
 
     @classmethod
