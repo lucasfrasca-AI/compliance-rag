@@ -182,9 +182,13 @@ def test_ids_are_unique_across_files(tmp_path: Path) -> None:
         load_mapping_set([first, write_yaml(tmp_path, second, "b.yaml")])
 
 
-def test_corpus_mappings_holds_no_authored_content() -> None:
-    """Authoring obligations is the human's design session, not this ticket."""
-    assert [p.name for p in (ROOT / "corpus" / "mappings").iterdir()] == ["README.md"]
+def test_every_authored_mapping_file_validates_together() -> None:
+    """Every file in corpus/mappings/ besides the README is mapping YAML that
+    loads as one set — front matter, review rule, references (D-01)."""
+    mappings = ROOT / "corpus" / "mappings"
+    files = sorted(mappings.glob("*.yaml"))
+    assert {p.name for p in mappings.iterdir()} == {"README.md", *(p.name for p in files)}
+    load_mapping_set(files)
 
 
 # ---- corpus structure, on a real server -------------------------------------

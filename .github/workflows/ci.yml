@@ -75,6 +75,9 @@ jobs:
       # The graph tests fail rather than skip without the Neo4j container.
       NEO4J_TEST_URI: bolt://localhost:7687
       REQUIRE_NEO4J: "1"
+      # The applicability labels are checked in: a missing file fails the
+      # gate instead of skipping it (tests/test_applicability_gate.py).
+      REQUIRE_APPLICABILITY_GATE: "1"
 
     steps:
       - uses: actions/checkout@v4
