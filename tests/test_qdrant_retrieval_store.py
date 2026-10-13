@@ -227,7 +227,7 @@ async def test_the_residency_gate_query_on_real_qdrant() -> None:
         await store.upsert_chunks(
             (Chunk(chunk_id="law", clause_id=APP11, text="law"), tenant("s1", synthetic=True))
         )
-        assert not await store.holds_real_tenant_data()
+        assert not await store.holds_real_customer_data()
 
         # A legacy point: written synthetic, then the field removed as if it
         # predated the flag. It must count as real.
@@ -236,10 +236,18 @@ async def test_the_residency_gate_query_on_real_qdrant() -> None:
         collection = store._collection_name  # pyright: ignore[reportPrivateUsage]
         await client.delete_payload(collection, keys=["synthetic"], points=[_chunk_point_id("s2")])
         await client.close()
-        assert await store.holds_real_tenant_data()
+        assert await store.holds_real_customer_data()
 
     async with QdrantRetrievalStore.ephemeral(
         _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="gate"
     ) as store:
         await store.upsert_chunks((tenant("r1", synthetic=False),))
-        assert await store.holds_real_tenant_data()
+        assert await store.holds_real_customer_data()
+
+    # One person's private addition is customer data too (#166).
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="gate"
+    ) as store:
+        mine = tenant("u1", synthetic=False).model_copy(update={"scope": Scope.USER})
+        await store.upsert_chunks((mine,))
+        assert await store.holds_real_customer_data()

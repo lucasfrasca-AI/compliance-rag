@@ -457,10 +457,11 @@ class RetrievalAdmin(ABC):
     async def upsert_chunks(self, chunks: tuple[Chunk, ...]) -> None: ...
 
     @abstractmethod
-    async def holds_real_tenant_data(self) -> bool:
-        """Whether any stored chunk is tenant-scoped and not marked synthetic
-        — what closes offshore generation (ADR-0023). A chunk stored before
-        the `synthetic` flag existed counts as real."""
+    async def holds_real_customer_data(self) -> bool:
+        """Whether any stored chunk is not public law and not marked synthetic
+        (a tenant's documents and a person's private additions alike, #166) —
+        what closes offshore generation (ADR-0023). A chunk stored before the
+        `synthetic` flag existed counts as real."""
 
     @abstractmethod
     async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
