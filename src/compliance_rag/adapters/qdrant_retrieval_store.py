@@ -4,7 +4,7 @@ Collection `clauses` (`Settings.qdrant_collection`): a named dense vector
 (1536, cosine — `gemini-embedding-001`) plus a named sparse vector (BM25),
 fused with Qdrant's own native RRF (D-07: "hybrid, native RRF") rather than
 a hand-rolled client-side fusion. Payload indexes on `clause_id`,
-`obligation_id`, `tenant_id`, `scope` (keyword) and `valid_from`/`valid_to`
+`tenant_id`, `scope` (keyword) and `valid_from`/`valid_to`
 (integer epoch days — `corpus.models.epoch_days`; `valid_to` is never null,
 `CONTEXT.md`: Bitemporal, so the range side of every filter below is one
 unconditional `Range`, never a range-or-is-null pair).
@@ -77,7 +77,6 @@ _SPARSE_CACHE_DIR = ".fastembed_cache"
 
 _PAYLOAD_KEYWORD_FIELDS = (
     "clause_id",
-    "obligation_id",
     "tenant_id",
     "scope",
     "instrument_id",
@@ -308,7 +307,6 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     "version_id": parse_stable_id(chunk.clause_id)[1],
                     "withdrawn": False,
                     "synthetic": chunk.synthetic,
-                    "obligation_id": chunk.obligation_id,
                     "text": chunk.text,
                     "scope": chunk.scope.value,
                     "tenant_id": chunk.tenant_id,
@@ -486,7 +484,6 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             text=cast("str", data["text"]),
             score=score,
             channel=channel,
-            obligation_id=cast("str | None", data.get("obligation_id")),
         )
 
     async def search(

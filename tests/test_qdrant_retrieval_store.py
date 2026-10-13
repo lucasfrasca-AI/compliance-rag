@@ -83,19 +83,16 @@ async def store(ledger: FakeLedgerStore) -> QdrantRetrievalStore:
             Chunk(
                 chunk_id="c1",
                 clause_id=APP11,
-                obligation_id="OB-APP11",
                 text="An APP entity must take reasonable steps to protect the information.",
             ),
             Chunk(
                 chunk_id="c2",
                 clause_id=APP12,
-                obligation_id="OB-APP12",
                 text="An APP entity must give the individual access to the information.",
             ),
             Chunk(
                 chunk_id="c3",
                 clause_id="acme-policy:v3:sec2/1",
-                obligation_id=None,
                 text="Acme retains customer records for seven years to protect the information.",
                 scope=Scope.TENANT,
                 tenant_id="acme",
@@ -181,7 +178,6 @@ async def test_bitemporal_filter_is_one_unconditional_range_both_sides(
             Chunk(
                 chunk_id="c4",
                 clause_id="privacy-act-1988:TEST-FIXTURE-001:sch1/app13/1",
-                obligation_id="OB-APP13",
                 text="A repealed clause about direct marketing opt-outs.",
                 valid_from=dt.date(2020, 1, 1),
                 valid_to=dt.date(2024, 1, 1),

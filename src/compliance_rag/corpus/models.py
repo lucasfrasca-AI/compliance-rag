@@ -544,15 +544,15 @@ class Chunk(BaseModel):
     (420) as counted by the reranker's own tokenizer, not a word count
     (`CONTEXT.md`: Chunk, issue #6).
 
-    One chunk belongs to at most one obligation (`CONTEXT.md`). Chunks live in
-    Qdrant; clauses live in Cloud Storage.
+    A chunk carries its clause, never an obligation: which obligations cite a
+    clause is the graph's (ADR-0030, #129). Chunks live in Qdrant; clauses live
+    in Cloud Storage.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     chunk_id: str
     clause_id: str
-    obligation_id: str | None = None
     text: str
     scope: Scope = Scope.PUBLIC
     tenant_id: TenantSegment = PUBLIC_TENANT_ID

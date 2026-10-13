@@ -65,3 +65,5 @@ that being real:
   is to derive the relevant conditions from those definitions in mapping YAML.
   Unscoping is not the fix.
 - The `obligation_id` payload on chunks is no longer read by any filter.
+  (Dropped from `Chunk`, `Candidate` and the Qdrant payload and index in #129,
+  2026-10-13, before any deployed collection held it.)

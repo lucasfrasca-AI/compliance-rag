@@ -82,7 +82,6 @@ class Candidate:
     text: str
     score: float
     channel: Channel | None = None
-    obligation_id: str | None = None
 
 
 UNSCOPED = "unscoped: "
