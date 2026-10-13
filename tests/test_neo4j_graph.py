@@ -598,6 +598,10 @@ async def test_stored_returns_named_nodes_with_their_edges_at_no_date(graph: Neo
 # ---- server notifications (#141) ------------------------------------------
 
 
+def _notifications(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "neo4j.notifications"]
+
+
 @needs_neo4j
 async def test_reading_a_kind_of_data_not_yet_loaded_logs_no_warning(
     graph: Neo4jGraph, caplog: pytest.LogCaptureFixture
@@ -606,19 +610,22 @@ async def test_reading_a_kind_of_data_not_yet_loaded_logs_no_warning(
     server, which warned on every Track A read on Aura (no `REQUIRES` edge).
     Neo4j keeps a type's token once any data has used it, even after the data
     is gone, so a long-lived test database already knows every type the
-    builder names: the query uses names it has never seen, through the same
-    driver."""
+    builder names: the query uses a label, type and property key it has never
+    seen, through the same driver."""
     caplog.set_level(logging.DEBUG, logger="neo4j.notifications")
-    unseen = uuid.uuid4().hex[:8].upper()
-    await cypher(graph, f"MATCH (a:UNSEEN_{unseen})-[:UNSEEN_{unseen}]->(b) RETURN b LIMIT 1")
-    assert [r.getMessage() for r in caplog.records if r.name == "neo4j.notifications"] == []
+    suffix = uuid.uuid4().hex[:8].upper()
+    await cypher(
+        graph, f"MATCH (a:UNSEEN_{suffix} {{unseen_{suffix}: 1}})-[:UNSEEN_{suffix}]->(b) RETURN b"
+    )
+    assert _notifications(caplog) == []
 
 
 @needs_neo4j
 async def test_other_notifications_still_reach_the_log(
     graph: Neo4jGraph, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Also the control for the test above: notifications do reach the
+    captured log, so its empty list means none was sent."""
     caplog.set_level(logging.DEBUG, logger="neo4j.notifications")
     await cypher(graph, "MATCH (n) RETURN id(n) LIMIT 1")  # id() is deprecated in 5.x
-    logged = [r.getMessage() for r in caplog.records if r.name == "neo4j.notifications"]
-    assert any("Deprecat" in m for m in logged), logged
+    assert any("Deprecat" in m for m in _notifications(caplog)), _notifications(caplog)

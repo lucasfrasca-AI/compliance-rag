@@ -228,7 +228,10 @@ class Neo4jGraph(GraphAdmin):
         # vocabularies in graph_schema.py, so one the server doesn't recognise
         # means no data of that kind yet (no REQUIRES edge until an obligation
         # has a condition of its own), never a typo: left on, it would warn on
-        # every Track A read. Every other notification category stays on (#141).
+        # every Track A read. The category also covers property keys, which are
+        # literals in this module; a misspelt one is caught by the tests that
+        # assert what queries return, not by a server warning. Every other
+        # notification category stays on (#141).
         driver = AsyncGraphDatabase.driver(
             uri,
             auth=(username, password),
