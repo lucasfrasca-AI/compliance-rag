@@ -17,6 +17,10 @@ The exception is closed by a gate, not a note, at both ends:
   that is not marked synthetic while generation is offshore, so the first
   real policy upload fails loudly instead of being sent offshore on its first
   question. `CorpusLifecycle` calls it before touching any store.
+- **Each answer request.** `assert_request_allowed` refuses a question from a
+  member the operator hasn't registered as a build-phase tester, and a policy
+  prefix holding a clause the synthetic registry doesn't vouch for
+  (ADR-0032). Neither passes through the store the startup gate asks.
 
 The `global` endpoint, and every region not listed here, is refused
 outright: it routes requests anywhere.
@@ -24,7 +28,8 @@ outright: it routes requests anywhere.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from collections.abc import Set as AbstractSet
 
 from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.settings import GENERATION_REGIONS, REGION
@@ -79,4 +84,36 @@ def assert_generation_allowed(*, generation_region: str, holds_real_tenant_data:
             f"refusing to start the generator in {generation_region}: the corpus holds real "
             "(tenant-scoped, non-synthetic) data, and generation outside Australia is "
             "allowed only while it holds public law and synthetic data (ADR-0023)"
+        )
+
+
+def assert_request_allowed(
+    *,
+    generation_region: str,
+    member_email: str,
+    testers: AbstractSet[str],
+    real_prefix_clause_ids: Sequence[str] = (),
+) -> None:
+    """The two inputs of an answer that never pass through the stores the
+    startup gate asks (ADR-0032):
+    - **the question.** A member can type anything, so it counts as real
+      unless the operator registered the member as a build-phase tester
+      (`testers`, compared case-insensitively);
+    - **the policy prefix,** read from the bucket. `real_prefix_clause_ids`
+      are the clauses in it the synthetic registry doesn't vouch for.
+    Checked per request, before the model is called. Sydney checks neither."""
+    if not is_offshore(generation_region):
+        return
+    if member_email.casefold() not in {t.casefold() for t in testers}:
+        raise GenerationResidencyError(
+            f"generation runs in {generation_region}, outside Australia, during the build "
+            "phase, so only a registered build-phase tester's question is sent there: anyone "
+            "else's may hold real customer data (ADR-0023, ADR-0032)"
+        )
+    if real_prefix_clause_ids:
+        raise GenerationResidencyError(
+            f"generation runs in {generation_region}, outside Australia, during the build "
+            f"phase, and {len(real_prefix_clause_ids)} policy clause(s) in this tenant's prefix "
+            f"(first: {real_prefix_clause_ids[0]!r}) aren't registered synthetic, so they're "
+            "real data (ADR-0026, ADR-0032)"
         )

@@ -76,15 +76,19 @@ class SyntheticRegistry:
         path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
     def vouches_for(self, chunk: Chunk) -> bool:
-        return synthetic_key(chunk.tenant_id, chunk.text) in self.keys
+        return self.vouches_for_text(chunk.tenant_id, chunk.text)
+
+    def vouches_for_text(self, tenant_id: str, text: str) -> bool:
+        """`text` (a chunk's, or a clause's canonical text) is registered
+        synthetic under `tenant_id`: the policy prefix's check (ADR-0032)."""
+        return synthetic_key(tenant_id, text) in self.keys
 
     def real_clauses(self, clauses: Iterable[ClauseRecord]) -> tuple[str, ...]:
         """Ids of tenant clauses the registry doesn't vouch for — real data."""
         return tuple(
             c.clause_id
             for c in clauses
-            if c.scope is Scope.TENANT
-            and synthetic_key(c.tenant_id, c.canonical_text) not in self.keys
+            if c.scope is Scope.TENANT and not self.vouches_for_text(c.tenant_id, c.canonical_text)
         )
 
     def mark(self, chunks: tuple[Chunk, ...]) -> tuple[Chunk, ...]:

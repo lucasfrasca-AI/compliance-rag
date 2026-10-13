@@ -1,7 +1,8 @@
-"""The build-phase residency gate on ingest (ADR-0023): while generation runs
+"""The build-phase residency gate (ADR-0023). On ingest: while generation runs
 offshore, a real tenant upload fails loudly at the door instead of being sent
 outside Australia on its first question. Both ways, through the real write path
-(`CorpusLifecycle`)."""
+(`CorpusLifecycle`). Per request (ADR-0032): the question and the policy prefix,
+which never pass through the stores the startup gate asks."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.generation_residency import (
     GenerationResidencyError,
+    assert_request_allowed,
     validate_generation_region,
 )
 from compliance_rag.corpus.models import Chunk, DocumentClass, Scope
@@ -101,6 +103,54 @@ def test_no_other_generation_region_is_accepted(region: str) -> None:
         validate_generation_region(region)
     with pytest.raises(GenerationResidencyError):
         _lifecycle(region)
+
+
+TESTERS = frozenset({"Tester@Acme.example"})
+
+
+def test_offshore_a_question_from_a_member_who_isnt_a_registered_tester_is_refused() -> None:
+    """A member can type anything, real customer data included, so a question
+    counts as real unless the operator registered its asker (ADR-0032)."""
+    with pytest.raises(GenerationResidencyError, match="registered build-phase tester"):
+        assert_request_allowed(
+            generation_region="us", member_email="lead@acme.example", testers=TESTERS
+        )
+    with pytest.raises(GenerationResidencyError, match="registered build-phase tester"):
+        assert_request_allowed(generation_region="us", member_email="anyone", testers=frozenset())
+
+
+def test_offshore_a_registered_tester_is_allowed_whatever_the_case_of_their_email() -> None:
+    assert_request_allowed(
+        generation_region="us", member_email="tester@acme.EXAMPLE", testers=TESTERS
+    )
+
+
+def test_offshore_a_prefix_clause_the_registry_doesnt_vouch_for_is_refused_even_for_a_tester() -> (
+    None
+):
+    with pytest.raises(GenerationResidencyError, match="1 policy clause"):
+        assert_request_allowed(
+            generation_region="us",
+            member_email="tester@acme.example",
+            testers=TESTERS,
+            real_prefix_clause_ids=(f"{POLICY}:v2:1/1",),
+        )
+
+
+def test_in_sydney_neither_the_asker_nor_the_prefix_is_checked() -> None:
+    assert_request_allowed(
+        generation_region="australia-southeast1",
+        member_email="lead@acme.example",
+        testers=frozenset(),
+        real_prefix_clause_ids=(f"{POLICY}:v2:1/1",),
+    )
+
+
+def test_the_registry_vouches_for_a_clause_text_under_its_own_tenant_only() -> None:
+    text = _chunk(synthetic=False).text
+    assert REGISTERED.vouches_for_text("acme", text)
+    assert not REGISTERED.vouches_for_text("globex", text)
+    assert not REGISTERED.vouches_for_text("acme", text + " ")
 
 
 def test_the_golden_corpus_marks_every_tenant_chunk_synthetic() -> None:

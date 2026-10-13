@@ -10,6 +10,12 @@ The pipeline:
 The question is the retriever's query and nothing else (#29); nothing in it
 names the tenant, the scope or the date.
 
+While generation runs outside Australia (the build phase, ADR-0023), the
+request is checked before anything is retrieved or generated (ADR-0032): the
+member must be a registered build-phase tester, and every clause of the
+policy prefix registered synthetic. A refusal is an `error` event naming the
+rule.
+
 The stream carries stages and a verified result, never unverified text
 (D-02):
 - `coverage` once Track A has answered;
@@ -37,6 +43,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from compliance_rag.adapters.generation_residency import (
+    GenerationResidencyError,
+    assert_request_allowed,
+)
 from compliance_rag.adapters.interfaces import LawScope
 from compliance_rag.api.deps import (
     EARLIEST,
@@ -149,6 +159,16 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
             policies = await tenant_policies(
                 services.ledger, services.clauses, tenant_id=who.tenant_id, as_of=day
             )
+            assert_request_allowed(
+                generation_region=services.settings.vertex_claude_region,
+                member_email=who.member.email,
+                testers=services.settings.offshore_testers,
+                real_prefix_clause_ids=[
+                    p.clause_id
+                    for p in policies
+                    if not services.synthetic.vouches_for_text(who.tenant_id, p.text)
+                ],
+            )
             retrieved: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
             async def on_retrieved(trace: RetrievalTrace) -> None:
@@ -176,6 +196,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
                 yield retrieved.result()
             answer = await asyncio.shield(answering)
             yield event("answer", _answer_json(answer))
+        except GenerationResidencyError as refused:
+            log.warning("an answer was refused by the residency gate: %s", refused)
+            yield event("error", {"error": "residency", "message": str(refused)})
         except MalformedGeneration:
             yield event("error", MALFORMED)
         except Exception:

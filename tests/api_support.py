@@ -34,6 +34,7 @@ from compliance_rag.adapters.firebase_auth import (
 from compliance_rag.adapters.interfaces import VerifierUnavailable
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings
@@ -173,5 +174,6 @@ def fake_api_services(**fields: Any) -> ApiServices:  # Any: ApiServices fields
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
         ),
+        "synthetic": SyntheticRegistry.load(),
     }
     return ApiServices(**{**defaults, **fields})
