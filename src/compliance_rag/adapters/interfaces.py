@@ -734,3 +734,37 @@ class CitationVerifier(ABC):
         silently compare text produced by different rules, so implementations
         must raise rather than attempt it — never a bool for "I don't know".
         """
+
+
+@dataclass(frozen=True, slots=True)
+class Member:
+    """A signed-in person admitted to the tenant (#146)."""
+
+    uid: str
+    email: str
+
+
+class Unauthenticated(Exception):
+    """No valid sign-in token: 401."""
+
+
+class NotAMember(Exception):
+    """A valid token for someone not admitted to the tenant: 403."""
+
+
+class VerifierUnavailable(Exception):
+    """The signing keys can't be had, so no token can be checked: 503."""
+
+
+class TokenVerifier(ABC):
+    """Who signed in, from an identity provider's token (#146). The API's one
+    way in; it never decides the tenant."""
+
+    @abstractmethod
+    async def verify(self, token: str) -> Member:
+        """The member the token signs in, or `Unauthenticated` /
+        `NotAMember` / `VerifierUnavailable`. Never a reason that echoes the
+        token."""
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
