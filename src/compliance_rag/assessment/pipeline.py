@@ -60,7 +60,9 @@ class Answer:
     unverified_draft: DraftAnswer
     """The model's schema-validated draft — **unverified**: its citations are
     claims, and its prose is not tied to them. Only `citations` below have
-    been verified; nothing renders this as is."""
+    been verified. Its prose is shown only when the whole answer is
+    `verified` (ADR-0003: a bad citation blocks the answer), never beside a
+    blocked citation it may quote."""
     citations: tuple[CheckedCitation, ...]
     """Verified citations, each carrying the canonical clause to show."""
     blocked: tuple[CheckedCitation, ...]

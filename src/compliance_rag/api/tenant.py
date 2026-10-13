@@ -22,13 +22,20 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from typing import Annotated
-from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from compliance_rag.api.deps import Caller, current_caller, services_of
-from compliance_rag.assessment.coverage import Coverage, Outcome, Question, question_json
+from compliance_rag.api.deps import (
+    EARLIEST,
+    LATEST,
+    CurrentCaller,
+    counts,
+    coverage_on,
+    services_of,
+    today,
+)
+from compliance_rag.assessment.coverage import Coverage, Question, question_json
 from compliance_rag.assessment.coverage_report import cite
 from compliance_rag.assessment.evidence import (
     Evidence,
@@ -41,20 +48,10 @@ from compliance_rag.corpus.models import NO_END_DATE
 from compliance_rag.telemetry import current_trace_id
 
 router = APIRouter(prefix="/v1")
-SYDNEY = ZoneInfo("Australia/Sydney")
-EARLIEST, LATEST = dt.date(1901, 1, 1), dt.date(2199, 12, 31)
-
-
-def today() -> dt.date:
-    """The default `as_of`: today in Sydney, where the Commonwealth law the
-    library holds is in force (the server's own clock runs in UTC)."""
-    return dt.datetime.now(SYDNEY).date()
-
 
 AsOf = Annotated[
     dt.date | None, Query(description="The date to read on; today in Sydney if omitted")
 ]
-Member = Annotated[Caller, Depends(current_caller)]
 
 Text = Annotated[str, StringConstraints(max_length=2_000)]
 Item = Annotated[str, StringConstraints(min_length=1, max_length=200)]
@@ -164,7 +161,7 @@ def _coverage_json(coverage: Coverage) -> dict[str, object]:
     return {
         "tenant_id": coverage.tenant_id,
         "as_of": coverage.as_of.isoformat(),
-        "counts": {o.value: len(coverage.with_outcome(o)) for o in Outcome},
+        "counts": counts(coverage),
         "obligations": [
             {
                 "obligation_id": o.obligation_id,
@@ -189,7 +186,7 @@ def _coverage_json(coverage: Coverage) -> dict[str, object]:
 
 
 @router.get("/profile")
-async def get_profile(request: Request, who: Member) -> dict[str, object]:
+async def get_profile(request: Request, who: CurrentCaller) -> dict[str, object]:
     """`current` is what Track A reads: settling evidence (asserted or
     parsed) nothing settling supersedes. Each reading is what that evidence
     says for one field over one period it covers: a financial year's figure
@@ -219,7 +216,9 @@ async def get_profile(request: Request, who: Member) -> dict[str, object]:
 
 
 @router.post("/profile/evidence", status_code=201)
-async def record_evidence(request: Request, who: Member, body: EvidenceIn) -> dict[str, object]:
+async def record_evidence(
+    request: Request, who: CurrentCaller, body: EvidenceIn
+) -> dict[str, object]:
     try:
         evidence = Evidence(
             tenant_id=who.tenant_id,
@@ -243,27 +242,26 @@ async def record_evidence(request: Request, who: Member, body: EvidenceIn) -> di
 
 
 @router.get("/coverage")
-async def get_coverage(request: Request, who: Member, as_of: AsOf = None) -> dict[str, object]:
+async def get_coverage(
+    request: Request, who: CurrentCaller, as_of: AsOf = None
+) -> dict[str, object]:
     day = as_of or today()
     if not EARLIEST <= day <= LATEST:
         raise HTTPException(422, f"as_of must be between {EARLIEST} and {LATEST}")
-    services = services_of(request)
-    evidence = await services.ledger.evidence(who.tenant_id)
-    coverage = await services.graph.coverage(Facts.of(evidence), tenant_id=who.tenant_id, as_of=day)
-    return _coverage_json(coverage)
+    return _coverage_json(await coverage_on(services_of(request), who.tenant_id, day))
 
 
 # ---- subscriptions ----------------------------------------------------------------
 
 
 @router.get("/subscriptions")
-async def list_subscriptions(request: Request, who: Member) -> dict[str, list[str]]:
+async def list_subscriptions(request: Request, who: CurrentCaller) -> dict[str, list[str]]:
     subscribed = await services_of(request).ledger.subscribed_instruments(who.tenant_id)
     return {"instruments": sorted(subscribed)}
 
 
 @router.put("/subscriptions/{instrument_id}", status_code=204)
-async def subscribe(request: Request, who: Member, instrument_id: str) -> Response:
+async def subscribe(request: Request, who: CurrentCaller, instrument_id: str) -> Response:
     try:
         await services_of(request).ledger.subscribe(
             tenant_id=who.tenant_id,
@@ -277,7 +275,7 @@ async def subscribe(request: Request, who: Member, instrument_id: str) -> Respon
 
 
 @router.delete("/subscriptions/{instrument_id}", status_code=204)
-async def unsubscribe(request: Request, who: Member, instrument_id: str) -> Response:
+async def unsubscribe(request: Request, who: CurrentCaller, instrument_id: str) -> Response:
     """The subscription row only: nothing is deleted from any store (D-17)."""
     await services_of(request).ledger.unsubscribe(
         tenant_id=who.tenant_id, instrument_id=instrument_id

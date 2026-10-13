@@ -17,7 +17,9 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
+from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import (
     FakeClauseStore,
     FakeGenerator,
@@ -25,16 +27,21 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.generation_residency import GenerationResidencyError
 from compliance_rag.adapters.interfaces import LawScope, Profile
+from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
+from compliance_rag.api.main import GeneratorAtStartup
 from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.eval.golden_corpus import POLICY_TENANT_ID, golden_chunks, golden_clauses
 from compliance_rag.eval.harness import golden_clause_store, golden_ledger
 from compliance_rag.graph.mappings import load_mapping_set
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
-from tests.api_support import bearer, fake_api_services, mint
+from tests.api_support import api_settings, bearer, fake_api_services, mint
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
 
 AS_OF = "2026-10-12"
@@ -67,15 +74,20 @@ async def _ledger() -> FakeLedgerStore:
 
 
 async def _client(
-    generator: FakeGenerator, ledger: FakeLedgerStore, clauses: FakeClauseStore
+    generator: FakeGenerator,
+    ledger: FakeLedgerStore,
+    clauses: FakeClauseStore,
+    store: FakeRetrievalStore | None = None,
 ) -> httpx.AsyncClient:
     labels = load_applicability_set()
     services = fake_api_services(
         ledger=ledger,
         clauses=clauses,
         graph=fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels),
-        answers=AssessmentPipeline(
-            RetrievalPipeline(FakeRetrievalStore(golden_chunks(), ledger=ledger), FakeReranker()),
+        pipeline=AssessmentPipeline(
+            RetrievalPipeline(
+                store or FakeRetrievalStore(golden_chunks(), ledger=ledger), FakeReranker()
+            ),
             generator,
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
@@ -100,10 +112,12 @@ async def _ask(
     generator: FakeGenerator,
     *,
     ledger: FakeLedgerStore | None = None,
+    clauses: FakeClauseStore | None = None,
+    store: FakeRetrievalStore | None = None,
     **body: Any,  # Any: JSON
 ) -> tuple[httpx.Response, list[tuple[str, dict[str, Any]]]]:  # Any: JSON
-    clauses = await golden_clause_store()
-    async with await _client(generator, ledger or await _ledger(), clauses) as c:
+    clauses = clauses or await golden_clause_store()
+    async with await _client(generator, ledger or await _ledger(), clauses, store) as c:
         response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF, **body})
     return response, _events(response.text) if response.status_code == 200 else []
 
@@ -124,6 +138,7 @@ async def test_a_verified_answer_streams_its_stages_and_the_canonical_clause(quo
     }
     assert retrieval["candidates"] > 0
     assert answer["verified"] is True and answer["blocked"] == []
+    assert answer["text"] == "Acme must take reasonable steps."
     [citation] = answer["citations"]
     assert citation["clause_id"] == APP11 and citation["cite"] == "APP 11.1"
     # What a client is shown is the clause's text, not the model's quote of it.
@@ -131,14 +146,28 @@ async def test_a_verified_answer_streams_its_stages_and_the_canonical_clause(quo
     assert answer["trace_id"] == response.headers["x-trace-id"]
 
 
-async def test_a_citation_never_retrieved_is_blocked_and_its_quote_never_sent(quote: str) -> None:
-    generator = FakeGenerator(_reply((APP11, quote), (NOT_RETRIEVED, SECRET_QUOTE)))
+async def test_a_bad_citation_blocks_the_whole_answer_and_nothing_it_wrote_is_sent(
+    quote: str,
+) -> None:
+    """ADR-0003: a bad citation blocks the answer rather than shipping it.
+    The prose repeats the refused quote, as a model's prose can, so sending
+    the prose would send the quote."""
+    prose = f'Section 6C(2) says "{SECRET_QUOTE}".'
+    generator = FakeGenerator(_reply((APP11, quote), (NOT_RETRIEVED, SECRET_QUOTE), answer=prose))
     response, events = await _ask(generator)
     answer = dict(events)["answer"]
-    assert answer["verified"] is False
-    assert [c["clause_id"] for c in answer["citations"]] == [APP11]
+    assert answer["verified"] is False and answer["text"] is None
+    assert answer["citations"] == []
+    assert answer["withheld"] == answers.BLOCKED
     assert [b["clause_id"] for b in answer["blocked"]] == [NOT_RETRIEVED]
-    assert SECRET_QUOTE not in response.text
+    assert SECRET_QUOTE not in response.text and "Section 6C(2)" not in response.text
+
+
+async def test_an_answer_citing_nothing_is_withheld() -> None:
+    _, events = await _ask(FakeGenerator(_reply(answer="Acme is probably fine.")))
+    answer = dict(events)["answer"]
+    assert answer["verified"] is False and answer["text"] is None
+    assert answer["withheld"] == answers.UNCITED
 
 
 async def test_a_malformed_generation_ends_in_an_error_and_no_answer() -> None:
@@ -148,27 +177,38 @@ async def test_a_malformed_generation_ends_in_an_error_and_no_answer() -> None:
     assert "this is not the JSON" not in response.text
 
 
-async def test_the_tenants_policies_are_the_cached_prefix_and_a_withdrawn_one_isnt(
+async def test_the_tenants_policies_are_the_cached_prefix_and_a_withdrawn_one_is_nowhere(
     quote: str,
 ) -> None:
+    policy = "acme/privacy-policy"
+    texts = [c.canonical_text for c in golden_clauses() if c.instrument_id == policy]
     generator = FakeGenerator(_reply((APP11, quote)))
     await _ask(generator)
-    prefix = str(generator.calls[0]["cached_prefix"])
-    policy_text = next(
-        c.canonical_text for c in golden_clauses() if c.instrument_id == "acme/privacy-policy"
-    )
-    assert policy_text in prefix
+    assert all(t in str(generator.calls[0]["cached_prefix"]) for t in texts)
 
-    ledger = await _ledger()
-    await ledger.mark_withdrawn(
+    # Withdrawn the way a member would: through CorpusLifecycle (ADR-0021),
+    # which takes it out of the ledger's policies and out of retrieval.
+    ledger, clauses = await _ledger(), await golden_clause_store()
+    store = FakeRetrievalStore(golden_chunks(), ledger=ledger)
+    lifecycle = CorpusLifecycle(
+        ledger=ledger,
+        retrieval=store,
+        clauses=clauses,
+        generation_region=BUILD_PHASE_OFFSHORE_REGION,
+        synthetic_registry=SyntheticRegistry.load(),
+    )
+    await lifecycle.withdraw(
         tenant_id=POLICY_TENANT_ID,
-        instrument_id="acme/privacy-policy",
+        instrument_id=policy,
         version_id="v1",
-        withdrawn_by="lead@acme.example",
+        actor="lead@acme.example",
+        reason="superseded by the new privacy policy",
     )
     again = FakeGenerator(_reply((APP11, quote)))
-    await _ask(again, ledger=ledger)
-    assert policy_text not in str(again.calls[0]["cached_prefix"])
+    await _ask(again, ledger=ledger, clauses=clauses, store=store)
+    sent = str(again.calls[0]["cached_prefix"]) + str(again.calls[0]["user"])
+    assert not any(t in sent for t in texts)
+    assert f"{policy}:v1:" not in sent
 
 
 async def test_the_requests_usage_rows_carry_its_trace(quote: str) -> None:
@@ -238,3 +278,50 @@ async def test_law_outside_track_as_scope_never_reaches_the_model() -> None:
     response, _ = await _ask(generator, question=_canonical(outside))
     assert response.status_code == 200
     assert outside not in str(generator.calls[0]["user"])
+
+
+# ---- the generator the real app builds at startup ------------------------------
+
+
+async def test_the_generator_refuses_to_answer_before_the_app_starts() -> None:
+    generator = GeneratorAtStartup(
+        api_settings(), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
+    )
+    with pytest.raises(RuntimeError, match="starts with the app"):
+        await generator.generate(system="s", cached_prefix=None, user="u", max_tokens=1)
+
+
+def test_a_residency_refusal_at_startup_stops_the_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate runs in `VertexClaudeGenerator.create` (ADR-0023). When it
+    refuses, the app never starts serving."""
+    from compliance_rag.adapters import vertex_claude_generator
+
+    async def refused(*_: object, **__: object) -> object:
+        raise GenerationResidencyError("offshore generation over real tenant data")
+
+    monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", refused)
+    generator = GeneratorAtStartup(
+        api_settings(), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
+    )
+    app = create_app(fake_api_services(checks=(generator.start,)))
+    with pytest.raises(GenerationResidencyError), TestClient(app):
+        pass
+
+
+async def test_once_started_the_generator_is_the_one_the_gate_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from compliance_rag.adapters import vertex_claude_generator
+
+    built = FakeGenerator(_reply())
+
+    async def create(*_: object, **__: object) -> FakeGenerator:
+        return built
+
+    monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", create)
+    generator = GeneratorAtStartup(
+        api_settings(), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
+    )
+    await generator.start()
+    await generator.generate(system="s", cached_prefix=None, user="u", max_tokens=1)
+    assert built.calls and built.calls[0]["user"] == "u"

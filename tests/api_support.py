@@ -167,7 +167,7 @@ def fake_api_services(**fields: Any) -> ApiServices:  # Any: ApiServices fields
         "ledger": ledger,
         "graph": FakeGraphStore(MappingSet(files=()), clause_validity={}),
         "clauses": clauses,
-        "answers": AssessmentPipeline(
+        "pipeline": AssessmentPipeline(
             RetrievalPipeline(FakeRetrievalStore(ledger=ledger), FakeReranker()),
             FakeGenerator(),
             Verifier(clauses, ledger, CanonicalCitationVerifier()),

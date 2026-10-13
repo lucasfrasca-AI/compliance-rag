@@ -5,10 +5,12 @@ on, and who is asking, for which tenant. The tenant is always
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -23,6 +25,8 @@ from compliance_rag.adapters.interfaces import (
     Unauthenticated,
     VerifierUnavailable,
 )
+from compliance_rag.assessment.coverage import Coverage, Outcome
+from compliance_rag.assessment.evidence import Facts
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.settings import Settings
 
@@ -37,7 +41,7 @@ class ApiServices:
     graph: GraphStore
     clauses: ClauseStore
     """Canonical text: the tenant's policies for the cached prefix (#148)."""
-    answers: AssessmentPipeline
+    pipeline: AssessmentPipeline
     """`answer()`: retrieval, generation, verification (#149)."""
     checks: tuple[Callable[[], Awaitable[None]], ...] = field(
         default_factory=tuple[Callable[[], Awaitable[None]], ...]
@@ -99,3 +103,27 @@ async def current_caller(
     """The dependency every endpoint takes: the member, and the tenant from
     configuration."""
     return Caller(member=signed_in, tenant_id=services_of(request).settings.tenant_id)
+
+
+CurrentCaller = Annotated[Caller, Depends(current_caller)]
+"""An endpoint's caller: a signed-in member, on the configured tenant."""
+
+SYDNEY = ZoneInfo("Australia/Sydney")
+EARLIEST, LATEST = dt.date(1901, 1, 1), dt.date(2199, 12, 31)
+"""The dates a request may name: the calendar the library's law uses."""
+
+
+def today() -> dt.date:
+    """The default `as_of`: today in Sydney, where the Commonwealth law the
+    library holds is in force (the server's own clock runs in UTC)."""
+    return dt.datetime.now(SYDNEY).date()
+
+
+async def coverage_on(services: ApiServices, tenant_id: str, day: dt.date) -> Coverage:
+    """Track A over the tenant's evidence on `day` (D-06)."""
+    evidence = await services.ledger.evidence(tenant_id)
+    return await services.graph.coverage(Facts.of(evidence), tenant_id=tenant_id, as_of=day)
+
+
+def counts(coverage: Coverage) -> dict[str, int]:
+    return {o.value: len(coverage.with_outcome(o)) for o in Outcome}

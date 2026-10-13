@@ -13,8 +13,9 @@ Tests build it with `create_app` and fakes instead.
 Two things run at startup, before anything is served:
 - the graph's connectivity check;
 - the generator, built through `VertexClaudeGenerator.create`, so the
-  residency gate (ADR-0023) runs first and an offshore generator over real
-  tenant data never starts.
+  residency gate (ADR-0023) runs first. That gate asks whether the vector
+  store holds real tenant chunks. It doesn't see a member's question or the
+  policy prefix read from the bucket (#155).
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             ledger=ledger,
             graph=GraphTrackA(graph),
             clauses=clauses,
-            answers=AssessmentPipeline(
+            pipeline=AssessmentPipeline(
                 retrieval, generator, Verifier(clauses, ledger, CanonicalCitationVerifier()), ledger
             ),
             checks=(graph.verify, generator.start),
