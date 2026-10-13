@@ -88,6 +88,15 @@ class Settings(BaseSettings):
         description="Comma-separated sink names. Config only — never a call site (D-16).",
     )
 
+    # --- API ---------------------------------------------------------------
+    firebase_project_id: str = ""
+    """The Firebase project whose ID tokens the API accepts: their `aud`, and
+    the issuer `https://securetoken.google.com/<id>` (#146). Required in
+    `env=cloud`."""
+    api_members: str = ""
+    """Comma-separated verified emails admitted to `tenant_id`. A Firebase
+    account alone isn't membership (#145, default 1). Empty admits no one."""
+
     # --- Web fallback ------------------------------------------------------
     web_search_provider: Literal["brave", "tavily", "none"] = "none"
     web_search_api_key: SecretStr = SecretStr("")
@@ -120,6 +129,11 @@ class Settings(BaseSettings):
     def ranking_api_allowed(self) -> bool:
         """The Vertex Ranking API is CI-only and synthetic-only (D-15, SERVICES.md)."""
         return self.tenant_id == "dev-tenant"
+
+    @property
+    def members(self) -> frozenset[str]:
+        """`api_members`, normalised: the emails admitted to the tenant."""
+        return frozenset(e.strip().lower() for e in self.api_members.split(",") if e.strip())
 
     @property
     def sinks(self) -> tuple[str, ...]:
