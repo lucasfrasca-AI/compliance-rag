@@ -2,24 +2,27 @@
 `create_app` from its services, so tests pass fakes and `api/main.py` passes the
 real adapters.
 
-Every route but `/healthz` needs a signed-in member of the tenant (`auth.py`,
-#146), and acts on `Settings.tenant_id`. Nothing in a request names or changes
-the tenant. Every request runs in a span (D-16), so ledger rows written while
-handling it carry its `trace_id`. The response returns that id as `X-Trace-Id`,
-so a reported problem can be found.
+Every route but `/health` needs a signed-in member of the tenant
+(`TokenVerifier`, #146), and acts on `Settings.tenant_id`. Nothing in a request
+names or changes the tenant. Every request runs in one span, from the first
+byte to the last, a streamed response included (D-16), so ledger rows written
+while handling it carry its `trace_id`. The response returns that id as
+`X-Trace-Id`, so a reported problem can be found.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from compliance_rag.api.auth import (
+from compliance_rag.adapters.interfaces import (
     Member,
     NotAMember,
     TokenVerifier,
@@ -49,6 +52,32 @@ class Caller:
     tenant_id: str
 
 
+class RequestSpan:
+    """One `api.request` span per HTTP request, open until the response's last
+    byte, so a streamed response's work is inside it. Pure ASGI rather than
+    `BaseHTTPMiddleware`, which ends at the response headers. It records the
+    method, the path and the status; never a header, so never the token."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        attributes = {"http.method": str(scope["method"]), "http.path": str(scope["path"])}
+        with span("api.request", **attributes) as current:
+            trace_id = current_trace_id()
+
+            async def send_traced(message: Message) -> None:
+                if message["type"] == "http.response.start":
+                    current.set_attribute("http.status_code", int(message["status"]))
+                    MutableHeaders(scope=message).append("X-Trace-Id", trace_id)
+                await send(message)
+
+            await self.app(scope, receive, send_traced)
+
+
 _bearer = HTTPBearer(auto_error=False)
 _CHALLENGE = {"WWW-Authenticate": "Bearer"}
 
@@ -62,7 +91,7 @@ async def current_member(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> Member:
-    if credentials is None or credentials.scheme.lower() != "bearer":
+    if credentials is None:
         raise HTTPException(401, "sign in required", headers=_CHALLENGE)
     try:
         return await services_of(request).verifier.verify(credentials.credentials)
@@ -83,10 +112,6 @@ async def current_caller(
 
 
 def create_app(services: ApiServices) -> FastAPI:
-    settings = services.settings
-    if settings.env == "cloud" and not settings.firebase_project_id:
-        raise ValueError("FIREBASE_PROJECT_ID is required in env=cloud (#146)")
-
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         try:
@@ -94,32 +119,20 @@ def create_app(services: ApiServices) -> FastAPI:
         finally:
             await services.aclose()
 
-    local = settings.env == "local"
+    docs = services.settings.api_docs
     app = FastAPI(
         title="compliance-rag",
         lifespan=lifespan,
-        # The schema is for local development, not published by the service.
-        docs_url="/docs" if local else None,
+        docs_url="/docs" if docs else None,
         redoc_url=None,
-        openapi_url="/openapi.json" if local else None,
+        openapi_url="/openapi.json" if docs else None,
     )
     app.state.services = services
+    app.add_middleware(RequestSpan)
 
-    @app.middleware("http")
-    async def request_span(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        # The path only: never a header, so never the token.
-        with span(
-            "api.request", **{"http.method": request.method, "http.path": request.url.path}
-        ) as current:
-            response = await call_next(request)
-            current.set_attribute("http.status_code", response.status_code)
-            response.headers["X-Trace-Id"] = current_trace_id()
-            return response
-
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
+    # Not /healthz: Cloud Run reserves paths ending in "z".
+    @app.get("/health")
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/v1/me")

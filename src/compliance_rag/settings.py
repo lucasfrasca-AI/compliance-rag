@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     api_members: str = ""
     """Comma-separated verified emails admitted to `tenant_id`. A Firebase
     account alone isn't membership (#145, default 1). Empty admits no one."""
+    api_sign_in_providers: str = "google.com,password"
+    """Firebase sign-in providers whose verified email is trusted. Google and
+    email/password prove ownership; an arbitrary OIDC or SAML provider can
+    assert any address (#145)."""
+    api_docs: bool = False
+    """Serve the OpenAPI schema and /docs. Off unless asked for, so a
+    deployment missing `ENV` doesn't publish it."""
 
     # --- Web fallback ------------------------------------------------------
     web_search_provider: Literal["brave", "tavily", "none"] = "none"
@@ -132,8 +139,12 @@ class Settings(BaseSettings):
 
     @property
     def members(self) -> frozenset[str]:
-        """`api_members`, normalised: the emails admitted to the tenant."""
-        return frozenset(e.strip().lower() for e in self.api_members.split(",") if e.strip())
+        """`api_members` as a set (the verifier compares case-insensitively)."""
+        return frozenset(e.strip() for e in self.api_members.split(",") if e.strip())
+
+    @property
+    def sign_in_providers(self) -> frozenset[str]:
+        return frozenset(p.strip() for p in self.api_sign_in_providers.split(",") if p.strip())
 
     @property
     def sinks(self) -> tuple[str, ...]:
