@@ -11,16 +11,26 @@ over a real Neo4j — the same path the live trace takes on Aura.
   and every question that would settle them asked.
 - Acme at $2.5M with the questionnaire answered: s 6D(4)(b) and (c) remain,
   asked rather than inferred from the policies that speak to them.
+- Acme at $2.5M, once over $3M (GA-05): the APPs apply because of one dated
+  fact, and each way of breaking what s 6D(4)(a) reads breaks the answer.
 """
 
 from __future__ import annotations
 
+import datetime as dt
+
+import pytest
+
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
-from compliance_rag.assessment.coverage import Outcome, Truth
+from compliance_rag.assessment.coverage import ObligationCoverage, Outcome, Truth
 from compliance_rag.assessment.evidence import Facts
-from compliance_rag.eval.applicability import load_applicability_set
+from compliance_rag.eval.applicability import (
+    ApplicabilityCase,
+    GoldenFact,
+    load_applicability_set,
+)
 from compliance_rag.graph.mappings import load_mapping_set
-from tests.test_applicability_gate import CORPUS_MAPPINGS, graph_for
+from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for, graph_for
 from tests.test_neo4j_graph import graph as graph
 from tests.test_neo4j_graph import needs_neo4j
 
@@ -80,3 +90,88 @@ async def test_answered_only_s6d4_b_and_c_remain_as_questions(graph: Neo4jGraph)
     }
     assert f"{P}s6d/4/b" in asked["COND-PA-PROVIDES-HEALTH-SERVICE"]
     assert f"{P}s6d/4/c" in asked["COND-PA-S6D4C-DISCLOSES-FOR-BENEFIT"]
+
+
+# ---- GA-05: s6D(4)(a) is decided by the turnover history ---------------------------
+#
+# On the fake, which runs the same evaluator as Track A over Neo4j (GA-05 itself
+# is checked on both by the gate). As of 12 October 2026 the ended financial
+# years since Acme started (2 March 2015) are FY2014-15 to FY2025-26.
+
+S6D4A = "COND-PA-S6D4A-EVER-OVER-THRESHOLD"
+S6D1 = "COND-PA-TURNOVER-PREVIOUS-YEAR-UNDER"
+
+
+def _turnover(financial_year: int, aud: int) -> GoldenFact:
+    return GoldenFact(field="annual_turnover_aud", value=aud, financial_year=financial_year)
+
+
+def _ga05(
+    *, turnover: list[GoldenFact] | None = None, started: dt.date | None = None
+) -> ApplicabilityCase:
+    """GA-05's facts, with its turnover figures or its start date replaced."""
+    ga05 = next(c for c in load_applicability_set().cases if c.id == "GA-05")
+    facts = [f for f in ga05.facts if turnover is None or f.field != "annual_turnover_aud"]
+    if started is not None:
+        facts = [
+            GoldenFact(field=f.field, value=started, since=started)
+            if f.field == "business_started_on"
+            else f
+            for f in facts
+        ]
+    return ga05.model_copy(update={"facts": tuple(facts + (turnover or []))})
+
+
+async def _app11(case: ApplicabilityCase) -> tuple[ObligationCoverage, set[str]]:
+    labels = load_applicability_set()
+    store = fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
+    coverage = await store.coverage(
+        Facts.of(case.evidence()), tenant_id=case.tenant_id, as_of=case.as_of
+    )
+    app11 = coverage.obligation(APP11)
+    return app11, {q.condition_id for q in app11.questions}
+
+
+async def test_ga05_applies_because_of_the_fy2023_24_figure() -> None:
+    app11, asked = await _app11(_ga05())
+    assert app11.outcome is Outcome.APPLICABLE and not asked
+    leaf = app11.explanation.find(S6D4A)
+    assert leaf is not None and leaf.truth is Truth.TRUE
+    assert f"{P}s6d/4/a" in app11.citations
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_ga05(turnover=[_turnover(2025, 2_500_000)]), id="no-fy2023-24-figure"),
+        pytest.param(
+            _ga05(turnover=[_turnover(2025, 2_500_000), _turnover(2026, 3_200_000)]),
+            id="over-3m-only-in-a-year-not-yet-ended",
+        ),
+        pytest.param(_ga05(started=dt.date(2024, 8, 1)), id="fy2023-24-ended-before-it-started"),
+        pytest.param(
+            _ga05(
+                turnover=[_turnover(2000, 3_200_000), _turnover(2025, 2_500_000)],
+                started=dt.date(1999, 1, 1),
+            ),
+            id="over-3m-only-before-s6d-commenced",
+        ),
+    ],
+)
+async def test_a_year_s6d4a_does_not_count_leaves_it_asked(case: ApplicabilityCase) -> None:
+    app11, asked = await _app11(case)
+    assert app11.outcome is Outcome.UNASSESSABLE
+    assert S6D4A in asked
+
+
+async def test_every_ended_year_known_and_under_settles_s6d4a_false() -> None:
+    every_year = [_turnover(fy, 2_000_000) for fy in range(2014, 2026)]
+    app11, asked = await _app11(_ga05(turnover=every_year))
+    assert S6D4A not in asked and S6D1 not in asked
+    assert app11.outcome is Outcome.UNASSESSABLE  # the other routes are still open
+
+
+async def test_s6d1_reads_the_previous_financial_year_only() -> None:
+    # FY2023-24 under the threshold, nothing for FY2025-26: s6D(1) can't use it.
+    _, asked = await _app11(_ga05(turnover=[_turnover(2023, 2_900_000)]))
+    assert S6D1 in asked

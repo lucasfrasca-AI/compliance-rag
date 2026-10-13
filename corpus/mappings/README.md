@@ -46,10 +46,10 @@ golden set (`corpus/golden/`). It is enforced by `validate_review` in
 
 **Pending review.** A model-drafted file carries
 `reviewed_by: "PENDING — <reviewer>"` until the reviewer signs it.
-`scripts/load_mappings.py` refuses to load any file still pending, and the
-applicability gate checks pending labels only as a draft (`allow_draft`).
-Signing means replacing that value with the reviewer's name and dating the
-file.
+`scripts/load_mappings.py` refuses to load any file still pending, and CI's
+applicability gate refuses pending labels (a local run checks them only as a
+draft, `allow_draft`: that they agree with the code). Signing means replacing
+that value with the reviewer's name and dating the file.
 
 The rule depends on the `model:` prefix being written honestly — a model
 recorded without it would pass as a human self-review. That is a review

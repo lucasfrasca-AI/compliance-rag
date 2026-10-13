@@ -2,9 +2,10 @@
 # obligation outcomes out. Gated in CI (tests/test_applicability_gate.py)
 # through the fake and through Track A over Neo4j.
 #
-# DRAFTED BY THE MODEL, NOT YET REVIEWED. Every label below is the model's
-# reading of C2026C00227 and is for the reviewer to correct: a label is a label
-# only once `reviewed_by` signs it (D-01; CONTEXT.md: Golden set).
+# Drafted by the model from C2026C00227 at the human's request; reviewed and
+# signed by Piero Frasca on 2026-10-13. A label is a label only once
+# `reviewed_by` signs it (D-01; CONTEXT.md: Golden set), and CI refuses
+# unsigned labels.
 #
 # Acme Pty Ltd is the synthetic company of docs/research/fixtures/
 # synthetic-policies/. Its facts here (when it started, its turnover each year,
@@ -17,8 +18,8 @@
 # 2 March 2015.
 
 author: "model: Claude Opus 5.5 — labels drafted for #117/#118 from C2026C00227"
-reviewed_by: "PENDING — Piero Frasca"
-date: "PENDING"
+reviewed_by: "Piero Frasca"
+date: "2026-10-13"
 compilations:
   "privacy-act-1988:C2026C00227": 2026-06-04
 

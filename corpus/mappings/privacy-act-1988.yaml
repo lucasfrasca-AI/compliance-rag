@@ -1,10 +1,9 @@
 # Privacy Act 1988 (Cth): who the Australian Privacy Principles bind, and the
 # obligations they impose (issue #118).
 #
-# DRAFTED BY THE MODEL, NOT YET REVIEWED. Corpus content under D-01: the model
-# authored it at the human's request; the human reviews it, and only then is
-# `reviewed_by` set and the file loaded into the graph. scripts/load_mappings.py
-# refuses a file whose reviewer is still pending.
+# Corpus content under D-01: drafted by the model at the human's request,
+# reviewed and signed by Piero Frasca on 2026-10-13. scripts/load_mappings.py
+# refuses any file whose reviewer is still pending.
 #
 # Read from compilation C2026C00227 (in force from 4 June 2026). Every clause id
 # below is a clause of that compilation; every condition and actor is
@@ -31,7 +30,8 @@
 #                          (s6E(1), (1C))
 #                       OR opted in (s6EA))                          s6C(1), s6E, s6EA
 #   (s6E(1A), (1B), (1D), (2) apply the Act only to some activities: a
-#    separate role no obligation binds yet — a reviewer decision)
+#    separate role no obligation binds — the reviewer's decision; binding it
+#    needs a "partly applicable" outcome, #138, Phase 4)
 #   small business operator = carries on a business                 s6D(3)(a)
 #                  AND small business (s6D(1)/(2), turnover per s6DA, s6DA(2)
 #                      for a part year)
@@ -45,8 +45,8 @@
 # opt-in. Each is a condition below and each unknown leaf is a question.
 
 author: "model: Claude Opus 5.5 — drafted for #118 from C2026C00227 at the human's request"
-reviewed_by: "PENDING — Piero Frasca"
-date: 2026-10-12
+reviewed_by: "Piero Frasca"
+date: 2026-10-13
 source_clause_ids:
   - privacy-act-1988:C2026C00227:s15
   - privacy-act-1988:C2026C00227:s6/1/app-entity
@@ -167,9 +167,9 @@ actors:
     description: >
       A small business operator the Act applies to only for particular
       activities, information or practices (s6E(1A), (1B), (1D), (2)). No
-      obligation binds this role yet: how the APPs apply "in relation to the
-      activities" is a reviewer decision. Evaluated so the tenant subgraph
-      shows it.
+      obligation binds this role: the reviewer kept it apart until a "partly
+      applicable" outcome exists to say how the APPs apply "in relation to the
+      activities" (#138). Evaluated so the tenant subgraph shows it.
     clause_ids:
       - privacy-act-1988:C2026C00227:s6e/1a
       - privacy-act-1988:C2026C00227:s6e/1b
