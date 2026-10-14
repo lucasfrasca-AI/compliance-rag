@@ -1,9 +1,9 @@
 # ADR-0039 — A definition's closing words stay with it; a connector leads the paragraph it governs
 
-- Status: accepted. Extended on 2026-10-14 to connectors outside definitions
-  (issue #186; see "Extended to ordinary subsections" below).
+- Status: accepted; extended to subsections with no definition by ADR-0041
+  (issue #186)
 - Date: 2026-10-14
-- Issue: #178 (part 1, the parser); #186 (the same shape in ordinary subsections)
+- Issue: #178 (part 1, the parser)
 - Relates to: ADR-0019 (anchors are synthesized, clause ids are what a citation carries)
 
 ## Context
@@ -70,8 +70,8 @@ knows which shape they are:
 3. **Closing words outside a Definition are unchanged.** A `subsection2` in a
    subsection with no definition that no paragraph follows still joins that
    subsection's text (`s8/2`, `s6e/1a`, `sch1/app11/2`). (A `subsection2`
-   *between* two paragraphs of such a subsection is a connector, and leads the
-   paragraph after it: see "Extended to ordinary subsections".)
+   *between* two paragraphs of such a subsection was left as it was in #178,
+   and is a connector: ADR-0041 gives it the same rule.)
 4. **The anchor stays on the paragraph's own `<p>`.** The connector's `<p>`
    sits directly above it and has no id of its own, as no closing words'
    `<p>` ever had. The stored HTML (`source.html`) is therefore byte-identical
@@ -151,138 +151,10 @@ shape, so it isn't guessed at.
   and its text gains the words "that carries on a credit reporting business."
   The reviewer may want to re-read that condition against the corrected
   definition.
-- **The same shape exists outside definitions.** Where a non-definition
-  subsection has a `subsection2` between its paragraphs, the words used to join
-  the subsection's text. The clearest case is s7(1) ("… is a reference to: but
-  does not include a reference to an act done … received from:"), whose (f)–(h)
-  are exclusions that read as inclusions. Fixed by the same rule in #186: see
-  the next section.
-
-## Extended to ordinary subsections (issue #186)
-
-### Context
-
-The class was bigger than s6(1). A `subsection2` between two `paragraph` (or
-`paragraphsub`) blocks of a subsection with no definition joined the
-subsection's text too. There are 21, in 15 sections (`s7/1`, `s11/2`,
-`s20k/4`, `s23c/2`–`3`, `s26wc/1`–`2`, `s26we/2`, `s26wf/1`–`5`, `s26wg`,
-`s26wn`, `s26wq/1`, `s30/4`, `s46/2`, `s50/2`, `sch1/app7/6`, `sch2/s11/5`).
-Every one splits a single lettered list: the letters carry on across it ((ee)
-then (f); (b) then (c)). None closes a list, and none is followed by a
-paragraph without its own letter. They are of four kinds:
-
-- **An exclusion** (s7(1)): "… a reference to: (a) … (ee) …; **but does not
-  include a reference to an act done … received from:** (f) an intelligence
-  agency; …". On the subsection, (f)–(h) read as acts and practices the Act
-  covers.
-- **A second chapeau for the group that carries the consequence** (15 of them:
-  "the body must:", "the respondent must, in writing:", "this Part has effect
-  as if:", "then:", "commits an offence punishable on conviction:", "the
-  individual may:", "must not exceed the greater of:", s26WQ(1)'s "the
-  Commissioner may, by written notice given to the entity:").
-- **A connector with closing words after the second group** (s26WF(2), s26WF(5),
-  s30(4)): "this Part does not require: (e) …; (f) …; **to take steps to notify
-  the individual …**".
-- **A connector that also finishes the first group's sentence** (s26WG, s50(2)):
-  "… information: (a) would be likely; or (b) would not be likely; **to result
-  in serious harm …, have regard to the following:** (c) …".
-
-In seven of the 21 the connector carries a negation: s7(1), s26WF(1)–(5) ("the
-access or disclosure is not, and is taken never to have been:", "this Part does
-not require:") and s26WN ("do not apply in relation to:"). On the subsection, a
-bare "(e) an eligible data breach of the APP entity …; or" reads as what the
-access *is*.
-
-### Decision
-
-The same rule, and only that. A `subsection2` in a subsection with no
-definition waits (`_SubsectionNode.unclaimed`, as `_DefinitionNode.unclaimed`
-does) until the next block is known:
-
-1. A paragraph (or sub-paragraph) opens: the words lead it. `s7/1/f` is "but
-   does not include a reference to an act done, or a practice engaged in, in
-   relation to a record that has originated with, or has been received from:
-   an intelligence agency;", and `s7/1` is "Except so far as the contrary
-   intention appears, a reference in this Act (other than section 8) to an act
-   or to a practice is a reference to:".
-2. Nothing opens: the words close the subsection, after its other text, as
-   they always have (`s8/2`, `sch1/app11/2`). **Closing words are not changed.**
-3. A Definition opens in the subsection: whatever waited settles into the
-   subsection's text first, so a shape with words before a definition keeps
-   the order it had.
-
-This is an extension of ADR-0039, not a new ADR, because the rule does not
-differ. The reasons in "Why the connector leads" are about what a connector
-governs, not about definitions, and every alternative rejected there fails in
-an ordinary subsection for the same reason (on the subsection it is the
-inversion again; trailing the paragraph before it leaves a dangling clause and
-a bare noun phrase; repeating it writes words the Act prints once; a clause of
-its own needs a path no source word supplies, and re-paths the paragraphs).
-
-| Clause | Before | After |
-| --- | --- | --- |
-| `s20k/4` | If: the body must: | If: |
-| `s20k/4/d` | extend the ban period by such period as the body considers is reasonable in the circumstances; and | the body must: extend the ban period by such period as the body considers is reasonable in the circumstances; and |
-| `s26wf/1/e` | an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or | the access or disclosure is not, and is taken never to have been: an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or |
-
-### Judgement calls
-
-- **Three subsections have a connector and closing words** (s26WF(2), s26WF(5),
-  s30(4)). The connector leads its paragraph and the closing words stay on the
-  subsection, where all closing words go. Their sentence is therefore split
-  across the subsection and the paragraph: `s26wf/2` is "If: to take steps to
-  notify the individual of the contents of a statement that relates to the
-  access or disclosure." and `s26wf/2/e` is "this Part does not require: the
-  APP entity, … ; or". Read in clause order it is still every word once, but the
-  subsection no longer reads as a sentence on its own, as it did when it also
-  held "this Part does not require:". Rejected, for these three only: leaving
-  their connector on the subsection. That makes the rule depend on words
-  further down the subsection, and (e) and (f) are then bare noun phrases under
-  "does not require", which is the problem being fixed. Rejected: moving their
-  closing words to the second group, which changes closing words, the thing
-  that was not to change, and puts the end of a sentence in the middle of a
-  list.
-- **Two connectors finish the sentence before them** (s26WG: "to result in
-  serious harm to any of the individuals to whom the information relates, have
-  regard to the following:"; s50(2): "and that that matter could be more
-  conveniently or effectively dealt with by the alternative complaint body, the
-  Commissioner may decide not to investigate …, and, if the Commissioner so
-  decides, he or she shall:"). The first part belongs to the group before and
-  the last part to the group after. They are one block in the source, the parser
-  does not cut a block, and a rule that looked at the words to guess where to
-  cut would be a guess. They lead the paragraph after them whole, like the
-  rest. `s26wg/c` and `s50/2/c` carry both halves; the first group (`s26wg/a`
-  "would be likely; or", `s26wg/b` "would not be likely;") is stored without
-  the words that complete its sentence, which were on the subsection before and
-  are now on (c).
-- **Only the first paragraph of the second group carries the connector**, as
-  in *record*. A retrieved `s7/1/g` is still "the Defence Intelligence
-  Organisation or the Australian Geospatial‑Intelligence Organisation; or".
-  `s7/1/f`, the one the issue names, reads as what it is.
-- **Not modelled**: a held `subsection2` followed by a paragraph with no letter
-  of its own (the s6FA(a) shape) keeps waiting until a paragraph with a letter
-  opens or the subsection ends. No connector in C2026C00227 is followed by
-  one. A test keeps every word stored once in that shape.
-
-### Consequences
-
-- **42 clauses change text; none is added, removed or re-pathed.** The 21
-  subsections lose the connector (and are the chapeau, plus any closing words),
-  and the 21 paragraphs after them gain it. Over the whole pinned compilation
-  (sha256 `6d0a43e5…`, 4114 clauses): same paths in the same order with the
-  same ids, `source.html` byte-identical, the multiset of words identical, and
-  nothing else differs.
-- **The golden corpus is unchanged.** Its law is the excerpt, which has no
-  connector of this kind, so the embedding cache stays valid.
-- **No chunk budget is at risk.** The longest changed clause is 76 reranker
-  tokens (the budget is 420); the longest clause in the Act is 150.
-- **No signed mapping cites any of the 21 subsections or paragraphs.**
-- **A deployed C2026C00227 is further behind the parser.** Its bucket, Aura and
-  Qdrant hold the old text of these 42 clauses as well as #178's five (47 in
-  all). `ingest_compilation` refuses the drift, as it should; republishing is
-  #178 part 2, the human's decision, and now covers these clauses.
-- **The test fixture holds every connector in the Act**, cut verbatim from the
-  pinned source. The whole-compilation test checks that there are 21, that each
-  leads its paragraph, and that the fixture reads each one exactly as the whole
-  compilation does, so a fixture that holds fewer than the Act has is a failing
-  test.
+- **The same shape exists outside definitions and is not fixed here.** Where a
+  non-definition subsection has a `subsection2` between its paragraphs, the
+  words still join the subsection's text. The clearest case is s7(1)
+  ("… is a reference to: but does not include a reference to an act done …
+  received from:"), whose (f)–(h) are exclusions that read as inclusions.
+  Tracked in #186; ADR-0041 applies this ADR's rule to them, with one
+  exception that this ADR did not meet.

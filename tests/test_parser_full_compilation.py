@@ -297,8 +297,8 @@ def _source_words(term: str) -> list[str]:
 
 
 def _stored_words(clauses: dict[str, ClauseRecord], path: str) -> list[str]:
-    """The same definition as stored: its clause, then the clauses inside it, in
-    the order the parser emits them."""
+    """The same definition (or subsection) as stored: its clause, then the clauses
+    inside it, in the order the parser emits them."""
     return [
         word
         for p, clause in clauses.items()
@@ -399,13 +399,13 @@ def test_closing_words_after_a_non_definition_list_stay_on_their_subsection(
 
 
 # --------------------------------------------------------------------------
-# A connector between two paragraph groups of an ordinary subsection (#186,
-# ADR-0039). The Act has 21, in 15 sections; the constructs fixture holds them
-# all, cut verbatim. Each splits one lettered list: the letters carry on
-# across it ((ee) then (f); (b) then (c)).
+# A connector between two paragraph groups of a subsection with no definition
+# (#186, ADR-0041). The Act has 21, in 15 sections; the constructs fixture
+# holds them all, cut verbatim. Each splits one lettered list: the letters
+# carry on across it ((ee) then (f); (b) then (c)).
 # --------------------------------------------------------------------------
 
-# The paragraph each connector leads, in document order.
+# The paragraph each connector sits in front of, in document order.
 CONNECTOR_PARAGRAPHS = [
     "s7/1/f",
     "s11/2/d",
@@ -429,6 +429,12 @@ CONNECTOR_PARAGRAPHS = [
     "sch1/app7/6/c",
     "sch2/s11/5/c",
 ]
+# Three of them sit in a subsection whose last words close it: "this Part does
+# not require: (e) ...; (f) ...; to take steps to notify ...". Those words
+# complete the connector's sentence, and closing words stay on the subsection,
+# so the connector stays with them: the subsection is stored as it always was,
+# until the human decides what such closing words attach to (ADR-0041).
+HELD_WITH_CLOSING_WORDS = {"s26wf/2/e", "s26wf/5/e", "s30/4/c"}
 _PARAGRAPH_KINDS = ("paragraph", "paragraphsub", "paragraphsub-sub")
 
 
@@ -438,9 +444,10 @@ class _Connector(NamedTuple):
 
     words: str  # the connector itself
     chapeau: str  # the subsection's opening words, its "(2)" left off
+    connectors: tuple[str, ...]  # every connector of the subsection, in order
     closing: tuple[str, ...]  # words that close the same subsection: no paragraph follows them
     paragraph: str  # the paragraph right after the connector, its "(c)" left off
-    reading_order: tuple[str, ...]  # the subsection's words as stored: chapeau, closing, the rest
+    source_order: tuple[str, ...]  # every word of the subsection, in the Act's order
     tokenless: bool  # holds a paragraph with no "(c)": it continues the one above
 
 
@@ -478,22 +485,19 @@ def _connectors(source: str) -> list[_Connector]:
             kind == "subsection2" and i + 1 < len(bare) and bare[i + 1][0] in _PARAGRAPH_KINDS
             for i, (kind, _) in enumerate(bare)
         ]
+        connectors = tuple(bare[i][1] for i, lead in enumerate(leads) if lead)
         closing = tuple(
             words for i, (kind, words) in enumerate(bare) if kind == "subsection2" and not leads[i]
         )
-        rest = [
-            words
-            for i, (kind, words) in enumerate(bare)
-            if i > 0 and not (kind == "subsection2" and not leads[i])
-        ]
-        reading_order = tuple(" ".join([bare[0][1], *closing, *rest]).split())
+        source_order = tuple(" ".join(words for _, words in bare).split())
         found += [
             _Connector(
                 words=bare[i][1],
                 chapeau=bare[0][1],
+                connectors=connectors,
                 closing=closing,
                 paragraph=bare[i + 1][1],
-                reading_order=reading_order,
+                source_order=source_order,
                 tokenless=tokenless,
             )
             for i, lead in enumerate(leads)
@@ -503,23 +507,36 @@ def _connectors(source: str) -> list[_Connector]:
 
 
 CONSTRUCTS_CONNECTORS = _connectors(CONSTRUCTS.read_text(encoding="utf-8"))
+# Matched by position; test_the_constructs_fixture_holds_every_connector_in_the_act
+# fails if the two lists are not the same length.
+_PAIRS = list(zip(CONNECTOR_PARAGRAPHS, CONSTRUCTS_CONNECTORS, strict=False))
+LEADING = [pytest.param(p, c, id=p) for p, c in _PAIRS if p not in HELD_WITH_CLOSING_WORDS]
+HELD = [pytest.param(p, c, id=p) for p, c in _PAIRS if p in HELD_WITH_CLOSING_WORDS]
+IN_SOURCE_ORDER = [pytest.param(p, c, id=p) for p, c in _PAIRS if not c.closing and not c.tokenless]
 
 
-def _assert_connector_leads(
-    clauses: dict[str, ClauseRecord], path: str, connector: _Connector
-) -> None:
-    """The connector is the first words of the paragraph after it; the subsection
-    keeps its chapeau (and any closing words) and no longer holds the connector;
-    and nothing else in the subsection says it."""
+def _assert_connector(clauses: dict[str, ClauseRecord], path: str, connector: _Connector) -> None:
+    """A connector leads the paragraph after it, and the subsection is its
+    chapeau alone; unless closing words follow it, when both are as they were:
+    the connector with the closing words on the subsection, the paragraph its
+    own words. Either way, no other clause of the subsection says it."""
     subsection = path.rsplit("/", 1)[0]
-    assert clauses[path].text == f"{connector.words} {connector.paragraph}"
-    assert clauses[subsection].text == " ".join((connector.chapeau, *connector.closing))
+    if connector.closing:
+        assert clauses[path].text == connector.paragraph
+        assert clauses[subsection].text == " ".join(
+            (connector.chapeau, *connector.connectors, *connector.closing)
+        )
+        holder = subsection
+    else:
+        assert clauses[path].text == f"{connector.words} {connector.paragraph}"
+        assert clauses[subsection].text == connector.chapeau
+        holder = path
     said = [
         p
         for p, clause in clauses.items()
         if (p == subsection or p.startswith(f"{subsection}/")) and connector.words in clause.text
     ]
-    assert said == [path]
+    assert said == [holder]
 
 
 def test_the_constructs_fixture_holds_every_connector_in_the_act() -> None:
@@ -531,39 +548,72 @@ def test_the_constructs_fixture_holds_every_connector_in_the_act() -> None:
         "/".join(p.split("/")[: 2 if p.startswith("sch") else 1]) for p in CONNECTOR_PARAGRAPHS
     }
     assert len(sections) == 15
+    # The three held back are exactly the ones whose subsection has closing words.
+    assert {p for p, c in _PAIRS if c.closing} == HELD_WITH_CLOSING_WORDS
 
 
-@pytest.mark.parametrize("index", range(len(CONNECTOR_PARAGRAPHS)), ids=CONNECTOR_PARAGRAPHS)
+@pytest.mark.parametrize(("path", "connector"), LEADING)
 def test_a_mid_list_connector_leads_the_paragraph_after_it(
-    clauses: dict[str, ClauseRecord], index: int
+    clauses: dict[str, ClauseRecord], path: str, connector: _Connector
 ) -> None:
     """The words govern the paragraphs from this one on and nothing before, so
     this paragraph carries them: s7(1)'s "but does not include a reference to an
     act done ... received from:" is no longer the subsection's, with (f)-(h) left
     bare noun phrases that read as inclusions (#186)."""
-    _assert_connector_leads(clauses, CONNECTOR_PARAGRAPHS[index], CONSTRUCTS_CONNECTORS[index])
+    _assert_connector(clauses, path, connector)
 
 
-READABLE_IN_ORDER = [
-    path
-    for path, connector in zip(CONNECTOR_PARAGRAPHS, CONSTRUCTS_CONNECTORS, strict=False)
-    if not connector.tokenless
-]
-
-
-@pytest.mark.parametrize("path", READABLE_IN_ORDER)
+@pytest.mark.parametrize(("path", "connector"), IN_SOURCE_ORDER)
 def test_a_mid_list_connector_keeps_source_order_across_the_stored_clauses(
-    clauses: dict[str, ClauseRecord], path: str
+    clauses: dict[str, ClauseRecord], path: str, connector: _Connector
 ) -> None:
-    """Read the subsection's clauses in order — the subsection, then its
-    paragraphs — and the Act's own sentence comes out, with the connector
-    between the two groups. (A subsection's closing words sit on the subsection,
-    ahead of its paragraphs, as they always have: s26WF(2) and (5) and s30(4)
-    have both.) s26WG and s26WQ(1) hold a tokenless paragraph that joins the one
-    above, which moves words ahead of its subparagraphs: they are pinned below."""
-    connector = CONSTRUCTS_CONNECTORS[CONNECTOR_PARAGRAPHS.index(path)]
+    """Read the subsection's clauses in order, the subsection and then its
+    paragraphs, and the Act's own sentence comes out, with the connector between
+    the two groups. Not asked of a subsection with closing words, which sit on
+    the subsection ahead of its paragraphs whatever the source order, nor of
+    s26WG and s26WQ(1), whose tokenless paragraph joins the one above and so moves
+    words ahead of its subparagraphs: those are pinned below."""
     subsection = path.rsplit("/", 1)[0]
-    assert tuple(_stored_words(clauses, subsection)) == connector.reading_order
+    assert tuple(_stored_words(clauses, subsection)) == connector.source_order
+
+
+@pytest.mark.parametrize(("path", "connector"), HELD)
+def test_a_connector_beside_closing_words_stays_with_them(
+    clauses: dict[str, ClauseRecord], path: str, connector: _Connector
+) -> None:
+    """s26WF(2) and (5), s30(4): "this Part does not require: (e) ...; (f) ...;
+    to take steps to notify the individual ...". The closing words complete the
+    connector's sentence and stay on the subsection, as every closing words do
+    (s8(2)). Leading (e) with the connector would put "does not require" on (e)
+    and leave the subsection as "If: to take steps to notify ...", with the
+    negation gone from it. So the connector stays with them, and the subsection
+    and its paragraphs are stored as they always were (ADR-0041)."""
+    _assert_connector(clauses, path, connector)
+
+
+def test_a_subsection_held_with_its_closing_words_reads_as_it_always_did(
+    clauses: dict[str, ClauseRecord],
+) -> None:
+    assert clauses["s26wf/2"].text == (
+        "If: this Part does not require: to take steps to notify the individual of the "
+        "contents of a statement that relates to the access or disclosure."
+    )
+    assert clauses["s26wf/2/e"].text == (
+        "the APP entity, credit reporting body, credit provider or file number recipient, "
+        "as the case may be; or"
+    )
+    assert clauses["s26wf/5"].text == (
+        "If: this Part does not require: to take steps to notify the individual of the "
+        "contents of a statement that relates to the loss."
+    )
+    assert clauses["s30/4"].text == (
+        "Where, at the end of 60 days after a copy of a report about an act or practice of "
+        "an agency, file number recipient, credit reporting body or credit provider was "
+        "served under subsection (3), the Commissioner: the Commissioner shall give to the "
+        "Minister a further report that: and shall serve a copy of the report on the "
+        "Minister (if any) responsible for the agency, recipient, credit reporting body or "
+        "credit provider."
+    )
 
 
 def test_s7_1_does_not_read_its_exclusions_as_inclusions(
@@ -595,37 +645,6 @@ def test_s7_1_does_not_read_its_exclusions_as_inclusions(
     assert clauses["s7/1/f"].canonical_text.startswith("but does not include a reference")
 
 
-def test_a_connector_beside_closing_words_leaves_the_closing_words_where_they_were(
-    clauses: dict[str, ClauseRecord],
-) -> None:
-    """s26WF(2), s26WF(5) and s30(4) have both: a connector between two groups
-    and closing words after the second ("this Part does not require: (e) ...;
-    (f) ...; to take steps to notify the individual ..."). The connector leads
-    its paragraph; the closing words are the subsection's, as every closing words
-    are (s8(2)), so the subsection and its first group of paragraphs are no
-    longer one sentence between them (ADR-0039)."""
-    assert clauses["s26wf/2"].text == (
-        "If: to take steps to notify the individual of the contents of a statement that "
-        "relates to the access or disclosure."
-    )
-    assert clauses["s26wf/5"].text == (
-        "If: to take steps to notify the individual of the contents of a statement that "
-        "relates to the loss."
-    )
-    assert clauses["s26wf/2/e"].text == (
-        "this Part does not require: the APP entity, credit reporting body, credit provider "
-        "or file number recipient, as the case may be; or"
-    )
-    assert clauses["s26wf/2/f"].text == "any other entity;"
-    assert clauses["s30/4"].text.endswith(
-        "the Commissioner: and shall serve a copy of the report on the Minister (if any) "
-        "responsible for the agency, recipient, credit reporting body or credit provider."
-    )
-    assert clauses["s30/4/c"].text.startswith(
-        "the Commissioner shall give to the Minister a further report that: incorporates "
-    )
-
-
 def test_a_connector_that_also_finishes_the_sentence_before_it_still_leads(
     clauses: dict[str, ClauseRecord],
 ) -> None:
@@ -633,8 +652,8 @@ def test_a_connector_that_also_finishes_the_sentence_before_it_still_leads(
     first group began ("... information: (a) would be likely; or (b) would not be
     likely; **to result in serious harm ..., have regard to the following:** (c)")
     and its last words open the second group. One source block, and the parser
-    does not cut a block, so it leads (c) whole. Tokenless paragraphs inside
-    s26WG(h) are as they were (#97)."""
+    does not cut a block, so it leads (c) whole (ADR-0041). Tokenless paragraphs
+    inside s26WG(h) are as they were (#97)."""
     assert clauses["s26wg"].text == (
         "For the purposes of this Division, in determining whether a reasonable person "
         "would conclude that an access to, or a disclosure of, information:"
@@ -645,6 +664,11 @@ def test_a_connector_that_also_finishes_the_sentence_before_it_still_leads(
     )
     assert clauses["s26wg/a"].text == "would be likely; or"
     assert clauses["s26wg/d"].text == "the sensitivity of the information;"
+    assert clauses["s26wg/h"].text == (
+        "if a security technology or methodology: the likelihood that the persons, or the "
+        "kinds of persons, who: have obtained, or could obtain, information or knowledge "
+        "required to circumvent the security technology or methodology;"
+    )
     assert clauses["s50/2/c"].text.startswith(
         "and that that matter could be more conveniently or effectively dealt with by "
         "the alternative complaint body, the Commissioner may decide not to investigate "
@@ -726,5 +750,5 @@ def test_the_whole_compilation_parses() -> None:
     connectors = _connectors(text)
     assert len(connectors) == len(CONNECTOR_PARAGRAPHS)
     for path, connector in zip(CONNECTOR_PARAGRAPHS, connectors, strict=True):
-        _assert_connector_leads(clauses, path, connector)
+        _assert_connector(clauses, path, connector)
     assert connectors == CONSTRUCTS_CONNECTORS
