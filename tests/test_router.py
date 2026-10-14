@@ -149,9 +149,10 @@ async def test_answer_routes_a_clause_id_question_to_the_keyword_channel(
 
     ledger = FakeLedgerStore()
     reranker = FakeReranker()
+    generator = FakeGenerator()
     pipeline = AssessmentPipeline(
         RetrievalPipeline(FakeRetrievalStore((public_chunk,), ledger=ledger), reranker),
-        FakeGenerator(),
+        generator,
         Verifier(FakeClauseStore(), ledger, CanonicalCitationVerifier()),
         ledger,
         tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
@@ -160,3 +161,4 @@ async def test_answer_routes_a_clause_id_question_to_the_keyword_channel(
     assert [c.clause_id for c in answer.retrieval.fused] == [PUBLIC_ID]
     assert answer.retrieval.fused[0].channel == "keyword"
     assert reranker.rerank_calls == 0
+    assert public_chunk.text in str(generator.calls[0]["user"])  # and it reached the model
