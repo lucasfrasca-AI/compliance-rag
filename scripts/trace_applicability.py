@@ -43,8 +43,8 @@ async def run(case_id: str, *, aura: bool, obligation: str) -> Coverage:
                 facts, tenant_id=case.tenant_id, as_of=case.as_of
             )
     mappings = load_mapping_set(sorted(MAPPINGS.glob("*.yaml")))
-    clause_ids = {c for _, item in mappings.grounded for c in item.clause_ids}
-    store: GraphStore = FakeGraphStore(mappings, clause_validity=labels.clause_validity(clause_ids))
+    validity = labels.clause_validity(set(mappings.clause_ids))
+    store: GraphStore = FakeGraphStore(mappings, clause_validity=validity)
     return await store.coverage(facts, tenant_id=case.tenant_id, as_of=case.as_of)
 
 

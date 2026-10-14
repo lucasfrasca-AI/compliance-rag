@@ -8,6 +8,11 @@ user. What a user is shown for a citation is the clause's canonical text from
 `ClauseStore`, never the model's words. A quote that didn't match is repaired
 on its own — one targeted regeneration of that citation, never the whole
 answer — and anything still failing is blocked.
+
+An obligation's clause never reaches the model without its exceptions (#164,
+ADR-0037): whatever the ranking returned, every exception Track A names for a
+clause in the context is delivered with it, fetched by id if need be, and
+marked as the exception it is.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import (
@@ -62,6 +67,13 @@ LIBRARY_QUESTION = LawScope.unscoped(
 )
 
 
+class ObligationExceptionUndelivered(RuntimeError):
+    """An exception Track A names for a clause in the context couldn't be
+    fetched: the graph names a clause the retrieval store doesn't hold on
+    `as_of`. Raised before generation, so no answer states the rule without
+    it (ADR-0037)."""
+
+
 @dataclass(frozen=True, slots=True)
 class Answer:
     retrieval: RetrievalTrace
@@ -80,6 +92,10 @@ class Answer:
     """Citations that failed verification (after any repair) — never shown."""
     trace_id: str
     """The request's trace: on every ledger row it produced (#31)."""
+    exceptions: tuple[SourceClause, ...] = ()
+    """The exceptions the model was given with an obligation's clause, each
+    naming the clauses it excepts — retrieved, or fetched by id where the
+    ranking left them out (#164, ADR-0037). Citable like what was retrieved."""
 
     @property
     def verified(self) -> bool:
@@ -159,7 +175,9 @@ class AssessmentPipeline:
         asking (`Member.uid`): their own private additions are retrievable and
         citable by them, and no one else's are, by retrieval or by the
         verifier's read of canonical text (ADR-0036). Without one, user scope
-        yields nothing."""
+        yields nothing. Then every exception `law` names for a clause in it is
+        added, fetched by id if the ranking left it out (#164, ADR-0037): the
+        ids come from Track A, never from retrieved text."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             # Before anything is retrieved or generated: offshore, the prefix
             # must be registered synthetic (ADR-0032).
@@ -187,6 +205,14 @@ class AssessmentPipeline:
                 await on_retrieved(trace)
 
             retrieved = [SourceClause(c.clause_id, c.text) for c in trace.ranked_candidates()]
+            retrieved, fetched = await self._with_exceptions(
+                retrieved, tenant_id, as_of, law=law, policy_corpus=sent
+            )
+            current.set_attribute(
+                "answer.exceptions",
+                [f"{c.clause_id} excepts {' '.join(c.excepts)}" for c in retrieved if c.excepts],
+            )
+            current.set_attribute("answer.exceptions_fetched", list(fetched))
             generation = await self.generator.generate(
                 system=SYSTEM_PROMPT,
                 cached_prefix=policy_prefix(policies),
@@ -211,7 +237,8 @@ class AssessmentPipeline:
             current.set_attribute("generation.schema_valid", True)
 
             # The context is what this request showed the model: the retrieved
-            # set plus the cached policy set. Nothing else is citable.
+            # set (with the exceptions delivered beside it) plus the cached
+            # policy set. Nothing else is citable.
             context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
             checked = await self.verifier.check_all(
                 draft.citations, context=context, as_of=as_of, user_id=user_id
@@ -235,6 +262,7 @@ class AssessmentPipeline:
                 citations=tuple(c for c in final if c.verified),
                 blocked=tuple(c for c in final if not c.verified),
                 trace_id=current_trace_id(),
+                exceptions=tuple(c for c in retrieved if c.excepts),
             )
             current.set_attribute("verifier.result", result.verified)
             current.set_attribute(
@@ -243,6 +271,48 @@ class AssessmentPipeline:
             current.set_attribute("verifier.repairs", len(repairs))
             current.set_attribute("generation.cost_usd", result.cost_usd)
             return result
+
+    async def _with_exceptions(
+        self,
+        retrieved: list[SourceClause],
+        tenant_id: str,
+        as_of: dt.date,
+        *,
+        law: LawScope,
+        policy_corpus: PolicyCorpus,
+    ) -> tuple[list[SourceClause], tuple[str, ...]]:
+        """`retrieved` with every exception `law` names for a clause in it
+        (ADR-0037): marked where the ranking returned it, fetched by id where
+        it didn't, and again for anything a fetched clause is owed. Returns
+        what the model is given and the ids that were fetched. An exception
+        that can't be fetched refuses the answer before generation."""
+        delivered = list(retrieved)
+        fetched: list[str] = []
+        while True:
+            owed = law.owed(c.clause_id for c in delivered)
+            held = {c.clause_id for c in delivered}
+            missing = tuple(e for e in owed if e not in held)
+            if not missing:
+                break
+            found = {
+                c.clause_id: c
+                for c in await self.retrieval.fetch(
+                    missing, tenant_id, as_of, law=law, policy_corpus=policy_corpus
+                )
+            }
+            lost = [e for e in missing if e not in found]
+            if lost:
+                raise ObligationExceptionUndelivered(
+                    f"{', '.join(lost)}: an exception Track A names for a clause in the context "
+                    f"isn't retrievable on {as_of}, so the answer is refused rather than state "
+                    "the rule without it (ADR-0037)"
+                )
+            delivered += [SourceClause(e, found[e].text) for e in missing]
+            fetched += missing
+        marked = [
+            replace(c, excepts=owed[c.clause_id]) if c.clause_id in owed else c for c in delivered
+        ]
+        return marked, tuple(fetched)
 
     async def _repair(
         self,

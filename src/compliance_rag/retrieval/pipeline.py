@@ -12,6 +12,7 @@ anywhere in the path.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from dataclasses import dataclass
 
@@ -206,3 +207,37 @@ class RetrievalPipeline:
                 fused=fused,
                 reranked=reranked,
             )
+
+    async def fetch(
+        self,
+        clause_ids: tuple[str, ...],
+        tenant_id: str,
+        as_of: dt.date,
+        *,
+        law: LawScope,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
+    ) -> tuple[Candidate, ...]:
+        """Clauses by exact id on the keyword channel, through every filter a
+        lookup applies (the law scope, subscriptions, validity, ADR-0033);
+        the ones not found are left out. For ids Track A names — an
+        obligation's exceptions (#164, ADR-0037) — never for an id a model or
+        a retrieved text supplied. Public scope only: an exception is library
+        law, so no tenant or private text can come back under its id."""
+        with span("retrieve.fetch", tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
+            current.set_attribute("retrieval.fetch.clause_ids", list(clause_ids))
+            found = await asyncio.gather(
+                *(
+                    self.retrieval_store.lookup_clause(
+                        clause_id,
+                        law=law,
+                        tenant_id=tenant_id,
+                        scopes=(Scope.PUBLIC,),
+                        as_of=as_of,
+                        policy_corpus=policy_corpus,
+                    )
+                    for clause_id in clause_ids
+                )
+            )
+            hits = tuple(hit for hit in found if hit is not None)
+            current.set_attribute("retrieval.channel.keyword", _scored(hits))
+            return hits

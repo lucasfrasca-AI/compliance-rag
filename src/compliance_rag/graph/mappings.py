@@ -16,6 +16,10 @@ What a mapping file holds:
   conditions, down to **leaves** that test one profile fact for one period.
 - **Controls** — a standard's controls, crosswalk targets (ADR-0027, Q3).
 - **Jurisdictions and Sectors** — reference nodes (ISO 3166-2, ANZSIC).
+- **Exceptions** — for an obligation, the clauses that say when it does not
+  apply or is displaced (APP 8.2 for APP 8.1). `EXCEPTED_BY` edges from the
+  obligation to each clause (#164, ADR-0037). Keyed by the obligation's id, so
+  a signed obligation gains them in a file of their own, reviewed on its own.
 
 Everything but a reference node is **grounded**: `DERIVED_FROM` the clauses it
 was read from (ADR-0028), one edge per compilation, so an obligation survives
@@ -50,6 +54,7 @@ from compliance_rag.corpus.models import (
     NO_END_DATE,
     EndReason,
     check_end,
+    clause_ancestors,
     parse_stable_id,
     validate_review,
 )
@@ -178,19 +183,20 @@ class Dated(_Strict):
         return self
 
 
+def _stable_clause_ids(v: tuple[str, ...]) -> tuple[str, ...]:
+    for clause_id in v:
+        parse_stable_id(clause_id)
+    if len(set(v)) != len(v):
+        raise ValueError("a clause is listed twice")
+    return v
+
+
 class Grounded(Dated):
     """`DERIVED_FROM` the clauses it was read from (ADR-0028)."""
 
     clause_ids: tuple[str, ...] = Field(min_length=1)
 
-    @field_validator("clause_ids")
-    @classmethod
-    def _stable_ids(cls, v: tuple[str, ...]) -> tuple[str, ...]:
-        for clause_id in v:
-            parse_stable_id(clause_id)
-        if len(set(v)) != len(v):
-            raise ValueError("a clause is listed twice")
-        return v
+    _stable_ids = field_validator("clause_ids")(_stable_clause_ids)
 
     @property
     def instrument_id(self) -> str:
@@ -361,6 +367,24 @@ class Obligation(Grounded):
         return self
 
 
+class ObligationExceptions(_Strict):
+    """An obligation's exceptions (#164, ADR-0037): the clauses that say when
+    it does not apply, or is displaced — APP 8.2 for APP 8.1. Which clause
+    excepts which is a legal judgement, so it is reviewed mapping content,
+    like every other (D-01).
+
+    Keyed by the obligation's id, not written on it: an obligation already
+    signed gains its exceptions in a file of their own, reviewed on its own,
+    and its signed file is never edited. Loaded as `EXCEPTED_BY` edges from
+    the obligation to each clause, one per compilation like `DERIVED_FROM`
+    (ADR-0028); once loaded they may grow, never shrink (D-05)."""
+
+    obligation_id: str
+    clause_ids: tuple[str, ...] = Field(min_length=1)
+
+    _stable_ids = field_validator("clause_ids")(_stable_clause_ids)
+
+
 class Crosswalk(_Strict):
     model_config = _Strict.model_config | ConfigDict(populate_by_name=True)
 
@@ -409,6 +433,7 @@ class MappingFile(_Strict):
     actors: tuple[Actor, ...] = ()
     controls: tuple[Control, ...] = ()
     obligations: tuple[Obligation, ...] = ()
+    exceptions: tuple[ObligationExceptions, ...] = ()
     crosswalks: tuple[Crosswalk, ...] = ()
     policy_mappings: tuple[PolicyMapping, ...] = ()
 
@@ -422,10 +447,12 @@ class MappingFile(_Strict):
         for clause_id in self.source_clause_ids:
             parse_stable_id(clause_id)
         sources = set(self.source_clause_ids)
-        for item in self.grounded:
-            for clause_id in item.clause_ids:
+        named = [(item.id, item.clause_ids) for item in self.grounded]
+        named += [(f"exceptions of {e.obligation_id}", e.clause_ids) for e in self.exceptions]
+        for who, clause_ids in named:
+            for clause_id in clause_ids:
                 if clause_id not in sources:
-                    raise ValueError(f"{item.id}: clause {clause_id} is not in source_clause_ids")
+                    raise ValueError(f"{who}: clause {clause_id} is not in source_clause_ids")
         return self
 
 
@@ -484,6 +511,22 @@ class MappingSet(_Strict):
     @property
     def conditions_by_id(self) -> dict[str, Condition]:
         return {c.id: c for c in self.conditions}
+
+    @property
+    def exceptions(self) -> tuple[ObligationExceptions, ...]:
+        return tuple(x for f in self.files for x in f.exceptions)
+
+    @property
+    def exceptions_by_obligation(self) -> dict[str, tuple[str, ...]]:
+        """Each obligation's exception clauses, by obligation id (#164)."""
+        return {e.obligation_id: e.clause_ids for e in self.exceptions}
+
+    @property
+    def clause_ids(self) -> frozenset[str]:
+        """Every clause the set names: what its items derive from, and its
+        exceptions. What a graph must hold before the set is loaded."""
+        derived = {c for _, item in self.grounded for c in item.clause_ids}
+        return frozenset(derived | {c for e in self.exceptions for c in e.clause_ids})
 
     @property
     def crosswalks(self) -> tuple[Crosswalk, ...]:
@@ -582,7 +625,39 @@ class MappingSet(_Strict):
         for mapping in self.policy_mappings:
             if mapping.obligation_id not in by_kind["Obligation"]:
                 raise ValueError(f"{mapping.id}: unknown obligation {mapping.obligation_id}")
+        self._check_exceptions()
         return self
+
+    def _check_exceptions(self) -> None:
+        """An obligation's exceptions name it once, and each is another clause:
+        never its own clause, and never one containing it — that would admit
+        the whole provision around the obligation (#164's option (b)) by
+        another name. Whether a clause is loaded is the loader's to check."""
+        obligations = self.obligations_by_id
+        seen: set[str] = set()
+        for entry in self.exceptions:
+            obligation = obligations.get(entry.obligation_id)
+            if obligation is None:
+                raise ValueError(f"exceptions of unknown obligation {entry.obligation_id}")
+            if entry.obligation_id in seen:
+                raise ValueError(
+                    f"exceptions of {entry.obligation_id} are listed twice: one entry per "
+                    "obligation, every compilation's clause in it"
+                )
+            seen.add(entry.obligation_id)
+            for clause_id in entry.clause_ids:
+                for own in obligation.clause_ids:
+                    if clause_id == own:
+                        raise ValueError(
+                            f"{obligation.id}: {clause_id} is its own clause, not an exception "
+                            "to it"
+                        )
+                    if clause_id in clause_ancestors(own):
+                        raise ValueError(
+                            f"{obligation.id}: exception {clause_id} contains its own clause "
+                            f"{own}: an exception is the clause that excepts, not the provision "
+                            "around the obligation"
+                        )
 
 
 def _unique(kind: str, ids: Iterable[str]) -> frozenset[str]:

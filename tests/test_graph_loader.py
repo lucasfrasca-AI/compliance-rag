@@ -96,11 +96,14 @@ def test_the_fixture_validates() -> None:
 def test_the_readme_documented_shapes_validate(tmp_path: Path) -> None:
     """The README is the spec for mapping YAML: its examples, joined into
     one file, must validate — so the loader and the README can't drift.
-    Every kind of the #93 ontology appears in it."""
+    Every kind of the #93 ontology appears in it, and #164's exceptions."""
     document = _readme_document()
     mappings = load_mapping_set([write_yaml(tmp_path, document)])
     assert all(mappings.by_label.values()), mappings.by_label
     assert mappings.crosswalks and mappings.policy_mappings
+    assert mappings.exceptions_by_obligation == {
+        "OB-APP8-1": ("privacy-act-1988:C2026C00227:sch1/app8/2",)
+    }
 
 
 @pytest.mark.parametrize("field", ["author", "reviewed_by", "date", "source_clause_ids"])

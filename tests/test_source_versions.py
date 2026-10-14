@@ -322,6 +322,23 @@ def test_a_change_to_the_mapping_script_is_a_new_mapping_version_only(repo: Repo
     assert corpus(repo) == SourceVersion(SourceKind.CORPUS, tagged, "corpus-2026.10")
 
 
+def test_a_new_file_of_exceptions_beside_a_signed_mapping_is_a_new_mapping_version(
+    repo: Repo,
+) -> None:
+    """#164: an obligation's exceptions are mapping content in a file of their
+    own, the signed file untouched. Adding that file moves the mapping
+    version, and only it; uncommitted, it refuses the load."""
+    tagged = repo.commit(**{name: "1" for name in FILES})
+    repo.tag("mappings-2026.10")
+    repo.tag("corpus-2026.10")
+    repo.write("corpus/mappings/privacy-act-1988-exceptions.yaml", "exceptions: []\n")
+    with pytest.raises(UncommittedSource, match=r"privacy-act-1988-exceptions\.yaml"):
+        mapping(repo)
+    head = repo.commit()
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
+    assert corpus(repo) == SourceVersion(SourceKind.CORPUS, tagged, "corpus-2026.10")
+
+
 @pytest.mark.parametrize(
     ("kind", "changed"),
     [(kind, name) for kind, names in PATHS_OF.items() for name in names],

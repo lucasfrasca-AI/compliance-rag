@@ -84,6 +84,9 @@ class ObligationSpec:
     jurisdictions: tuple[str, ...] = ()
     sectors: tuple[str, ...] = ()
     conditions: tuple[str, ...] = ()
+    exception_clause_ids: tuple[str, ...] = ()
+    """Its exceptions' clauses in force on the snapshot's date (ADR-0037).
+    They decide nothing here: they are what Track B must deliver with it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,6 +401,7 @@ class _Evaluator:
                 outcome=Outcome.UNASSESSABLE,
                 explanation=explanation,
                 reason=explanation.description,
+                exception_clause_ids=spec.exception_clause_ids,
             )
         parts = [self._actors(spec)]
         if spec.jurisdictions:
@@ -423,6 +427,7 @@ class _Evaluator:
             outcome=outcome,
             explanation=explanation,
             reason=_reason(outcome, explanation),
+            exception_clause_ids=spec.exception_clause_ids,
         )
 
 
