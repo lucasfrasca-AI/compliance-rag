@@ -78,6 +78,7 @@ from compliance_rag.corpus.models import (
 )
 from compliance_rag.graph.mappings import (
     Actor,
+    ClausesInside,
     Condition,
     Control,
     Dated,
@@ -89,6 +90,7 @@ from compliance_rag.graph.mappings import (
     Sector,
     clauses_inside,
     lineage,
+    with_clauses_inside,
     words,
 )
 
@@ -340,12 +342,7 @@ def _outgoing(item: Dated) -> list[tuple[str, NodeRef]]:
     return edges
 
 
-Inside = Mapping[str, tuple[str, ...]]
-"""Each exception or qualifier clause the mappings name, with the clauses
-inside it in the graph (`clauses_inside`), read before any write."""
-
-
-def _edges(mappings: MappingSet, inside: Inside) -> list[EdgeWrite]:
+def _edges(mappings: MappingSet, inside: ClausesInside) -> list[EdgeWrite]:
     labels = mappings.labels
     edges: list[EdgeWrite] = []
     for label, items in mappings.by_label.items():
@@ -363,15 +360,12 @@ def _edges(mappings: MappingSet, inside: Inside) -> list[EdgeWrite]:
                 {"kind": crosswalk.kind.value, "note": words(crosswalk.note)},
             )
         )
-    for edge_type, entries in mappings.travelling.items():
-        for entry in entries:
-            obligation = NodeRef("Obligation", entry.obligation_id)
-            # The named clause and every clause inside it, once each: an entry
-            # may name a paragraph its other clause already contains.
-            targets = dict.fromkeys(
-                c for named in entry.clause_ids for c in (named, *inside.get(named, ()))
-            )
-            edges += [EdgeWrite(edge_type, obligation, NodeRef("Clause", c)) for c in targets]
+    for entry in mappings.travelling:
+        obligation = NodeRef("Obligation", entry.obligation_id)
+        edges += [
+            EdgeWrite(entry.EDGE, obligation, NodeRef("Clause", c))
+            for c in with_clauses_inside(entry.clause_ids, inside)
+        ]
     return edges
 
 
@@ -431,11 +425,9 @@ async def _check_grounding(
             )
 
     obligations = mappings.obligations_by_id
-    kinds = {"EXCEPTED_BY": "exception", "READ_WITH": "qualifier"}
-    for edge_type, entries in mappings.travelling.items():
-        for entry in entries:
-            for clause_id in entry.clause_ids:
-                check(obligations[entry.obligation_id], "Obligation", kinds[edge_type], clause_id)
+    for entry in mappings.travelling:
+        for clause_id in entry.clause_ids:
+            check(obligations[entry.obligation_id], "Obligation", entry.NOUN, clause_id)
     for label, item in mappings.grounded:
         last = _last_visible(item, today)
         for clause_id in item.clause_ids:
@@ -466,9 +458,7 @@ async def _read_inside(
     through it. One builder-built read per version and day, through the query
     builder like every read (D-05). `clauses` is what `_check_grounding`
     already read, so every named clause is there."""
-    named = sorted(
-        {c for entries in mappings.travelling.values() for e in entries for c in e.clause_ids}
-    )
+    named = sorted(mappings.travelling_clause_ids)
     by_version: dict[tuple[NodeRef, dt.date], list[str]] = {}
     for clause_id in named:
         instrument_id, version_id, _ = parse_stable_id(clause_id)
@@ -478,9 +468,9 @@ async def _read_inside(
         )
     inside: dict[str, tuple[str, ...]] = {}
     for (version, first_day), clause_ids in by_version.items():
-        held = [c.stable_id for c in await _clauses_in_force(graph, version, first_day)]
+        in_force = [c.stable_id for c in await _clauses_in_force(graph, version, first_day)]
         for clause_id in clause_ids:
-            inside[clause_id] = clauses_inside(clause_id, held)
+            inside[clause_id] = clauses_inside(clause_id, in_force)
     return inside
 
 
@@ -492,7 +482,7 @@ def _refuse(item: Dated, label: str, what: str) -> MappingError:
 
 
 async def _check_unchanged(
-    graph: GraphAdmin, mappings: MappingSet, inside: Inside
+    graph: GraphAdmin, mappings: MappingSet, inside: ClausesInside
 ) -> tuple[CorrectionWrite, ...]:
     """An item already loaded is unchanged in meaning — its non-cosmetic
     properties, its valid time (retiring an open node is the one change
@@ -585,7 +575,7 @@ class CheckedMappings:
 
     corrections: tuple[CorrectionWrite, ...]
     """Wording changes to loaded items, acknowledged (ADR-0031)."""
-    inside: Inside
+    inside: ClausesInside
     """Each exception and qualifier, with the clauses inside it in the graph:
     the further `EXCEPTED_BY` / `READ_WITH` targets (ADR-0044)."""
 

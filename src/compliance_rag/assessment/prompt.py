@@ -42,13 +42,13 @@ other clauses, in one of two ways, which are different things:
 - An exception: [B clause <clause id> excepts <clause id> ... (when it does not \
 apply)]. That clause says when the obligation in each named clause does not \
 apply. If your answer relies on a clause an exception names, it must also say \
-that the exception exists and cite it: a rule stated without its exceptions \
-overstates it.
+that the exception exists, state when the obligation does not apply, and cite \
+it: a rule stated without its exceptions overstates it.
 - A qualifier: [B clause <clause id> qualifies <clause id> ... (how it is \
 satisfied)]. That clause says how the obligation in each named clause is \
 satisfied, or what it requires. If your answer relies on a clause a qualifier \
-names, it must also say what the qualifier adds and cite it: a rule stated \
-without its qualifiers is incomplete.
+names, it must also state how the obligation is satisfied as the qualifier \
+says, and cite it: a rule stated without its qualifiers is incomplete.
 One marker may carry both, an exception to one clause and a qualifier of \
 another. Never describe a qualifier as an exception, or an exception as a \
 qualifier.

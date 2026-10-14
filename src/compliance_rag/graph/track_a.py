@@ -42,6 +42,7 @@ from compliance_rag.graph.mappings import (
     Operator,
     clauses_inside,
     lineage,
+    with_clauses_inside,
     words,
 )
 
@@ -161,10 +162,21 @@ def snapshot_of_mappings(
     def clauses(ids: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(sorted(c for c in ids if c in clause_validity and live(*clause_validity[c])))
 
+    def inside_on_its_first_day(named: str) -> tuple[str, ...]:
+        """As the loader reads the graph: the clauses inside an exception or
+        qualifier, among those in force on its own first day (ADR-0044)."""
+        first = clause_validity[named][0]
+        in_force = (c for c, (start, end) in clause_validity.items() if start <= first < end)
+        return clauses_inside(named, in_force)
+
+    inside = {
+        named: inside_on_its_first_day(named)
+        for named in mappings.travelling_clause_ids
+        if named in clause_validity
+    }
+
     def with_inside(ids: tuple[str, ...]) -> tuple[str, ...]:
-        return clauses(
-            tuple(dict.fromkeys(c for n in ids for c in (n, *clauses_inside(n, clause_validity))))
-        )
+        return clauses(with_clauses_inside(ids, inside))
 
     conditions = {
         c.id: ConditionSpec(

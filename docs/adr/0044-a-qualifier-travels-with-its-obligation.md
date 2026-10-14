@@ -83,10 +83,13 @@ edges. APP 8.2 brings 8.2(a)–(f) and their subparagraphs; 5.2 brings
   version's clauses in force on the named clause's first day, and keeps
   those whose path runs through it (`clauses_inside`, ADR-0035's
   containment by path segment: `s1/30` is not inside `s1/3`). One read per
-  version. The writes use that read (`CheckedMappings.inside`), so they rest
+  version and first day, which is one per version, since a version's clauses
+  share its validity. The writes use that read (`CheckedMappings.inside`), so they rest
   on what the checks saw.
 - **The fake mirrors it from its clause validity,** through the same
-  `clauses_inside`. A test holds Track A over Neo4j equal to the fake.
+  `clauses_inside`, among the clauses in force on the named clause's first
+  day, as the loader reads them. A test holds Track A over Neo4j equal to the
+  fake.
 - **Why the loader.** #182 offered three options:
   - The reviewer lists every paragraph. That is error-prone, and a reviewer
     signs legal judgements, not the parser's structure.
@@ -126,9 +129,11 @@ edges. APP 8.2 brings 8.2(a)–(f) and their subparagraphs; 5.2 brings
   bytes don't change (D-11).
 - **The system prompt** describes each, with a rule for each:
   - an answer relying on a clause an exception names must say the exception
-    exists, because a rule without its exceptions overstates it;
-  - one relying on a clause a qualifier names must say what the qualifier
-    adds, because a rule without its qualifiers is incomplete;
+    exists and state when the obligation does not apply, because a rule
+    without its exceptions overstates it;
+  - one relying on a clause a qualifier names must state how the obligation
+    is satisfied as the qualifier says, because a rule without its
+    qualifiers is incomplete;
   - never describe one as the other.
 - **The structured output:** `Answer.qualifiers`, beside `Answer.exceptions`.
 - **The spans:** `answer.qualifiers` and `answer.qualifiers_fetched` beside

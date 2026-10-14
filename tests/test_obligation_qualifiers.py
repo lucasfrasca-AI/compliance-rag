@@ -294,13 +294,26 @@ async def test_an_obligation_that_might_apply_brings_its_qualifiers_too() -> Non
 async def test_an_exception_and_a_qualifier_bring_the_clauses_inside_them() -> None:
     """#182's second half: APP 8.2's paragraphs travel with 8.1 by exact id.
     On the fake, from the clause validity it stands in for the graph with;
-    `s1/30` is not inside `s1/3`, and a paragraph not in force stays out."""
-    later = dt.date(2027, 1, 1)
-    coverage = await coverage_of(validity={**VALIDITY, QUALIFIER_B: (later, NO_END_DATE)})
-    keep = coverage.obligation("OB-T-KEEP")
+    `s1/30` is not inside `s1/3`."""
+    keep = (await coverage_of()).obligation("OB-T-KEEP")
     assert keep.exception_clause_ids == (EXCEPTION, EXCEPTION_A, EXCEPTION_B)
-    assert keep.qualifier_clause_ids == (QUALIFIER, QUALIFIER_A)
-    assert LawScope.of(coverage).owed([KEEP])[EXCEPTION_A] == Owed(excepts=(KEEP,))
+    assert keep.qualifier_clause_ids == (QUALIFIER, QUALIFIER_A, QUALIFIER_B)
+    law = LawScope.of(await coverage_of())
+    assert law.owed([KEEP])[EXCEPTION_A] == Owed(excepts=(KEEP,))
+
+
+async def test_the_fake_expands_from_what_is_in_force_on_the_named_clauses_first_day() -> None:
+    """As the loader does, which reads the graph's clauses in force on the
+    named clause's first day: a paragraph that starts later was not there to
+    expand to, so it never travels, even once it is in force. (A version's
+    clauses share its validity, so a real load can't make one; the fake and
+    the graph must still agree on it.)"""
+    later = dt.date(2027, 1, 1)
+    validity = {**VALIDITY, QUALIFIER_B: (later, NO_END_DATE)}
+    for as_of in (AS_OF, dt.date(2027, 2, 1)):
+        store = FakeGraphStore(with_both(), clause_validity=validity)
+        coverage = await store.coverage(Facts.of(OVER), tenant_id="acme", as_of=as_of)
+        assert coverage.obligation("OB-T-KEEP").qualifier_clause_ids == (QUALIFIER, QUALIFIER_A)
 
 
 async def test_a_qualifier_not_in_force_is_not_in_scope() -> None:
@@ -625,15 +638,15 @@ def test_a_qualifiers_marker_says_how_and_an_exceptions_says_when() -> None:
 
 
 def test_the_system_prompt_tells_an_exception_from_a_qualifier() -> None:
-    """An exception: say it exists, because without it the rule is
-    overstated. A qualifier: say what it adds, because without it the rule is
-    incomplete. And never call one the other."""
-    assert "excepts <clause id> ... (when it does not apply)" in SYSTEM_PROMPT
-    assert "qualifies <clause id> ... (how it is" in SYSTEM_PROMPT
-    assert "how the obligation in each named clause is satisfied, or what it requires" in (
-        " ".join(SYSTEM_PROMPT.split())
-    )
-    assert "Never describe a qualifier as an exception" in SYSTEM_PROMPT
+    """An exception: state when the obligation doesn't apply, because without
+    it the rule is overstated. A qualifier: state how it is satisfied, because
+    without it the rule is incomplete. And never call one the other."""
+    prompt = " ".join(SYSTEM_PROMPT.split())
+    assert "excepts <clause id> ... (when it does not apply)" in prompt
+    assert "qualifies <clause id> ... (how it is satisfied)" in prompt
+    assert "say that the exception exists, state when the obligation does not apply" in prompt
+    assert "state how the obligation is satisfied as the qualifier says" in prompt
+    assert "Never describe a qualifier as an exception, or an exception as a qualifier" in prompt
 
 
 def test_a_malformed_qualified_id_never_reaches_a_marker() -> None:

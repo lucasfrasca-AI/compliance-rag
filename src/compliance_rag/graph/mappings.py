@@ -48,7 +48,7 @@ import re
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import ClassVar, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -382,7 +382,18 @@ class TravellingClauses(_Strict):
     signed file is never edited. Each is loaded as an edge from the obligation
     to the clause, and to every clause inside it in the graph, one per
     compilation like `DERIVED_FROM` (ADR-0028); once loaded they may grow,
-    never shrink (D-05)."""
+    never shrink (D-05). Each kind says what it is, for the loader and for a
+    refusal, so nothing dispatches on a string."""
+
+    EDGE: ClassVar[str]
+    """The edge it loads as."""
+    NOUN: ClassVar[str]
+    """What one of its clauses is: "exception"."""
+    KIND: ClassVar[str]
+    """The same, with its article: "an exception"."""
+    RELATION: ClassVar[str]
+    """What that clause is to the obligation: "an exception to"."""
+    VERB: ClassVar[str]
 
     obligation_id: str
     clause_ids: tuple[str, ...] = Field(min_length=1)
@@ -394,6 +405,12 @@ class ObligationExceptions(TravellingClauses):
     """An obligation's exceptions (#164, ADR-0037): the clauses that say when
     it does not apply, or is displaced — APP 8.2 for APP 8.1. `EXCEPTED_BY`."""
 
+    EDGE = "EXCEPTED_BY"
+    NOUN = "exception"
+    KIND = "an exception"
+    RELATION = "an exception to"
+    VERB = "excepts"
+
 
 class ObligationQualifiers(TravellingClauses):
     """An obligation's qualifiers (#182, ADR-0044): the clauses that say how
@@ -401,6 +418,12 @@ class ObligationQualifiers(TravellingClauses):
     APP 5.2 for APP 5.1. `READ_WITH`. An exception says when the obligation
     doesn't apply; a qualifier says how it is met. Never a clause that is also
     an exception to the same obligation."""
+
+    EDGE = "READ_WITH"
+    NOUN = "qualifier"
+    KIND = "a qualifier"
+    RELATION = "a qualifier of"
+    VERB = "qualifies"
 
 
 class Crosswalk(_Strict):
@@ -467,8 +490,10 @@ class MappingFile(_Strict):
             parse_stable_id(clause_id)
         sources = set(self.source_clause_ids)
         named = [(item.id, item.clause_ids) for item in self.grounded]
-        named += [(f"exceptions of {e.obligation_id}", e.clause_ids) for e in self.exceptions]
-        named += [(f"qualifiers of {q.obligation_id}", q.clause_ids) for q in self.qualifiers]
+        named += [
+            (f"{e.NOUN}s of {e.obligation_id}", e.clause_ids)
+            for e in (*self.exceptions, *self.qualifiers)
+        ]
         for who, clause_ids in named:
             for clause_id in clause_ids:
                 if clause_id not in sources:
@@ -551,10 +576,16 @@ class MappingSet(_Strict):
         return {q.obligation_id: q.clause_ids for q in self.qualifiers}
 
     @property
-    def travelling(self) -> dict[str, tuple[TravellingClauses, ...]]:
-        """Every clause named to travel with an obligation, by the edge it
-        loads as: exceptions, then qualifiers."""
-        return {"EXCEPTED_BY": self.exceptions, "READ_WITH": self.qualifiers}
+    def travelling(self) -> tuple[TravellingClauses, ...]:
+        """Every entry naming clauses that travel with an obligation:
+        exceptions, then qualifiers. Each says which kind it is."""
+        return (*self.exceptions, *self.qualifiers)
+
+    @property
+    def travelling_clause_ids(self) -> frozenset[str]:
+        """Every exception and qualifier clause the set names (not the clauses
+        inside them, which only the graph knows)."""
+        return frozenset(c for entry in self.travelling for c in entry.clause_ids)
 
     @property
     def clause_ids(self) -> frozenset[str]:
@@ -562,10 +593,7 @@ class MappingSet(_Strict):
         exceptions and qualifiers. What a graph must hold before the set is
         loaded."""
         derived = {c for _, item in self.grounded for c in item.clause_ids}
-        travelling = {
-            c for entries in self.travelling.values() for e in entries for c in e.clause_ids
-        }
-        return frozenset(derived | travelling)
+        return frozenset(derived | self.travelling_clause_ids)
 
     @property
     def crosswalks(self) -> tuple[Crosswalk, ...]:
@@ -664,44 +692,40 @@ class MappingSet(_Strict):
         for mapping in self.policy_mappings:
             if mapping.obligation_id not in by_kind["Obligation"]:
                 raise ValueError(f"{mapping.id}: unknown obligation {mapping.obligation_id}")
-        self._check_travelling("exception", self.exceptions)
-        self._check_travelling("qualifier", self.qualifiers)
+        self._check_travelling()
         self._check_exceptions_are_not_qualifiers()
         return self
 
-    def _check_travelling(self, kind: str, entries: tuple[TravellingClauses, ...]) -> None:
-        """An obligation's exceptions (or qualifiers) name it once, and each is
-        another clause: never its own clause, and never one containing it —
-        that would admit the whole provision around the obligation (#164's
-        option (b)) by another name. Whether a clause is loaded is the
-        loader's to check."""
-        relation, verb = {
-            "exception": ("an exception to", "excepts"),
-            "qualifier": ("a qualifier of", "qualifies"),
-        }[kind]
+    def _check_travelling(self) -> None:
+        """An obligation's exceptions, and its qualifiers, name it once each,
+        and each is another clause: never its own clause, and never one
+        containing it — that would admit the whole provision around the
+        obligation (#164's option (b)) by another name. Whether a clause is
+        loaded is the loader's to check."""
         obligations = self.obligations_by_id
-        seen: set[str] = set()
-        for entry in entries:
+        seen: set[tuple[str, str]] = set()
+        for entry in self.travelling:
             obligation = obligations.get(entry.obligation_id)
             if obligation is None:
-                raise ValueError(f"{kind}s of unknown obligation {entry.obligation_id}")
-            if entry.obligation_id in seen:
+                raise ValueError(f"{entry.NOUN}s of unknown obligation {entry.obligation_id}")
+            if (entry.EDGE, entry.obligation_id) in seen:
                 raise ValueError(
-                    f"{kind}s of {entry.obligation_id} are listed twice: one entry per "
+                    f"{entry.NOUN}s of {entry.obligation_id} are listed twice: one entry per "
                     "obligation, every compilation's clause in it"
                 )
-            seen.add(entry.obligation_id)
+            seen.add((entry.EDGE, entry.obligation_id))
             for clause_id in entry.clause_ids:
                 for own in obligation.clause_ids:
                     if clause_id == own:
                         raise ValueError(
-                            f"{obligation.id}: {clause_id} is its own clause, not {relation} it"
+                            f"{obligation.id}: {clause_id} is its own clause, not "
+                            f"{entry.RELATION} it"
                         )
                     if clause_id in clause_ancestors(own):
                         raise ValueError(
-                            f"{obligation.id}: {kind} {clause_id} contains its own clause "
-                            f"{own}: an {kind} is the clause that {verb}, not the provision "
-                            "around the obligation"
+                            f"{obligation.id}: {entry.NOUN} {clause_id} contains its own clause "
+                            f"{own}: {entry.KIND} is the clause that {entry.VERB}, not the "
+                            "provision around the obligation"
                         )
 
     def _check_exceptions_are_not_qualifiers(self) -> None:
@@ -789,6 +813,18 @@ def clauses_inside(clause_id: str, clause_ids: Iterable[str]) -> tuple[str, ...]
     (#182, ADR-0044): the loader reads the graph's clauses, the fake its
     clause validity, and both expand through this."""
     return tuple(sorted({c for c in clause_ids if clause_id in clause_ancestors(c)}))
+
+
+ClausesInside = Mapping[str, tuple[str, ...]]
+"""Each exception or qualifier clause a mapping set names, with the clauses
+inside it (`clauses_inside`) in the graph, or in a fake's clause validity."""
+
+
+def with_clauses_inside(clause_ids: Iterable[str], inside: ClausesInside) -> tuple[str, ...]:
+    """Each clause followed by the clauses inside it, once each: what an
+    entry's clause ids expand to (ADR-0044). An entry may name a paragraph
+    another of its clauses already contains."""
+    return tuple(dict.fromkeys(c for named in clause_ids for c in (named, *inside.get(named, ()))))
 
 
 def words(text: str) -> str:
