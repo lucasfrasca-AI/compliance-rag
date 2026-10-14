@@ -14,14 +14,16 @@
 # privacy-act-1988.yaml lists the APP subclauses that are clauses, not
 # obligations: 1.1, 2.2, 3.4, 3.7, 4.2, 4.4, 5.2, 6.2, 6.3, 6.6, 6.7, 7.2-7.6,
 # 7.8, 8.2, 8.3, 9.3, 11.3, 12.2, 12.3, 12.6, 12.10. Drafted as exceptions: 2.2,
-# 3.4, 6.2, 6.3, 6.7, 7.2, 7.3, 7.4, 7.5, 7.8, 8.2, 9.3, 12.2, 12.3. Not
+# 3.4, 6.2, 6.3, 6.7, 7.2, 7.3, 7.4, 7.5, 7.8, 8.2, 8.3, 9.3, 12.2, 12.3. Not
 # exceptions (the PR's review table gives the reason for each): 1.1 (object),
 # 3.7, 5.2, 6.6, 11.3 (definitional), 4.2, 7.6, 12.6, 12.10 (permissions), 4.4
-# (what applies when 4.3 doesn't). Not classified: 8.3.
+# (what applies when 4.3 doesn't).
 #
-# The drafting session had the parsed text of APP 10 and 11 only (the
-# checked-in fixtures). Every other pairing is the model's reading of the APPs
-# and must be checked against the clause text of C2026C00227 before signing.
+# The first draft had the parsed text of APP 10 and 11 only (the checked-in
+# fixtures). Every pairing has since been read against the parsed text of the
+# pinned C2026C00227 source, and the PR's review table quotes each exception's
+# opening words. 8.3 was added then: 8.2(aa) disapplies 8.1 where "subclause
+# 8.3 applies", the prescribed-countries scheme.
 #
 # The comments below are the model's paraphrase, never quotes. Each
 # obligation's entry lists its exceptions; an exception that displaces a whole
@@ -42,6 +44,7 @@ source_clause_ids:
   - privacy-act-1988:C2026C00227:sch1/app7/5
   - privacy-act-1988:C2026C00227:sch1/app7/8
   - privacy-act-1988:C2026C00227:sch1/app8/2
+  - privacy-act-1988:C2026C00227:sch1/app8/3
   - privacy-act-1988:C2026C00227:sch1/app9/3
   - privacy-act-1988:C2026C00227:sch1/app12/2
   - privacy-act-1988:C2026C00227:sch1/app12/3
@@ -89,9 +92,12 @@ exceptions:
       - privacy-act-1988:C2026C00227:sch1/app7/8
 
   # APP 8.2: when 8.1 does not apply to a disclosure to an overseas recipient.
+  # APP 8.3: the prescribed countries and binding schemes; 8.2(aa) disapplies
+  # 8.1 where 8.3 applies.
   - obligation_id: OB-PA-APP8-1
     clause_ids:
       - privacy-act-1988:C2026C00227:sch1/app8/2
+      - privacy-act-1988:C2026C00227:sch1/app8/3
 
   # APP 9.3: the prescribed organisations, identifiers and circumstances in
   # which 9.1 and 9.2 allow adopting, using or disclosing a government related
