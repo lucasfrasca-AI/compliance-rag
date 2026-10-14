@@ -96,6 +96,21 @@ _PAYLOAD_KEYWORD_FIELDS = (
 _PAYLOAD_BOOL_FIELDS = ("withdrawn", "synthetic")
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
 
+_FUSED_LIMIT_FACTOR = 2
+"""How many times the caller's `limit` the fused query asks Qdrant for (#160).
+
+`search` prefetches `limit` candidates from each of two channels, so the list
+Qdrant fuses holds at most 2 x `limit`; the 2 is that number of channels, and a
+third prefetch needs this changed with it. Asked for exactly `limit`, Qdrant
+cuts that list itself, and when the candidates either side of the cut have
+equal RRF scores it keeps whichever it likes, differently from one call to the
+next (so the clause that reaches the model, and the recall@10 measured for it,
+changed between runs). Asked for the whole fused list there is nothing left
+for it to cut: the cut is made in `search`, after the list is put in the
+`RetrievalStore` order, and a tie at the cut keeps the lowest `chunk_id`. The
+price is the payload (clause text) of up to `limit` extra points, fetched and
+dropped."""
+
 _SCROLL_PAGE = 256
 """Points per scroll page when listing a version's chunk ids."""
 
@@ -621,16 +636,24 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     ),
                 ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=limit,
+                limit=limit * _FUSED_LIMIT_FACTOR,
                 with_payload=True,
             ),
         )
 
-        return RetrievalResult(
-            fused=tuple(
+        # The order is ours, not Qdrant's (`_FUSED_LIMIT_FACTOR`): score
+        # descending, `chunk_id` ascending on a tie, as the contract says and
+        # `FakeRetrievalStore` does, and only then the cut to `limit`.
+        fused = sorted(
+            (
                 self._payload_to_candidate(p.payload, score=p.score, channel=None)
                 for p in fused_hits.points
             ),
+            key=lambda c: (-c.score, c.chunk_id),
+        )[:limit]
+
+        return RetrievalResult(
+            fused=tuple(fused),
             per_channel={
                 Channel.DENSE: tuple(
                     self._payload_to_candidate(p.payload, score=p.score, channel=Channel.DENSE)

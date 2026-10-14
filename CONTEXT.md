@@ -48,7 +48,7 @@ Use these words exactly, in code, docs, commits and chat. If a concept isn't her
 - **Track A** — graph traversal from profile to applicable obligations. Deterministic, complete, unranked.
 - **Track B** — hybrid retrieval over chunks. Library law is filtered to the clauses Track A cites for obligations that apply or might (the **law scope**), by every channel; the tenant's own documents aren't law and aren't Track A's to scope. A retrieval without a profile must say so (`LawScope.unscoped(reason)`), never pass an empty filter (ADR-0030). Probabilistic, ranked.
 - **Channel** — one retrieval signal: dense (cosine), sparse (BM25), keyword (exact `clause_id`).
-- **Fusion** — RRF over channels inside Qdrant, producing the candidates the reranker scores: the top 20 (ADR-0022).
+- **Fusion** — RRF over channels inside Qdrant, producing the candidates the reranker scores: the top 20 (ADR-0022), ordered by score and, among equal scores, by `chunk_id` (#160).
 - **Rerank** — second-stage scoring of fused candidates to top 10. Default: the **reranker service** (cross-encoder on Cloud Run, Sydney). Alternative: **ColBERT rescoring** (late-interaction multivectors inside Qdrant).
 - **Router** — the single fixed decision: clause-ID regex → keyword channel, skip rerank; else full pipeline. The regex accepts a tenant-prefixed instrument id, so a policy clause ID is routed like any other.
 - **Scope** — which corpus partition a chunk belongs to: `public` (law), `tenant` (company policies), `user` (one person's private additions). Scope `public` implies the reserved tenant id `_public`; `tenant_id` always names an owner, never nobody.
