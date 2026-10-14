@@ -67,18 +67,31 @@ class VertexEmbedder(Embedder):
     """Dense vectors from `gemini-embedding-001` (`SERVICES.md`: Vertex AI
     Embeddings, 1536 dims)."""
 
-    def __init__(self, embed_api: _EmbedContentLike, *, model_name: str, dimensions: int) -> None:
+    def __init__(
+        self,
+        embed_api: _EmbedContentLike,
+        *,
+        model_name: str,
+        dimensions: int,
+        owner: object = None,
+    ) -> None:
+        """`owner` is whatever `embed_api` belongs to, held for as long as the
+        embedder lives: `google-genai`'s `Client` closes its HTTP clients when
+        it is garbage-collected, and `client.aio.models` alone doesn't keep it
+        alive (#144: the first call after a collection fails with "the client
+        has been closed")."""
         self._embed_api = embed_api
+        self._owner = owner
         self._model_name = model_name
         self._dimensions = dimensions
         self._tokens_embedded = 0
 
     @classmethod
     def from_settings(cls, settings: Settings) -> VertexEmbedder:
-        """The one place this module constructs a real Vertex client — never
-        exercised in tests, which inject `_EmbedContentLike` fakes instead
-        (`tests/test_vertex_embedder.py`). The location is the AU region
-        (`gcp_region`), never `global`."""
+        """The one place this module constructs a real Vertex client. Tests
+        inject `_EmbedContentLike` fakes instead (`tests/test_vertex_embedder.py`),
+        and replace `genai.Client` to prove the embedder keeps it alive. The
+        location is the AU region (`gcp_region`), never `global`."""
         from google import genai  # local import: only the real path needs it
 
         client = genai.Client(
@@ -91,6 +104,7 @@ class VertexEmbedder(Embedder):
             cast("_EmbedContentLike", client.aio.models),
             model_name=settings.vertex_embedding_model,
             dimensions=settings.vertex_embedding_dims,
+            owner=client,
         )
 
     @property
