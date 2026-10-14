@@ -1,6 +1,7 @@
 # ADR-0039 — A definition's closing words stay with it; a connector leads the paragraph it governs
 
-- Status: accepted
+- Status: accepted; extended to subsections with no definition by ADR-0041
+  (issue #186)
 - Date: 2026-10-14
 - Issue: #178 (part 1, the parser)
 - Relates to: ADR-0019 (anchors are synthesized, clause ids are what a citation carries)
@@ -66,9 +67,11 @@ knows which shape they are:
    always have (`s6c/1`, `sch1/app11/2`, `s8/2`). `s6/1/credit-reporting-body`
    is "credit reporting body means: that carries on a credit reporting
    business."
-3. **Outside a Definition nothing changes.** A `subsection2` in a subsection
-   with no definition still joins that subsection's text (`s8/2`, `s6e/1a`,
-   `sch1/app11/2`).
+3. **Closing words outside a Definition are unchanged.** A `subsection2` in a
+   subsection with no definition that no paragraph follows still joins that
+   subsection's text (`s8/2`, `s6e/1a`, `sch1/app11/2`). (A `subsection2`
+   *between* two paragraphs of such a subsection was left as it was in #178,
+   and is a connector: ADR-0041 gives it the same rule.)
 4. **The anchor stays on the paragraph's own `<p>`.** The connector's `<p>`
    sits directly above it and has no id of its own, as no closing words'
    `<p>` ever had. The stored HTML (`source.html`) is therefore byte-identical
@@ -153,4 +156,5 @@ shape, so it isn't guessed at.
   words still join the subsection's text. The clearest case is s7(1)
   ("… is a reference to: but does not include a reference to an act done …
   received from:"), whose (f)–(h) are exclusions that read as inclusions.
-  Tracked in #186.
+  Tracked in #186; ADR-0041 applies this ADR's rule to them, with one
+  exception that this ADR did not meet.
