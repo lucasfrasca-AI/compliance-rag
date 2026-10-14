@@ -44,7 +44,9 @@ from compliance_rag.corpus.models import (
     Chunk,
     ClauseRecord,
     DocumentClass,
+    Scope,
     check_document_class,
+    check_user_owner,
     instrument_tenant_prefix,
     parse_stable_id,
 )
@@ -74,15 +76,52 @@ def _check_payload(
     version_id: str,
 ) -> None:
     """Every chunk and clause belongs to exactly this version of this
-    tenant's instrument — checked before any store is touched."""
+    tenant's instrument — checked before any store is touched.
+
+    A user-scoped record names its owner, and a version has one owner
+    (ADR-0036). The models refuse an ownerless user-scoped record when they are
+    built, but `model_copy` skips validation, so the rule is checked again here
+    where a store is about to hold the record. One owner per version because a
+    version is retired, withdrawn and purged as a unit, by tenant and
+    instrument and never by owner: a version spanning two people's private
+    additions would let either one's removal reach the other's."""
     target = (instrument_id, version_id, tenant_id)
     for chunk in chunks:
         chunk_instrument, chunk_version, _ = parse_stable_id(chunk.clause_id)
         if (chunk_instrument, chunk_version, chunk.tenant_id) != target:
             raise ValueError(f"chunk {chunk.chunk_id!r} is not in {instrument_id}:{version_id}")
+        _check_owner(chunk.chunk_id, chunk.scope, chunk.user_id)
     for clause in clauses:
         if (clause.instrument_id, clause.version_id, clause.tenant_id) != target:
             raise ValueError(f"clause {clause.clause_id!r} is not in {instrument_id}:{version_id}")
+        _check_owner(clause.clause_id, clause.scope, clause.user_id)
+    owners = {(r.scope, r.user_id) for r in (*chunks, *clauses)}
+    if len(owners) > 1:
+        raise ValueError(
+            f"{instrument_id}:{version_id} spans more than one scope or owner: a version is one "
+            "document with one owner"
+        )
+
+
+def _check_owner(what: str, scope: Scope, user_id: str | None) -> None:
+    try:
+        check_user_owner(scope, user_id)
+    except ValueError as refused:
+        raise ValueError(f"{what!r}: {refused}") from None
+
+
+def _check_class_scope(
+    document_class: DocumentClass, chunks: tuple[Chunk, ...], clauses: tuple[ClauseRecord, ...]
+) -> None:
+    """An internal policy is the cached prefix of every member's answer (D-11),
+    so it can't hold one person's private additions (ADR-0036)."""
+    if document_class is DocumentClass.INTERNAL_POLICY and any(
+        r.scope is Scope.USER for r in (*chunks, *clauses)
+    ):
+        raise ValueError(
+            "an internal policy is read by every member of the tenant in the cached prefix, so "
+            "it can't hold user-scoped (private) text"
+        )
 
 
 def _in_force_from(chunks: tuple[Chunk, ...], effective_from: dt.date) -> tuple[Chunk, ...]:
@@ -138,7 +177,11 @@ class CorpusLifecycle:
         disagrees with the instrument's is refused before anything is written."""
         await self._check_class(tenant_id, instrument_id, document_class)
         chunks = self._admitted(
-            chunks, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+            chunks,
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            document_class=document_class,
         )
         if supersedes == version_id:
             raise ValueError("a version cannot supersede itself — that is replace-in-place")
@@ -177,7 +220,11 @@ class CorpusLifecycle:
         touched; `record_published_version` records the finished version."""
         await self._check_class(tenant_id, instrument_id, document_class)
         chunks = self._admitted(
-            chunks, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+            chunks,
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            document_class=document_class,
         )
         stored = await self._retrieval.version_chunk_ids(
             instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
@@ -233,13 +280,21 @@ class CorpusLifecycle:
             raise ValueError(f"{instrument_id} is {recorded.value}, not {document_class.value}")
 
     def _admitted(
-        self, chunks: tuple[Chunk, ...], *, instrument_id: str, tenant_id: str, version_id: str
+        self,
+        chunks: tuple[Chunk, ...],
+        *,
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        document_class: DocumentClass,
     ) -> tuple[Chunk, ...]:
-        """The payload checked, marked synthetic from the registry (never the
-        caller, #78) and allowed by the residency gate (ADR-0023)."""
+        """The payload checked, its scope allowed for its class (ADR-0036),
+        marked synthetic from the registry (never the caller, #78) and allowed
+        by the residency gate (ADR-0023)."""
         _check_payload(
             chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
+        _check_class_scope(document_class, chunks, ())
         chunks = self._synthetic_registry.mark(chunks)
         assert_upload_allowed(chunks, generation_region=self._generation_region)
         return chunks
@@ -377,6 +432,13 @@ class CorpusLifecycle:
         _check_payload(
             chunks, clauses, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
+        recorded = await self._ledger.document_class(
+            tenant_id=tenant_id, instrument_id=instrument_id
+        )
+        if recorded is not None:
+            # With no class recorded the instrument is no policy, so it is not
+            # in the cached prefix (the ledger lists the prefix by class).
+            _check_class_scope(recorded, chunks, clauses)
         chunks = self._synthetic_registry.mark(chunks)
         assert_upload_allowed(
             chunks,

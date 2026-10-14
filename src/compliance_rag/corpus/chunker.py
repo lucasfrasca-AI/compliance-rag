@@ -109,6 +109,7 @@ def chunk_clause(clause: ClauseRecord, *, count_tokens: Callable[[str], int]) ->
         text=text,
         scope=clause.scope,
         tenant_id=clause.tenant_id,
+        user_id=clause.user_id,
     )
 
 

@@ -45,7 +45,7 @@ from compliance_rag.corpus.models import (
     Scope,
     canonical_sha256,
 )
-from tests.conftest import ALL_LAW
+from tests.conftest import ALL_LAW, PUBLIC_AND_TENANT
 
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
@@ -160,7 +160,9 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     assert all(c.chunk_id != "c3" for c in result.fused)
 
     # D-04 / D-12: the router's only decision, and it returns the keyword channel.
-    hit = await store.lookup_clause(APP11, law=ALL_LAW, tenant_id="acme", as_of=TODAY)
+    hit = await store.lookup_clause(
+        APP11, law=ALL_LAW, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=TODAY
+    )
     assert hit is not None
     assert hit.channel is Channel.KEYWORD
     assert hit.clause_id == APP11
@@ -168,7 +170,11 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     # Cross-tenant lookup: acme can never look up beta's clause by ID either,
     # not just by ranked search.
     hit = await store.lookup_clause(
-        "acme-policy:v3:sec2/1", law=ALL_LAW, tenant_id="other-corp", as_of=TODAY
+        "acme-policy:v3:sec2/1",
+        law=ALL_LAW,
+        tenant_id="other-corp",
+        scopes=PUBLIC_AND_TENANT,
+        as_of=TODAY,
     )
     assert hit is None
 
@@ -206,7 +212,9 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     )
     assert "c3" in {c.chunk_id for c in own.fused}
     # ...and another tenant's view of the shared library is untouched.
-    still_public = await store.lookup_clause(APP11, law=ALL_LAW, tenant_id="_public", as_of=TODAY)
+    still_public = await store.lookup_clause(
+        APP11, law=ALL_LAW, tenant_id="_public", scopes=PUBLIC_AND_TENANT, as_of=TODAY
+    )
     assert still_public is not None
 
     # Resubscribing is another row, with nothing re-upserted: the same
@@ -214,7 +222,9 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     await ledger.subscribe(
         tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT, subscribed_by="contract-test"
     )
-    hit = await store.lookup_clause(APP11, law=ALL_LAW, tenant_id="acme", as_of=TODAY)
+    hit = await store.lookup_clause(
+        APP11, law=ALL_LAW, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=TODAY
+    )
     assert hit is not None
     assert hit.clause_id == APP11
 
@@ -236,7 +246,9 @@ async def _library_reach(store: RetrievalStore, *, tenant_id: str) -> dict[str, 
         return frozenset(c.chunk_id for c in candidates) & LIBRARY_CHUNK_IDS
 
     looked_up = [
-        await store.lookup_clause(clause_id, law=ALL_LAW, tenant_id=tenant_id, as_of=LATER)
+        await store.lookup_clause(
+            clause_id, law=ALL_LAW, tenant_id=tenant_id, scopes=PUBLIC_AND_TENANT, as_of=LATER
+        )
         for clause_id in (APP11, APP12)
     ]
     return {

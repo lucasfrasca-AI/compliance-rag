@@ -183,10 +183,12 @@ async def test_the_clause_store_is_read_back_in_full() -> None:
 
 async def test_a_clause_the_manifest_names_but_the_store_lacks_is_an_error() -> None:
     class LosesOne(FakeClauseStore):
-        async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
+        async def get_clause(
+            self, clause_id: str, *, tenant_id: str, user_id: str | None = None
+        ) -> ClauseRecord | None:
             if clause_id == LAW[2].clause_id:
                 return None
-            return await super().get_clause(clause_id, tenant_id=tenant_id)
+            return await super().get_clause(clause_id, tenant_id=tenant_id, user_id=user_id)
 
     store = LosesOne()
     for clause in LAW:
