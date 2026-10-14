@@ -190,6 +190,12 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
             return 0.0
         return len(q & t) / len(q)
 
+    def _score(self, channel: Channel, query: str, text: str) -> float:
+        """One channel's score for one chunk. Both channels use the same token
+        overlap, so the fake's channels rank alike; a test subclass overrides
+        this to make them differ, as real dense and sparse channels do (#160)."""
+        return self._overlap(query, text)
+
     def _visible(
         self,
         chunk: Chunk,
@@ -244,7 +250,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                     chunk_id=c.chunk_id,
                     clause_id=c.clause_id,
                     text=c.text,
-                    score=self._overlap(query, c.text),
+                    score=self._score(channel, query, c.text),
                     channel=channel,
                 )
                 for c in pool
