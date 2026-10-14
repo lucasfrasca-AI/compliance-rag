@@ -464,10 +464,6 @@ class TurnOutcome(StrEnum):
     """The answer couldn't be completed."""
 
     @property
-    def withheld(self) -> bool:
-        return self in (TurnOutcome.BLOCKED, TurnOutcome.UNCITED)
-
-    @property
     def failed(self) -> bool:
         return self in (
             TurnOutcome.RESIDENCY,

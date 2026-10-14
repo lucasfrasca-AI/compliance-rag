@@ -350,9 +350,12 @@ class PostgresLedgerStore(LedgerStore):
                     raise ValueError(f"chat {exchange.chat_id} belongs to another member")
                 async with conn.cursor() as cursor:
                     await cursor.executemany(
+                        # `clock_timestamp()`, not the default `now()`: that is when
+                        # the transaction began, before it waited for the lock, so
+                        # a chat's latest turn could carry the earlier time.
                         "INSERT INTO chat (tenant_id, chat_id, turn_index, user_id, role, content, "
-                        "outcome, citations, blocked, as_of, trace_id) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        "outcome, citations, blocked, as_of, trace_id, created_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
                         [
                             (
                                 turn.tenant_id,
@@ -380,7 +383,10 @@ class PostgresLedgerStore(LedgerStore):
                 f"tenant {exchange.tenant_id!r} isn't registered in the ledger"
             ) from exc
         except (psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation) as exc:
-            raise ValueError(f"chat turn refused: {exc.diag.message_primary}") from exc
+            # Not `from exc`: Postgres' message carries the failing row, which is
+            # the member's question and what they were shown, and a chain is
+            # what `log.exception` prints.
+            raise ValueError(f"chat turn refused: {exc.diag.message_primary}") from None
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         rows = await self._fetchall(

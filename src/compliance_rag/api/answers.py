@@ -61,6 +61,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request
@@ -81,9 +82,9 @@ from compliance_rag.adapters.interfaces import (
     TurnOutcome,
 )
 from compliance_rag.api.deps import (
-    CHAT_ID,
     EARLIEST,
     LATEST,
+    UUID4_HEX,
     Caller,
     CurrentCaller,
     counts,
@@ -95,6 +96,7 @@ from compliance_rag.assessment.coverage_report import cite
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
+from compliance_rag.corpus.models import ClauseRecord
 from compliance_rag.retrieval.pipeline import RetrievalTrace
 from compliance_rag.telemetry import current_trace_id
 
@@ -127,7 +129,7 @@ class Question(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: QuestionText
     as_of: dt.date | None = Field(default=None, ge=EARLIEST, le=LATEST)
-    chat_id: Annotated[str, StringConstraints(pattern=CHAT_ID)] | None = Field(
+    chat_id: Annotated[str, StringConstraints(pattern=UUID4_HEX)] | None = Field(
         default=None, description="Continue this chat; without one a new chat is started"
     )
 
@@ -151,6 +153,11 @@ def _retrieval_json(trace: RetrievalTrace) -> dict[str, object]:
     }
 
 
+def _verified_clauses(answer: Answer) -> tuple[ClauseRecord, ...]:
+    """The clauses a verified answer cites, as read from the clause store."""
+    return tuple(c.clause for c in answer.citations if c.clause is not None)
+
+
 def _shown(answer: Answer) -> ChatAnswer:
     """What the member is shown of an answer, and all of it that is kept: the
     verified text and its citations, or the ids of the citations that blocked
@@ -161,9 +168,7 @@ def _shown(answer: Answer) -> ChatAnswer:
             TurnOutcome.VERIFIED,
             text=answer.unverified_draft.answer,
             citations=tuple(
-                ChatCitation(c.clause.clause_id, c.clause.version_id)
-                for c in answer.citations
-                if c.clause is not None
+                ChatCitation(c.clause_id, c.version_id) for c in _verified_clauses(answer)
             ),
         )
     return ChatAnswer(
@@ -188,13 +193,12 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
         "text": shown.text,
         "citations": [
             {
-                "clause_id": c.clause.clause_id,
-                "cite": cite(c.clause.clause_id),
-                "version_id": c.clause.version_id,
-                "canonical_text": c.clause.canonical_text,
+                "clause_id": c.clause_id,
+                "cite": cite(c.clause_id),
+                "version_id": c.version_id,
+                "canonical_text": c.canonical_text,
             }
-            for c in answer.citations
-            if c.clause is not None
+            for c in _verified_clauses(answer)
         ],
     }
 
@@ -214,18 +218,16 @@ def _error_json(outcome: TurnOutcome, error: Exception) -> dict[str, object]:
     return MALFORMED if outcome is TurnOutcome.MALFORMED_GENERATION else FAILED
 
 
-class _Exchange:
-    """The two turns this request adds to its chat, written once: what the
-    member asked, and what they were shown for it (#162)."""
+@dataclass(frozen=True, slots=True)
+class _ChatRecorder:
+    """Writes the two turns this request adds to its chat: what the member
+    asked, and what they were shown for it (#162)."""
 
-    def __init__(
-        self, ledger: LedgerStore, who: Caller, chat_id: str, question: str, as_of: dt.date
-    ) -> None:
-        self.ledger = ledger
-        self.who = who
-        self.chat_id = chat_id
-        self.question = question
-        self.as_of = as_of
+    ledger: LedgerStore
+    who: Caller
+    chat_id: str
+    question: str
+    as_of: dt.date
 
     async def record(self, shown: ChatAnswer) -> None:
         await self.ledger.record_chat_exchange(
@@ -276,7 +278,7 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
         chat_id = body.chat_id
     else:
         raise HTTPException(404, "no such chat")
-    chat = _Exchange(services.ledger, who, chat_id, body.question, day)
+    chat = _ChatRecorder(services.ledger, who, chat_id, body.question, day)
 
     def staged(name: str, data: dict[str, object]) -> str:
         return event(name, {"chat_id": chat_id, **data})

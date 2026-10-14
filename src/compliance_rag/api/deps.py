@@ -109,9 +109,9 @@ async def current_caller(
 CurrentCaller = Annotated[Caller, Depends(current_caller)]
 """An endpoint's caller: a signed-in member, on the configured tenant."""
 
-CHAT_ID = r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$"
-"""What `uuid.uuid4().hex` makes, as for an assessment's id: the API makes a
-chat's id, so no other form is one."""
+UUID4_HEX = r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$"
+"""What `uuid.uuid4().hex` makes: the form of an id the API makes (an
+assessment's, a chat's), so no other form names one."""
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 EARLIEST, LATEST = dt.date(1901, 1, 1), dt.date(2199, 12, 31)

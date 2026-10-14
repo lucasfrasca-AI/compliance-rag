@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Path, Request
 
 from compliance_rag.adapters.interfaces import ChatCitation, ChatTurn, TurnOutcome
 from compliance_rag.api.answers import WITHHELD
-from compliance_rag.api.deps import CHAT_ID, CurrentCaller, services_of
+from compliance_rag.api.deps import UUID4_HEX, CurrentCaller, services_of
 from compliance_rag.assessment.coverage_report import cite
 
 router = APIRouter(prefix="/v1")
@@ -76,7 +76,7 @@ async def list_chats(request: Request, who: CurrentCaller) -> dict[str, object]:
 
 @router.get("/chats/{chat_id}")
 async def get_chat(
-    request: Request, who: CurrentCaller, chat_id: Annotated[str, Path(pattern=CHAT_ID)]
+    request: Request, who: CurrentCaller, chat_id: Annotated[str, Path(pattern=UUID4_HEX)]
 ) -> dict[str, object]:
     turns = await services_of(request).ledger.chat_turns(who.tenant_id, who.member.uid, chat_id)
     if not turns:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import traceback
 import uuid
 from collections.abc import AsyncIterator
 from urllib.parse import urlparse
@@ -134,8 +135,13 @@ async def test_a_withheld_answer_carrying_text_is_refused_by_the_database_with_i
     await ledger.put_profile(Profile("acme"))
     leaked = ChatAnswer(TurnOutcome.UNCITED)
     object.__setattr__(leaked, "text", MODEL_PROSE)  # past the guard the type gives
-    with pytest.raises(ValueError, match="chat turn refused"):
+    with pytest.raises(ValueError, match="chat turn refused") as refused:
         await ledger.record_chat_exchange(an_exchange("c1", answer=leaked))
+    # Postgres' own error carries the failing row (the question, the member,
+    # the text). `log.exception` prints the whole chain, so the chain must not
+    # reach it: a member's words don't go to the logs.
+    chain = "".join(traceback.format_exception(refused.value))
+    assert MODEL_PROSE not in chain and "uid-1" not in chain and "Failing row" not in chain
     assert await ledger.chat_turns("acme", "uid-1", "c1") == ()
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         cursor = await conn.execute("SELECT count(*) FROM chat")

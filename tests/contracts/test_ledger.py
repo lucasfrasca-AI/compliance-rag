@@ -619,27 +619,6 @@ async def assert_chat_contract(ledger: LedgerStore) -> None:
     assert (await turns("chat-1"), await ledger.chats("acme", "uid-1")) == before
     assert await turns("chat-new") == ()
     assert await turns("chat-1", user_id="uid-2") == ()
-    # What a turn may hold is fixed when the answer is built (ADR-0003): a
-    # withheld or failed answer can't carry the model's text, and a verified
-    # one must carry its citations.
-    for build, why in (
-        (lambda: ChatAnswer(TurnOutcome.BLOCKED, MODEL_PROSE, (), (APP12,)), "holds no text"),
-        (lambda: ChatAnswer(TurnOutcome.UNCITED, MODEL_PROSE), "holds no text"),
-        (lambda: ChatAnswer(TurnOutcome.INTERNAL, MODEL_PROSE), "holds no text"),
-        (lambda: ChatAnswer(TurnOutcome.UNCITED, None, VERIFIED.citations), "holds no text"),
-        (lambda: ChatAnswer(TurnOutcome.BLOCKED), "names the citations"),
-        (lambda: ChatAnswer(TurnOutcome.UNCITED, blocked=(APP12,)), "names the citations"),
-        (lambda: ChatAnswer(TurnOutcome.BLOCKED, blocked=(MODEL_PROSE,)), "stable clause ID"),
-        (lambda: ChatAnswer(TurnOutcome.VERIFIED, "text"), "text and citations"),
-        (lambda: ChatAnswer(TurnOutcome.VERIFIED, " ", VERIFIED.citations), "text and citations"),
-        (
-            lambda: ChatAnswer(TurnOutcome.VERIFIED, "t", VERIFIED.citations, (APP12,)),
-            "none blocked",
-        ),
-        (lambda: ChatCitation(APP11, "v9"), "not a clause of version v9"),
-    ):
-        with pytest.raises(ValueError, match=why):
-            build()
 
     # ---- a member's list: theirs only, the chat with the latest turn first
     assert [c.chat_id for c in await ledger.chats("acme", "uid-1")] == ["failed", "chat-1"]
@@ -674,7 +653,74 @@ async def assert_chat_contract(ledger: LedgerStore) -> None:
         assert (
             question.trace_id == answer.trace_id and question.content == f"q{question.trace_id[0]}"
         )
+    # and recorded in that order too: a chat's latest turn is the one numbered
+    # last, so a list ordered by recording time agrees with the turns
+    stamps = [t.created_at for t in racing if t.created_at]
+    assert len(stamps) == 8 and stamps == sorted(stamps)
 
 
 async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:
     await assert_chat_contract(FakeLedgerStore())
+
+
+@pytest.mark.parametrize(
+    ("build", "why"),
+    [
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.BLOCKED, MODEL_PROSE, (), (APP12,)),
+            "holds no text",
+            id="blocked-with-text",
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.UNCITED, MODEL_PROSE), "holds no text", id="uncited-text"
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.INTERNAL, MODEL_PROSE), "holds no text", id="error-text"
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.UNCITED, None, VERIFIED.citations),
+            "holds no text",
+            id="withheld-with-citations",
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.BLOCKED), "names the citations", id="blocked-0"
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.UNCITED, blocked=(APP12,)),
+            "names the citations",
+            id="uncited-names-blocked",
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.BLOCKED, blocked=(MODEL_PROSE,)),
+            "stable clause ID",
+            id="blocked-id-is-prose",
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.VERIFIED, "text"),
+            "text and citations",
+            id="verified-uncited",
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.VERIFIED, " ", VERIFIED.citations),
+            "text and citations",
+            id="verified-blank",
+        ),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.VERIFIED, "t", VERIFIED.citations, (APP12,)),
+            "none blocked",
+            id="verified-and-blocked",
+        ),
+        pytest.param(
+            lambda: ChatCitation(APP11, "v9"), "not a clause of version v9", id="wrong-version"
+        ),
+    ],
+)
+def test_what_an_answer_turn_may_hold_is_fixed_when_the_answer_is_built(
+    build: Callable[[], object], why: str
+) -> None:
+    """ADR-0003: a withheld or failed answer can't carry the model's text, and
+    a verified one must carry its citations. No store is ever handed one that
+    does otherwise, whichever store it is: this is the type's, not the
+    ledger's, so it isn't part of the shared contract."""
+    with pytest.raises(ValueError, match=why):
+        build()
