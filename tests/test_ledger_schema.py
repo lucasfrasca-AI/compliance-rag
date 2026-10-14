@@ -722,9 +722,13 @@ def test_an_assessment_names_both_shas_and_may_name_no_tag(
         pytest.param({"mapping_sha": "main"}, id="a-name-not-a-sha"),
         pytest.param({"corpus_version": ""}, id="blank-corpus-tag"),
         pytest.param({"mapping_version": "  "}, id="blank-mapping-tag"),
+        pytest.param({"trace_id": ""}, id="no-trace-id"),
+        pytest.param({"trace_id": "  "}, id="blank-trace-id"),
+        pytest.param({"user_id": ""}, id="empty-user"),
+        pytest.param({"user_id": " "}, id="blank-user"),
     ],
 )
-def test_an_assessment_without_full_shas_or_with_a_blank_tag_is_refused(
+def test_an_assessment_without_full_shas_a_trace_or_a_real_user_is_refused(
     conn: psycopg.Connection[tuple[object, ...]], override: dict[str, object]
 ) -> None:
     _insert_tenant(conn, "acme")
@@ -732,12 +736,40 @@ def test_an_assessment_without_full_shas_or_with_a_blank_tag_is_refused(
         _versioned_assessment(conn, override)
 
 
-def test_the_both_shas_rule_is_enforced_on_new_rows_without_validating_old_ones(
+def test_an_assessment_may_name_a_user_or_none(
     conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """Nullable: an assessment not made for a member has nobody to name."""
+    _insert_tenant(conn, "acme")
+    _versioned_assessment(conn, {"assessment_id": "by-a-member", "user_id": "lead@acme.example"})
+    _versioned_assessment(conn, {"assessment_id": "by-nobody", "user_id": None})
+
+
+@pytest.mark.parametrize(
+    "constraint",
+    ["assessment_names_both_commits", "assessment_trace_id", "assessment_user_id"],
+)
+def test_the_rules_for_new_rows_are_enforced_without_validating_old_ones(
+    conn: psycopg.Connection[tuple[object, ...]], constraint: str
 ) -> None:
     """Added NOT VALID: rows from before #153 (tests only) aren't rejected,
     and every new row is."""
     row = conn.execute(
-        "SELECT convalidated FROM pg_constraint WHERE conname = 'assessment_names_both_commits'"
+        "SELECT convalidated FROM pg_constraint WHERE conrelid = 'assessment'::regclass "
+        "AND conname = %s",
+        (constraint,),
     ).fetchone()
     assert row == (False,)
+
+
+@pytest.mark.parametrize("column", ["corpus_version", "mapping_version"])
+def test_a_null_version_is_documented_as_untagged(
+    conn: psycopg.Connection[tuple[object, ...]], column: str
+) -> None:
+    row = conn.execute(
+        "SELECT col_description('assessment'::regclass, attnum) FROM pg_attribute "
+        "WHERE attrelid = 'assessment'::regclass AND attname = %s",
+        (column,),
+    ).fetchone()
+    assert row is not None and isinstance(row[0], str)
+    assert "NULL means untagged" in row[0] and "the SHA alone" in row[0]

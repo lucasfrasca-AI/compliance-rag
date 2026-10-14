@@ -28,9 +28,12 @@ Correcting a loaded item in place changes a node, which D-05 forbids: such a
 load is refused before any write, naming the item. A change of meaning is a
 new id with `supersedes` (#93 Q4).
 
-**Recording a load** (`recorded_load`, #153): a loader run is wrapped so the
-graph records which corpus or mapping version it wrote, from which commit,
-and whether it finished. A load that raised stays unfinished.
+**Recording a load** (`recorded_load`, #153): each loader is split into its
+checks (`check_instrument_version`, `check_mappings`: every refusal that
+precedes the first write) and its writes, so a caller can run the checks, then
+record the load, then write. The graph records which corpus or mapping version
+was written, from which commit, and whether it finished. A load refused by its
+checks leaves no record; one that raised after its first write stays open.
 """
 
 from __future__ import annotations
@@ -119,32 +122,37 @@ async def _clauses_in_force(graph: GraphAdmin, version: NodeRef, as_of: dt.date)
     return [NodeRef("Clause", str(row.node["stable_id"])) for row in await graph.read(query)]
 
 
-async def load_instrument_version(
+@dataclass(frozen=True, slots=True)
+class CheckedVersion:
+    """An instrument version that passed every check that reads the graph, and
+    what the write needs from them: ready to write."""
+
+    instrument_id: str
+    version_id: str
+    old_clauses: tuple[NodeRef, ...]
+    """The clauses of the version it supersedes, in force the day before."""
+
+
+async def check_instrument_version(
     graph: GraphAdmin,
     clauses: tuple[ClauseRecord, ...],
     *,
-    instrument_since: dt.date,
     effective: dt.date,
     supersedes: str | None,
-) -> LoadReport:
-    """One instrument version's structure. `instrument_since` is when the
-    instrument itself commenced — the same on every load, since the
-    `Instrument` node is immutable. `effective` is when this version came
-    into force; `supersedes` names the version it replaces, retired then."""
+) -> CheckedVersion:
+    """Everything that can refuse `load_instrument_version`, before its first
+    write: the clauses make one library-law version, and the version it
+    supersedes is in force the day before (or already retired on `effective`,
+    for a re-run — then it and its clauses are found in force on the day
+    before, and retiring them to the same date again is a no-op). A load a
+    caller records (`recorded_load`) is begun after this, so a refusal leaves
+    no record."""
     instrument_id, version_id = _validate_version(clauses, supersedes)
-    instrument = NodeRef("Instrument", instrument_id)
-    version = version_ref(instrument_id, version_id)
-    in_force = Bitemporal(valid_from=effective)
-
+    old_clauses: list[NodeRef] = []
     with telemetry.span(
-        "graph_loader.load_instrument_version",
+        "graph_loader.check_instrument_version",
         **{"graph.instrument_id": instrument_id, "graph.version_id": version_id},
-    ) as span:
-        # Reads first: the superseded version must be in force the day before
-        # (or already retired on `effective`, for a re-run — then it and its
-        # clauses are found in force on the day before, and retiring them to
-        # the same date again is a no-op).
-        old_clauses: list[NodeRef] = []
+    ):
         if supersedes is not None:
             old = version_ref(instrument_id, supersedes)
             day_before = effective - dt.timedelta(days=1)
@@ -156,7 +164,57 @@ async def load_instrument_version(
                     f"{old.stable_id} is not in force on {day_before}: nothing to supersede"
                 )
             old_clauses = await _clauses_in_force(graph, old, day_before)
+    return CheckedVersion(instrument_id, version_id, tuple(old_clauses))
 
+
+async def load_instrument_version(
+    graph: GraphAdmin,
+    clauses: tuple[ClauseRecord, ...],
+    *,
+    instrument_since: dt.date,
+    effective: dt.date,
+    supersedes: str | None,
+) -> LoadReport:
+    """One instrument version's structure. `instrument_since` is when the
+    instrument itself commenced — the same on every load, since the
+    `Instrument` node is immutable. `effective` is when this version came
+    into force; `supersedes` names the version it replaces, retired then.
+    The checks, then the writes; a caller that records the load runs them
+    apart (`check_instrument_version`, `write_instrument_version`)."""
+    checked = await check_instrument_version(
+        graph, clauses, effective=effective, supersedes=supersedes
+    )
+    return await write_instrument_version(
+        graph,
+        clauses,
+        checked,
+        instrument_since=instrument_since,
+        effective=effective,
+        supersedes=supersedes,
+    )
+
+
+async def write_instrument_version(
+    graph: GraphAdmin,
+    clauses: tuple[ClauseRecord, ...],
+    checked: CheckedVersion,
+    *,
+    instrument_since: dt.date,
+    effective: dt.date,
+    supersedes: str | None,
+) -> LoadReport:
+    """The writes of `load_instrument_version`, once `check_instrument_version`
+    has passed."""
+    instrument_id, version_id = checked.instrument_id, checked.version_id
+    old_clauses = checked.old_clauses
+    instrument = NodeRef("Instrument", instrument_id)
+    version = version_ref(instrument_id, version_id)
+    in_force = Bitemporal(valid_from=effective)
+
+    with telemetry.span(
+        "graph_loader.load_instrument_version",
+        **{"graph.instrument_id": instrument_id, "graph.version_id": version_id},
+    ) as span:
         created_nodes = created_edges = 0
         created_nodes += await graph.put_node(instrument, Bitemporal(valid_from=instrument_since))
         version_properties = {"instrument_id": instrument_id, "version_id": version_id}
@@ -168,7 +226,7 @@ async def load_instrument_version(
                 new=version,
                 effective=effective,
                 properties=version_properties,
-                retire_with=tuple(old_clauses),
+                retire_with=old_clauses,
             )
         created_edges += await graph.put_edge("VERSION_OF", version, instrument)
         created_nodes += await graph.put_nodes(
@@ -436,23 +494,20 @@ class CorrectionAcknowledgement:
     reason: str
 
 
-async def load_mappings(
+async def check_mappings(
     graph: GraphAdmin,
     mappings: MappingSet,
     *,
     today: dt.date | None = None,
     corrections: CorrectionAcknowledgement | None = None,
-) -> LoadReport:
-    """Every node and edge the mapping set describes, after checking the
-    graph: clauses present and in force, loaded items unchanged in meaning.
-    A change of wording to a loaded item is applied in place only when
-    `corrections` acknowledges exactly the items it touches (ADR-0031).
-    Then nodes (every kind, batched), then edges. Tenant policy mappings are
-    validated and reported, never written (D-09, D-14)."""
-    attributes = {
-        f"graph.{label.lower()}s": len(items) for label, items in mappings.by_label.items()
-    }
-    with telemetry.span("graph_loader.load_mappings", **attributes) as span:
+) -> tuple[CorrectionWrite, ...]:
+    """Everything that can refuse `load_mappings`, before its first write:
+    clauses present and in force, loaded items unchanged in meaning. A change
+    of wording to a loaded item is returned, to be applied in place only if
+    `corrections` acknowledges exactly the items it touches (ADR-0031). A load
+    a caller records (`recorded_load`) is begun after this, so a refusal
+    leaves no record."""
+    with telemetry.span("graph_loader.check_mappings") as span:
         await _check_grounding(graph, mappings, today or dt.date.today())
         found = await _check_unchanged(graph, mappings)
         touched = frozenset(c.node.stable_id for c in found)
@@ -463,9 +518,42 @@ async def load_mappings(
                 f"applied only when acknowledged exactly, with who and why (ADR-0031); "
                 f"acknowledged {sorted(acknowledged)}"
             )
+        span.set_attribute("graph.corrected", sorted(touched))
+        return found
+
+
+async def load_mappings(
+    graph: GraphAdmin,
+    mappings: MappingSet,
+    *,
+    today: dt.date | None = None,
+    corrections: CorrectionAcknowledgement | None = None,
+) -> LoadReport:
+    """Every node and edge the mapping set describes, after checking the
+    graph (`check_mappings`). Then nodes (every kind, batched), then edges.
+    Tenant policy mappings are validated and reported, never written (D-09,
+    D-14). A caller that records the load runs the checks and the writes apart
+    (`check_mappings`, `write_mappings`)."""
+    found = await check_mappings(graph, mappings, today=today, corrections=corrections)
+    return await write_mappings(graph, mappings, found, corrections)
+
+
+async def write_mappings(
+    graph: GraphAdmin,
+    mappings: MappingSet,
+    found: tuple[CorrectionWrite, ...],
+    corrections: CorrectionAcknowledgement | None,
+) -> LoadReport:
+    """The writes of `load_mappings`, once `check_mappings` has passed and
+    returned `found`: the acknowledged wording corrections, in place, in one
+    transaction; then the nodes; then the edges."""
+    attributes = {
+        f"graph.{label.lower()}s": len(items) for label, items in mappings.by_label.items()
+    }
+    with telemetry.span("graph_loader.load_mappings", **attributes) as span:
         if corrections is not None:
             await graph.correct(found, by=corrections.by, reason=corrections.reason)
-        span.set_attribute("graph.corrected", sorted(touched))
+        span.set_attribute("graph.corrected", sorted(c.node.stable_id for c in found))
         created_nodes = await graph.put_nodes(
             [
                 NodeWrite(
@@ -495,18 +583,22 @@ def _record(span: Span, report: LoadReport) -> None:
 
 
 @asynccontextmanager
-async def recorded_load(graph: GraphAdmin, version: SourceVersion) -> AsyncGenerator[str]:
+async def recorded_load(graph: GraphAdmin, version: SourceVersion) -> AsyncGenerator[None]:
     """Stamp a load with the version it loads (#153, ADR-0034): `begin_load`
-    before the body, `finish_load` only if the body returns. A body that
-    raises leaves the load unfinished, deliberately: the graph may be
+    before the body, `finish_load` only if the body returns. Begun after the
+    loader's own checks (`check_mappings`, `check_instrument_version`), so a
+    load refused before its first write leaves no record at all. A body that
+    raises after that leaves the load open, deliberately: the graph may be
     part-written, so `loaded_sources()` reports it as loading and nothing is
-    assessed against it until a load of that kind finishes. Yields the load's
-    id.
+    assessed against it until it is abandoned (`abandon_load`) and a load of
+    that kind finishes. Loads of a kind are serialised: a second can't begin
+    while one is open.
 
+        checked = await check_mappings(graph, mappings, today=today)
         async with recorded_load(graph, version):
-            await load_mappings(graph, mappings)
+            await write_mappings(graph, mappings, checked, None)
     """
     with telemetry.span("graph_loader.recorded_load", **{"graph.load_version": version.described}):
         load_id = await graph.begin_load(version)
-        yield load_id
+        yield
         await graph.finish_load(load_id)

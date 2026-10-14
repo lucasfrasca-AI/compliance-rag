@@ -44,6 +44,7 @@ from compliance_rag.api.deps import (
     CurrentCaller,
     counts,
     coverage_on,
+    outcome_counts,
     services_of,
     today,
 )
@@ -51,7 +52,6 @@ from compliance_rag.assessment.coverage import (
     Coverage,
     CoverageRow,
     ObligationCoverage,
-    Outcome,
     Question,
     question_json,
 )
@@ -316,7 +316,7 @@ def _recorded_json(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> d
         "corpus_version": _version_json(record.corpus),
         "mapping_version": _version_json(record.mapping),
         "recorded_by": record.user_id,
-        "counts": {o.value: sum(1 for r in rows if r.outcome is o) for o in Outcome},
+        "counts": outcome_counts(r.outcome for r in rows),
         "obligations": [_row_json(r) for r in rows],
     }
 
@@ -328,9 +328,10 @@ def _held(sources: LoadedSources) -> tuple[SourceVersion, SourceVersion]:
     if unfinished:
         raise HTTPException(
             503,
-            f"a {' and a '.join(unfinished)} load hasn't finished (it is running, or it failed): "
-            "nothing is assessed against a graph that may be part-written. Try again when it "
-            "has, or re-run the loader",
+            f"a {' and a '.join(unfinished)} load hasn't finished (it is running, or it failed "
+            "and hasn't been abandoned): nothing is assessed against a graph that may be "
+            "part-written. Try again when it has, or have the operator abandon it (the loader's "
+            "--abandon) and load again",
             headers={"Retry-After": RETRY_AFTER},
         )
     corpus, mapping = sources.corpus.version, sources.mapping.version
@@ -379,16 +380,7 @@ async def record_coverage(
         as_of=day,
         trace_id=current_trace_id(),
     )
-    await services.ledger.record_coverage_assessment(
-        tenant_id=record.tenant_id,
-        assessment_id=record.assessment_id,
-        user_id=record.user_id,
-        corpus=record.corpus,
-        mapping=record.mapping,
-        as_of=record.as_of,
-        trace_id=record.trace_id,
-        rows=rows,
-    )
+    await services.ledger.record_coverage_assessment(record, rows)
     current = trace.get_current_span()
     current.set_attribute("assessment.id", record.assessment_id)
     current.set_attribute("assessment.corpus_version", corpus.described)

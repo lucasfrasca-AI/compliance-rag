@@ -22,6 +22,11 @@ that reason: a string derived from the coverage itself varied with the tenant's
 evidence, and (ADR-0031) a wording correction keeps an id but changes what is
 recorded, which only git recovers.
 
+#153 asked the human two things: how the deployed stores carry the tags they
+were loaded from, and what happens to an assessment requested while a load is in
+progress, including whether the API refuses to record when the stores disagree
+with what is configured.
+
 ## Decision
 
 **The human's decision (2026-10-14, verbatim):**
@@ -36,75 +41,123 @@ recorded, which only git recovers.
 recorded; the tag is the name it was known by, or absent. The assessment row
 holds `corpus_version` and `mapping_version` (the tags, NULL for untagged) and
 `corpus_sha` and `mapping_sha` (always). Ledger migration `0013` makes the tag
-columns nullable, checks both SHAs are 40 lowercase hex characters, and
-requires both on every new row. That last check is `NOT VALID`: rows written
-before it (tests only; no deployed ledger holds one) aren't rejected, and every
-new row is. The adapter refuses to read such a row back, rather than guess.
+columns nullable and says so in a column comment, checks both SHAs are 40
+lowercase hex characters, and requires both on every new row, along with a
+non-empty `trace_id` and a `user_id` that is NULL or non-blank. Those last
+checks are `NOT VALID`: rows written before them (tests only; no deployed
+ledger holds one) aren't rejected, and every new row is. The adapter refuses to
+read such a row back, rather than guess.
 
-**2. Resolution is from git, at load time, by content (the human's mechanism;
+**2. A version is a tag over the data and the code that builds the graph from
+it.** The corpus is more than the selection manifest in `corpus/instruments/`:
+its clauses come from the compilation pinned by `SOURCE_SHA256` in
+`scripts/ingest_compilation.py`, parsed by `src/compliance_rag/corpus/` and
+loaded by `scripts/load_graph_structure.py`. The mappings are more than the
+YAML: `src/compliance_rag/graph/` compiles and loads it. A parser fix changes
+what the graph holds with no manifest touched, and checking out a recorded SHA
+would otherwise re-parse differently. So each kind is a set of paths
+(`SOURCE_PATHS` in `adapters/git_source_versions.py`, which is where the
+repository's layout is known, not in the interfaces):
+
+- corpus: `corpus/instruments`, `src/compliance_rag/corpus`,
+  `scripts/ingest_compilation.py`, `scripts/load_graph_structure.py`;
+- mapping: `corpus/mappings`, `src/compliance_rag/graph`.
+
+This was found in review, not in the human's decision, and is a widening of
+`CONTEXT.md`'s definition, which now says so.
+
+**3. Resolution is from git, at load time, by content (the human's mechanism;
 the matching rule is the model's).** `resolve_source_version(kind, repo=...)`
 runs in the loader before it writes anything:
 
 - the candidates are the tags named with the kind's prefix, newest first by
   creation date;
-- the first whose commit holds the same tree for the kind's path as `HEAD` does
-  wins, and the version is that tag with the commit it points at (an annotated
-  tag is peeled to its commit);
+- the first whose commit holds the same tree (or blob) as `HEAD` for *every*
+  one of the kind's paths wins, and the version is that tag with the commit it
+  points at (an annotated tag is peeled to its commit);
 - with none, the version is `HEAD`'s commit, untagged.
 
-The match is on the path's *content*, not on `HEAD`. `CONTEXT.md` defines the
-version as a tag over that path, so a commit that changes only code leaves the
-version where it was; comparing `HEAD` to the tag's commit would call every
-code change a new, untagged version. A tag that moved resolves to where it
-points now, and what a load already recorded doesn't change: that is the reason
-the SHA is kept.
+The match is on the paths' *content*, not on `HEAD`. A commit that changes
+nothing under them, an API change say, leaves the version where it was;
+comparing `HEAD` to the tag's commit would call every such commit a new,
+untagged version. A tag that moved resolves to where it points now, and what a
+load already recorded doesn't change: that is the reason the SHA is kept.
 
-**3. The tag names are a convention: `corpus-<version>` and
+**4. The tag names are a convention: `corpus-<version>` and
 `mappings-<version>`.** The prefix is how the two kinds are told apart, so
 `mappings-2026.10.14` can never name a corpus.
 
-**4. A path with uncommitted changes is refused (the model's call).** Staged,
-unstaged and untracked changes under the path all count; changes elsewhere
-don't. The content a load would write is then in no commit, so no SHA could name
-it, and recording `HEAD`'s would say something false. Both loaders check this
-before touching the graph, as `load_mappings` already refuses a file awaiting
-review. This is the one case in which "record the SHA alone rather than
-refusing" doesn't apply: that sentence is about a missing tag, and here there
-is nothing to record.
+**5. Anything uncommitted under the paths is refused (the model's call).**
+Staged, unstaged and untracked changes all count, whatever
+`status.showUntrackedFiles` says, and so do files git ignores: a gitignored
+`corpus/mappings/draft.yaml` is loaded all the same by the `*.yaml` glob. Files
+git has been told to stop watching (`assume-unchanged`, `skip-worktree`) count
+too, since a change to one shows nowhere. The content a load would write is then
+in no commit, so no SHA could name it, and recording `HEAD`'s would say
+something false. Both loaders check this before touching the graph, as
+`load_mappings` already refuses a file awaiting review. This is the one case in
+which "record the SHA alone rather than refusing" doesn't apply: that sentence
+is about a missing tag, and here there is nothing true to record.
 
-**5. The graph records each load, in the graph.** `begin_load(version)` creates
+Three kinds of untracked or ignored file are not uncommitted source and are let
+through (`NOT_SOURCE`): bytecode (`__pycache__/`, `*.pyc`), Finder's
+`.DS_Store`, and the raw compilations in `corpus/instruments/**/raw/`, which are
+fetched and not committed (`.gitignore`) and pinned by a sha256 the ingest
+checks, so they cannot change what is loaded. Without the first two every load
+would be refused on any machine that had run the code. The list is closed and in
+one place; anything else untracked or ignored under a path refuses the load.
+
+**6. The graph records each load, in the graph.** `begin_load(version)` creates
 a `Load` node (`load_id`, `kind`, `tag` if any, `sha`, `started_at`) and
-`finish_load(load_id)` sets `finished_at`, once; an unknown or already finished
+`finish_load(load_id)` sets `finished_at`, once; an unknown or already closed
 load is refused. Like the law the loads write, the record is append-only, and
 `Load` is metadata: not in the bitemporal vocabulary, no valid time, never
-retired, unreachable by the query builder. `loaded_sources()` returns, for each
-kind, the latest *finished* load's version (latest by when it started) and
-`loading`: a load of that kind started after it and hasn't finished.
+retired, unreachable by the query builder (`D-05` says so). Its times are the
+Neo4j server's (`datetime()`), never the caller's, so a client with a wrong
+clock can't reorder history. `loaded_sources()` returns, for each kind, the
+latest *finished* load's version (latest by when it started) and `loading`: a
+load of that kind is open, meaning begun and neither finished nor abandoned.
 
 It lives in the graph, not the ledger, because it describes the graph. The graph
 is derived and can be rebuilt from the repository (D-09); a ledger row saying
 what the graph held would survive the rebuild and then lie. And the loaders
 have Aura credentials but no reason to hold the ledger's.
 
-**6. A load that doesn't finish blocks assessments (the model's call).**
-`recorded_load(graph, version)` wraps a loader's writes: `begin_load` before,
-`finish_load` only if the body returns. A body that raises leaves the load
-unfinished, so `loading` stays true, as the graph may be part-written, until a
-later load of that kind finishes. It also holds for a load refused before its
-first write, which the wrapper can't tell from one that died halfway; the
-cost is that a refused load must be re-run, once its refusal is dealt with,
-before assessments resume. Erring toward refusing is the point.
+**7. Loads of a kind are serialised, and a failed one is cleared by a person
+(the model's call).** Two loads running at once make "the latest" meaningless:
+B can finish while A is still writing, and the graph would report B, with
+`loading` false, over a half-written A. So `begin_load` is refused while any
+load of that kind is open, in the same transaction that would write it, and an
+open load holds its kind through a property under a uniqueness constraint
+(`schema.cypher`), so two that begin in the same instant can't both succeed
+either.
 
-**7. The API records through one ledger call.**
+A load that fails after it began stays open, so it blocks the next one and
+every assessment. It is closed by `abandon_load(load_id, by, reason)`, which
+records who, why and when, and by `--abandon LOAD_ID --by NAME --reason WHY` on
+either loader script. It is never closed by time: whether a quiet load has
+failed or is slow is a person's call. Abandoning doesn't make a load a finished
+one, so the version the graph holds is unchanged, and the next load may begin.
+The refusal that blocks a loader names the open load and the option.
+
+**8. A load refused before it writes leaves no record (the model's call).** Each
+loader is split into its checks (`check_mappings`, `check_instrument_version`:
+every refusal that precedes its first write, including every D-05 refusal) and
+its writes, and the scripts run the checks, then `recorded_load`, then the
+writes. A routine refusal, an unacknowledged wording change say, is then not an
+outage of the assessment endpoint. A load that raises after its first write
+stays open (point 7).
+
+**9. The API records through one ledger call.**
 `POST /v1/coverage` (`{as_of?}`; nothing else, in particular no version)
 reads `loaded_sources()`, computes the coverage on the tenant's evidence, reads
-`loaded_sources()` again, and records the assessment and every obligation's
-row in one transaction (`LedgerStore.record_coverage_assessment`; a refused row
-leaves no assessment, which two separate calls could not promise), as the
-member (`user_id` is their email) and with the request's `trace_id`.
+`loaded_sources()` again, and records the assessment and every obligation's row
+in one transaction (`LedgerStore.record_coverage_assessment(record, rows)`; a
+refused row leaves no assessment, which two separate calls could not promise),
+as the member (`user_id` is their email) and with the request's `trace_id`.
 
-- Either kind with no finished load, or either unfinished: **503**. The first
-  names the loaders to run; the second adds `Retry-After`.
+- Either kind with no finished load: **503** naming the loaders to run. Either
+  kind with an open load: **503** with `Retry-After`.
 - The second read differing from the first, because a load started or
   finished meanwhile: **503**, nothing recorded. The coverage may mix two
   versions.
@@ -113,18 +166,29 @@ member (`user_id` is their email) and with the request's `trace_id`.
 `{tag, sha, untagged}`. An id that isn't a uuid4 is a 422; another tenant's, or
 an unknown one, is a 404.
 
-**8. Only the graph records loads, for now.** The corpus bucket (ingest) and
-Qdrant (embed and upsert) loaders record nothing. Nothing records an *answer*
-as an assessment yet, so the one thing an assessment is computed from, Track A
-over the graph, is the one source whose version is recorded. When answers are
-recorded, whether the bucket and the vector store record loads too is a
-decision for then.
+**10. #153's second question, in its own words.** There is no configured pin:
+`CORPUS_VERSION` and `MAPPING_VERSION` do not exist, and nothing loaded is
+checked against one. That was the issue's second option, and the human chose
+the first: the loaders write what they loaded into the store, and the API reads
+it. So an assessment requested while a load is in progress, or after one failed
+and wasn't abandoned, is refused with a 503 (point 9), and there is nothing
+configured for the stores to disagree with. What the API records is what the
+graph says it holds.
 
-**9. What the ledger doesn't keep, the read-back doesn't show.** `coverage`
+Nothing compares the graph with the corpus bucket or with Qdrant, and the
+bucket and Qdrant loaders record nothing. That is acceptable while the only
+thing recorded as an assessment is Track A's coverage, which is computed from
+the graph alone. It stops being acceptable when an answer is recorded, because
+an answer reads clause text from the bucket and chunks from Qdrant: whether
+those record their loads, and whether the API refuses on disagreement among the
+three, is a decision for that ticket.
+
+**11. What the ledger doesn't keep, the read-back doesn't show.** `coverage`
 rows hold the outcome, reason, citations and questions, not an obligation's
-`instrument_id` or `summary`. The recorded shape therefore drops those two from
-`GET /v1/coverage`'s, so that what is returned on recording and on reading back
-are the same. Recording them is a ledger change of its own, if wanted.
+`instrument_id` or `summary`, and an assessment holds no `roles`. The recorded
+shape therefore drops those from `GET /v1/coverage`'s, so that what is
+returned on recording and on reading back are the same. Recording them is a
+ledger change of its own, if wanted.
 
 ## Consequences
 
@@ -133,12 +197,16 @@ are the same. Recording them is a ledger change of its own, if wanted.
   state: `git tag corpus-2026.10.14` and `git tag mappings-2026.10.14`, then
   re-run both loaders. They are idempotent apart from the new `Load` node.
 - **The deployed graph needs both loaders re-run before `POST /v1/coverage`
-  works**, and `scripts/apply_graph_schema.py` for the `load_id` uniqueness
-  constraint (idempotent). Until then it is a 503 naming the loaders. This
-  change runs none of that.
+  works**, and `scripts/apply_graph_schema.py` for the two `Load` constraints
+  (idempotent; the serialisation needs the second). Until then it is a 503
+  naming the loaders. This change runs none of that.
 - **A `Load` node is added to the graph per loader run**, and counts toward
   `counts()` and so toward Aura's limits. At a few a day that is not a concern;
   nothing compacts them.
+- **Widening the paths means more things are new versions.** A parser change
+  makes the corpus untagged until it is tagged and loaded again. That is the
+  intent: it changes what the graph holds. A load must also be run from a
+  checkout with those paths committed.
 - **Reproducing an assessment** is checking out its two SHAs. A tag that has
   moved since can be told apart by the SHA it was recorded with.
 - A reviewer reading a version sees `mappings-2026.10.14 @ 1a2b3c4` (a tag and

@@ -2,11 +2,12 @@
 -- (#153, ADR-0034; CONTEXT.md: Corpus version, Mapping version).
 --
 -- A version is a git tag resolved when the graph was loaded, plus the commit
--- the tag pointed at. A tag can move; a commit can't, so the SHA is what makes
--- the assessment reproducible and the tag is the name it was known by.
--- `corpus_version` and `mapping_version` keep holding the tag, and are NULL
--- when no tag existed at load time: the assessment is then untagged, named by
--- its SHA alone. A load is never refused for want of a tag.
+-- the tag pointed at. It is a tag over the data and over the code that turns
+-- it into what the graph holds (ADR-0034). A tag can move; a commit can't, so
+-- the SHA is what makes the assessment reproducible and the tag is the name it
+-- was known by. `corpus_version` and `mapping_version` keep holding the tag,
+-- and are NULL when no tag existed at load time: the assessment is then
+-- untagged, named by its SHA alone. A load is never refused for want of a tag.
 --
 -- Every new assessment names both commits. Rows written before this have
 -- neither (tests only: no deployed ledger holds one), so the constraint is
@@ -42,5 +43,25 @@ ALTER TABLE assessment ADD CONSTRAINT assessment_mapping_sha
 ALTER TABLE assessment DROP CONSTRAINT IF EXISTS assessment_names_both_commits;
 ALTER TABLE assessment ADD CONSTRAINT assessment_names_both_commits
     CHECK (corpus_sha IS NOT NULL AND mapping_sha IS NOT NULL) NOT VALID;
+
+-- An assessment carries the trace_id of its request (CLAUDE.md) and, when it
+-- names who asked, a real name. user_id stays nullable: an assessment not made
+-- for a member (a document's, later) has none. NOT VALID, like the above.
+ALTER TABLE assessment DROP CONSTRAINT IF EXISTS assessment_trace_id;
+ALTER TABLE assessment ADD CONSTRAINT assessment_trace_id
+    CHECK (btrim(trace_id) <> '') NOT VALID;
+
+ALTER TABLE assessment DROP CONSTRAINT IF EXISTS assessment_user_id;
+ALTER TABLE assessment ADD CONSTRAINT assessment_user_id
+    CHECK (user_id IS NULL OR btrim(user_id) <> '') NOT VALID;
+
+COMMENT ON COLUMN assessment.corpus_version IS
+    'the git tag at load; NULL means untagged (the SHA alone, #153)';
+COMMENT ON COLUMN assessment.mapping_version IS
+    'the git tag at load; NULL means untagged (the SHA alone, #153)';
+COMMENT ON COLUMN assessment.corpus_sha IS
+    'the commit the corpus version resolved to at load (#153)';
+COMMENT ON COLUMN assessment.mapping_sha IS
+    'the commit the mapping version resolved to at load (#153)';
 
 COMMIT;

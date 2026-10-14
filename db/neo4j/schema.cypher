@@ -63,6 +63,15 @@ FOR (n:Sector) REQUIRE n.stable_id IS UNIQUE;
 CREATE CONSTRAINT load_id IF NOT EXISTS
 FOR (n:Load) REQUIRE n.load_id IS UNIQUE;
 
+// Loads of a kind are serialised: a load holds `open_kind` (its kind) from
+// when it begins until it finishes or is abandoned, and only one load may hold
+// it, so two that begin together can't both succeed. Without this constraint
+// begin_load still refuses a second load while one is open, but not two that
+// begin in the same instant.
+
+CREATE CONSTRAINT load_open_kind IF NOT EXISTS
+FOR (n:Load) REQUIRE n.open_kind IS UNIQUE;
+
 // --- existence of the bitemporal properties ---------------------------------
 // Property-existence constraints are an Enterprise/Aura feature. Community
 // (the CI service container) refuses them; apply_schema reports each refused

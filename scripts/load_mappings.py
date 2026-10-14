@@ -10,10 +10,14 @@ is in none.
 
 The graph records the load: the mapping version (the newest `mappings-*` tag
 over this content, with the commit it points at, or the commit alone if none)
-when it starts, and that it finished only once the load returns.
+when it starts, and that it finished only once the load returns. The record is
+begun after the checks (every D-05 refusal), so a refused load leaves none; a
+load that fails after its first write stays open, and blocks another load of
+the same kind, and any assessment, until someone abandons it.
 
     uv run python -m scripts.load_mappings [--today 2026-10-12]
     uv run python -m scripts.load_mappings --correct ID [ID ...] --by NAME --reason WHY
+    uv run python -m scripts.load_mappings --abandon LOAD_ID --by NAME --reason WHY
 """
 
 from __future__ import annotations
@@ -26,7 +30,12 @@ from pathlib import Path
 from compliance_rag.adapters.git_source_versions import UncommittedSource, resolve_source_version
 from compliance_rag.adapters.interfaces import SourceKind
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
-from compliance_rag.graph.loader import CorrectionAcknowledgement, load_mappings, recorded_load
+from compliance_rag.graph.loader import (
+    CorrectionAcknowledgement,
+    check_mappings,
+    recorded_load,
+    write_mappings,
+)
 from compliance_rag.graph.mappings import load_mapping_set
 from compliance_rag.settings import Settings
 
@@ -55,11 +64,13 @@ async def main(today: dt.date, corrections: CorrectionAcknowledgement | None) ->
         version = resolve_source_version(SourceKind.MAPPING, repo=REPO)
     except UncommittedSource as refused:
         raise SystemExit(f"not loaded: {refused}") from None
+    mappings = load_mapping_set(paths)
     print(f"loading mapping version {version.described}")
-    async with Neo4jGraph.from_settings(Settings()) as graph, recorded_load(graph, version):
-        report = await load_mappings(
-            graph, load_mapping_set(paths), today=today, corrections=corrections
-        )
+    async with Neo4jGraph.from_settings(Settings()) as graph:
+        # Every refusal first: a load refused here leaves no record of itself.
+        found = await check_mappings(graph, mappings, today=today, corrections=corrections)
+        async with recorded_load(graph, version):
+            report = await write_mappings(graph, mappings, found, corrections)
     nodes, edges = report.counts.nodes, report.counts.edges
     print(f"recorded as the graph's mapping version: {version.described}")
     print(
@@ -67,6 +78,15 @@ async def main(today: dt.date, corrections: CorrectionAcknowledgement | None) ->
         f"{nodes} nodes ({nodes / AURA_FREE_NODES:.1%} of Aura Free) and {edges} edges "
         f"({edges / AURA_FREE_RELATIONSHIPS:.1%})"
     )
+
+
+async def abandon(load_id: str, by: str, reason: str) -> None:
+    """Close a load that failed and will never finish, so another can begin
+    (#153). It doesn't make it a finished load: the version the graph holds
+    is what it was."""
+    async with Neo4jGraph.from_settings(Settings()) as graph:
+        await graph.abandon_load(load_id, by, reason)
+    print(f"abandoned load {load_id} (by {by}: {reason})")
 
 
 if __name__ == "__main__":
@@ -78,9 +98,20 @@ if __name__ == "__main__":
         default=[],
         help="ids whose wording (only) changed, acknowledged for in-place correction (ADR-0031)",
     )
-    parser.add_argument("--by", default="", help="who made the correction (with --correct)")
-    parser.add_argument("--reason", default="", help="why (with --correct)")
+    parser.add_argument(
+        "--abandon",
+        metavar="LOAD_ID",
+        default="",
+        help="close a failed load that is blocking others (with --by and --reason); loads nothing",
+    )
+    parser.add_argument("--by", default="", help="who made the correction or abandoned the load")
+    parser.add_argument("--reason", default="", help="why")
     args = parser.parse_args()
+    if args.abandon:
+        if args.correct:
+            parser.error("--abandon loads nothing: it can't be combined with --correct")
+        asyncio.run(abandon(str(args.abandon), str(args.by), str(args.reason)))
+        raise SystemExit(0)
     acknowledged: CorrectionAcknowledgement | None = None
     if args.correct:
         acknowledged = CorrectionAcknowledgement(

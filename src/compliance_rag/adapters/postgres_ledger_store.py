@@ -215,23 +215,12 @@ class PostgresLedgerStore(LedgerStore):
         )
 
     async def record_coverage_assessment(
-        self,
-        *,
-        tenant_id: str,
-        assessment_id: str,
-        user_id: str,
-        corpus: SourceVersion,
-        mapping: SourceVersion,
-        as_of: dt.date,
-        trace_id: str,
-        rows: tuple[CoverageRow, ...],
+        self, record: AssessmentRecord, rows: tuple[CoverageRow, ...]
     ) -> None:
         """The assessment row and every coverage row in one transaction
         (#153): a row the database refuses rolls the assessment back with it,
         so there is never an assessment without its coverage."""
-        check_assessment_write(
-            user_id=user_id, corpus=corpus, mapping=mapping, trace_id=trace_id, rows=rows
-        )
+        check_assessment_write(record, rows)
         try:
             async with self._connection() as conn, conn.transaction():
                 await conn.execute(
@@ -239,15 +228,15 @@ class PostgresLedgerStore(LedgerStore):
                     "corpus_sha, mapping_version, mapping_sha, as_of, trace_id) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
-                        tenant_id,
-                        assessment_id,
-                        user_id,
-                        corpus.tag,
-                        corpus.sha,
-                        mapping.tag,
-                        mapping.sha,
-                        as_of,
-                        trace_id,
+                        record.tenant_id,
+                        record.assessment_id,
+                        record.user_id,
+                        record.corpus.tag,
+                        record.corpus.sha,
+                        record.mapping.tag,
+                        record.mapping.sha,
+                        record.as_of,
+                        record.trace_id,
                     ),
                 )
                 async with conn.cursor() as cursor:
@@ -257,22 +246,22 @@ class PostgresLedgerStore(LedgerStore):
                         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                         [
                             (
-                                tenant_id,
-                                assessment_id,
+                                record.tenant_id,
+                                record.assessment_id,
                                 row.obligation_id,
                                 row.outcome.value,
                                 row.reason,
                                 Jsonb(list(row.citations)),
                                 Jsonb([question_json(q) for q in row.questions]),
-                                trace_id,
+                                record.trace_id,
                             )
                             for row in rows
                         ],
                     )
         except psycopg.errors.ForeignKeyViolation as exc:
-            raise ValueError(f"tenant {tenant_id!r} isn't registered in the ledger") from exc
+            raise ValueError(f"tenant {record.tenant_id!r} isn't registered in the ledger") from exc
         except psycopg.errors.UniqueViolation as exc:
-            raise ValueError(f"assessment {assessment_id} is already recorded") from exc
+            raise ValueError(f"assessment {record.assessment_id} is already recorded") from exc
         except (psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation) as exc:
             raise ValueError(f"assessment refused: {exc.diag.message_primary}") from exc
 

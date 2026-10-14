@@ -46,7 +46,7 @@ from neo4j import (
     Record,
     RoutingControl,
 )
-from neo4j.exceptions import Neo4jError
+from neo4j.exceptions import ConstraintError, Neo4jError
 from neo4j.time import Date, DateTime
 
 from compliance_rag import telemetry
@@ -861,32 +861,76 @@ class Neo4jGraph(GraphAdmin):
     async def begin_load(self, version: SourceVersion) -> str:
         """Record that a load started: a `Load` node (`graph_schema.LOAD_LABEL`)
         with its kind, tag, commit and start. Written once and given its end
-        once by `finish_load`; never rewritten or removed."""
+        once, by `finish_load` or `abandon_load`; never rewritten or removed.
+
+        Loads of a kind are serialised. An open one (begun, neither finished
+        nor abandoned) refuses this, naming it; the check and the write are
+        one transaction, and an open load carries `open_kind`, which a
+        uniqueness constraint (`schema.cypher`) lets only one load per kind
+        hold, so two that begin together can't both succeed. Times come from
+        the server's clock, never the caller's."""
         load_id = uuid.uuid4().hex
+        kind = version.kind.value
         props: dict[str, object] = {
             "load_id": load_id,
-            "kind": version.kind.value,
+            "kind": kind,
             "sha": version.sha,
-            "started_at": self._clock(),
+            "open_kind": kind,
         }
         if version.tag is not None:  # Neo4j stores no null: untagged has no tag
             props["tag"] = version.tag
 
         async def work(tx: AsyncManagedTransaction) -> str:
-            await tx.run("CREATE (l:Load) SET l = $props", props=props)
+            open_load = await (
+                await tx.run(
+                    "MATCH (l:Load {kind: $kind}) "
+                    "WHERE l.finished_at IS NULL AND l.abandoned_at IS NULL "
+                    "RETURN l.load_id AS id, toString(l.started_at) AS started LIMIT 1",
+                    kind=kind,
+                )
+            ).single()
+            if open_load is not None:
+                raise GraphWriteRefused(
+                    f"a {kind} load ({open_load['id']}, begun {open_load['started']}) is still "
+                    "open: wait for it to finish, or, if it failed, abandon it by re-running the "
+                    f"loader with --abandon {open_load['id']} --by NAME --reason WHY (#153)"
+                )
+            await tx.run("CREATE (l:Load) SET l = $props, l.started_at = datetime()", props=props)
             return load_id
 
-        attributes = {
-            "graph.load_kind": version.kind.value,
-            "graph.load_version": version.described,
-        }
-        return await self._write("neo4j_graph.begin_load", attributes, work)
+        attributes = {"graph.load_kind": kind, "graph.load_version": version.described}
+        try:
+            return await self._write("neo4j_graph.begin_load", attributes, work)
+        except ConstraintError as raced:
+            raise GraphWriteRefused(
+                f"another {kind} load began at the same moment; the first to begin is the one "
+                "that runs (#153)"
+            ) from raced
 
     async def finish_load(self, load_id: str) -> None:
-        """Set `finished_at` on a load, once: lock, then read, then set — as a
-        retirement does, so two concurrent finishes can't both win. An unknown
-        load, or one already finished, is refused."""
-        now = self._clock()
+        """Set `finished_at` on an open load, once, and close it. An unknown
+        load, or one already finished or abandoned, is refused."""
+        await self._close_load("finish", load_id, {})
+
+    async def abandon_load(self, load_id: str, by: str, reason: str) -> None:
+        """Set `abandoned_at`, with who and why, on an open load, once, and
+        close it. It stays what it was: begun, and never finished, so the
+        version the graph holds is unchanged. An unknown load, or one already
+        finished or abandoned, is refused, as is an abandonment that names
+        nobody or no reason."""
+        if not (by.strip() and reason.strip()):
+            raise GraphWriteRefused("abandoning a load names who did it and why (#153)")
+        await self._close_load("abandon", load_id, {"by": by, "reason": reason})
+
+    async def _close_load(self, action: str, load_id: str, parameters: Mapping[str, str]) -> None:
+        """Lock, then read, then set, as a retirement does, so two concurrent
+        closes of one load can't both win; and release the load's hold on its
+        kind (`open_kind`), which lets the next load begin."""
+        sets = {
+            "finish": "l.finished_at = datetime()",
+            "abandon": "l.abandoned_at = datetime(), l.abandoned_by = $by, "
+            "l.abandon_reason = $reason",
+        }[action]
 
         async def work(tx: AsyncManagedTransaction) -> None:
             locked = await tx.run(
@@ -894,29 +938,37 @@ class Neo4jGraph(GraphAdmin):
                 load_id=load_id,
             )
             if (await locked.single(strict=True))["found"] == 0:
-                raise GraphWriteRefused(f"no load {load_id!r} to finish")
+                raise GraphWriteRefused(f"no load {load_id!r} to {action}")
             result = await tx.run(
                 "MATCH (l:Load {load_id: $load_id}) REMOVE l._lock "
-                "RETURN l.finished_at AS finished",
+                "RETURN l.finished_at IS NOT NULL AS finished, "
+                "l.abandoned_at IS NOT NULL AS abandoned",
                 load_id=load_id,
             )
-            if (await result.single(strict=True))["finished"] is not None:
+            state = await result.single(strict=True)
+            if state["finished"]:
                 raise GraphWriteRefused(
-                    f"load {load_id!r} already finished; finished_at is set once"
+                    f"load {load_id!r} already finished; a load ends once, so it can't be "
+                    f"{action}ed"
+                )
+            if state["abandoned"]:
+                raise GraphWriteRefused(
+                    f"load {load_id!r} was abandoned; a load ends once, so it can't be {action}ed"
                 )
             await tx.run(
-                "MATCH (l:Load {load_id: $load_id}) SET l.finished_at = $now",
-                load_id=load_id,
-                now=now,
+                _trusted(f"MATCH (l:Load {{load_id: $load_id}}) SET {sets} REMOVE l.open_kind"),
+                {"load_id": load_id, **parameters},
             )
 
-        await self._write("neo4j_graph.finish_load", {"graph.load_id": load_id}, work)
+        attributes = {"graph.load_id": load_id}
+        await self._write(f"neo4j_graph.{action}_load", attributes, work)
 
     async def loaded_sources(self) -> LoadedSources:
-        """The latest finished load of each kind, and whether a newer one
-        hasn't finished. Latest is by start: a failed load followed by a
-        successful one is no longer loading. Like `counts()`, a read outside
-        the query builder that returns no node of the law."""
+        """The latest finished load of each kind, and whether one is open
+        (begun, neither finished nor abandoned: running, or failed). Latest
+        is by start, on the server's clock; since loads of a kind are
+        serialised that is also the order they ended in. Like `counts()`, a
+        read outside the query builder that returns no node of the law."""
         with telemetry.span("neo4j_graph.loaded_sources") as s:
             found = {kind: await self._loaded(kind) for kind in SourceKind}
             for kind, state in found.items():
@@ -930,8 +982,8 @@ class Neo4jGraph(GraphAdmin):
             "OPTIONAL MATCH (f:Load {kind: $kind}) WHERE f.finished_at IS NOT NULL "
             "WITH f ORDER BY f.started_at DESC, f.load_id DESC LIMIT 1 "
             "OPTIONAL MATCH (u:Load {kind: $kind}) "
-            "WHERE u.finished_at IS NULL AND (f IS NULL OR u.started_at > f.started_at) "
-            "RETURN f.tag AS tag, f.sha AS sha, count(u) AS unfinished",
+            "WHERE u.finished_at IS NULL AND u.abandoned_at IS NULL "
+            "RETURN f.tag AS tag, f.sha AS sha, count(u) AS open",
             kind=kind.value,
             database_=self._database,
             routing_=RoutingControl.READ,
@@ -940,7 +992,7 @@ class Neo4jGraph(GraphAdmin):
         version = None
         if record["sha"] is not None:
             version = SourceVersion(kind, sha=str(record["sha"]), tag=record["tag"])
-        return LoadedSource(version=version, loading=int(record["unfinished"]) > 0)
+        return LoadedSource(version=version, loading=int(record["open"]) > 0)
 
     # ---- counts (Phase 2 exit: Aura usage under 10% of its limits) ----------
 

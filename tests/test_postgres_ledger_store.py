@@ -22,7 +22,13 @@ import pytest
 
 from compliance_rag.adapters import postgres_ledger_store
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
-from compliance_rag.adapters.interfaces import PolicyVersion, Profile, SourceKind, SourceVersion
+from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
+    PolicyVersion,
+    Profile,
+    SourceKind,
+    SourceVersion,
+)
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
 from compliance_rag.corpus.models import DocumentClass
@@ -203,23 +209,23 @@ async def test_a_coverage_row_the_database_refuses_takes_the_assessment_with_it(
     refuse these rows before any SQL, so they are switched off to let the
     database's constraints be what refuses."""
 
-    def unchecked(**_: object) -> None:
+    def unchecked(*_: object) -> None:
         return None
 
     monkeypatch.setattr(postgres_ledger_store, "check_assessment_write", unchecked)
     await ledger.put_profile(Profile("acme"))
     good = CoverageRow("OB-GOOD", Outcome.APPLICABLE, "r", ("x:v:1",), ())
+    record = AssessmentRecord(
+        tenant_id="acme",
+        assessment_id="a1",
+        user_id="lead@acme.example",
+        corpus=SourceVersion(SourceKind.CORPUS, "a" * 40, "corpus-2026.10"),
+        mapping=SourceVersion(SourceKind.MAPPING, "b" * 40),
+        as_of=dt.date(2026, 10, 14),
+        trace_id="t",
+    )
     with pytest.raises(ValueError, match="assessment refused"):
-        await ledger.record_coverage_assessment(
-            tenant_id="acme",
-            assessment_id="a1",
-            user_id="lead@acme.example",
-            corpus=SourceVersion(SourceKind.CORPUS, "a" * 40, "corpus-2026.10"),
-            mapping=SourceVersion(SourceKind.MAPPING, "b" * 40),
-            as_of=dt.date(2026, 10, 14),
-            trace_id="t",
-            rows=(good, refused),
-        )
+        await ledger.record_coverage_assessment(record, (good, refused))
     assert await ledger.get_assessment("acme", "a1") is None
     assert await ledger.coverage_rows("acme", "a1") == ()
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:

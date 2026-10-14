@@ -257,20 +257,11 @@ class ManifestMetadata:
 class SourceKind(StrEnum):
     """The two parts of the repository an assessment is reproducible from: the
     corpus and the mappings (`CONTEXT.md`: Corpus version, Mapping version).
-    Each is a tag over one path, named with one prefix (ADR-0034)."""
+    Which paths make up each, and how a tag over them is named, is the git
+    adapter's to know (`git_source_versions`, ADR-0034)."""
 
     CORPUS = "corpus"
     MAPPING = "mapping"
-
-    @property
-    def path(self) -> str:
-        """The repository path the version is a tag over."""
-        return "corpus/instruments" if self is SourceKind.CORPUS else "corpus/mappings"
-
-    @property
-    def tag_prefix(self) -> str:
-        """What a tag over `path` is called: `corpus-2026.10`, `mappings-2026.10`."""
-        return "corpus-" if self is SourceKind.CORPUS else "mappings-"
 
 
 _SHA = re.compile(r"[0-9a-f]{40}")
@@ -283,8 +274,8 @@ class SourceVersion:
 
     A tag can move; a commit can't, and reproducibility is the point, so the
     SHA is always present and the tag is the name it was known by. `tag` None
-    means untagged: no tag over this path's content existed at load time, and
-    the SHA alone names it."""
+    means untagged: no tag over this content existed at load time, and the SHA
+    alone names it."""
 
     kind: SourceKind
     sha: str
@@ -309,9 +300,10 @@ class SourceVersion:
 @dataclass(frozen=True, slots=True)
 class LoadedSource:
     """What the graph holds of one kind: the latest load that finished, and
-    whether a newer one hasn't. `loading` is true while a load runs, and stays
-    true if it failed: a failed load may have left the graph part-written, so
-    nothing is assessed against it until a load of that kind finishes."""
+    whether one is open. `loading` is true while a load runs, and stays true if
+    it failed until someone abandons it: a failed load may have left the graph
+    part-written, so nothing is assessed against it until a load of that kind
+    finishes, or the open one is abandoned and another finishes."""
 
     version: SourceVersion | None = None
     """None if no load of this kind has ever finished."""
@@ -346,22 +338,17 @@ class AssessmentRecord:
     trace_id: str
 
 
-def check_assessment_write(
-    *,
-    user_id: str,
-    corpus: SourceVersion,
-    mapping: SourceVersion,
-    trace_id: str,
-    rows: tuple[CoverageRow, ...],
-) -> None:
+def check_assessment_write(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> None:
     """What every `LedgerStore` refuses before writing an assessment and its
-    coverage (`record_coverage_assessment`); the database's own constraints
-    refuse the same again."""
-    if not trace_id:
+    coverage (`record_coverage_assessment`), in this order. The database's own
+    constraints refuse all of it again but that a version is of the right kind
+    (ledger 0013); what only a store can refuse (the tenant not registered, the
+    id already recorded) comes after, in both."""
+    if not record.trace_id:
         raise ValueError("an assessment and its coverage carry the trace_id of their request")
-    if not user_id.strip():
+    if not record.user_id.strip():
         raise ValueError("an assessment names who asked")
-    if corpus.kind is not SourceKind.CORPUS or mapping.kind is not SourceKind.MAPPING:
+    if record.corpus.kind is not SourceKind.CORPUS or record.mapping.kind is not SourceKind.MAPPING:
         raise ValueError("an assessment records a corpus version and a mapping version")
     if len({row.obligation_id for row in rows}) != len(rows):
         raise ValueError("coverage names an obligation twice")
@@ -402,8 +389,8 @@ class GraphStore(ABC):
     @abstractmethod
     async def loaded_sources(self) -> LoadedSources:
         """The corpus and mapping versions the graph holds, and whether a load
-        is unfinished (#153): what an assessment records, and the reason it
-        isn't recorded while a load runs."""
+        is open (#153): what an assessment records, and the reason it isn't
+        recorded while a load runs."""
 
 
 class GraphReader(ABC):
@@ -415,9 +402,9 @@ class GraphReader(ABC):
 
     @abstractmethod
     async def loaded_sources(self) -> LoadedSources:
-        """The latest finished load of each kind, and whether a newer one
-        hasn't finished (#153). Not a traversal and returns no node of the
-        law: it reads the record of the loads."""
+        """The latest finished load of each kind, and whether one is open
+        (#153). Not a traversal and returns no node of the law: it reads the
+        record of the loads."""
 
 
 class GraphAdmin(GraphReader):
@@ -491,16 +478,27 @@ class GraphAdmin(GraphReader):
     @abstractmethod
     async def begin_load(self, version: SourceVersion) -> str:
         """Record that a load of `version.kind` from `version` has started
-        (#153); returns its id. Append-only, like the law the loads write: a
-        record is never rewritten, and `finish_load` sets its end once. Not a
-        node of the ontology and not bitemporal: it says what was loaded, not
-        what was true."""
+        (#153); returns its id. Loads of a kind are serialised: this is refused
+        while another of that kind is open (begun, and neither finished nor
+        abandoned), atomically, so two can't both begin. Append-only, like the
+        law the loads write: a record is never rewritten, and its end is set
+        once. Not a node of the ontology and not bitemporal: it says what was
+        loaded, not what was true. Times are the server's, not the caller's."""
 
     @abstractmethod
     async def finish_load(self, load_id: str) -> None:
         """Mark the load finished, once. An unknown load, or one already
-        finished, is refused. A load that never reaches this stays unfinished,
-        which is how a failed load is told from a successful one."""
+        finished or abandoned, is refused. A load that never reaches this
+        stays open, which is how a failed load is told from a successful one."""
+
+    @abstractmethod
+    async def abandon_load(self, load_id: str, by: str, reason: str) -> None:
+        """Close an open load that will never finish, naming who and why, once.
+        Never done by the passing of time: someone looked at the failed load
+        and decided. It doesn't make the load a finished one, so the version
+        the graph holds is unchanged, and it lets another load of that kind
+        begin. An unknown load, or one already finished or abandoned, is
+        refused."""
 
     @abstractmethod
     async def counts(self) -> GraphCounts:
@@ -607,16 +605,7 @@ class LedgerStore(ABC):
 
     @abstractmethod
     async def record_coverage_assessment(
-        self,
-        *,
-        tenant_id: str,
-        assessment_id: str,
-        user_id: str,
-        corpus: SourceVersion,
-        mapping: SourceVersion,
-        as_of: dt.date,
-        trace_id: str,
-        rows: tuple[CoverageRow, ...],
+        self, record: AssessmentRecord, rows: tuple[CoverageRow, ...]
     ) -> None:
         """An assessment and its coverage, in one transaction (#153): the
         assessment against the corpus and mapping versions it was computed

@@ -2,9 +2,10 @@
 value types, and their resolution from git in a temporary repository built
 here — the checkout a loader runs from, in miniature.
 
-A version is a tag over one path and the commit the tag pointed at. What
-decides it is the path's content, so a commit that changes only code leaves it
-where it was.
+A version is a tag over the data a graph is built from and the code that turns
+it into what the graph holds, and the commit the tag pointed at. What decides
+it is the content of those paths, so a commit that changes nothing under them
+leaves it where it was, and one that changes a parser does not.
 """
 
 from __future__ import annotations
@@ -14,10 +15,14 @@ import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from compliance_rag.adapters import git_source_versions
 from compliance_rag.adapters.git_source_versions import (
+    SOURCE_PATHS,
+    TAG_PREFIXES,
     SourceVersionError,
     UncommittedSource,
     resolve_source_version,
@@ -31,23 +36,51 @@ from compliance_rag.adapters.interfaces import (
 
 SHA = "1a2b3c4d" * 5
 
-MAPPINGS_FILE = "corpus/mappings/privacy-act-1988.yaml"
-CORPUS_FILE = "corpus/instruments/privacy-act-1988/C2026C00227/manifest.yaml"
-CODE_FILE = "src/code.py"
+FILES = {
+    "mappings": "corpus/mappings/privacy-act-1988.yaml",
+    "graph": "src/compliance_rag/graph/loader.py",
+    "corpus": "corpus/instruments/privacy-act-1988/C2026C00227/manifest.yaml",
+    "parser": "src/compliance_rag/corpus/parser.py",
+    "ingest": "scripts/ingest_compilation.py",
+    "loader": "scripts/load_graph_structure.py",
+    "code": "src/compliance_rag/api/app.py",  # in neither kind
+}
+"""A file under each path a version is a tag over, by a short name."""
+
+PATHS_OF = {
+    SourceKind.MAPPING: ("mappings", "graph"),
+    SourceKind.CORPUS: ("corpus", "parser", "ingest", "loader"),
+}
+GITIGNORE = "__pycache__/\n*.pyc\ncorpus/instruments/**/raw/\n*.draft.yaml\n"
+"""The real `.gitignore`'s rules that bear on these paths, and one more."""
 
 
 # ---- the value types ----------------------------------------------------------------
 
 
-def test_each_kind_is_a_tag_over_one_path_with_its_own_prefix() -> None:
-    assert (SourceKind.CORPUS.path, SourceKind.CORPUS.tag_prefix) == (
+def test_the_paths_and_prefixes_are_the_git_adapters_not_the_interfaces() -> None:
+    assert not hasattr(SourceKind.CORPUS, "path") and not hasattr(SourceKind.CORPUS, "tag_prefix")
+    assert set(SOURCE_PATHS) == set(TAG_PREFIXES) == set(SourceKind)
+    assert TAG_PREFIXES == {SourceKind.CORPUS: "corpus-", SourceKind.MAPPING: "mappings-"}
+
+
+def test_the_paths_each_kind_is_a_tag_over_include_the_code_that_builds_it() -> None:
+    """The graph holds what the code made of the data: a parser fix changes it
+    with no manifest touched."""
+    assert SOURCE_PATHS[SourceKind.CORPUS] == (
         "corpus/instruments",
-        "corpus-",
+        "src/compliance_rag/corpus",
+        "scripts/ingest_compilation.py",
+        "scripts/load_graph_structure.py",
     )
-    assert (SourceKind.MAPPING.path, SourceKind.MAPPING.tag_prefix) == (
-        "corpus/mappings",
-        "mappings-",
-    )
+    assert SOURCE_PATHS[SourceKind.MAPPING] == ("corpus/mappings", "src/compliance_rag/graph")
+
+
+def test_every_path_a_version_is_a_tag_over_exists_in_this_repository() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for paths in SOURCE_PATHS.values():
+        for path in paths:
+            assert (root / path).exists(), f"{path} moved: update SOURCE_PATHS (ADR-0034)"
 
 
 def test_a_tagged_version_is_described_by_its_tag_and_a_short_sha() -> None:
@@ -94,11 +127,20 @@ def test_loaded_sources_are_read_by_kind() -> None:
 # ---- a repository to resolve from ----------------------------------------------------
 
 
-class Repo:
-    """A throwaway repository. Every commit and tag gets its own minute, so
-    'newest first' is a fact of the history and not of the clock."""
+@pytest.fixture(autouse=True)
+def _git_config_is_the_repositorys_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What the developer or CI has configured (an excludes file, a status
+    default) must not decide these tests; a repository's own config does."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
 
-    def __init__(self, root: Path) -> None:
+
+class Repo:
+    """A throwaway repository, with a baseline commit holding a file under
+    every path a version is a tag over. Every commit and tag gets its own
+    minute, so 'newest first' is a fact of the history and not of the clock."""
+
+    def __init__(self, root: Path, *, baseline: bool = True) -> None:
         self.root = root
         self._minute = 0
         self.git("init", "-q", "-b", "main")
@@ -109,6 +151,9 @@ class Repo:
             ("tag.gpgsign", "false"),
         ):
             self.git("config", key, value)
+        if baseline:
+            self.write(".gitignore", GITIGNORE)
+            self.commit(**{name: "0" for name in FILES})
 
     def _stamp(self) -> dict[str, str]:
         self._minute += 1
@@ -118,18 +163,12 @@ class Repo:
         return {"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
 
     def git(self, *args: str, stamped: bool = False) -> str:
-        environment = {
-            **os.environ,
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_SYSTEM": os.devnull,
-            **(self._stamp() if stamped else {}),
-        }
         done = subprocess.run(
             ["git", "-C", str(self.root), *args],
             check=True,
             capture_output=True,
             text=True,
-            env=environment,
+            env={**os.environ, **(self._stamp() if stamped else {})},
         )
         return done.stdout.strip()
 
@@ -139,11 +178,10 @@ class Repo:
         target.write_text(text, encoding="utf-8")
 
     def commit(self, **files: str) -> str:
-        """Write `files` (keyword names stand for the three paths below) and
-        commit everything; returns the new commit's sha."""
-        paths = {"mappings": MAPPINGS_FILE, "corpus": CORPUS_FILE, "code": CODE_FILE}
+        """Write `files` (by the short names in `FILES`) and commit everything;
+        returns the new commit's sha."""
         for name, text in files.items():
-            self.write(paths[name], text)
+            self.write(FILES[name], text)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "change", stamped=True)
         return self.git("rev-parse", "HEAD")
@@ -163,12 +201,22 @@ def repo(tmp_path: Path) -> Repo:
     return Repo(tmp_path)
 
 
+@pytest.fixture
+def bare(tmp_path: Path) -> Repo:
+    """A repository whose first commit holds none of the paths."""
+    return Repo(tmp_path, baseline=False)
+
+
 def mapping(repo: Repo) -> SourceVersion:
     return resolve_source_version(SourceKind.MAPPING, repo=repo.root)
 
 
 def corpus(repo: Repo) -> SourceVersion:
     return resolve_source_version(SourceKind.CORPUS, repo=repo.root)
+
+
+def resolve(kind: SourceKind, repo: Repo) -> SourceVersion:
+    return resolve_source_version(kind, repo=repo.root)
 
 
 # ---- resolving a version from git -----------------------------------------------------
@@ -187,7 +235,9 @@ def test_an_annotated_tag_is_recorded_by_the_commit_not_the_tag_object(repo: Rep
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head, "mappings-2026.10")
 
 
-def test_a_commit_that_changes_only_code_leaves_the_version_where_it_was(repo: Repo) -> None:
+def test_a_commit_that_changes_nothing_a_version_is_built_from_leaves_it_where_it_was(
+    repo: Repo,
+) -> None:
     tagged = repo.commit(mappings="v1", corpus="c1", code="x")
     repo.tag("mappings-2026.10")
     repo.tag("corpus-2026.10")
@@ -196,6 +246,65 @@ def test_a_commit_that_changes_only_code_leaves_the_version_where_it_was(repo: R
     # The sha names the commit the tag points at: the one that holds this content.
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, tagged, "mappings-2026.10")
     assert corpus(repo) == SourceVersion(SourceKind.CORPUS, tagged, "corpus-2026.10")
+
+
+def test_a_change_to_the_api_is_not_a_new_version_of_either_kind(repo: Repo) -> None:
+    tagged = repo.commit(mappings="v1", corpus="c1")
+    repo.tag("mappings-2026.10")
+    repo.tag("corpus-2026.10")
+    repo.commit(code="an api change")
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, tagged, "mappings-2026.10")
+    assert corpus(repo) == SourceVersion(SourceKind.CORPUS, tagged, "corpus-2026.10")
+
+
+def test_a_parser_fix_is_a_new_corpus_version_though_no_manifest_changed(repo: Repo) -> None:
+    """The clauses are what the parser makes of the pinned source: checking out
+    the old tag's commit would parse them differently."""
+    tagged = repo.commit(corpus="c1", parser="p1")
+    repo.tag("corpus-2026.10")
+    repo.tag("mappings-2026.10")
+    head = repo.commit(parser="p2")
+    assert corpus(repo) == SourceVersion(SourceKind.CORPUS, head)
+    assert corpus(repo).untagged
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, tagged, "mappings-2026.10")
+
+
+def test_a_change_to_the_mapping_loader_is_a_new_mapping_version_not_a_corpus_one(
+    repo: Repo,
+) -> None:
+    tagged = repo.commit(mappings="v1", graph="g1")
+    repo.tag("mappings-2026.10")
+    repo.tag("corpus-2026.10")
+    head = repo.commit(graph="g2")
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
+    assert corpus(repo) == SourceVersion(SourceKind.CORPUS, tagged, "corpus-2026.10")
+
+
+@pytest.mark.parametrize(
+    ("kind", "changed"),
+    [(kind, name) for kind, names in PATHS_OF.items() for name in names],
+)
+def test_a_change_under_any_path_a_version_is_a_tag_over_leaves_it_untagged(
+    repo: Repo, kind: SourceKind, changed: str
+) -> None:
+    repo.commit(**{name: "1" for name in FILES})
+    repo.tag(f"{TAG_PREFIXES[kind]}2026.10")
+    head = repo.commit(**{changed: "2"})
+    assert resolve(kind, repo) == SourceVersion(kind, head)
+
+
+@pytest.mark.parametrize(
+    ("kind", "changed"),
+    [(kind, name) for kind, own in PATHS_OF.items() for name in FILES if name not in own],
+)
+def test_a_change_under_none_of_them_keeps_the_version(
+    repo: Repo, kind: SourceKind, changed: str
+) -> None:
+    tagged = repo.commit(**{name: "1" for name in FILES})
+    tag = f"{TAG_PREFIXES[kind]}2026.10"
+    repo.tag(tag)
+    repo.commit(**{changed: "2"})
+    assert resolve(kind, repo) == SourceVersion(kind, tagged, tag)
 
 
 def test_a_change_to_the_path_after_the_tag_is_untagged_at_head(repo: Repo) -> None:
@@ -245,6 +354,15 @@ def test_a_newer_tag_over_other_content_is_passed_over_for_one_that_matches(repo
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, current)
 
 
+def test_a_tag_matches_only_if_every_path_matches(repo: Repo) -> None:
+    """The mappings are the same at the tag as at HEAD; the code that loads
+    them is not."""
+    old = repo.commit(mappings="v1", graph="g1")
+    head = repo.commit(graph="g2")
+    repo.tag("mappings-stale", on=old)
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
+
+
 def test_the_other_kinds_tag_is_ignored(repo: Repo) -> None:
     head = repo.commit(mappings="v1", corpus="c1")
     repo.tag("corpus-2026.10")
@@ -266,7 +384,7 @@ def test_a_tag_moved_to_another_commit_resolves_to_where_it_is_now(repo: Repo) -
     first = repo.commit(mappings="v1")
     repo.tag("mappings-2026.10")
     recorded = mapping(repo)
-    second = repo.commit(code="y")  # same content for the path
+    second = repo.commit(code="y")  # same content for the paths
     repo.untag("mappings-2026.10")
     repo.tag("mappings-2026.10")
     moved = mapping(repo)
@@ -283,11 +401,11 @@ def test_a_tag_moved_onto_other_content_no_longer_names_this_content(repo: Repo)
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
 
 
-def test_a_tag_on_a_commit_before_the_path_existed_matches_nothing(repo: Repo) -> None:
-    before = repo.commit(code="x")
-    head = repo.commit(mappings="v1")
-    repo.tag("mappings-2026.10", on=before)
-    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
+def test_a_tag_on_a_commit_before_the_paths_existed_matches_nothing(bare: Repo) -> None:
+    before = bare.commit(code="x")
+    head = bare.commit(mappings="v1", graph="g1")
+    bare.tag("mappings-2026.10", on=before)
+    assert mapping(bare) == SourceVersion(SourceKind.MAPPING, head)
 
 
 def test_a_tag_that_is_not_on_a_commit_is_passed_over(repo: Repo) -> None:
@@ -300,8 +418,25 @@ def test_a_tag_that_is_not_on_a_commit_is_passed_over(repo: Repo) -> None:
 # ---- refusing what no commit holds -----------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("kind", "name"),
+    [(kind, name) for kind, names in PATHS_OF.items() for name in names],
+)
+def test_uncommitted_content_under_any_path_a_version_is_built_from_is_refused(
+    repo: Repo, kind: SourceKind, name: str
+) -> None:
+    repo.commit(**{n: "1" for n in FILES})
+    repo.tag(f"{TAG_PREFIXES[kind]}2026.10")
+    repo.write(FILES[name], "edited")
+    with pytest.raises(UncommittedSource, match="no SHA could name it") as refused:
+        resolve(kind, repo)
+    assert FILES[name] in str(refused.value)
+    other = next(k for k in SourceKind if k is not kind)
+    assert resolve(other, repo).untagged  # the other kind is clean: only this one is refused
+
+
 def _edit(repo: Repo) -> None:
-    repo.write(MAPPINGS_FILE, "edited")
+    repo.write(FILES["mappings"], "edited")
 
 
 def _add_a_file(repo: Repo) -> None:
@@ -309,12 +444,16 @@ def _add_a_file(repo: Repo) -> None:
 
 
 def _delete(repo: Repo) -> None:
-    (repo.root / MAPPINGS_FILE).unlink()
+    (repo.root / FILES["mappings"]).unlink()
 
 
 def _stage(repo: Repo) -> None:
-    repo.write(MAPPINGS_FILE, "staged")
-    repo.git("add", MAPPINGS_FILE)
+    repo.write(FILES["mappings"], "staged")
+    repo.git("add", FILES["mappings"])
+
+
+def _add_code(repo: Repo) -> None:
+    repo.write("src/compliance_rag/graph/new.py", "x = 1")
 
 
 @pytest.mark.parametrize(
@@ -324,9 +463,10 @@ def _stage(repo: Repo) -> None:
         pytest.param(_add_a_file, id="untracked-file"),
         pytest.param(_delete, id="deleted"),
         pytest.param(_stage, id="staged-not-committed"),
+        pytest.param(_add_code, id="untracked-code"),
     ],
 )
-def test_uncommitted_content_under_the_path_is_refused(
+def test_uncommitted_content_under_the_paths_is_refused(
     repo: Repo, change: Callable[[Repo], None]
 ) -> None:
     repo.commit(mappings="v1", corpus="c1")
@@ -337,26 +477,134 @@ def test_uncommitted_content_under_the_path_is_refused(
     assert corpus(repo).untagged  # the corpus is clean: only the mappings are refused
 
 
+def test_an_untracked_file_is_found_whatever_status_is_configured_to_show(repo: Repo) -> None:
+    repo.commit(mappings="v1")
+    repo.tag("mappings-2026.10")
+    repo.git("config", "status.showUntrackedFiles", "no")
+    repo.write("corpus/mappings/a.yaml", "a loaded file, in no commit")
+    assert repo.git("status", "--porcelain") == ""  # git itself says nothing
+    with pytest.raises(UncommittedSource, match=r"corpus/mappings/a\.yaml"):
+        mapping(repo)
+
+
+def test_an_ignored_file_is_found_because_it_is_loaded_all_the_same(repo: Repo) -> None:
+    repo.commit(mappings="v1")
+    repo.tag("mappings-2026.10")
+    repo.write("corpus/mappings/draft.draft.yaml", "ignored by .gitignore, loaded by *.yaml")
+    assert repo.git("status", "--porcelain") == ""
+    with pytest.raises(UncommittedSource, match=r"draft\.draft\.yaml"):
+        mapping(repo)
+
+
+def test_a_file_ignored_by_the_users_own_excludes_is_found_too(repo: Repo, tmp_path: Path) -> None:
+    excludes = tmp_path.parent / f"{tmp_path.name}-excludes"
+    excludes.write_text("*.local.yaml\n", encoding="utf-8")
+    repo.git("config", "core.excludesFile", str(excludes))
+    repo.commit(mappings="v1")
+    repo.write("corpus/mappings/mine.local.yaml", "hidden by a global ignore")
+    assert repo.git("status", "--porcelain") == ""
+    with pytest.raises(UncommittedSource, match=r"mine\.local\.yaml"):
+        mapping(repo)
+
+
+def test_ignored_code_under_the_paths_is_found_too(repo: Repo) -> None:
+    repo.write("src/compliance_rag/corpus/notes.draft.yaml", "ignored")
+    with pytest.raises(UncommittedSource, match=r"notes\.draft\.yaml"):
+        corpus(repo)
+
+
+def test_what_is_not_source_is_let_through(repo: Repo) -> None:
+    """Bytecode, Finder metadata and the raw compilations that are fetched, not
+    committed, and pinned by a sha256: none of it can change what is loaded."""
+    head = repo.commit(mappings="v1", corpus="c1")
+    repo.tag("mappings-2026.10")
+    repo.tag("corpus-2026.10")
+    repo.write("src/compliance_rag/graph/__pycache__/loader.cpython-312.pyc", "bytecode")
+    repo.write("src/compliance_rag/corpus/__pycache__/parser.cpython-312.pyc", "bytecode")
+    repo.write("corpus/mappings/.DS_Store", "finder")
+    repo.write("corpus/instruments/.DS_Store", "finder")
+    repo.write(
+        "corpus/instruments/privacy-act-1988/C2026C00227/raw/document_1.html", "<html>fetched"
+    )
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head, "mappings-2026.10")
+    assert corpus(repo) == SourceVersion(SourceKind.CORPUS, head, "corpus-2026.10")
+
+
+def test_a_raw_directory_is_let_through_only_under_the_instruments(repo: Repo) -> None:
+    repo.write("corpus/mappings/raw/anything.yaml", "loaded by nothing, but in no commit")
+    with pytest.raises(UncommittedSource, match=r"raw/anything\.yaml"):
+        mapping(repo)
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_a_file_git_was_told_not_to_look_at_is_refused(repo: Repo, flag: str) -> None:
+    """A change to it shows nowhere in `git status`."""
+    repo.commit(mappings="v1")
+    repo.git("update-index", flag, FILES["mappings"])
+    repo.write(FILES["mappings"], "changed, and git doesn't say so")
+    assert FILES["mappings"] not in repo.git("status", "--porcelain")
+    with pytest.raises(UncommittedSource, match="assume-unchanged or skip-worktree"):
+        mapping(repo)
+
+
+def test_the_refusal_names_what_it_found_and_how_much_more(repo: Repo) -> None:
+    for number in range(7):
+        repo.write(f"corpus/mappings/new-{number}.yaml", "x")
+    with pytest.raises(UncommittedSource, match=r"7 file\(s\).*new-0.*and 2 more") as refused:
+        mapping(repo)
+    assert "new-6" not in str(refused.value)
+
+
 def test_uncommitted_changes_elsewhere_do_not_matter(repo: Repo) -> None:
     head = repo.commit(mappings="v1", corpus="c1", code="x")
     repo.tag("mappings-2026.10")
-    repo.write(CODE_FILE, "edited")
+    repo.write(FILES["code"], "edited")
     repo.write("notes.txt", "untracked")
-    repo.write(CORPUS_FILE, "edited too")  # the other kind's path
+    repo.write(FILES["corpus"], "edited too")  # the other kind's path
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head, "mappings-2026.10")
     with pytest.raises(UncommittedSource):
         corpus(repo)
 
 
-def test_a_path_in_no_commit_is_refused(repo: Repo) -> None:
-    repo.commit(code="x")
+def test_a_path_in_no_commit_is_refused(bare: Repo) -> None:
+    bare.commit(code="x")
     with pytest.raises(UncommittedSource, match="no commit at HEAD"):
-        mapping(repo)
+        mapping(bare)
 
 
 def test_a_directory_that_is_not_a_repository_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(SourceVersionError, match="git status"):
         resolve_source_version(SourceKind.MAPPING, repo=tmp_path / "nowhere" / "at-all")
+
+
+# ---- git is a process: with a timeout ---------------------------------------------------
+
+
+def test_every_git_call_has_a_timeout(repo: Repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo.commit(mappings="v1")
+    repo.tag("mappings-2026.10")
+    real: Callable[..., Any] = subprocess.run
+    timeouts: list[object] = []
+
+    def recording(*args: Any, **kwargs: Any) -> Any:  # Any: forwarded to subprocess.run
+        timeouts.append(kwargs.get("timeout"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(git_source_versions.subprocess, "run", recording)
+    mapping(repo)
+    assert git_source_versions.TIMEOUT_SECONDS == 30
+    assert len(timeouts) >= 6 and set(timeouts) == {30}
+
+
+def test_a_git_that_hangs_is_an_error_not_a_loader_that_never_starts(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def hangs(*args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(args[0], 30)
+
+    monkeypatch.setattr(git_source_versions.subprocess, "run", hangs)
+    with pytest.raises(SourceVersionError, match="took longer than 30s"):
+        mapping(repo)
 
 
 # ---- the loaders resolve before they touch the graph -----------------------------------

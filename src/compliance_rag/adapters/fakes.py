@@ -37,7 +37,6 @@ from compliance_rag.adapters.interfaces import (
     RetrievalResult,
     RetrievalStore,
     ScoredDocument,
-    SourceVersion,
     UsageRecord,
     check_assessment_write,
 )
@@ -316,36 +315,19 @@ class FakeLedgerStore(LedgerStore):
         return self._profiles.get(tenant_id)
 
     async def record_coverage_assessment(
-        self,
-        *,
-        tenant_id: str,
-        assessment_id: str,
-        user_id: str,
-        corpus: SourceVersion,
-        mapping: SourceVersion,
-        as_of: dt.date,
-        trace_id: str,
-        rows: tuple[CoverageRow, ...],
+        self, record: AssessmentRecord, rows: tuple[CoverageRow, ...]
     ) -> None:
         """Everything is checked before anything is stored, which is what
-        Postgres' one transaction gives: a refused row leaves no assessment."""
-        key = (tenant_id, assessment_id)
-        if tenant_id not in self._profiles:
-            raise ValueError(f"tenant {tenant_id!r} isn't registered in the ledger")
+        Postgres' one transaction gives: a refused row leaves no assessment.
+        Checked in Postgres' order too, so an input with several faults gets
+        the same refusal from both."""
+        check_assessment_write(record, rows)
+        key = (record.tenant_id, record.assessment_id)
+        if record.tenant_id not in self._profiles:
+            raise ValueError(f"tenant {record.tenant_id!r} isn't registered in the ledger")
         if key in self._assessments:
-            raise ValueError(f"assessment {assessment_id} is already recorded")
-        check_assessment_write(
-            user_id=user_id, corpus=corpus, mapping=mapping, trace_id=trace_id, rows=rows
-        )
-        self._assessments[key] = AssessmentRecord(
-            tenant_id=tenant_id,
-            assessment_id=assessment_id,
-            user_id=user_id,
-            corpus=corpus,
-            mapping=mapping,
-            as_of=as_of,
-            trace_id=trace_id,
-        )
+            raise ValueError(f"assessment {record.assessment_id} is already recorded")
+        self._assessments[key] = record
         self._coverage[key] = {row.obligation_id: row for row in rows}
 
     async def coverage_rows(self, tenant_id: str, assessment_id: str) -> tuple[CoverageRow, ...]:

@@ -33,13 +33,14 @@ writable here."""
 
 LOAD_LABEL = "Load"
 """The record that a load ran (#153, ADR-0034): which corpus or mapping
-version, from which commit, started when and finished when. Deliberately not
-in `PERSISTED_LABELS`: it is metadata about the graph, not law or ontology, and
-not bitemporal — it has `started_at` and `finished_at`, no valid time, and is
-never retired. So it has no `stable_id`, can't be written with `put_node`, and
-the query builder can't start a traversal from it. `Neo4jGraph` writes and
-reads it in fixed Cypher (`begin_load`, `finish_load`, `loaded_sources`); a
-`Load` is never an answer about the law."""
+version, from which commit, started when and finished (or abandoned, by whom
+and why) when. Deliberately not in `PERSISTED_LABELS`: it is metadata about the
+graph, not law or ontology, and not bitemporal — it has `started_at` and its
+end, no valid time, and is never retired. So it has no `stable_id`, can't be
+written with `put_node`, and the query builder can't start a traversal from
+it. `Neo4jGraph` writes and reads it in fixed Cypher (`begin_load`,
+`finish_load`, `abandon_load`, `loaded_sources`), with the server's clock; a
+`Load` is never an answer about the law (D-05, ADR-0034)."""
 
 EDGE_TYPES = frozenset(
     {

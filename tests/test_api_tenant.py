@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
     GraphStore,
     LedgerStore,
     LoadedSource,
@@ -571,14 +572,16 @@ async def test_another_tenants_assessment_is_not_found(
     theirs, mine = uuid.uuid4().hex, uuid.uuid4().hex
     for tenant_id, assessment_id in (("other-tenant", theirs), (TENANT, mine)):
         await ledger.record_coverage_assessment(
-            tenant_id=tenant_id,
-            assessment_id=assessment_id,
-            user_id="someone@example.com",
-            corpus=CORPUS_VERSION,
-            mapping=MAPPING_VERSION,
-            as_of=dt.date(2026, 10, 12),
-            trace_id="a" * 32,
-            rows=(),
+            AssessmentRecord(
+                tenant_id=tenant_id,
+                assessment_id=assessment_id,
+                user_id="someone@example.com",
+                corpus=CORPUS_VERSION,
+                mapping=MAPPING_VERSION,
+                as_of=dt.date(2026, 10, 12),
+                trace_id="a" * 32,
+            ),
+            (),
         )
     assert (await client.get(f"/v1/coverage/{mine}")).status_code == 200
     hostile = {"tenant_id": "other-tenant"}

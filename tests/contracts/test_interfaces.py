@@ -22,6 +22,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
     Candidate,
     Channel,
     CitationVerifier,
@@ -286,14 +287,16 @@ async def test_assessment_records_versions_and_trace_id() -> None:
     corpus = SourceVersion(SourceKind.CORPUS, sha="a" * 40, tag="corpus-2026.09")
     mapping = SourceVersion(SourceKind.MAPPING, sha="b" * 40, tag="mappings-2026.09")
     await ledger.record_coverage_assessment(
-        tenant_id="acme",
-        assessment_id="a1",
-        user_id="lead@acme.example",
-        corpus=corpus,
-        mapping=mapping,
-        as_of=TODAY,
-        trace_id="0" * 32,
-        rows=(),
+        AssessmentRecord(
+            tenant_id="acme",
+            assessment_id="a1",
+            user_id="lead@acme.example",
+            corpus=corpus,
+            mapping=mapping,
+            as_of=TODAY,
+            trace_id="0" * 32,
+        ),
+        (),
     )
     record = await ledger.get_assessment("acme", "a1")
     assert record is not None
