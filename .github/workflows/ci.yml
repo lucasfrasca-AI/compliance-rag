@@ -46,6 +46,10 @@ jobs:
         image: qdrant/qdrant:v1.19.1
         ports:
           - 6333:6333
+        env:
+          # Qdrant reports usage telemetry to telemetry.qdrant.io by default:
+          # no telemetry endpoint outside australia-southeast1 (CLAUDE.md, #172).
+          QDRANT__TELEMETRY_DISABLED: "true"
       # neo4j: the graph tests (issue #87) run against a real, ephemeral
       # Community server — never Aura, which holds public law only (D-09)
       # and whose credentials no workflow carries. Community refuses
@@ -165,6 +169,8 @@ jobs:
         image: qdrant/qdrant:v1.19.1
         ports:
           - 6333:6333
+        env:
+          QDRANT__TELEMETRY_DISABLED: "true"  # #172, as above
 
     env:
       QDRANT_URL: http://localhost:6333
