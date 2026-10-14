@@ -342,6 +342,20 @@ def parse_stable_id(value: str) -> tuple[str, str, str]:
     )
 
 
+def clause_ancestors(clause_id: str) -> tuple[str, ...]:
+    """The stable ids of the clauses that contain this one, outermost first:
+    `…:sch1/app11/2/b` is inside `…:sch1`, `…:sch1/app11` and `…:sch1/app11/2`.
+    By path segment, never by characters, so `s1/10` is not inside `s1/1`.
+    A citation of a clause is a citation of its text, and in the stored model
+    that text is the clause and the clauses inside it (#163)."""
+    instrument_id, version_id, path = parse_stable_id(clause_id)
+    segments = path.split("/")
+    return tuple(
+        f"{instrument_id}:{version_id}:{'/'.join(segments[:depth])}"
+        for depth in range(1, len(segments))
+    )
+
+
 def clause_anchor_id(clause_path: str) -> str:
     """The synthesized click-to-clause anchor for a clause (`CONTEXT.md`:
     Position map, issue #9's ePub format spike).
@@ -581,8 +595,9 @@ class Chunk(BaseModel):
     valid_to: dt.date = NO_END_DATE
     synthetic: bool = False
     """Invented test data, not a customer's document (ADR-0023). Defaults to
-    False on purpose: an unmarked tenant chunk counts as real customer data,
-    which closes the offshore-generation gate."""
+    False on purpose: an unmarked chunk that isn't public law (tenant or user
+    scope, #166) counts as real customer data, which closes the
+    offshore-generation gate."""
 
     @field_validator("clause_id")
     @classmethod

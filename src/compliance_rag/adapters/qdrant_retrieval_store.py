@@ -57,17 +57,25 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.interfaces import (
+    NO_PREFIX,
     Candidate,
     Channel,
     Embedder,
     LawScope,
     LedgerStore,
+    PolicyCorpus,
     RetrievalAdmin,
     RetrievalResult,
     RetrievalStore,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.corpus.models import Chunk, Scope, epoch_days, parse_stable_id
+from compliance_rag.corpus.models import (
+    Chunk,
+    Scope,
+    clause_ancestors,
+    epoch_days,
+    parse_stable_id,
+)
 from compliance_rag.settings import Settings
 
 DENSE_VECTOR_NAME = "dense"
@@ -77,6 +85,7 @@ _SPARSE_CACHE_DIR = ".fastembed_cache"
 
 _PAYLOAD_KEYWORD_FIELDS = (
     "clause_id",
+    "ancestors",
     "tenant_id",
     "scope",
     "instrument_id",
@@ -303,6 +312,9 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                 payload={
                     "chunk_id": chunk.chunk_id,
                     "clause_id": chunk.clause_id,
+                    # The clauses this one is inside, so a citation of a
+                    # subclause admits its paragraphs (#163, `LawScope.admits`).
+                    "ancestors": list(clause_ancestors(chunk.clause_id)),
                     "instrument_id": parse_stable_id(chunk.clause_id)[0],
                     "version_id": parse_stable_id(chunk.clause_id)[1],
                     "withdrawn": False,
@@ -325,6 +337,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         law: LawScope,
+        policy_corpus: PolicyCorpus,
         extra: list[models.Condition] | None = None,
     ) -> models.Filter:
         """The *only* place a `Filter` is built (module docstring). Mirrors
@@ -332,7 +345,8 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         scope must be one of `scopes`, AND (the tenant owns the chunk OR it
         is library law in an instrument the tenant subscribes to), AND the
         chunk is in force on `as_of`. Subscriptions are read here, from the
-        ledger, never accepted from the caller (ADR-0020)."""
+        ledger, never accepted from the caller (ADR-0020). A tenant chunk of a
+        clause in `policy_corpus` is excluded (ADR-0033)."""
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         # What the tenant could see is part of why a clause didn't come back.
         trace.get_current_span().set_attribute(
@@ -377,16 +391,25 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                 )
             ]
             if law.clause_ids:
+                # A cited clause, or a clause inside one (#163): its paragraphs
+                # are its text. A point stored before `ancestors` existed
+                # matches on its own id only, which is narrower, never wider.
+                cited = sorted(law.clause_ids)
                 own_or_law.append(
                     models.Filter(
                         must=[
                             models.FieldCondition(
                                 key="scope", match=models.MatchValue(value=Scope.PUBLIC.value)
+                            )
+                        ],
+                        should=[
+                            models.FieldCondition(
+                                key="clause_id", match=models.MatchAny(any=cited)
                             ),
                             models.FieldCondition(
-                                key="clause_id", match=models.MatchAny(any=sorted(law.clause_ids))
+                                key="ancestors", match=models.MatchAny(any=cited)
                             ),
-                        ]
+                        ],
                     )
                 )
             must.append(models.Filter(should=own_or_law))
@@ -394,8 +417,28 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             must.extend(extra)
         # ADR-0021: a withdrawn version is out of retrieval at every as_of.
         # must_not, so a point upserted before the field existed still passes.
-        withdrawn = models.FieldCondition(key="withdrawn", match=models.MatchValue(value=True))
-        return models.Filter(must=must, must_not=[withdrawn])
+        must_not: list[models.Condition] = [
+            models.FieldCondition(key="withdrawn", match=models.MatchValue(value=True))
+        ]
+        trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
+        if policy_corpus.clause_ids:
+            # ADR-0033: the prefix's clauses are already in front of the model.
+            # Tenant scope only, so a law id here can never narrow the law; an
+            # empty MatchAny isn't "match nothing" everywhere, so none is sent.
+            must_not.append(
+                models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="scope", match=models.MatchValue(value=Scope.TENANT.value)
+                        ),
+                        models.FieldCondition(
+                            key="clause_id",
+                            match=models.MatchAny(any=sorted(policy_corpus.clause_ids)),
+                        ),
+                    ]
+                )
+            )
+        return models.Filter(must=must, must_not=must_not)
 
     @staticmethod
     def _target(
@@ -432,19 +475,19 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             ),
         )
 
-    async def holds_real_tenant_data(self) -> bool:
+    async def holds_real_customer_data(self) -> bool:
         # must_not synthetic=true, not must synthetic=false: a point written
         # before the field existed has no `synthetic` key and counts as real.
+        # Anything but public law is customer data: a tenant's documents and
+        # one person's private additions alike (#166).
         result = await self._client.count(
             self._collection_name,
             count_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="scope", match=models.MatchValue(value=Scope.TENANT.value)
-                    )
-                ],
                 must_not=[
-                    models.FieldCondition(key="synthetic", match=models.MatchValue(value=True))
+                    models.FieldCondition(
+                        key="scope", match=models.MatchValue(value=Scope.PUBLIC.value)
+                    ),
+                    models.FieldCondition(key="synthetic", match=models.MatchValue(value=True)),
                 ],
             ),
             exact=True,
@@ -495,9 +538,10 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> RetrievalResult:
         query_filter = await self._build_filter(
-            tenant_id=tenant_id, scopes=scopes, as_of=as_of, law=law
+            tenant_id=tenant_id, scopes=scopes, as_of=as_of, law=law, policy_corpus=policy_corpus
         )
         (dense_vector,) = await self._embedder.embed((query,))
         (sparse_vector,) = _encode_sparse([query])
@@ -568,12 +612,14 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         law: LawScope,
         tenant_id: str,
         as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> Candidate | None:
         scroll_filter = await self._build_filter(
             tenant_id=tenant_id,
             scopes=(Scope.PUBLIC, Scope.TENANT, Scope.USER),
             as_of=as_of,
             law=law,
+            policy_corpus=policy_corpus,
             extra=[
                 models.FieldCondition(key="clause_id", match=models.MatchValue(value=clause_id))
             ],

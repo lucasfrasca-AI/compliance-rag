@@ -42,6 +42,7 @@ from compliance_rag.corpus.models import (
     ClauseRecord,
     DocumentClass,
     Scope,
+    clause_ancestors,
     validate_tenant_id,
 )
 
@@ -99,9 +100,10 @@ class LawScope:
     """Which library-law clauses Track B may return (D-03, ADR-0030).
 
     Built from Track A's coverage (`LawScope.of`): the clauses its applicable
-    and unassessable obligations cite. A library clause outside that set is
-    never returned, by any channel, however well it matches. The tenant's own
-    documents aren't law, and Track A doesn't scope them.
+    and unassessable obligations cite, and the clauses inside them (#163). A
+    library clause outside that set is never returned, by any channel, however
+    well it matches. The tenant's own documents aren't law, and Track A
+    doesn't scope them.
 
     `unscoped` is the one way to retrieve library law without Track A. It is
     for a question asked with no tenant profile (the Phase 1 retrieval eval,
@@ -132,14 +134,50 @@ class LawScope:
         return cls(None, f"{UNSCOPED}{reason}")
 
     def admits(self, scope: Scope, clause_id: str) -> bool:
-        return scope is not Scope.PUBLIC or self.clause_ids is None or clause_id in self.clause_ids
+        """A cited clause admits the clauses inside it: the mapping cites a
+        subclause (APP 11.2), and the law is stored down to its paragraphs
+        (APP 11.2(b), (d)), which are its text (#163)."""
+        if scope is not Scope.PUBLIC or self.clause_ids is None:
+            return True
+        return clause_id in self.clause_ids or not self.clause_ids.isdisjoint(
+            clause_ancestors(clause_id)
+        )
 
     @property
     def described(self) -> str:
-        """For a span: the reason, and how many clauses it admits."""
+        """For a span: the reason, and how many clauses it cites. Each also
+        admits the clauses inside it (#163), which this doesn't count."""
         if self.clause_ids is None:
             return self.reason
-        return f"{self.reason}: {len(self.clause_ids)} clause(s)"
+        return f"{self.reason}: {len(self.clause_ids)} cited clause(s) and those inside them"
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyCorpus:
+    """The clauses of a tenant's policy corpus already sent as the CAG prefix
+    (D-11). Retrieval never returns one of them, by any channel: the prefix is
+    their authoritative copy, and the slots they'd take go to law (ADR-0033).
+
+    It excludes tenant-scoped chunks only, so it can never narrow the law, and
+    an external upload (never in the prefix) stays retrievable. Empty
+    (`NO_PREFIX`) for a call that sends no prefix: the recall gate, a library
+    question. Unlike `LawScope`, leaving it out can't widen what a tenant
+    sees, only spend slots on clauses the model already has, so it isn't
+    required (ADR-0033)."""
+
+    clause_ids: frozenset[str] = frozenset()
+
+    def excludes(self, scope: Scope, clause_id: str) -> bool:
+        return scope is Scope.TENANT and clause_id in self.clause_ids
+
+    @property
+    def described(self) -> str:
+        """For a span: how many clauses retrieval leaves out."""
+        return f"{len(self.clause_ids)} clause(s) already in the CAG prefix"
+
+
+NO_PREFIX = PolicyCorpus()
+"""No CAG prefix sent: nothing is left out."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,6 +558,9 @@ class RetrievalStore(ABC):
     caller cannot pass that filter in, so it cannot leave it out. Library law
     is further restricted to `law` (Track A's clauses, D-03), which every
     method requires.
+
+    `policy_corpus` names the tenant clauses already sent as the CAG prefix:
+    no method returns one of them, by any channel (ADR-0033).
     """
 
     @abstractmethod
@@ -532,6 +573,7 @@ class RetrievalStore(ABC):
         scopes: tuple[Scope, ...],
         as_of: dt.date,
         limit: int,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> RetrievalResult:
         """Dense + sparse channels fused with RRF inside the store (D-04)."""
 
@@ -543,6 +585,7 @@ class RetrievalStore(ABC):
         law: LawScope,
         tenant_id: str,
         as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> Candidate | None:
         """Exact clause-ID lookup. The router sends ID queries here (D-12)."""
 
@@ -557,10 +600,11 @@ class RetrievalAdmin(ABC):
     async def upsert_chunks(self, chunks: tuple[Chunk, ...]) -> None: ...
 
     @abstractmethod
-    async def holds_real_tenant_data(self) -> bool:
-        """Whether any stored chunk is tenant-scoped and not marked synthetic
-        — what closes offshore generation (ADR-0023). A chunk stored before
-        the `synthetic` flag existed counts as real."""
+    async def holds_real_customer_data(self) -> bool:
+        """Whether any stored chunk is not public law and not marked synthetic
+        (a tenant's documents and a person's private additions alike, #166) —
+        what closes offshore generation (ADR-0023). A chunk stored before the
+        `synthetic` flag existed counts as real."""
 
     @abstractmethod
     async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:

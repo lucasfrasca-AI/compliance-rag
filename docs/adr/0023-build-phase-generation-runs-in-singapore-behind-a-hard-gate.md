@@ -1,6 +1,6 @@
 # ADR-0023 — Build-phase generation runs in Singapore, behind a hard gate
 
-- Status: accepted; model and region superseded by ADR-0024 (`claude-sonnet-5` at the US multi-region endpoint). The gate stands, extended to each answer by ADR-0032 (the question, the CAG prefix and a clause to repair)
+- Status: accepted; model and region superseded by ADR-0024 (`claude-sonnet-5` at the US multi-region endpoint). The gate stands, extended to each answer by ADR-0032 (the question, the CAG prefix and a clause to repair); "real" covers user scope as well as tenant scope since #166
 - Date: 2026-10-09
 - Decision IDs: corrects `D-07`, amends `D-16` (`DECISIONS.md`)
 - Extends: D-09 (build-phase stores hold only public law and synthetic data)
