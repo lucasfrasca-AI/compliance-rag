@@ -1,0 +1,22 @@
+# TEST FIXTURE — invented for the obligation-qualifier tests (issue #182,
+# ADR-0044). Not law. Loaded beside test-applicability.yaml and
+# test-exceptions.yaml, whose obligations and exceptions it sits beside the
+# way a qualifiers file sits beside a signed mapping without editing it.
+#
+# OB-T-KEEP (s1/1) is qualified by s1/3: it says how keeping the records safe
+# is done, and its paragraphs s1/3/a and s1/3/b travel with it. Its exception
+# s1/2 (test-exceptions.yaml) stays an exception. OB-T-HEALTH (s2/1) is
+# qualified by s2/2: when it doesn't apply, s2/2 stays out of scope like its
+# clause.
+author: "model: Claude Opus 5.5 — qualifiers test fixture"
+reviewed_by: test-fixture (not a review — invented data)
+date: 2026-10-15
+source_clause_ids:
+  - test-act:v1:s1/3
+  - test-act:v1:s2/2
+
+qualifiers:
+  - obligation_id: OB-T-KEEP
+    clause_ids: [test-act:v1:s1/3]
+  - obligation_id: OB-T-HEALTH
+    clause_ids: [test-act:v1:s2/2]

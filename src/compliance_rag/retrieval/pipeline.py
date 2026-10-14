@@ -220,9 +220,10 @@ class RetrievalPipeline:
         """Clauses by exact id on the keyword channel, through every filter a
         lookup applies (the law scope, subscriptions, validity, ADR-0033);
         the ones not found are left out. For ids Track A names — an
-        obligation's exceptions (#164, ADR-0037) — never for an id a model or
-        a retrieved text supplied. Public scope only: an exception is library
-        law, so no tenant or private text can come back under its id."""
+        obligation's exceptions and qualifiers and the clauses inside them
+        (#164, #182, ADR-0037, ADR-0044) — never for an id a model or a
+        retrieved text supplied. Public scope only: each is library law, so
+        no tenant or private text can come back under its id."""
         with span("retrieve.fetch", tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             current.set_attribute("retrieval.fetch.clause_ids", list(clause_ids))
             found = await asyncio.gather(

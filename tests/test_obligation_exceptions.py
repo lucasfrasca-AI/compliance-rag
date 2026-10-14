@@ -38,11 +38,11 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import NO_PREFIX, Candidate, LawScope, PolicyCorpus
+from compliance_rag.adapters.interfaces import NO_PREFIX, Candidate, LawScope, Owed, PolicyCorpus
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.assessment.coverage import Coverage, ExceptionOf, Outcome
 from compliance_rag.assessment.evidence import Evidence, Facts
-from compliance_rag.assessment.pipeline import AssessmentPipeline, ObligationExceptionUndelivered
+from compliance_rag.assessment.pipeline import AssessmentPipeline, OwedClauseUndelivered
 from compliance_rag.assessment.prompt import SourceClause, fence, policy_prefix
 from compliance_rag.corpus.models import (
     NO_END_DATE,
@@ -217,7 +217,7 @@ async def test_an_exception_not_in_force_is_not_in_scope() -> None:
 
 async def test_an_exception_is_owed_for_its_clause_or_any_clause_inside_it() -> None:
     law = LawScope.of(await coverage_of())
-    owed = {KEEP_EXCEPTION: (KEEP,)}
+    owed = {KEEP_EXCEPTION: Owed(excepts=(KEEP,))}
     assert law.owed([KEEP]) == owed
     assert law.owed([f"{KEEP}/a"]) == owed  # a paragraph is its clause's text
     assert law.owed(["test-act:v1:s1/10", "test-act:v1:s1"]) == {}  # not inside s1/1
@@ -429,7 +429,7 @@ async def test_an_answer_given_an_obligations_clause_is_given_its_exception() ->
     assert store.looked_up == [KEEP_EXCEPTION]  # so it was fetched, by id
     assert answer.exceptions == (SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,)),)
     sent = str(generator.calls[0]["user"])
-    assert f" clause {KEEP_EXCEPTION} excepts {KEEP}]\n{TEXTS['s1/2']}\n" in sent
+    assert f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]\n{TEXTS['s1/2']}\n" in sent
     assert answer.verified
     assert [c.clause.clause_id for c in answer.citations if c.clause] == [KEEP_EXCEPTION]
 
@@ -456,7 +456,7 @@ async def test_an_exception_the_ranking_returned_is_marked_not_fetched_again() -
     assert KEEP_EXCEPTION in {c.clause_id for c in answer.retrieval.ranked_candidates()}
     assert store.looked_up == []
     assert answer.exceptions == (SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,)),)
-    assert f" clause {KEEP_EXCEPTION} excepts {KEEP}]" in str(generator.calls[0]["user"])
+    assert f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]" in str(generator.calls[0]["user"])
 
 
 async def test_an_exception_that_cannot_be_delivered_refuses_the_answer_before_generation() -> None:
@@ -466,7 +466,7 @@ async def test_an_exception_that_cannot_be_delivered_refuses_the_answer_before_g
     pipeline, generator, _ = await answering(
         {k: v for k, v in TEXTS.items() if k != "s1/2"}, citing(KEEP)
     )
-    with pytest.raises(ObligationExceptionUndelivered, match=KEEP_EXCEPTION):
+    with pytest.raises(OwedClauseUndelivered, match=KEEP_EXCEPTION):
         await pipeline.answer(QUESTION, "acme", AS_OF, law=law)
     assert generator.calls == []
 
@@ -502,7 +502,7 @@ async def test_an_answer_without_the_obligations_clause_owes_nothing() -> None:
 def test_an_exceptions_marker_names_what_it_excepts() -> None:
     fenced = fence("retrieved_clauses", [SourceClause(KEEP_EXCEPTION, "Text.", excepts=(KEEP,))])
     boundary = fenced.split("boundary=", 1)[1].split(">", 1)[0]
-    assert f"[{boundary} clause {KEEP_EXCEPTION} excepts {KEEP}]\nText.\n[{boundary} end]" in fenced
+    assert f"[{boundary} clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]\nText.\n[{boundary} end]" in fenced
 
 
 def test_a_malformed_excepted_id_never_reaches_a_marker() -> None:
