@@ -390,7 +390,7 @@ def test_opening_words_show_where_two_texts_part() -> None:
         "Commonwealth, and includes: but does not include a person",
     )
     assert old == "… Commonwealth, and includes:"
-    assert new == "… Commonwealth, and includes: but does not include a person …"
+    assert new == "… Commonwealth, and includes: but does not include a person"
 
 
 # ---- the authorization -----------------------------------------------------
