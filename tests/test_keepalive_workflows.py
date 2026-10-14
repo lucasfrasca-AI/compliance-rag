@@ -222,6 +222,7 @@ async def test_bootstrap_creates_the_production_shape_once_and_never_empties_it(
         "ancestors",  # ADR-0035
         "tenant_id",
         "scope",
+        "user_id",  # ADR-0036
         "instrument_id",
         "version_id",
         "valid_from",

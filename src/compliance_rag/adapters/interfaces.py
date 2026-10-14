@@ -578,6 +578,12 @@ class RetrievalStore(ABC):
 
     `policy_corpus` names the tenant clauses already sent as the CAG prefix:
     no method returns one of them, by any channel (ADR-0033).
+
+    `user_id` is the signed-in member asking (`Member.uid`). A user-scoped
+    chunk is one person's private addition: no method returns one except to
+    the member who owns it, in that member's tenant, by any channel
+    (ADR-0036). `None` — no member — admits no user-scoped chunk at all, so
+    leaving it out can only narrow what comes back, never widen it.
     """
 
     @abstractmethod
@@ -591,6 +597,7 @@ class RetrievalStore(ABC):
         as_of: dt.date,
         limit: int,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> RetrievalResult:
         """Dense + sparse channels fused with RRF inside the store (D-04).
 
@@ -611,10 +618,14 @@ class RetrievalStore(ABC):
         *,
         law: LawScope,
         tenant_id: str,
+        scopes: tuple[Scope, ...],
         as_of: dt.date,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> Candidate | None:
-        """Exact clause-ID lookup. The router sends ID queries here (D-12)."""
+        """Exact clause-ID lookup. The router sends ID queries here (D-12).
+        `scopes` narrows it exactly as it narrows `search`: a lookup is a
+        channel too (ADR-0036)."""
 
 
 class RetrievalAdmin(ABC):
@@ -816,8 +827,13 @@ class ClauseStore(ABC):
     """
 
     @abstractmethod
-    async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
-        """One clause by its stable ID, or `None` if it doesn't exist."""
+    async def get_clause(
+        self, clause_id: str, *, tenant_id: str, user_id: str | None = None
+    ) -> ClauseRecord | None:
+        """One clause by its stable ID, or `None` if it doesn't exist. A
+        user-scoped clause is one person's private addition: only the member
+        who owns it (`user_id`) is given it; anyone else gets `None`, as if it
+        did not exist (ADR-0036)."""
 
     @abstractmethod
     async def put_clause(self, clause: ClauseRecord) -> None:
