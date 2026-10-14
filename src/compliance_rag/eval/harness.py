@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+from pydantic import SecretStr
 
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
@@ -39,14 +40,18 @@ from compliance_rag.reranker_service.model import RerankerModel
 
 
 @asynccontextmanager
-async def golden_store(qdrant_url: str, *, prefix: str) -> AsyncGenerator[QdrantRetrievalStore]:
+async def golden_store(
+    qdrant_url: str, *, prefix: str, api_key: SecretStr | None = None
+) -> AsyncGenerator[QdrantRetrievalStore]:
     """The golden corpus on a throwaway collection, with the real
-    `gemini-embedding-001` snapshot as its embedder."""
+    `gemini-embedding-001` snapshot as its embedder. `api_key` only for the
+    one-off run on the deployed cluster (#144); the gates pass none."""
     async with QdrantRetrievalStore.ephemeral(
         qdrant_url,
         embedder=CachedEmbedder(EmbeddingCache.load()),
         ledger=FakeLedgerStore(),
         prefix=prefix,
+        api_key=api_key,
     ) as store:
         await store.upsert_chunks(golden_chunks())
         yield store

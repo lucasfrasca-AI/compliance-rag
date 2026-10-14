@@ -672,9 +672,20 @@ class RetrievalAdmin(ABC):
         `synthetic` flag existed counts as real."""
 
     @abstractmethod
+    async def version_chunk_ids(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> frozenset[str]:
+        """The `chunk_id` of every stored chunk of this version, visible or
+        not: what tells a finished load from a partial one, or from a
+        different clause set (#144)."""
+
     async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
         """Whether any chunk of this version is stored, visible or not —
         publishing over an existing version would be a replace in place."""
+        stored = await self.version_chunk_ids(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        )
+        return bool(stored)
 
     @abstractmethod
     async def retire_version(
