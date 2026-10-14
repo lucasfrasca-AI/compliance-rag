@@ -197,10 +197,18 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         return self._overlap(query, text)
 
     def _visible(
-        self, chunk: Chunk, tenant_id: str, scopes: tuple[Scope, ...], subscribed: frozenset[str]
+        self,
+        chunk: Chunk,
+        tenant_id: str,
+        scopes: tuple[Scope, ...],
+        subscribed: frozenset[str],
+        user_id: str | None,
     ) -> bool:
         if chunk.scope not in scopes or chunk.chunk_id in self._withdrawn:
             return False
+        if chunk.scope is Scope.USER:
+            # One person's private addition: its tenant, and its owner (ADR-0036).
+            return chunk.tenant_id == tenant_id and user_id is not None and chunk.user_id == user_id
         if chunk.tenant_id == tenant_id:
             return True
         if chunk.scope is Scope.PUBLIC:
@@ -218,14 +226,16 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         as_of: dt.date,
         limit: int,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> RetrievalResult:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
         trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
+        trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
         pool = [
             c
             for c in self._chunks.values()
-            if self._visible(c, tenant_id, scopes, subscribed)
+            if self._visible(c, tenant_id, scopes, subscribed, user_id)
             # D-03: library law only from the clauses Track A cites.
             and law.admits(c.scope, c.clause_id)
             # ADR-0033: the prefix's clauses are already in front of the model.
@@ -282,17 +292,19 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         *,
         law: LawScope,
         tenant_id: str,
+        scopes: tuple[Scope, ...],
         as_of: dt.date,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> Candidate | None:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
         trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
-        every_scope = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
+        trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
         for c in self._chunks.values():
             if c.clause_id != clause_id:
                 continue
-            if not self._visible(c, tenant_id, every_scope, subscribed):
+            if not self._visible(c, tenant_id, scopes, subscribed, user_id):
                 continue
             if not law.admits(c.scope, c.clause_id):
                 continue  # D-03: the keyword channel is a channel too
@@ -528,8 +540,12 @@ class FakeClauseStore(ClauseStore):
         self._source_html: dict[tuple[str, str, str], str] = {}
         self._manifest_metadata: dict[tuple[str, str, str], ManifestMetadata] = {}
 
-    async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
-        return self._clauses.get((tenant_id, clause_id))
+    async def get_clause(
+        self, clause_id: str, *, tenant_id: str, user_id: str | None = None
+    ) -> ClauseRecord | None:
+        clause = self._clauses.get((tenant_id, clause_id))
+        # One person's private addition goes to its owner alone (ADR-0036).
+        return clause if clause is not None and clause.visible_to(user_id) else None
 
     async def put_clause(self, clause: ClauseRecord) -> None:
         self._clauses[(clause.tenant_id, clause.clause_id)] = clause

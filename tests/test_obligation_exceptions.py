@@ -344,12 +344,20 @@ class SpyStore(FakeRetrievalStore):
         *,
         law: LawScope,
         tenant_id: str,
+        scopes: tuple[Scope, ...],
         as_of: dt.date,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> Candidate | None:
         self.looked_up.append(clause_id)
         return await super().lookup_clause(
-            clause_id, law=law, tenant_id=tenant_id, as_of=as_of, policy_corpus=policy_corpus
+            clause_id,
+            law=law,
+            tenant_id=tenant_id,
+            scopes=scopes,
+            as_of=as_of,
+            policy_corpus=policy_corpus,
+            user_id=user_id,
         )
 
 
