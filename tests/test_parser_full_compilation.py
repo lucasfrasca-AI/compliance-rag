@@ -21,7 +21,7 @@ doesn't download it.
 from __future__ import annotations
 
 import hashlib
-import html
+import html as html_module
 import os
 import re
 from collections import Counter
@@ -260,7 +260,7 @@ _PARAGRAPH_TOKEN = re.compile(r"^\([a-z]+\)\s*")
 
 
 def _plain(block: str) -> str:
-    return html.unescape(re.sub(r"<[^>]+>", "", block))
+    return html_module.unescape(re.sub(r"<[^>]+>", "", block))
 
 
 def _class_of(block: str) -> str:
@@ -330,6 +330,57 @@ def test_a_connector_keeps_source_order_across_the_stored_clauses(
     assert _stored_words(clauses, "s6/1/record") == _source_words("record")
 
 
+_OPERATIVE = (
+    "subsection",
+    "subsection2",
+    "Definition",
+    "paragraph",
+    "paragraphsub",
+    "paragraphsub-sub",
+)
+_LEADING_TOKEN = {
+    "subsection": re.compile(r"^(\(\d+[A-Z]*\)|\d+\.\d+[A-Z]*)\s*"),
+    "paragraph": re.compile(r"^\([a-z]+\)\s*"),
+    "paragraphsub": re.compile(r"^\([ivx]+[a-z]*\)\s*"),
+    "paragraphsub-sub": re.compile(r"^\([A-Z]\)\s*"),
+}
+
+
+def _operative_words(source: str) -> Counter[str]:
+    """Every word of the operative text from the first section on, read off the
+    markup with no parser code: the blocks that hold provisions, minus the
+    "(a)" or "11.1" each starts with (a clause's number is its path, not its
+    text). Headings, notes and tables are not operative text, and the recitals
+    before section 1 belong to no section."""
+    words: Counter[str] = Counter()
+    in_a_section = False
+    for block in _P_BLOCK.findall(source):
+        kind = _class_of(block)
+        in_a_section = in_a_section or kind == "ActHead5"
+        if not in_a_section or kind not in _OPERATIVE:
+            continue
+        text = _plain(block).strip()
+        if kind in _LEADING_TOKEN:
+            text = _LEADING_TOKEN[kind].sub("", text, count=1)
+        words.update(text.split())
+    return words
+
+
+def _stored_word_counts(source: str) -> Counter[str]:
+    parsed = parse_compilation(source, instrument_id="privacy-act-1988", version_id="C2026C00227")
+    return Counter(word for clause in parsed.clauses for word in clause.text.split())
+
+
+@pytest.mark.parametrize("name", ["constructs", "excerpt"])
+def test_every_operative_word_of_a_fixture_is_stored_exactly_once(name: str) -> None:
+    """The parser may put a word on the wrong clause (#178), but it may never
+    lose one, write one or store one twice. Checked on every real fixture, so
+    every Definition, list and closing line in them is covered, not just the
+    ones a test above names."""
+    source = (FIXTURES / f"privacy-act-1988-C2026C00227.{name}.html").read_text(encoding="utf-8")
+    assert _stored_word_counts(source) == _operative_words(source)
+
+
 def test_closing_words_after_a_non_definition_list_stay_on_their_subsection(
     clauses: dict[str, ClauseRecord],
 ) -> None:
@@ -361,7 +412,8 @@ def test_two_provisions_on_one_path_are_refused() -> None:
 def test_the_whole_compilation_parses() -> None:
     raw = Path(os.environ["PRIVACY_ACT_COMPILATION_HTML"]).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == FULL_SHA256, "a different compilation file"
-    clauses = _parse(raw.decode("utf-8"))
+    text = raw.decode("utf-8")
+    clauses = _parse(text)
     assert len(clauses) == 4114
     counts = Counter(p.split("/")[0] for p in clauses)
     assert {s: counts[s] for s in ("s6", "s6c", "s6d", "s6da", "s6e", "s6ea", "sch1")} == {
@@ -379,9 +431,14 @@ def test_the_whole_compilation_parses() -> None:
     assert "s80u" not in clauses and "s80u/1" in clauses
     # Term and body joined as the source reads.
     assert clauses["s6/1/breach"].text.startswith("breach:")
+    # Every operative word is stored exactly once, bar the one heading set in
+    # subsection style that is not a provision (s80U).
+    stored, operative = _stored_word_counts(text), _operative_words(text)
+    assert stored - operative == Counter()
+    assert operative - stored == Counter(["Enforceable", "civil", "penalty", "provisions"])
     # The words after a definition's paragraphs are the definition's (#178).
     assert clauses["s6/1"].text == S6_1_CHAPEAU
-    for path, text in CLOSED_BY_THEIR_OWN_WORDS.items():
-        assert clauses[path].text == text
+    for path, expected in CLOSED_BY_THEIR_OWN_WORDS.items():
+        assert clauses[path].text == expected
     assert clauses["s6/1/record"].text == "record includes:"
     assert clauses["s6/1/record/d"].text.startswith("but does not include: ")

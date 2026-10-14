@@ -116,6 +116,11 @@ govern the whole list, and the definition is the clause that heads it. Only a
 connector, which governs what follows it and nothing else, is placed by source
 order.
 
+**Not modelled:** a held `subsection2` followed by a token-less paragraph that
+continues the paragraph above (the s6FA(a) shape) stays held until the next
+clause opens or the definition ends. No definition in C2026C00227 has that
+shape, so it isn't guessed at.
+
 ## Consequences
 
 - **Five clauses change text; none is added, removed or re-pathed.** `s6/1`
@@ -124,6 +129,13 @@ order.
   `s6/1/record/d`. Over the whole pinned compilation (sha256 `6d0a43e5…`, 4114
   clauses) nothing else differs, the stored HTML is identical, and the
   multiset of words is identical.
+- **A conservation test now guards the class of bug, not the four cases.**
+  Every operative word of the Act, read off the markup without parser code, is
+  stored exactly once. It runs on both checked-in fixtures, and on the pinned
+  compilation when `PRIVACY_ACT_COMPILATION_HTML` is set, where the only
+  exception is the s80U heading set in subsection style ("Enforceable civil
+  penalty provisions"), which is not a provision. A word on the wrong clause
+  still needs a test of its own, as the four here have.
 - **The golden corpus is unchanged.** Its law is the excerpt, whose `s6/1`
   was already the bare chapeau, so the embedding cache (keyed by text) stays
   valid.
@@ -141,4 +153,4 @@ order.
   words still join the subsection's text. The clearest case is s7(1)
   ("… is a reference to: but does not include a reference to an act done …
   received from:"), whose (f)–(h) are exclusions that read as inclusions.
-  Tracked in its own issue.
+  Tracked in #186.
