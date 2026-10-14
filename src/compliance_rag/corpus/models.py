@@ -538,6 +538,13 @@ class ClauseRecord(BaseModel):
         """The stable ID: `{instrument_id}:{version_id}:{clause_path}`."""
         return stable_id(self.instrument_id, self.version_id, self.clause_path)
 
+    def visible_to(self, user_id: str | None) -> bool:
+        """Whether the member `user_id` may be given this clause's text
+        (ADR-0036): any clause that isn't user-scoped, and a user-scoped one
+        only to its owner. No member, or a record naming no owner, is the
+        owner of nothing."""
+        return self.scope is not Scope.USER or (user_id is not None and self.user_id == user_id)
+
     @field_validator("canonical_text")
     @classmethod
     def _already_canonical(cls, v: str) -> str:

@@ -3,6 +3,8 @@
 - Status: accepted (the human's decision on #171, 2026-10-14)
 - Date: 2026-10-14
 - Issue: #171
+- Related: ADR-0020 (the tenant filter this adds the owner to), ADR-0033 (the
+  cached prefix, now stated to be tenant scope only)
 
 ## Context
 
@@ -44,7 +46,8 @@ of that tenant and to no one else.**
   the asking member. It is built in `_build_filter`, the one place a Qdrant
   filter is built, and mirrored in the fake's `_visible`, so one contract runs
   against both. The tenant's other documents are admitted by tenant alone, as
-  before. Nothing downstream re-checks it.
+  before. No later stage of retrieval re-checks it; the clause store's read of
+  canonical text applies the same rule on its own (below).
 - **No member admits nothing.** `user_id=None` matches no user-scoped chunk, so
   the argument defaults to `None` on the store, pipeline and `answer`: leaving
   it out can only narrow what comes back, never widen it. A point that is
@@ -61,7 +64,10 @@ of that tenant and to no one else.**
   passes the member to `ClauseStore.get_clause`, which returns `None` for a
   user-scoped clause to anyone else, in the fake and in the Cloud Storage
   adapter. Retrieval's filter already keeps another's clause out of the
-  context; this holds when it did not, as the version check does.
+  context; this holds when it did not, as the ledger's version checks hold
+  for a retired clause. It finds the clause's tenant from the instrument id's
+  prefix, as the verifier always has, so it does not itself know the asking
+  tenant: retrieval's filter is what binds the tenant.
 - **The write path carries the owner.** `CorpusLifecycle._check_payload` checks
   every chunk and clause against `check_user_owner` before any store is touched,
   because `model_copy` skips model validation, and requires a version to have
@@ -124,8 +130,14 @@ does not change them.
   read of canonical text, and in the cached prefix. The leakage contract runs
   on the fake and on a real Qdrant server, with the owner as the positive
   control for every route.
-- **`lookup_clause` gained a required `scopes`.** Existing callers pass public
-  and tenant, which is what they were using.
+- **`lookup_clause` gained a required `scopes`.** It used to search public,
+  tenant and user scope whatever the caller wanted, which is the narrowing:
+  the existing callers now pass public and tenant, and a caller that wants a
+  member's own additions must say so.
+- **`answer()` now retrieves a member's own private additions** (`ANSWER_SCOPES`).
+  Before, only its exact-id lookup could reach user scope, and for any member.
+  This is a capability for the owner, not part of the isolation fix; the
+  isolation is the filter.
 - **Points stored before `user_id` existed**, with scope `user`, fail closed.
   Nothing writes them today and the cloud collection is empty (#144), so nothing
   needs re-upserting.

@@ -13,6 +13,7 @@ import datetime as dt
 import json
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import ValidationError
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
@@ -266,6 +267,20 @@ async def test_a_clause_store_gives_a_private_clause_to_its_owner_alone(
         assert await store.get_clause(shared.clause_id, tenant_id="acme", user_id=member) == shared
 
 
+async def test_a_private_clause_naming_no_owner_is_given_to_no_one() -> None:
+    """Fails closed, as retrieval does for a point with no `user_id`: no
+    member, and no one at all, is its owner. (`model_copy` skips the model's
+    own check, which is how such a record can exist. The Cloud Storage adapter
+    can't hold one: it validates what it reads, so it raises rather than
+    return it.)"""
+    ownerless = _private(ALICE).model_copy(update={"user_id": None})
+    store = FakeClauseStore()
+    await store.put_clause(ownerless)
+    for member in (ALICE, BOB, None):
+        assert not ownerless.visible_to(member)
+        assert await store.get_clause(ownerless.clause_id, tenant_id="acme", user_id=member) is None
+
+
 # ---- the cached policy prefix -----------------------------------------------------
 
 
@@ -385,6 +400,27 @@ async def test_the_verifier_refuses_a_leaked_private_clause_to_a_stranger() -> N
     assert alices.verified
     [shown] = alices.citations
     assert shown.clause is not None and shown.clause.canonical_text == mine.canonical_text
+
+
+async def test_the_traces_say_whether_a_member_asked_never_who(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """CLAUDE.md: no identifiers in traces. The retrieval span records that a
+    member asked; the uid appears in no span, on either router path."""
+    pipeline, _ = await _pipeline(FakeGenerator())
+    mine = _private(ALICE)
+    for question in (QUESTION, mine.clause_id):
+        span_exporter.clear()
+        await pipeline.answer(question, "acme", TODAY, law=LIBRARY_QUESTION, user_id=ALICE)
+        spans = span_exporter.get_finished_spans()
+        assert any(s.attributes and s.attributes.get("retrieval.member_present") for s in spans)
+        assert ALICE not in json.dumps([dict(s.attributes or {}) for s in spans], default=str)
+        span_exporter.clear()
+        await pipeline.answer(question, "acme", TODAY, law=LIBRARY_QUESTION)
+        assert any(
+            s.attributes and s.attributes.get("retrieval.member_present") is False
+            for s in span_exporter.get_finished_spans()
+        )
 
 
 async def test_a_member_cites_their_own_private_addition_through_answer() -> None:

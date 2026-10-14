@@ -538,9 +538,8 @@ class FakeClauseStore(ClauseStore):
         self, clause_id: str, *, tenant_id: str, user_id: str | None = None
     ) -> ClauseRecord | None:
         clause = self._clauses.get((tenant_id, clause_id))
-        if clause is not None and clause.scope is Scope.USER and clause.user_id != user_id:
-            return None  # one person's private addition (ADR-0036)
-        return clause
+        # One person's private addition goes to its owner alone (ADR-0036).
+        return clause if clause is not None and clause.visible_to(user_id) else None
 
     async def put_clause(self, clause: ClauseRecord) -> None:
         self._clauses[(clause.tenant_id, clause.clause_id)] = clause

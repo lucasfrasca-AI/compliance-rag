@@ -123,7 +123,7 @@ class Verifier:
         """`user_id` is the member whose answer this is: canonical text of a
         user-scoped clause is read for its owner alone (ADR-0036). Retrieval's
         filter keeps another's clause out of `context`; this holds even when
-        it didn't, like the version check above."""
+        it didn't, as the ledger's version checks below do for a retired one."""
         if citation.clause_id not in context:
             return CheckedCitation(citation, Outcome.NOT_IN_CONTEXT)
         instrument_id, version_id, _ = parse_stable_id(citation.clause_id)

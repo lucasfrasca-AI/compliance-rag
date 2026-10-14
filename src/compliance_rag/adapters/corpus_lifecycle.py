@@ -323,6 +323,8 @@ class CorpusLifecycle:
             tenant_id=tenant_id, instrument_id=instrument_id
         )
         if recorded is not None:
+            # With no class recorded the instrument is no policy, so it is not
+            # in the cached prefix (the ledger lists the prefix by class).
             _check_class_scope(recorded, chunks, clauses)
         chunks = self._synthetic_registry.mark(chunks)
         assert_upload_allowed(

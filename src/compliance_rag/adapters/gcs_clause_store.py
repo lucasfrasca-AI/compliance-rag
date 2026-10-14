@@ -48,7 +48,6 @@ from compliance_rag.adapters.interfaces import ClauseStore, ManifestMetadata
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import (
     ClauseRecord,
-    Scope,
     canonical_sha256,
     parse_stable_id,
     sha256_hex,
@@ -149,9 +148,7 @@ class GCSClauseStore(ClauseStore):
         # One person's private addition (ADR-0036): the object key names the
         # tenant, not the owner, so the owner is checked on the record itself.
         # A reader who isn't the owner is told it isn't there.
-        if record.scope is Scope.USER and record.user_id != user_id:
-            return None
-        return record
+        return record if record.visible_to(user_id) else None
 
     async def put_clause(self, clause: ClauseRecord) -> None:
         blob = self._bucket.blob(

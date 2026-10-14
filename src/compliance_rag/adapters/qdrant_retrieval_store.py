@@ -35,7 +35,9 @@ User scope is private to its owner (ADR-0036), enforced in the same place: a
 user-scoped chunk carries its owner's `user_id`, and `_build_filter` admits it
 only when the chunk's tenant is the asking tenant AND its `user_id` is the
 asking member's. No member means no user-scoped chunk. The filter is the whole
-rule: nothing downstream re-checks it.
+rule for retrieval: no later stage of retrieval re-checks it. (The clause
+store's read of canonical text applies the same owner rule independently, for
+the case where a filter somewhere did not.)
 
 Subscriptions (ADR-0020) are enforced the same way: `_build_filter` reads the
 tenant's subscribed library instruments from the ledger itself on every call,
@@ -368,7 +370,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         )
         # Whether a member asked, not who: user scope admits only their own.
         trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
-        visible_to_tenant: list[models.Condition] = [
+        visible_to_asker: list[models.Condition] = [
             # The tenant's documents of every scope but user, which is private
             # to a member and admitted by the branch below.
             models.Filter(
@@ -383,7 +385,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             )
         ]
         if user_id is not None:
-            visible_to_tenant.append(
+            visible_to_asker.append(
                 models.Filter(
                     must=[
                         models.FieldCondition(
@@ -401,7 +403,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         if subscribed:
             # An empty MatchAny is not "match nothing" in every Qdrant
             # version, so with no subscriptions the branch is omitted outright.
-            visible_to_tenant.append(
+            visible_to_asker.append(
                 models.Filter(
                     must=[
                         models.FieldCondition(
@@ -417,7 +419,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             models.FieldCondition(
                 key="scope", match=models.MatchAny(any=[s.value for s in scopes])
             ),
-            models.Filter(should=visible_to_tenant),
+            models.Filter(should=visible_to_asker),
             models.FieldCondition(key="valid_from", range=models.Range(lte=epoch_days(as_of))),
             models.FieldCondition(key="valid_to", range=models.Range(gt=epoch_days(as_of))),
         ]

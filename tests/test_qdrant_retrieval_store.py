@@ -334,3 +334,24 @@ async def test_qdrant_stores_what_the_write_path_publishes_for_its_owner_alone()
         _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="publish"
     ) as store:
         await assert_a_published_private_addition_is_private(store, store)
+
+
+async def test_the_user_id_index_is_added_to_a_collection_that_lacks_only_it() -> None:
+    """A deployed collection already has every other index (ADR-0020,
+    ADR-0035): `ensure_ready` adds just `user_id`, without touching the data."""
+    from qdrant_client import AsyncQdrantClient
+
+    from tests.contracts.test_user_scope import ALICE_NOTE
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="index"
+    ) as store:
+        await store.upsert_chunks((ALICE_NOTE,))
+        client = AsyncQdrantClient(url=_QDRANT_URL)
+        collection = store._collection_name  # pyright: ignore[reportPrivateUsage]
+        await client.delete_payload_index(collection, "user_id")
+        assert "user_id" not in (await client.get_collection(collection)).payload_schema
+        await store.ensure_ready()
+        info = await client.get_collection(collection)
+        await client.close()
+    assert "user_id" in info.payload_schema and info.points_count == 1
