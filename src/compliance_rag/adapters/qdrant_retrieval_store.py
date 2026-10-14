@@ -24,10 +24,10 @@ first use; CI caches `.fastembed_cache/` across runs the same way it caches
 the reranker artifact, rather than a network call inside a gate that must
 be deterministic (issue #21's own standard).
 
-Its values are BM25's term-frequency part only. The inverse-document-frequency
-part is Qdrant's, applied at query time to a sparse vector configured with
-`Modifier.IDF`, so the sparse vector is created with it and an older collection
-is given it in place (`ensure_collection`, #179).
+The `Qdrant/bm25` values are BM25's term-frequency part only. The
+inverse-document-frequency part is Qdrant's, applied at query time to a sparse
+vector configured with `Modifier.IDF`, so the sparse vector is created with it
+and an older collection is given it in place (`ensure_collection`, #179).
 
 Scope and tenant enforcement lives here, not at the call site: `_build_filter`
 is the *only* place a Qdrant `Filter` gets constructed, and every method that
@@ -158,12 +158,16 @@ async def _apply_sparse_idf(client: AsyncQdrantClient, collection_name: str) -> 
     are the term-frequency part either way, and keeps the vector's index
     settings. Read back afterwards, so a server that accepted the call and
     ignored it is an error here, not a quiet no-op."""
-    with telemetry.span("qdrant.apply_sparse_idf", **{"retrieval.collection": collection_name}):
+    with telemetry.span(
+        "qdrant.apply_sparse_idf", **{"retrieval.collection": collection_name}
+    ) as span:
         await client.update_collection(
             collection_name, sparse_vectors_config={SPARSE_VECTOR_NAME: _sparse_vector_params()}
         )
         info = await client.get_collection(collection_name)
-        if _sparse_modifier(info.config.params) != models.Modifier.IDF:
+        modifier = _sparse_modifier(info.config.params)
+        span.set_attribute("retrieval.sparse_modifier", modifier.value if modifier else "none")
+        if modifier != models.Modifier.IDF:
             raise ValueError(
                 f"collection {collection_name}: asked the server to give the "
                 f"{SPARSE_VECTOR_NAME!r} sparse vector the IDF modifier and it still has none — "

@@ -202,8 +202,9 @@ async def test_exact_id_and_paraphrase_meet_their_exit_bars(
     """Issue #28's enforced bars on fusion: exact-ID = 1.0, paraphrase >= 0.9.
     Cross-clause is gated on the delivered, reranked list instead
     (`test_recall_gate_reranked.py`, ADR-0022): fusion alone measured 0.792 when
-    that was decided, with a BM25 channel that had no IDF (#179), and measures
-    0.833 since; reranking takes it to 0.896."""
+    that was decided, with a BM25 channel that had no IDF (#179), and is above
+    that since (the per-query numbers are `recall_baseline.json`'s); reranking
+    is what takes it to 0.896."""
     _report(results)
     failing = below_exit_bar(results)
     assert {c: v for c, v in failing.items() if c is not Category.CROSS_CLAUSE} == {}

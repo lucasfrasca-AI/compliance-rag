@@ -23,6 +23,7 @@ import datetime as dt
 import os
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import pytest
@@ -137,19 +138,22 @@ def _name(store: QdrantRetrievalStore) -> str:
     return store._collection_name  # pyright: ignore[reportPrivateUsage]
 
 
+def _new_store() -> AbstractAsyncContextManager[QdrantRetrievalStore]:
+    """A store on a collection it has just created, dropped on exit."""
+    return QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="idf-new"
+    )
+
+
 async def test_a_new_collection_is_created_with_the_idf_modifier(
     client: AsyncQdrantClient,
 ) -> None:
-    async with QdrantRetrievalStore.ephemeral(
-        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="idf-new"
-    ) as store:
+    async with _new_store() as store:
         assert await _modifier(client, _name(store)) == models.Modifier.IDF
 
 
 async def test_a_new_collection_ranks_the_rare_term_above_the_common_ones() -> None:
-    async with QdrantRetrievalStore.ephemeral(
-        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="idf-new"
-    ) as store:
+    async with _new_store() as store:
         await store.upsert_chunks(pair_chunks())
         ranking = await _sparse_ranking(store)
     assert ranking[0] == "rare", ranking
@@ -213,6 +217,7 @@ async def test_the_change_is_made_once_and_logged_by_collection_name(
         s for s in span_exporter.get_finished_spans() if s.name == "qdrant.apply_sparse_idf"
     ]
     assert (applied.attributes or {})["retrieval.collection"] == _name(legacy)
+    assert (applied.attributes or {})["retrieval.sparse_modifier"] == "idf"
 
 
 async def test_a_new_collection_needs_no_change(
