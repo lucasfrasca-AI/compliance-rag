@@ -71,6 +71,7 @@ class VertexEmbedder(Embedder):
         self._embed_api = embed_api
         self._model_name = model_name
         self._dimensions = dimensions
+        self._tokens_embedded = 0
 
     @classmethod
     def from_settings(cls, settings: Settings) -> VertexEmbedder:
@@ -95,6 +96,16 @@ class VertexEmbedder(Embedder):
     @property
     def dimensions(self) -> int:
         return self._dimensions
+
+    @property
+    def tokens_embedded(self) -> int:
+        """Input tokens across every call so far, as the server counted them —
+        what an operator script reports as its embedding spend (#144)."""
+        return self._tokens_embedded
+
+    @property
+    def cost_usd(self) -> float:
+        return self._tokens_embedded * _PRICE_PER_TOKEN_USD
 
     async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
         with telemetry.span(
@@ -133,6 +144,7 @@ class VertexEmbedder(Embedder):
                     )
                 vectors.append(tuple(values))
 
+            self._tokens_embedded += total_tokens
             current_span.set_attribute("embedder.total_tokens", total_tokens)
             current_span.set_attribute(
                 "embedder.total_cost_usd", total_tokens * _PRICE_PER_TOKEN_USD

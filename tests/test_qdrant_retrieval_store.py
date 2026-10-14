@@ -251,3 +251,37 @@ async def test_the_residency_gate_query_on_real_qdrant() -> None:
         mine = tenant("u1", synthetic=False).model_copy(update={"scope": Scope.USER})
         await store.upsert_chunks((mine,))
         assert await store.holds_real_customer_data()
+
+
+async def test_a_version_larger_than_one_upsert_request_is_stored_whole_and_counted() -> None:
+    """#144: a compilation is written in batches of `UPSERT_BATCH`, and
+    `count_version_chunks` counts exactly one version's points, so a load can
+    tell finished from partial."""
+    from compliance_rag.adapters.qdrant_retrieval_store import UPSERT_BATCH
+
+    many = 2 * UPSERT_BATCH + 3
+    version = tuple(
+        Chunk(
+            chunk_id=f"privacy-act-1988:C9:s{n}/1",
+            clause_id=f"privacy-act-1988:C9:s{n}/1",
+            text=f"section {n}",
+        )
+        for n in range(many)
+    )
+    other = Chunk(chunk_id=APP11, clause_id=APP11, text="another version of the same act")
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="count"
+    ) as store:
+        await store.upsert_chunks((*version, other))
+
+        async def count(version_id: str) -> int:
+            return await store.count_version_chunks(
+                instrument_id="privacy-act-1988", tenant_id="_public", version_id=version_id
+            )
+
+        assert await count("C9") == many
+        assert await count("TEST-FIXTURE-001") == 1
+        assert await count("C10") == 0
+        assert await store.version_exists(
+            instrument_id="privacy-act-1988", tenant_id="_public", version_id="C9"
+        )

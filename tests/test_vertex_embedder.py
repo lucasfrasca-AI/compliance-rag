@@ -151,6 +151,16 @@ async def test_embed_emits_a_span_with_token_count_and_cost(
     assert cost > 0
 
 
+async def test_the_embedder_keeps_a_running_total_of_tokens_and_cost() -> None:
+    """What an operator script reports as its spend (#144), across calls."""
+    embedder = VertexEmbedder(_FakeModels(), model_name=MODEL_NAME, dimensions=DIMENSIONS)
+    assert (embedder.tokens_embedded, embedder.cost_usd) == (0, 0.0)
+    await embedder.embed(("one two three",))
+    await embedder.embed(("four five",))
+    assert embedder.tokens_embedded == 5
+    assert abs(embedder.cost_usd - 5 * 0.15 / 1_000_000) < 1e-15
+
+
 async def test_a_server_side_truncation_fails_rather_than_returning_a_vector() -> None:
     """If the server ever truncates despite `auto_truncate=False`, the vector
     would be for text it never read — refused, naming the position."""

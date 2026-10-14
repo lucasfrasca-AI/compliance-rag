@@ -52,6 +52,7 @@ from typing import cast
 
 from fastembed import SparseTextEmbedding
 from opentelemetry import trace
+from pydantic import SecretStr
 from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
@@ -93,6 +94,11 @@ _PAYLOAD_KEYWORD_FIELDS = (
 )
 _PAYLOAD_BOOL_FIELDS = ("withdrawn", "synthetic")
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
+
+UPSERT_BATCH = 64
+"""Points per upsert request. A 1536-dim point is roughly 20-30 KB as JSON, so a
+whole compilation in one request (779 clauses, #144) would be ~20 MB, close to
+Qdrant's default 32 MB request limit; 64 keeps each request under 2 MB."""
 
 
 @lru_cache(maxsize=1)
@@ -269,12 +275,22 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
     @classmethod
     @asynccontextmanager
     async def ephemeral(
-        cls, url: str, *, embedder: Embedder, ledger: LedgerStore, prefix: str
+        cls,
+        url: str,
+        *,
+        embedder: Embedder,
+        ledger: LedgerStore,
+        prefix: str,
+        api_key: SecretStr | None = None,
     ) -> AsyncGenerator[QdrantRetrievalStore]:
         """A ready store on a uniquely named throwaway collection, dropped on
         exit — for eval runs and tests against a disposable server (CI's
-        service container), never the deployed cluster's collection."""
-        client = AsyncQdrantClient(url=url)
+        service container), never the deployed cluster's collection. The
+        drop names only the collection this call created. `api_key` is for a
+        one-off run on the deployed cluster (#144), read through `Settings`
+        by the operator script; tests and CI pass none."""
+        key = api_key.get_secret_value() if api_key is not None else ""
+        client = AsyncQdrantClient(url=url, api_key=key or None)
         store = cls(
             client,
             collection_name=f"{prefix}-{uuid.uuid4().hex[:8]}",
@@ -328,7 +344,11 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             )
             for chunk, dense, sparse in zip(chunk_list, dense_vectors, sparse_vectors, strict=True)
         ]
-        await self._client.upsert(self._collection_name, points=points)
+        # Embedded first, written after: a failed embedding writes nothing.
+        for start in range(0, len(points), UPSERT_BATCH):
+            await self._client.upsert(
+                self._collection_name, points=points[start : start + UPSERT_BATCH]
+            )
 
     async def _build_filter(
         self,
@@ -494,7 +514,9 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         )
         return result.count > 0
 
-    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
+    async def count_version_chunks(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> int:
         result = await self._client.count(
             self._collection_name,
             count_filter=self._target(
@@ -502,7 +524,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             ).filter,
             exact=True,
         )
-        return result.count > 0
+        return result.count
 
     async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
         await self._client.set_payload(
