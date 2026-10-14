@@ -161,7 +161,10 @@ async def test_retrieved_text_cannot_influence_the_query_sent_to_the_retriever()
 
     assert canonicalise(POISON) in str(obeying.calls[0]["user"])  # it was retrieved and sent
     assert "acme employee salaries" in result.unverified_draft.answer  # and the model obeyed
-    assert retrieval_calls == [QUESTION]
+    # answer() goes through route(), which hands a non-ID question on to
+    # retrieve() (#159): both entry points, and the store, saw the question
+    # and only the question.
+    assert retrieval_calls == [QUESTION, QUESTION]
     assert store.queries == [QUESTION]
 
 
