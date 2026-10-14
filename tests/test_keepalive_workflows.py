@@ -56,6 +56,25 @@ def test_only_the_qdrant_keepalive_holds_qdrant_cloud_credentials() -> None:
     assert "secrets.QDRANT_KEEPALIVE_API_KEY" in QDRANT.read_text()
 
 
+def test_no_workflow_runs_a_qdrant_that_reports_telemetry() -> None:
+    """#172: Qdrant reports usage telemetry to telemetry.qdrant.io unless told
+    not to, and no telemetry endpoint may sit outside australia-southeast1
+    (CLAUDE.md). Every Qdrant service container in every workflow turns it off."""
+    qdrants = 0
+    for workflow in WORKFLOWS.glob("*.yml"):
+        jobs: dict[str, dict[str, Any]] = yaml.safe_load(workflow.read_text()).get(
+            "jobs", {}
+        )  # Any: parsed YAML
+        for name, job in jobs.items():
+            services: dict[str, dict[str, Any]] = job.get("services") or {}  # Any: parsed YAML
+            for service in services.values():
+                if str(service.get("image", "")).startswith("qdrant/qdrant"):
+                    qdrants += 1
+                    env: dict[str, str] = service.get("env") or {}
+                    assert env.get("QDRANT__TELEMETRY_DISABLED") == "true", (workflow.name, name)
+    assert qdrants >= 2  # the ci job's and the reranker job's
+
+
 def test_the_qdrant_keepalive_runs_no_code_and_deletes_what_it_writes() -> None:
     text = QDRANT.read_text()
     run = str(_step()["run"])
