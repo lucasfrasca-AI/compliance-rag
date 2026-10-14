@@ -33,6 +33,7 @@ from compliance_rag.adapters.interfaces import (
     LedgerStore,
     Profile,
     Reranker,
+    RetrievalResult,
     RetrievalStore,
     SourceKind,
     SourceVersion,
@@ -44,7 +45,7 @@ from compliance_rag.corpus.models import (
     Scope,
     canonical_sha256,
 )
-from tests.conftest import ALL_LAW
+from tests.conftest import ALL_LAW, PUBLIC_AND_TENANT
 
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
@@ -159,7 +160,9 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     assert all(c.chunk_id != "c3" for c in result.fused)
 
     # D-04 / D-12: the router's only decision, and it returns the keyword channel.
-    hit = await store.lookup_clause(APP11, law=ALL_LAW, tenant_id="acme", as_of=TODAY)
+    hit = await store.lookup_clause(
+        APP11, law=ALL_LAW, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=TODAY
+    )
     assert hit is not None
     assert hit.channel is Channel.KEYWORD
     assert hit.clause_id == APP11
@@ -167,7 +170,11 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     # Cross-tenant lookup: acme can never look up beta's clause by ID either,
     # not just by ranked search.
     hit = await store.lookup_clause(
-        "acme-policy:v3:sec2/1", law=ALL_LAW, tenant_id="other-corp", as_of=TODAY
+        "acme-policy:v3:sec2/1",
+        law=ALL_LAW,
+        tenant_id="other-corp",
+        scopes=PUBLIC_AND_TENANT,
+        as_of=TODAY,
     )
     assert hit is None
 
@@ -205,7 +212,9 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     )
     assert "c3" in {c.chunk_id for c in own.fused}
     # ...and another tenant's view of the shared library is untouched.
-    still_public = await store.lookup_clause(APP11, law=ALL_LAW, tenant_id="_public", as_of=TODAY)
+    still_public = await store.lookup_clause(
+        APP11, law=ALL_LAW, tenant_id="_public", scopes=PUBLIC_AND_TENANT, as_of=TODAY
+    )
     assert still_public is not None
 
     # Resubscribing is another row, with nothing re-upserted: the same
@@ -213,7 +222,9 @@ async def assert_retrieval_store_contract(store: RetrievalStore, ledger: LedgerS
     await ledger.subscribe(
         tenant_id="acme", instrument_id=LIBRARY_INSTRUMENT, subscribed_by="contract-test"
     )
-    hit = await store.lookup_clause(APP11, law=ALL_LAW, tenant_id="acme", as_of=TODAY)
+    hit = await store.lookup_clause(
+        APP11, law=ALL_LAW, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=TODAY
+    )
     assert hit is not None
     assert hit.clause_id == APP11
 
@@ -235,7 +246,9 @@ async def _library_reach(store: RetrievalStore, *, tenant_id: str) -> dict[str, 
         return frozenset(c.chunk_id for c in candidates) & LIBRARY_CHUNK_IDS
 
     looked_up = [
-        await store.lookup_clause(clause_id, law=ALL_LAW, tenant_id=tenant_id, as_of=LATER)
+        await store.lookup_clause(
+            clause_id, law=ALL_LAW, tenant_id=tenant_id, scopes=PUBLIC_AND_TENANT, as_of=LATER
+        )
         for clause_id in (APP11, APP12)
     ]
     return {
@@ -260,6 +273,132 @@ async def test_fake_retrieval_store_satisfies_the_shared_contract(
 ) -> None:
     ledger = FakeLedgerStore()
     await assert_retrieval_store_contract(FakeRetrievalStore(chunks, ledger=ledger), ledger)
+
+
+# --------------------------------------------------------------------------
+# RetrievalStore: the order of `fused` (#160)
+# --------------------------------------------------------------------------
+
+# The three chunks of the ordering scenario, named by how the channels rank
+# them. `SPARSE_LED` and `DENSE_LED` are mirror images: the dense channel ranks
+# `DENSE_LED` 2nd and `SPARSE_LED` 3rd, the sparse channel the other way round,
+# so RRF gives them exactly equal fused scores. `chunk_id` order puts
+# `SPARSE_LED` first.
+BEST_IN_BOTH = "k-best-in-both"
+SPARSE_LED = "l-sparse-led"
+DENSE_LED = "m-dense-led"
+
+ORDER_QUERY = "zeta eta"
+ORDER_VECTORS: dict[str, tuple[float, ...]] = {
+    ORDER_QUERY: (1.0, 0.0, 0.0, 0.0),  # also BEST_IN_BOTH's text: cosine 1.0
+    "zeta alpha": (0.98, 0.2, 0.0, 0.0),  # DENSE_LED: cosine 0.98
+    "zeta eta beta": (0.8, 0.6, 0.0, 0.0),  # SPARSE_LED: cosine 0.8
+}
+"""The dense vector of the query and of each chunk's text. Sparse (BM25) needs
+no script: `BEST_IN_BOTH`'s text is the query itself, `SPARSE_LED`'s adds a
+word to it, and `DENSE_LED`'s shares only one of its two terms."""
+
+
+def order_chunks() -> tuple[Chunk, ...]:
+    """Stored in the opposite order to `chunk_id`, so insertion order can't
+    stand in for the order under test."""
+    return (
+        Chunk(chunk_id=DENSE_LED, clause_id=APP11, text="zeta alpha"),
+        Chunk(chunk_id=SPARSE_LED, clause_id=APP12, text="zeta eta beta"),
+        Chunk(
+            chunk_id=BEST_IN_BOTH,
+            clause_id=f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app13/1",
+            text=ORDER_QUERY,
+        ),
+    )
+
+
+class ScriptedEmbedder(Embedder):
+    """Dense vectors from a table, so a test decides which chunk the dense
+    channel ranks first. A text that isn't in the table is an error."""
+
+    def __init__(self, vectors: dict[str, tuple[float, ...]]) -> None:
+        self._vectors = vectors
+
+    @property
+    def dimensions(self) -> int:
+        return len(next(iter(self._vectors.values())))
+
+    async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        return tuple(self._vectors[text] for text in texts)
+
+
+class SplitChannelFake(FakeRetrievalStore):
+    """The fake with channels that disagree, as real dense and sparse channels
+    do: cosine over `ORDER_VECTORS` for dense, and for sparse the share of the
+    text's tokens that are query tokens (shorter text first, like BM25). The
+    stock fake's two channels both use token overlap, so they never rank
+    alike-but-differently and can't produce a fused tie."""
+
+    def _score(self, channel: Channel, query: str, text: str) -> float:
+        if channel is Channel.DENSE:
+            q, t = ORDER_VECTORS[query], ORDER_VECTORS[text]
+            norm = (sum(x * x for x in q) * sum(x * x for x in t)) ** 0.5
+            return sum(x * y for x, y in zip(q, t, strict=True)) / norm
+        tokens = text.split()
+        return sum(1 for token in tokens if token in query.split()) / len(tokens)
+
+
+async def assert_retrieval_order_contract(store: RetrievalStore) -> None:
+    """`fused` is `(-score, chunk_id)` order, cut to `limit` after that order
+    is applied, and the same search returns the same list every time (#160).
+
+    Against a store seeded with `order_chunks()` and, for dense vectors,
+    `ORDER_VECTORS`. Asserts the order itself, not that two calls agree: real
+    Qdrant breaks an RRF tie differently from call to call, so a test that
+    only compares two calls can pass by luck."""
+
+    async def search(limit: int) -> RetrievalResult:
+        return await store.search(
+            ORDER_QUERY,
+            law=ALL_LAW,
+            tenant_id="_public",
+            scopes=(Scope.PUBLIC,),
+            as_of=TODAY,
+            limit=limit,
+        )
+
+    def ids(candidates: tuple[Candidate, ...]) -> list[str]:
+        return [c.chunk_id for c in candidates]
+
+    full = await search(10)
+
+    # The scenario is what it claims to be, or this test proves nothing: the
+    # channels disagree about the two mirror-image chunks, and RRF ties them.
+    assert ids(full.per_channel[Channel.DENSE]) == [BEST_IN_BOTH, DENSE_LED, SPARSE_LED]
+    assert ids(full.per_channel[Channel.SPARSE]) == [BEST_IN_BOTH, SPARSE_LED, DENSE_LED]
+    scores = {c.chunk_id: c.score for c in full.fused}
+    assert scores[SPARSE_LED] == scores[DENSE_LED] < scores[BEST_IN_BOTH]
+    # "Highest first" holds for each channel too.
+    for candidates in full.per_channel.values():
+        assert [c.score for c in candidates] == sorted((c.score for c in candidates), reverse=True)
+
+    # The defined order, spelled out: the best, then the tie by `chunk_id`.
+    assert ids(full.fused) == [BEST_IN_BOTH, SPARSE_LED, DENSE_LED]
+    assert list(full.fused) == sorted(full.fused, key=lambda c: (-c.score, c.chunk_id))
+
+    # A tie at the cut: with limit 2 the cut falls between the two tied
+    # chunks, and the one that stays is the lower `chunk_id`.
+    cut = await search(2)
+    assert ids(cut.fused) == [BEST_IN_BOTH, SPARSE_LED]
+
+    # And every time: 20 repeats, so a store that breaks the tie at random
+    # can't match the defined order by luck.
+    for _ in range(20):
+        assert await search(10) == full
+        assert ids((await search(2)).fused) == [BEST_IN_BOTH, SPARSE_LED]
+        assert ids((await search(1)).fused) == [BEST_IN_BOTH]
+
+
+async def test_fake_retrieval_store_orders_equal_scores_by_chunk_id() -> None:
+    await assert_retrieval_order_contract(
+        SplitChannelFake(order_chunks(), ledger=FakeLedgerStore())
+    )
 
 
 # --------------------------------------------------------------------------

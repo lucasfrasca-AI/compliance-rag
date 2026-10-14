@@ -67,17 +67,31 @@ class VertexEmbedder(Embedder):
     """Dense vectors from `gemini-embedding-001` (`SERVICES.md`: Vertex AI
     Embeddings, 1536 dims)."""
 
-    def __init__(self, embed_api: _EmbedContentLike, *, model_name: str, dimensions: int) -> None:
+    def __init__(
+        self,
+        embed_api: _EmbedContentLike,
+        *,
+        model_name: str,
+        dimensions: int,
+        sdk_client: object = None,
+    ) -> None:
+        """`sdk_client` is the client `embed_api` belongs to, held for as long
+        as the embedder lives: `google-genai`'s `Client` closes its HTTP clients when
+        it is garbage-collected, and `client.aio.models` alone doesn't keep it
+        alive (#144: the first call after a collection fails with "the client
+        has been closed")."""
         self._embed_api = embed_api
+        self._sdk_client = sdk_client
         self._model_name = model_name
         self._dimensions = dimensions
+        self._tokens_embedded = 0
 
     @classmethod
     def from_settings(cls, settings: Settings) -> VertexEmbedder:
-        """The one place this module constructs a real Vertex client — never
-        exercised in tests, which inject `_EmbedContentLike` fakes instead
-        (`tests/test_vertex_embedder.py`). The location is the AU region
-        (`gcp_region`), never `global`."""
+        """The one place this module constructs a real Vertex client. Tests
+        inject `_EmbedContentLike` fakes instead (`tests/test_vertex_embedder.py`),
+        and replace `genai.Client` to prove the embedder keeps it alive. The
+        location is the AU region (`gcp_region`), never `global`."""
         from google import genai  # local import: only the real path needs it
 
         client = genai.Client(
@@ -90,11 +104,22 @@ class VertexEmbedder(Embedder):
             cast("_EmbedContentLike", client.aio.models),
             model_name=settings.vertex_embedding_model,
             dimensions=settings.vertex_embedding_dims,
+            sdk_client=client,
         )
 
     @property
     def dimensions(self) -> int:
         return self._dimensions
+
+    @property
+    def tokens_embedded(self) -> int:
+        """Input tokens across every call so far, as the server counted them —
+        what an operator script reports as its embedding spend (#144)."""
+        return self._tokens_embedded
+
+    @property
+    def cost_usd(self) -> float:
+        return self._tokens_embedded * _PRICE_PER_TOKEN_USD
 
     async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
         with telemetry.span(
@@ -133,6 +158,7 @@ class VertexEmbedder(Embedder):
                     )
                 vectors.append(tuple(values))
 
+            self._tokens_embedded += total_tokens
             current_span.set_attribute("embedder.total_tokens", total_tokens)
             current_span.set_attribute(
                 "embedder.total_cost_usd", total_tokens * _PRICE_PER_TOKEN_USD

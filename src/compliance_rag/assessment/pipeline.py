@@ -53,6 +53,14 @@ from compliance_rag.verifier.citations import CheckedCitation, Verifier
 REPAIR_MAX_TOKENS = 512
 
 
+ANSWER_SCOPES = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
+"""What a member's question may be answered from: library law, the tenant's
+documents, and the member's own private additions. User scope is listed
+because the filter, not this list, keeps it private: the store admits a
+user-scoped chunk to its owner alone, and to no one when no member asks
+(ADR-0036)."""
+
+
 LIBRARY_QUESTION = LawScope.unscoped(
     "a question about the library, asked with no tenant profile (Phase 1 answer(); "
     "an assessment passes Track A's scope, LawScope.of(coverage))"
@@ -148,6 +156,7 @@ class AssessmentPipeline:
         policies: Sequence[SourceClause] = (),
         max_tokens: int = 1024,
         on_retrieved: Callable[[RetrievalTrace], Awaitable[None]] | None = None,
+        user_id: str | None = None,
     ) -> Answer:
         """`law` is Track B's scope (D-03, ADR-0030): `LawScope.of(coverage)`
         for an assessment, `LIBRARY_QUESTION` for a question about the library
@@ -162,10 +171,13 @@ class AssessmentPipeline:
         rule that fenced text is data, which no caller gets to drop.
         `on_retrieved` is told what retrieval found before generation starts
         (the API's stream reports it as it happens, #149); it sees, never
-        changes, what the model is given. Then every exception `law` names for
-        a clause in it is added, fetched by id if the ranking left it out
-        (#164, ADR-0037): the ids come from Track A, never from retrieved
-        text."""
+        changes, what the model is given. `user_id` is the signed-in member
+        asking (`Member.uid`): their own private additions are retrievable and
+        citable by them, and no one else's are, by retrieval or by the
+        verifier's read of canonical text (ADR-0036). Without one, user scope
+        yields nothing. Then every exception `law` names for a clause in it is
+        added, fetched by id if the ranking left it out (#164, ADR-0037): the
+        ids come from Track A, never from retrieved text."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             # Before anything is retrieved or generated: offshore, the prefix
             # must be registered synthetic (ADR-0032).
@@ -180,7 +192,15 @@ class AssessmentPipeline:
             # Through the router (D-12, #159): a question that is a clause id
             # is an exact lookup that skips the reranker; anything else runs
             # the full retrieve().
-            trace = await self.retrieval.route(query, tenant_id, as_of, law=law, policy_corpus=sent)
+            trace = await self.retrieval.route(
+                query,
+                tenant_id,
+                as_of,
+                law=law,
+                scopes=ANSWER_SCOPES,
+                policy_corpus=sent,
+                user_id=user_id,
+            )
             if on_retrieved is not None:
                 await on_retrieved(trace)
 
@@ -220,12 +240,16 @@ class AssessmentPipeline:
             # set (with the exceptions delivered beside it) plus the cached
             # policy set. Nothing else is citable.
             context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
-            checked = await self.verifier.check_all(draft.citations, context=context, as_of=as_of)
+            checked = await self.verifier.check_all(
+                draft.citations, context=context, as_of=as_of, user_id=user_id
+            )
             repairs: list[Generation] = []
             final: list[CheckedCitation] = []
             for check in checked:
                 if check.outcome.repairable and check.clause is not None:
-                    check, repair = await self._repair(check, context=context, as_of=as_of)
+                    check, repair = await self._repair(
+                        check, context=context, as_of=as_of, user_id=user_id
+                    )
                     await self._record_usage(tenant_id, repair)
                     repairs.append(repair)
                 final.append(check)
@@ -291,7 +315,12 @@ class AssessmentPipeline:
         return marked, tuple(fetched)
 
     async def _repair(
-        self, failed: CheckedCitation, *, context: frozenset[str], as_of: dt.date
+        self,
+        failed: CheckedCitation,
+        *,
+        context: frozenset[str],
+        as_of: dt.date,
+        user_id: str | None,
     ) -> tuple[CheckedCitation, Generation]:
         """One targeted regeneration of one citation, re-verified. A repair
         that changes the clause id, or isn't valid JSON, leaves the original
@@ -321,6 +350,8 @@ class AssessmentPipeline:
             except MalformedGeneration:
                 repaired = None
             if repaired is not None and repaired.clause_id == failed.citation.clause_id:
-                outcome = await self.verifier.check(repaired, context=context, as_of=as_of)
+                outcome = await self.verifier.check(
+                    repaired, context=context, as_of=as_of, user_id=user_id
+                )
             current.set_attribute("repair.outcome", outcome.outcome.value)
             return outcome, generation

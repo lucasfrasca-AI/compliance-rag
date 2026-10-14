@@ -112,10 +112,13 @@ class RetrievalPipeline:
         limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> RetrievalTrace:
         """Both channels, fused, then reranked (`CONTEXT.md`: Fusion, Rerank).
         `policy_corpus`: the tenant clauses already sent as the CAG prefix,
-        never retrieved again (ADR-0033)."""
+        never retrieved again (ADR-0033). `user_id`: the signed-in member
+        asking; a user-scoped chunk comes back to its owner alone, and to no
+        one when this is `None` (ADR-0036)."""
         # The law scope is recorded on this span by the store's filter.
         with span("retrieve", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             result = await self.retrieval_store.search(
@@ -126,6 +129,7 @@ class RetrievalPipeline:
                 as_of=as_of,
                 limit=limit,
                 policy_corpus=policy_corpus,
+                user_id=user_id,
             )
             # Both retrieval channels are logged before fusion (CLAUDE.md).
             for channel, candidates in result.per_channel.items():
@@ -158,11 +162,16 @@ class RetrievalPipeline:
         limit: int = RERANK_CANDIDATES,
         top_k: int = 10,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> RetrievalTrace:
         """The router's fixed decision (`CONTEXT.md`: Router, D-04, D-12):
         a clause-ID query goes straight to `lookup_clause` on the keyword
         channel and never reaches the reranker; anything else runs the full
-        `retrieve()` pipeline unchanged.
+        `retrieve()` pipeline unchanged. Both paths are bound by `scopes` and
+        `user_id` alike: an exact lookup is a channel too, so it returns a
+        clause of a scope the caller didn't ask for, or a user's private
+        addition to anyone but its owner, no more than a search does
+        (ADR-0036).
         """
         if not is_clause_id_query(query):
             return await self.retrieve(
@@ -174,6 +183,7 @@ class RetrievalPipeline:
                 limit=limit,
                 top_k=top_k,
                 policy_corpus=policy_corpus,
+                user_id=user_id,
             )
 
         with span(
@@ -183,8 +193,10 @@ class RetrievalPipeline:
                 query.strip(),
                 law=law,
                 tenant_id=tenant_id,
+                scopes=scopes,
                 as_of=as_of,
                 policy_corpus=policy_corpus,
+                user_id=user_id,
             )
             fused = (hit,) if hit is not None else ()
             current.set_attribute("retrieval.channel.keyword", _scored(fused))
@@ -209,7 +221,8 @@ class RetrievalPipeline:
         lookup applies (the law scope, subscriptions, validity, ADR-0033);
         the ones not found are left out. For ids Track A names — an
         obligation's exceptions (#164, ADR-0037) — never for an id a model or
-        a retrieved text supplied."""
+        a retrieved text supplied. Public scope only: an exception is library
+        law, so no tenant or private text can come back under its id."""
         with span("retrieve.fetch", tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             current.set_attribute("retrieval.fetch.clause_ids", list(clause_ids))
             found = await asyncio.gather(
@@ -218,6 +231,7 @@ class RetrievalPipeline:
                         clause_id,
                         law=law,
                         tenant_id=tenant_id,
+                        scopes=(Scope.PUBLIC,),
                         as_of=as_of,
                         policy_corpus=policy_corpus,
                     )

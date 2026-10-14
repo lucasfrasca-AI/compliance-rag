@@ -21,6 +21,9 @@ from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
     Candidate,
     Channel,
+    ChatExchange,
+    ChatSummary,
+    ChatTurn,
     ClauseStore,
     Embedder,
     Generation,
@@ -41,6 +44,7 @@ from compliance_rag.adapters.interfaces import (
     ScoredDocument,
     UsageRecord,
     check_assessment_write,
+    check_chat_exchange,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.assessment.coverage import Coverage, CoverageRow
@@ -154,10 +158,11 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
     async def holds_real_customer_data(self) -> bool:
         return any(is_real_customer_data(c) for c in self._chunks.values())
 
-    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
-        return any(
-            _version_key(c) == (tenant_id, instrument_id, version_id) for c in self._chunks.values()
-        )
+    async def version_chunk_ids(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> frozenset[str]:
+        key = (tenant_id, instrument_id, version_id)
+        return frozenset(c.chunk_id for c in self._chunks.values() if _version_key(c) == key)
 
     async def retire_version(
         self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date
@@ -190,11 +195,25 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
             return 0.0
         return len(q & t) / len(q)
 
+    def _score(self, channel: Channel, query: str, text: str) -> float:
+        """One channel's score for one chunk. Both channels use the same token
+        overlap, so the fake's channels rank alike; a test subclass overrides
+        this to make them differ, as real dense and sparse channels do (#160)."""
+        return self._overlap(query, text)
+
     def _visible(
-        self, chunk: Chunk, tenant_id: str, scopes: tuple[Scope, ...], subscribed: frozenset[str]
+        self,
+        chunk: Chunk,
+        tenant_id: str,
+        scopes: tuple[Scope, ...],
+        subscribed: frozenset[str],
+        user_id: str | None,
     ) -> bool:
         if chunk.scope not in scopes or chunk.chunk_id in self._withdrawn:
             return False
+        if chunk.scope is Scope.USER:
+            # One person's private addition: its tenant, and its owner (ADR-0036).
+            return chunk.tenant_id == tenant_id and user_id is not None and chunk.user_id == user_id
         if chunk.tenant_id == tenant_id:
             return True
         if chunk.scope is Scope.PUBLIC:
@@ -212,14 +231,16 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         as_of: dt.date,
         limit: int,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> RetrievalResult:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
         trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
+        trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
         pool = [
             c
             for c in self._chunks.values()
-            if self._visible(c, tenant_id, scopes, subscribed)
+            if self._visible(c, tenant_id, scopes, subscribed, user_id)
             # D-03: library law only from the clauses Track A cites.
             and law.admits(c.scope, c.clause_id)
             # ADR-0033: the prefix's clauses are already in front of the model.
@@ -234,7 +255,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                     chunk_id=c.chunk_id,
                     clause_id=c.clause_id,
                     text=c.text,
-                    score=self._overlap(query, c.text),
+                    score=self._score(channel, query, c.text),
                     channel=channel,
                 )
                 for c in pool
@@ -276,17 +297,19 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         *,
         law: LawScope,
         tenant_id: str,
+        scopes: tuple[Scope, ...],
         as_of: dt.date,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> Candidate | None:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
         trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
-        every_scope = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
+        trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
         for c in self._chunks.values():
             if c.clause_id != clause_id:
                 continue
-            if not self._visible(c, tenant_id, every_scope, subscribed):
+            if not self._visible(c, tenant_id, scopes, subscribed, user_id):
                 continue
             if not law.admits(c.scope, c.clause_id):
                 continue  # D-03: the keyword channel is a channel too
@@ -321,6 +344,8 @@ class FakeLedgerStore(LedgerStore):
         self._audit: list[RemovalAuditEntry] = []
         self._evidence: list[Evidence] = []
         self._coverage: dict[tuple[str, str], dict[str, CoverageRow]] = {}
+        self._chats: dict[tuple[str, str], list[ChatTurn]] = {}  # (tenant, chat) -> its turns
+        self._recorded_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
         return self._profiles.get(tenant_id)
@@ -372,6 +397,51 @@ class FakeLedgerStore(LedgerStore):
 
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
         return self._assessments.get((tenant_id, assessment_id))
+
+    def _now(self) -> dt.datetime:
+        """The clock, never the same instant twice: Postgres stamps each
+        exchange in its own transaction, in the order they ran."""
+        self._recorded_at = max(
+            dt.datetime.now(dt.UTC), self._recorded_at + dt.timedelta(microseconds=1)
+        )
+        return self._recorded_at
+
+    async def record_chat_exchange(self, exchange: ChatExchange) -> None:
+        """Checked before anything is stored, which is what Postgres' one
+        transaction gives, and in Postgres' order."""
+        check_chat_exchange(exchange)
+        if exchange.tenant_id not in self._profiles:
+            raise ValueError(f"tenant {exchange.tenant_id!r} isn't registered in the ledger")
+        held = self._chats.get((exchange.tenant_id, exchange.chat_id), [])
+        if held and held[0].user_id != exchange.user_id:
+            raise ValueError(f"chat {exchange.chat_id} belongs to another member")
+        stamped = self._now()
+        self._chats[(exchange.tenant_id, exchange.chat_id)] = [
+            *held,
+            *(replace(turn, created_at=stamped) for turn in exchange.turns(len(held))),
+        ]
+
+    async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
+        turns = self._chats.get((tenant_id, chat_id), [])
+        return tuple(turns) if turns and turns[0].user_id == user_id else ()
+
+    async def chats(self, tenant_id: str, user_id: str) -> tuple[ChatSummary, ...]:
+        summaries: list[ChatSummary] = []
+        for (tenant, chat_id), turns in self._chats.items():
+            first, last = turns[0], turns[-1]
+            if tenant == tenant_id and first.user_id == user_id:
+                assert first.created_at and last.created_at and first.content  # stamped on write
+                summaries.append(
+                    ChatSummary(
+                        chat_id=chat_id,
+                        started_at=first.created_at,
+                        updated_at=last.created_at,
+                        turns=len(turns),
+                        first_question=first.content,
+                    )
+                )
+        by_id = sorted(summaries, key=lambda c: c.chat_id)
+        return tuple(sorted(by_id, key=lambda c: c.updated_at, reverse=True))
 
     async def subscribe(
         self, *, tenant_id: str, instrument_id: str, subscribed_by: str, trace_id: str | None = None
@@ -522,8 +592,12 @@ class FakeClauseStore(ClauseStore):
         self._source_html: dict[tuple[str, str, str], str] = {}
         self._manifest_metadata: dict[tuple[str, str, str], ManifestMetadata] = {}
 
-    async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
-        return self._clauses.get((tenant_id, clause_id))
+    async def get_clause(
+        self, clause_id: str, *, tenant_id: str, user_id: str | None = None
+    ) -> ClauseRecord | None:
+        clause = self._clauses.get((tenant_id, clause_id))
+        # One person's private addition goes to its owner alone (ADR-0036).
+        return clause if clause is not None and clause.visible_to(user_id) else None
 
     async def put_clause(self, clause: ClauseRecord) -> None:
         self._clauses[(clause.tenant_id, clause.clause_id)] = clause

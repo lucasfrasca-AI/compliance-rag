@@ -292,6 +292,169 @@ def test_a_duplicate_definition_slug_in_one_section_is_a_hard_parse_failure() ->
 
 
 # --------------------------------------------------------------------------
+# Words after a Definition's paragraphs (issue #178, ADR-0039). The real
+# shapes (record, credit reporting body, ...) are pinned on the constructs
+# fixture in test_parser_full_compilation.py; these are the edges no real
+# fixture holds, shaped per the same class table, so they are synthetic.
+# --------------------------------------------------------------------------
+
+
+def test_words_inside_a_definition_never_reach_the_next_definition_or_the_chapeau() -> None:
+    """A connector before a sub-paragraph leads it, closing words after the
+    sub-list close the definition, and the definition after it (and the
+    chapeau) are untouched."""
+    html = """<html><body>
+<p class="ActHead5"><span class="CharSectno">6</span><span> Interpretation</span></p>
+<p class="subsection"><span>(1)</span><span> In this Act:</span></p>
+<p class="Definition"><span style="font-weight:bold">alpha</span><span> means:</span></p>
+<p class="paragraph"><span>(a)</span><span> one;</span></p>
+<p class="paragraph"><span>(b)</span><span> two:</span></p>
+<p class="paragraphsub"><span>(i)</span><span> red; or</span></p>
+<p class="subsection2"><span>but not:</span></p>
+<p class="paragraphsub"><span>(ii)</span><span> blue;</span></p>
+<p class="subsection2"><span>in the case of a person.</span></p>
+<p class="Definition"><span style="font-weight:bold">beta</span><span> means a thing.</span></p>
+</body></html>"""
+    result = parse_compilation(html, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
+    texts = {c.clause_path: c.text for c in result.clauses}
+    assert texts == {
+        "s6/1": "In this Act:",
+        "s6/1/alpha": "alpha means: in the case of a person.",
+        "s6/1/alpha/a": "one;",
+        "s6/1/alpha/b": "two:",
+        "s6/1/alpha/b/i": "red; or",
+        "s6/1/alpha/b/ii": "but not: blue;",
+        "s6/1/beta": "beta means a thing.",
+    }
+
+
+def test_a_connector_in_a_singleton_definition_leads_its_paragraph_too() -> None:
+    """A subsection with one Definition folds it into the subsection's own
+    clause (s6C(1)); a connector inside it still leads the paragraph after it,
+    and the paragraphs are children of the subsection."""
+    html = """<html><body>
+<p class="ActHead5"><span class="CharSectno">6</span><span> Interpretation</span></p>
+<p class="subsection"><span>(2)</span><span> In this section:</span></p>
+<p class="Definition"><span style="font-weight:bold">gamma</span><span> includes:</span></p>
+<p class="paragraph"><span>(a)</span><span> x;</span></p>
+<p class="subsection2"><span>but does not include:</span></p>
+<p class="paragraph"><span>(c)</span><span> y.</span></p>
+</body></html>"""
+    result = parse_compilation(html, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
+    assert {c.clause_path: c.text for c in result.clauses} == {
+        "s6/2": "In this section: gamma includes:",
+        "s6/2/a": "x;",
+        "s6/2/c": "but does not include: y.",
+    }
+
+
+# --------------------------------------------------------------------------
+# Words between and after the paragraphs of a subsection with no definition
+# (issue #186, ADR-0041). The 21 real connectors are pinned on the constructs
+# fixture in test_parser_full_compilation.py; these are the edges no real
+# fixture holds, shaped per the same class table, so they are synthetic.
+# --------------------------------------------------------------------------
+
+
+def _texts(body: str) -> dict[str, str]:
+    html = f"""<html><body>
+<p class="ActHead5"><span class="CharSectno">6</span><span> Interpretation</span></p>
+{body}
+</body></html>"""
+    result = parse_compilation(html, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
+    return {c.clause_path: c.text for c in result.clauses}
+
+
+def test_a_connector_before_a_subparagraph_leads_it() -> None:
+    """A connector between two sub-paragraphs leads the second, and the
+    subsection and the paragraph above are their own words."""
+    assert _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> one:</span></p>
+<p class="paragraphsub"><span>(i)</span><span> red; or</span></p>
+<p class="subsection2"><span>but not:</span></p>
+<p class="paragraphsub"><span>(ii)</span><span> blue;</span></p>"""
+    ) == {
+        "s6/1": "If:",
+        "s6/1/a": "one:",
+        "s6/1/a/i": "red; or",
+        "s6/1/a/ii": "but not: blue;",
+    }
+
+
+def test_words_after_the_last_paragraph_close_the_subsection() -> None:
+    """Closing words, with no connector before them, are as they always were:
+    the subsection's, ahead of its paragraphs (s8(2))."""
+    assert _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> one;</span></p>
+<p class="subsection2"><span>then it applies.</span></p>"""
+    ) == {"s6/1": "If: then it applies.", "s6/1/a": "one;"}
+
+
+def test_connectors_stay_with_closing_words_that_follow_them() -> None:
+    """Closing words after a connector complete its sentence, and stay on the
+    subsection; so the connector stays with them, in source order, and the
+    paragraphs are their own words (ADR-0041)."""
+    assert _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> x;</span></p>
+<p class="subsection2"><span>and:</span></p>
+<p class="paragraph"><span>(b)</span><span> y;</span></p>
+<p class="subsection2"><span>then this does not apply to:</span></p>
+<p class="paragraph"><span>(c)</span><span> z;</span></p>
+<p class="subsection2"><span>in the case of a minor.</span></p>"""
+    ) == {
+        "s6/1": "If: and: then this does not apply to: in the case of a minor.",
+        "s6/1/a": "x;",
+        "s6/1/b": "y;",
+        "s6/1/c": "z;",
+    }
+
+
+def test_words_waiting_for_a_paragraph_never_reach_the_next_subsection() -> None:
+    """Closing words wait to see whether a paragraph follows. The next
+    subsection's first paragraph is not that paragraph."""
+    assert _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> one;</span></p>
+<p class="subsection2"><span>then X applies.</span></p>
+<p class="subsection"><span>(2)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> two;</span></p>"""
+    ) == {
+        "s6/1": "If: then X applies.",
+        "s6/1/a": "one;",
+        "s6/2": "If:",
+        "s6/2/a": "two;",
+    }
+
+
+def test_closing_words_stay_ahead_of_a_definition_that_follows_them() -> None:
+    """Words that closed a list before a singleton Definition still come before
+    it, in the subsection's text, as they did before #178 and #186."""
+    assert _texts(
+        """<p class="subsection"><span>(2)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> x;</span></p>
+<p class="subsection2"><span>then:</span></p>
+<p class="Definition"><span style="font-weight:bold">gamma</span><span> means a thing.</span></p>"""
+    ) == {"s6/2": "If: then: gamma means a thing.", "s6/2/a": "x;"}
+
+
+def test_a_connector_waiting_before_a_tokenless_paragraph_leads_the_next_lettered_one() -> None:
+    """Not modelled (ADR-0039, ADR-0041): a tokenless paragraph continues the one
+    above and the connector waiting before it leads the next paragraph with a
+    letter. No real fixture has the shape; this pins what happens to it, so a
+    change is a deliberate one, and every word is stored once."""
+    assert _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> one;</span></p>
+<p class="subsection2"><span>then:</span></p>
+<p class="paragraph"><span>continues one;</span></p>
+<p class="paragraph"><span>(b)</span><span> two.</span></p>"""
+    ) == {"s6/1": "If:", "s6/1/a": "one; continues one;", "s6/1/b": "then: two."}
+
+
+# --------------------------------------------------------------------------
 # Container tracking: the spike's central finding. Synthetic snippet, since
 # the real fixture (deliberately byte-verbatim) never includes a second
 # Schedule — shaped per the spike's documented ActHead1/CharChapNo pattern.

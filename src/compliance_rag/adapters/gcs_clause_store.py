@@ -130,7 +130,9 @@ class GCSClauseStore(ClauseStore):
             content_type="application/json",
         )
 
-    async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
+    async def get_clause(
+        self, clause_id: str, *, tenant_id: str, user_id: str | None = None
+    ) -> ClauseRecord | None:
         instrument_id, version_id, clause_path = parse_stable_id(clause_id)
         blob = self._bucket.blob(self._clauses_key(instrument_id, version_id, clause_path))
         data = await asyncio.to_thread(_download_text_or_none, blob)
@@ -143,7 +145,10 @@ class GCSClauseStore(ClauseStore):
         # tenant prefix and is therefore already a distinct object key.
         if record.tenant_id != tenant_id:
             return None
-        return record
+        # One person's private addition (ADR-0036): the object key names the
+        # tenant, not the owner, so the owner is checked on the record itself.
+        # A reader who isn't the owner is told it isn't there.
+        return record if record.visible_to(user_id) else None
 
     async def put_clause(self, clause: ClauseRecord) -> None:
         blob = self._bucket.blob(

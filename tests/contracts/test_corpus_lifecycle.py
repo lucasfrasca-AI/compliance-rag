@@ -43,7 +43,7 @@ from compliance_rag.corpus.models import (
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry, synthetic_key
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
-from tests.conftest import ALL_LAW
+from tests.conftest import ALL_LAW, PUBLIC_AND_TENANT
 
 NOW = dt.date(2026, 10, 8)
 GENERATION_REGION = BUILD_PHASE_OFFSHORE_REGION  # the build phase's setting
@@ -167,12 +167,25 @@ async def assert_corpus_lifecycle_contract(
         document_class=DocumentClass.INTERNAL_POLICY,
     )
     assert {V1, V2} <= await stored_chunk_ids()
+    # Each version lists exactly its own chunks (#144), never another's.
+    for version_id, chunk_id in (("v1", V1), ("v2", V2)):
+        assert await admin.version_chunk_ids(
+            instrument_id=POLICY, tenant_id="acme", version_id=version_id
+        ) == {chunk_id}
+    assert not await admin.version_chunk_ids(
+        instrument_id=POLICY, tenant_id="beta", version_id="v1"
+    )
 
     # Mechanism 2: at today's as_of, v1 is in no channel, not fused, not
     # reranked — and v2 is in every one of them (the positive control).
     today = _routes(await pipeline.retrieve(QUERY, "acme", NOW, law=ALL_LAW))
     assert all(V2 in found and V1 not in found for found in today.values()), today
-    assert await store.lookup_clause(V1, law=ALL_LAW, tenant_id="acme", as_of=NOW) is None
+    assert (
+        await store.lookup_clause(
+            V1, law=ALL_LAW, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=NOW
+        )
+        is None
+    )
     # Before v2 took effect, v1 is the one returned: retirement is a date,
     # not a deletion.
     then = _routes(await pipeline.retrieve(QUERY, "acme", BETWEEN, law=ALL_LAW))
@@ -267,7 +280,9 @@ async def assert_corpus_lifecycle_contract(
             await attempt
     assert {LAW_CLAUSE, BETA_DOC} <= await stored_chunk_ids()
     assert (
-        await store.lookup_clause(LAW_CLAUSE, law=ALL_LAW, tenant_id="_public", as_of=NOW)
+        await store.lookup_clause(
+            LAW_CLAUSE, law=ALL_LAW, tenant_id="_public", scopes=PUBLIC_AND_TENANT, as_of=NOW
+        )
         is not None
     )
     acme_refused = [
@@ -291,7 +306,12 @@ async def assert_corpus_lifecycle_contract(
     for as_of in (NOW, AFTER_V2):  # both on or after v2 took effect
         found = _routes(await pipeline.retrieve(QUERY, "acme", as_of, law=ALL_LAW))
         assert all(V2 not in ids for ids in found.values()), found
-    assert await store.lookup_clause(V2, law=ALL_LAW, tenant_id="acme", as_of=NOW) is None
+    assert (
+        await store.lookup_clause(
+            V2, law=ALL_LAW, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=NOW
+        )
+        is None
+    )
     assert V2 in await stored_chunk_ids()
     still_stored = await clauses.get_clause(V2, tenant_id="acme")
     assert still_stored is not None
@@ -414,7 +434,9 @@ async def assert_corpus_lifecycle_contract(
     stored_text = await clauses.get_clause(fixed.clause_id, tenant_id="acme")
     assert stored_text is not None
     assert stored_text.text == fixed.text
-    hit = await store.lookup_clause(fixed.clause_id, law=ALL_LAW, tenant_id="acme", as_of=NOW)
+    hit = await store.lookup_clause(
+        fixed.clause_id, law=ALL_LAW, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=NOW
+    )
     assert hit is not None
     assert "their desk" in hit.text
 

@@ -110,6 +110,29 @@ async def test_qdrant_retrieval_store_satisfies_the_shared_contract(
     await assert_retrieval_store_contract(store, ledger)
 
 
+async def test_qdrant_orders_equal_scores_by_chunk_id() -> None:
+    """#160 on the real adapter. Two chunks the channels rank in mirror image
+    get exactly equal RRF scores, and Qdrant returns them in either order from
+    one call to the next, and keeps either at a cut that falls between them:
+    before the fix this failed. The expected order is asserted, not just that
+    two calls agree."""
+    from tests.contracts.test_interfaces import (
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        assert_retrieval_order_contract,
+        order_chunks,
+    )
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="order",
+    ) as store:
+        await store.upsert_chunks(order_chunks())
+        await assert_retrieval_order_contract(store)
+
+
 async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedgerStore) -> None:
     """ADR-0021 against the real adapter. "Stored" is read straight off the
     collection through the raw client, ignoring every filter — so "withdrawn
@@ -162,7 +185,8 @@ async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
     )
     await store.ensure_ready()
     info = await client.get_collection(name)
-    assert {"instrument_id", "ancestors"} <= set(info.payload_schema)  # ADR-0020, ADR-0035
+    # ADR-0020, ADR-0035, ADR-0036
+    assert {"instrument_id", "ancestors", "user_id"} <= set(info.payload_schema)
     assert info.points_count == 1
 
 
@@ -248,6 +272,137 @@ async def test_the_residency_gate_query_on_real_qdrant() -> None:
     async with QdrantRetrievalStore.ephemeral(
         _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="gate"
     ) as store:
-        mine = tenant("u1", synthetic=False).model_copy(update={"scope": Scope.USER})
+        mine = tenant("u1", synthetic=False).model_copy(
+            update={"scope": Scope.USER, "user_id": "alice"}
+        )
         await store.upsert_chunks((mine,))
         assert await store.holds_real_customer_data()
+
+
+async def test_a_version_larger_than_one_upsert_request_is_stored_whole_and_listed() -> None:
+    """#144: a compilation is written in batches of `UPSERT_BATCH`, and
+    `version_chunk_ids` lists exactly one version's chunks, across scroll
+    pages, so a load can tell finished from partial from a different set."""
+    from compliance_rag.adapters.qdrant_retrieval_store import UPSERT_BATCH
+
+    many = 2 * UPSERT_BATCH + 3
+    ids = [f"privacy-act-1988:C9:s{n}/1" for n in range(many)]
+    version = tuple(Chunk(chunk_id=i, clause_id=i, text=f"section {i}") for i in ids)
+    other = Chunk(chunk_id=APP11, clause_id=APP11, text="another version of the same act")
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="ids"
+    ) as store:
+        await store.upsert_chunks((*version, other))
+
+        async def stored(version_id: str) -> frozenset[str]:
+            return await store.version_chunk_ids(
+                instrument_id="privacy-act-1988", tenant_id="_public", version_id=version_id
+            )
+
+        assert await stored("C9") == frozenset(ids)
+        assert await stored("TEST-FIXTURE-001") == {APP11}
+        assert await stored("C10") == frozenset()
+        assert await store.version_exists(
+            instrument_id="privacy-act-1988", tenant_id="_public", version_id="C9"
+        )
+
+
+# ---- user scope is private to its owner (ADR-0036, #171) --------------------------
+
+
+async def test_qdrant_keeps_user_scope_private_to_its_owner(ledger: FakeLedgerStore) -> None:
+    """The cross-member counterpart of the cross-tenant leakage test, on the
+    real adapter: alice's private chunk reaches alice and no one else — not bob
+    of her tenant, not another tenant's member, not a request with no member,
+    not alice's own uid in another tenant — through the dense channel, the
+    sparse channel, the fused list, the exact-id lookup and the router's two
+    paths, each with alice as the positive control."""
+    from tests.contracts.test_user_scope import assert_user_scope_is_private, user_scope_chunks
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=ledger, prefix="user-scope"
+    ) as store:
+        await store.upsert_chunks(user_scope_chunks())
+        await assert_user_scope_is_private(store)
+
+
+async def test_the_owner_is_stored_on_a_user_scoped_point_and_on_no_other() -> None:
+    from qdrant_client import AsyncQdrantClient
+
+    from tests.contracts.test_user_scope import ALICE, ALICE_NOTE, POLICY
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="owner"
+    ) as store:
+        await store.upsert_chunks((ALICE_NOTE, POLICY))
+        client = AsyncQdrantClient(url=_QDRANT_URL)
+        points, _ = await client.scroll(
+            store._collection_name,  # pyright: ignore[reportPrivateUsage]
+            limit=10,
+            with_payload=True,
+        )
+        await client.close()
+    owners = {str((p.payload or {})["chunk_id"]): (p.payload or {})["user_id"] for p in points}
+    assert owners == {ALICE_NOTE.chunk_id: ALICE, POLICY.chunk_id: None}
+
+
+async def test_a_user_scoped_point_with_no_owner_in_its_payload_is_visible_to_no_one() -> None:
+    """A point written before `user_id` existed (or by hand) with scope `user`
+    names no owner, so it fails closed: no member, not even the one who wrote
+    it, reaches it by any route. The same point with its owner is reached, so
+    the check is not passing because nothing is stored."""
+    from qdrant_client import AsyncQdrantClient
+
+    from tests.contracts.test_user_scope import ALICE, ALICE_NOTE, VIEWERS, reach
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="legacy"
+    ) as store:
+        await store.upsert_chunks((ALICE_NOTE,))
+        owner = next(v for v in VIEWERS if v.user_id == ALICE and v.tenant_id == "acme")
+        every = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
+        with_owner = await reach(store, owner, law=ALL_LAW, scopes=every)
+        assert all(found == {ALICE_NOTE.chunk_id} for found in with_owner.values())
+
+        client = AsyncQdrantClient(url=_QDRANT_URL)
+        collection = store._collection_name  # pyright: ignore[reportPrivateUsage]
+        await client.delete_payload(
+            collection, keys=["user_id"], points=[_chunk_point_id(ALICE_NOTE.chunk_id)]
+        )
+        await client.close()
+        for viewer in VIEWERS:
+            without_owner = await reach(store, viewer, law=ALL_LAW, scopes=every)
+            assert all(not found for found in without_owner.values()), (viewer.name, without_owner)
+
+
+async def test_qdrant_stores_what_the_write_path_publishes_for_its_owner_alone() -> None:
+    """`CorpusLifecycle` carries `user_id` through to the payload: a private
+    addition published like any other document is alice's by every route on
+    the real adapter, and no one else's."""
+    from tests.contracts.test_user_scope import assert_a_published_private_addition_is_private
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="publish"
+    ) as store:
+        await assert_a_published_private_addition_is_private(store, store)
+
+
+async def test_the_user_id_index_is_added_to_a_collection_that_lacks_only_it() -> None:
+    """A deployed collection already has every other index (ADR-0020,
+    ADR-0035): `ensure_ready` adds just `user_id`, without touching the data."""
+    from qdrant_client import AsyncQdrantClient
+
+    from tests.contracts.test_user_scope import ALICE_NOTE
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="index"
+    ) as store:
+        await store.upsert_chunks((ALICE_NOTE,))
+        client = AsyncQdrantClient(url=_QDRANT_URL)
+        collection = store._collection_name  # pyright: ignore[reportPrivateUsage]
+        await client.delete_payload_index(collection, "user_id")
+        assert "user_id" not in (await client.get_collection(collection)).payload_schema
+        await store.ensure_ready()
+        info = await client.get_collection(collection)
+        await client.close()
+    assert "user_id" in info.payload_schema and info.points_count == 1

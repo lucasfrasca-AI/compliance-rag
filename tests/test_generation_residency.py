@@ -45,6 +45,7 @@ def _chunk(*, synthetic: bool, scope: Scope = Scope.TENANT) -> Chunk:
         text="Accounts are kept seven years.",
         scope=scope,
         tenant_id="acme",
+        user_id="alice" if scope is Scope.USER else None,
         synthetic=synthetic,
     )
 
@@ -76,7 +77,13 @@ async def _publish(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
         version_id="v1",
         effective_from=dt.date(2026, 1, 1),
         supersedes=None,
-        document_class=DocumentClass.INTERNAL_POLICY,
+        # One person's private additions can't be a policy: every member reads
+        # the policy corpus in the cached prefix (ADR-0036).
+        document_class=(
+            DocumentClass.EXTERNAL_UPLOAD
+            if chunk.scope is Scope.USER
+            else DocumentClass.INTERNAL_POLICY
+        ),
     )
 
 
@@ -130,6 +137,7 @@ async def test_a_users_private_chunk_counts_as_real_too() -> None:
         canonical_text="My notes on Acme's payroll.",
         scope=Scope.USER,
         tenant_id="acme",
+        user_id="alice",
     )
     assert REGISTERED.real_clauses((record,)) == (record.clause_id,)
 

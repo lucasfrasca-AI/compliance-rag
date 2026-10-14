@@ -4,7 +4,7 @@ Collection `clauses` (`Settings.qdrant_collection`): a named dense vector
 (1536, cosine — `gemini-embedding-001`) plus a named sparse vector (BM25),
 fused with Qdrant's own native RRF (D-07: "hybrid, native RRF") rather than
 a hand-rolled client-side fusion. Payload indexes on `clause_id`,
-`tenant_id`, `scope` (keyword) and `valid_from`/`valid_to`
+`tenant_id`, `scope`, `user_id` (keyword) and `valid_from`/`valid_to`
 (integer epoch days — `corpus.models.epoch_days`; `valid_to` is never null,
 `CONTEXT.md`: Bitemporal, so the range side of every filter below is one
 unconditional `Range`, never a range-or-is-null pair).
@@ -24,12 +24,29 @@ first use; CI caches `.fastembed_cache/` across runs the same way it caches
 the reranker artifact, rather than a network call inside a gate that must
 be deterministic (issue #21's own standard).
 
+The `Qdrant/bm25` values are BM25's term-frequency part only. The
+inverse-document-frequency part is Qdrant's, applied at query time to a sparse
+vector configured with `Modifier.IDF`, so the sparse vector is created with it
+and an older collection is given it in place (`ensure_collection`, #179).
+Chunks and questions are encoded differently (#190): a chunk's terms weigh their
+frequency in it (`_encode_documents`), a question's each weigh 1
+(`_encode_query`). Both are client-side, so the deployed collection needs no
+change for it.
+
 Scope and tenant enforcement lives here, not at the call site: `_build_filter`
 is the *only* place a Qdrant `Filter` gets constructed, and every method that
 talks to the client calls it unconditionally. There is no public method on
 this class that accepts a caller-supplied filter or exposes the raw client —
 a query that forgets tenant/scope/as_of is not a possible call, not merely a
 discouraged one.
+
+User scope is private to its owner (ADR-0036), enforced in the same place: a
+user-scoped chunk carries its owner's `user_id`, and `_build_filter` admits it
+only when the chunk's tenant is the asking tenant AND its `user_id` is the
+asking member's. No member means no user-scoped chunk. The filter is the whole
+rule for retrieval: no later stage of retrieval re-checks it. (The clause
+store's read of canonical text applies the same owner rule independently, for
+the case where a filter somewhere did not.)
 
 Subscriptions (ADR-0020) are enforced the same way: `_build_filter` reads the
 tenant's subscribed library instruments from the ledger itself on every call,
@@ -50,9 +67,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import cast
 
-from fastembed import SparseTextEmbedding
+from fastembed import SparseEmbedding, SparseTextEmbedding
 from opentelemetry import trace
+from pydantic import SecretStr
 from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.conversions.common_types import PointId
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from compliance_rag import telemetry
@@ -88,11 +107,35 @@ _PAYLOAD_KEYWORD_FIELDS = (
     "ancestors",
     "tenant_id",
     "scope",
+    "user_id",
     "instrument_id",
     "version_id",
 )
 _PAYLOAD_BOOL_FIELDS = ("withdrawn", "synthetic")
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
+
+_FUSED_LIMIT_FACTOR = 2
+"""How many times the caller's `limit` the fused query asks Qdrant for (#160).
+
+`search` prefetches `limit` candidates from each of two channels, so the list
+Qdrant fuses holds at most 2 x `limit`; the 2 is that number of channels, and a
+third prefetch needs this changed with it. Asked for exactly `limit`, Qdrant
+cuts that list itself, and when the candidates either side of the cut have
+equal RRF scores it keeps whichever it likes, differently from one call to the
+next (so the clause that reaches the model, and the recall@10 measured for it,
+changed between runs). Asked for the whole fused list there is nothing left
+for it to cut: the cut is made in `search`, after the list is put in the
+`RetrievalStore` order, and a tie at the cut keeps the lowest `chunk_id`. The
+price is the payload (clause text) of up to `limit` extra points, fetched and
+dropped."""
+
+_SCROLL_PAGE = 256
+"""Points per scroll page when listing a version's chunk ids."""
+
+UPSERT_BATCH = 64
+"""Points per upsert request. A 1536-dim point is roughly 20-30 KB as JSON, so a
+whole compilation in one request (779 clauses, #144) would be ~20 MB, close to
+Qdrant's default 32 MB request limit; 64 keeps each request under 2 MB."""
 
 
 @lru_cache(maxsize=1)
@@ -102,12 +145,60 @@ def _sparse_encoder() -> SparseTextEmbedding:
     return SparseTextEmbedding(_SPARSE_MODEL_NAME, cache_dir=_SPARSE_CACHE_DIR)
 
 
-def _encode_sparse(texts: Iterable[str]) -> list[models.SparseVector]:
-    embeddings = _sparse_encoder().embed(list(texts))
-    return [
-        models.SparseVector(indices=e.indices.tolist(), values=e.values.tolist())
-        for e in embeddings
-    ]
+def _sparse_vector(embedding: SparseEmbedding) -> models.SparseVector:
+    return models.SparseVector(indices=embedding.indices.tolist(), values=embedding.values.tolist())
+
+
+def _encode_documents(texts: Iterable[str]) -> list[models.SparseVector]:
+    """Chunks, for storing: each term weighs its frequency in the chunk,
+    softened by the chunk's length (BM25's term-frequency part, `.embed`)."""
+    return [_sparse_vector(e) for e in _sparse_encoder().embed(list(texts))]
+
+
+def _encode_query(query: str) -> models.SparseVector:
+    """A question, for searching: each distinct term weighs 1 (`.query_embed`),
+    which is how BM25 scores a query. A document's weights would make a word the
+    question repeats count again, and the question's length shift every term's
+    weight (#190). The terms are the ones `_encode_documents` stores chunks
+    under: the two share a tokeniser, stemmer and stop list."""
+    (embedding,) = _sparse_encoder().query_embed(query)
+    return _sparse_vector(embedding)
+
+
+def _sparse_vector_params() -> models.SparseVectorParams:
+    """The sparse vector's config. `Qdrant/bm25` writes BM25's term-frequency
+    part only; IDF is Qdrant's to apply, at query time, and only when the
+    sparse vector says so (#179). Without it a word every clause uses weighs as
+    much as one that picks a clause out."""
+    return models.SparseVectorParams(modifier=models.Modifier.IDF)
+
+
+def _sparse_modifier(params: models.CollectionParams) -> models.Modifier | None:
+    sparse = (params.sparse_vectors or {}).get(SPARSE_VECTOR_NAME)
+    return sparse.modifier if sparse is not None else None
+
+
+async def _apply_sparse_idf(client: AsyncQdrantClient, collection_name: str) -> None:
+    """Give an existing collection's sparse vector the IDF modifier, in place
+    (#179): Qdrant changes it without touching the points, whose stored values
+    are the term-frequency part either way, and keeps the vector's index
+    settings. Read back afterwards, so a server that accepted the call and
+    ignored it is an error here, not a quiet no-op."""
+    with telemetry.span(
+        "qdrant.apply_sparse_idf", **{"retrieval.collection": collection_name}
+    ) as span:
+        await client.update_collection(
+            collection_name, sparse_vectors_config={SPARSE_VECTOR_NAME: _sparse_vector_params()}
+        )
+        info = await client.get_collection(collection_name)
+        modifier = _sparse_modifier(info.config.params)
+        span.set_attribute("retrieval.sparse_modifier", modifier.value if modifier else "none")
+        if modifier != models.Modifier.IDF:
+            raise ValueError(
+                f"collection {collection_name}: asked the server to give the "
+                f"{SPARSE_VECTOR_NAME!r} sparse vector the IDF modifier and it still has none — "
+                "the collection needs re-creating"
+            )
 
 
 async def ensure_collection(
@@ -119,14 +210,19 @@ async def ensure_collection(
     process start (production) and once per test run (CI's throwaway
     self-hosted container) — never re-creates an existing collection, so it
     never discards real data, but a collection created before an index was
-    added (`instrument_id`, ADR-0020) still gets it. An existing collection of
-    another shape (dense size or distance, or no sparse vector) is refused,
-    not used. Points upserted before a field existed don't carry it and must
-    be re-upserted; upsert is idempotent on the deterministic point id."""
+    added (`instrument_id`, ADR-0020) still gets it. So does one whose sparse
+    vector predates the IDF modifier (#179): that is changed in place, with its
+    points kept, once (a span, `qdrant.apply_sparse_idf`, names the
+    collection). An existing collection of another shape (dense size or
+    distance, or no sparse vector) is refused, not used. Points upserted before
+    a field existed don't carry it and must be re-upserted; upsert is
+    idempotent on the deterministic point id."""
     created = not await client.collection_exists(collection_name)
     if not created:
         info = await client.get_collection(collection_name)
         _check_shape(collection_name, info.config.params, dense_dims=dense_dims)
+        if _sparse_modifier(info.config.params) != models.Modifier.IDF:
+            await _apply_sparse_idf(client, collection_name)
         existing = set(info.payload_schema)
     else:
         await client.create_collection(
@@ -136,7 +232,7 @@ async def ensure_collection(
                     size=dense_dims, distance=models.Distance.COSINE
                 )
             },
-            sparse_vectors_config={SPARSE_VECTOR_NAME: models.SparseVectorParams()},
+            sparse_vectors_config={SPARSE_VECTOR_NAME: _sparse_vector_params()},
         )
         existing = set[str]()
     for field in _PAYLOAD_KEYWORD_FIELDS:
@@ -188,6 +284,9 @@ class CollectionStatus:
     created: bool
     points: int
     payload_indexes: tuple[str, ...]
+    sparse_modifier: str
+    """The sparse vector's weighting as the cluster reports it, read back after
+    the bootstrap ("idf", or "none"): the evidence #179's change took."""
 
 
 async def bootstrap_collection(settings: Settings) -> CollectionStatus:
@@ -218,14 +317,17 @@ async def bootstrap_collection(settings: Settings) -> CollectionStatus:
             raise
         finally:
             await client.close()
+        modifier = _sparse_modifier(info.config.params)
         status = CollectionStatus(
             name=name,
             created=created,
             points=info.points_count or 0,
             payload_indexes=tuple(sorted(info.payload_schema)),
+            sparse_modifier=modifier.value if modifier is not None else "none",
         )
         span.set_attribute("retrieval.collection_created", status.created)
         span.set_attribute("retrieval.collection_points", status.points)
+        span.set_attribute("retrieval.sparse_modifier", status.sparse_modifier)
     return status
 
 
@@ -269,12 +371,25 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
     @classmethod
     @asynccontextmanager
     async def ephemeral(
-        cls, url: str, *, embedder: Embedder, ledger: LedgerStore, prefix: str
+        cls,
+        url: str,
+        *,
+        embedder: Embedder,
+        ledger: LedgerStore,
+        prefix: str,
+        api_key: SecretStr | None = None,
     ) -> AsyncGenerator[QdrantRetrievalStore]:
         """A ready store on a uniquely named throwaway collection, dropped on
         exit — for eval runs and tests against a disposable server (CI's
-        service container), never the deployed cluster's collection."""
-        client = AsyncQdrantClient(url=url)
+        service container), never the deployed cluster's collection. The drop
+        names only the uuid-named collection this call created, never one that
+        existed before. `api_key` is for a one-off run on the deployed cluster
+        (#144), read through `Settings` by the operator script; tests and CI
+        pass none. On that cluster the drop removes the run's own throwaway
+        collection, not a cloud resource: the cluster and `clauses` are
+        untouched."""
+        key = api_key.get_secret_value() if api_key is not None else ""
+        client = AsyncQdrantClient(url=url, api_key=key or None)
         store = cls(
             client,
             collection_name=f"{prefix}-{uuid.uuid4().hex[:8]}",
@@ -301,7 +416,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         if not chunk_list:
             return
         dense_vectors = await self._embedder.embed(tuple(c.text for c in chunk_list))
-        sparse_vectors = _encode_sparse(c.text for c in chunk_list)
+        sparse_vectors = _encode_documents(c.text for c in chunk_list)
         points = [
             models.PointStruct(
                 id=_chunk_point_id(chunk.chunk_id),
@@ -322,13 +437,20 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     "text": chunk.text,
                     "scope": chunk.scope.value,
                     "tenant_id": chunk.tenant_id,
+                    # The owner of a user-scoped chunk, null for any other
+                    # scope: the only thing that keeps it private (ADR-0036).
+                    "user_id": chunk.user_id,
                     "valid_from": epoch_days(chunk.valid_from),
                     "valid_to": epoch_days(chunk.valid_to),
                 },
             )
             for chunk, dense, sparse in zip(chunk_list, dense_vectors, sparse_vectors, strict=True)
         ]
-        await self._client.upsert(self._collection_name, points=points)
+        # Embedded first, written after: a failed embedding writes nothing.
+        for start in range(0, len(points), UPSERT_BATCH):
+            await self._client.upsert(
+                self._collection_name, points=points[start : start + UPSERT_BATCH]
+            )
 
     async def _build_filter(
         self,
@@ -338,27 +460,60 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         as_of: dt.date,
         law: LawScope,
         policy_corpus: PolicyCorpus,
+        user_id: str | None,
         extra: list[models.Condition] | None = None,
     ) -> models.Filter:
         """The *only* place a `Filter` is built (module docstring). Mirrors
         `FakeRetrievalStore._visible()` exactly, as native Qdrant conditions:
-        scope must be one of `scopes`, AND (the tenant owns the chunk OR it
-        is library law in an instrument the tenant subscribes to), AND the
-        chunk is in force on `as_of`. Subscriptions are read here, from the
-        ledger, never accepted from the caller (ADR-0020). A tenant chunk of a
-        clause in `policy_corpus` is excluded (ADR-0033)."""
+        scope must be one of `scopes`, AND (the tenant owns the chunk, and if
+        it is user-scoped the asking member owns it too, OR it is library law
+        in an instrument the tenant subscribes to), AND the chunk is in force
+        on `as_of`. Subscriptions are read here, from the ledger, never
+        accepted from the caller (ADR-0020). A tenant chunk of a clause in
+        `policy_corpus` is excluded (ADR-0033). A chunk that is user-scoped
+        but carries no `user_id` matches nothing here: it is visible to no one
+        (ADR-0036)."""
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         # What the tenant could see is part of why a clause didn't come back.
         trace.get_current_span().set_attribute(
             "retrieval.subscribed_instruments", sorted(subscribed)
         )
-        visible_to_tenant: list[models.Condition] = [
-            models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id))
+        # Whether a member asked, not who: user scope admits only their own.
+        trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
+        visible_to_asker: list[models.Condition] = [
+            # The tenant's documents of every scope but user, which is private
+            # to a member and admitted by the branch below.
+            models.Filter(
+                must=[
+                    models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id))
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key="scope", match=models.MatchValue(value=Scope.USER.value)
+                    )
+                ],
+            )
         ]
+        if user_id is not None:
+            visible_to_asker.append(
+                models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="tenant_id", match=models.MatchValue(value=tenant_id)
+                        ),
+                        models.FieldCondition(
+                            key="scope", match=models.MatchValue(value=Scope.USER.value)
+                        ),
+                        models.FieldCondition(
+                            key="user_id", match=models.MatchValue(value=user_id)
+                        ),
+                    ]
+                )
+            )
         if subscribed:
             # An empty MatchAny is not "match nothing" in every Qdrant
             # version, so with no subscriptions the branch is omitted outright.
-            visible_to_tenant.append(
+            visible_to_asker.append(
                 models.Filter(
                     must=[
                         models.FieldCondition(
@@ -374,7 +529,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             models.FieldCondition(
                 key="scope", match=models.MatchAny(any=[s.value for s in scopes])
             ),
-            models.Filter(should=visible_to_tenant),
+            models.Filter(should=visible_to_asker),
             models.FieldCondition(key="valid_from", range=models.Range(lte=epoch_days(as_of))),
             models.FieldCondition(key="valid_to", range=models.Range(gt=epoch_days(as_of))),
         ]
@@ -494,15 +649,26 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         )
         return result.count > 0
 
-    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
-        result = await self._client.count(
-            self._collection_name,
-            count_filter=self._target(
-                instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
-            ).filter,
-            exact=True,
-        )
-        return result.count > 0
+    async def version_chunk_ids(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> frozenset[str]:
+        target = self._target(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        ).filter
+        ids: set[str] = set()
+        offset: PointId | None = None
+        while True:
+            points, offset = await self._client.scroll(
+                self._collection_name,
+                scroll_filter=target,
+                with_payload=["chunk_id"],
+                with_vectors=False,
+                limit=_SCROLL_PAGE,
+                offset=offset,
+            )
+            ids.update(str(p.payload["chunk_id"]) for p in points if p.payload)
+            if offset is None:
+                return frozenset(ids)
 
     async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
         await self._client.set_payload(
@@ -539,12 +705,18 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         as_of: dt.date,
         limit: int,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> RetrievalResult:
         query_filter = await self._build_filter(
-            tenant_id=tenant_id, scopes=scopes, as_of=as_of, law=law, policy_corpus=policy_corpus
+            tenant_id=tenant_id,
+            scopes=scopes,
+            as_of=as_of,
+            law=law,
+            policy_corpus=policy_corpus,
+            user_id=user_id,
         )
         (dense_vector,) = await self._embedder.embed((query,))
-        (sparse_vector,) = _encode_sparse([query])
+        sparse_vector = _encode_query(query)
 
         # Both channels run and are returned before fusion (CLAUDE.md code
         # standards), so each is its own real query against the collection,
@@ -583,16 +755,24 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     ),
                 ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=limit,
+                limit=limit * _FUSED_LIMIT_FACTOR,
                 with_payload=True,
             ),
         )
 
-        return RetrievalResult(
-            fused=tuple(
+        # The order is ours, not Qdrant's (`_FUSED_LIMIT_FACTOR`): score
+        # descending, `chunk_id` ascending on a tie, as the contract says and
+        # `FakeRetrievalStore` does, and only then the cut to `limit`.
+        fused = sorted(
+            (
                 self._payload_to_candidate(p.payload, score=p.score, channel=None)
                 for p in fused_hits.points
             ),
+            key=lambda c: (-c.score, c.chunk_id),
+        )[:limit]
+
+        return RetrievalResult(
+            fused=tuple(fused),
             per_channel={
                 Channel.DENSE: tuple(
                     self._payload_to_candidate(p.payload, score=p.score, channel=Channel.DENSE)
@@ -611,15 +791,18 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         *,
         law: LawScope,
         tenant_id: str,
+        scopes: tuple[Scope, ...],
         as_of: dt.date,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> Candidate | None:
         scroll_filter = await self._build_filter(
             tenant_id=tenant_id,
-            scopes=(Scope.PUBLIC, Scope.TENANT, Scope.USER),
+            scopes=scopes,
             as_of=as_of,
             law=law,
             policy_corpus=policy_corpus,
+            user_id=user_id,
             extra=[
                 models.FieldCondition(key="clause_id", match=models.MatchValue(value=clause_id))
             ],

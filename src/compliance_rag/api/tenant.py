@@ -41,6 +41,7 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.api.deps import (
     EARLIEST,
     LATEST,
+    UUID4_HEX,
     CurrentCaller,
     counts,
     coverage_on,
@@ -284,7 +285,7 @@ async def get_coverage(
 
 # ---- recorded assessments (#153) ---------------------------------------------------
 
-ASSESSMENT_ID = r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$"
+ASSESSMENT_ID = UUID4_HEX
 """What `uuid.uuid4().hex` makes."""
 
 RETRY_AFTER = "30"
