@@ -267,14 +267,14 @@ async def test_fake_retrieval_store_satisfies_the_shared_contract(
 # RetrievalStore: the order of `fused` (#160)
 # --------------------------------------------------------------------------
 
+# The three chunks of the ordering scenario, named by how the channels rank
+# them. `SPARSE_LED` and `DENSE_LED` are mirror images: the dense channel ranks
+# `DENSE_LED` 2nd and `SPARSE_LED` 3rd, the sparse channel the other way round,
+# so RRF gives them exactly equal fused scores. `chunk_id` order puts
+# `SPARSE_LED` first.
 BEST_IN_BOTH = "k-best-in-both"
 SPARSE_LED = "l-sparse-led"
 DENSE_LED = "m-dense-led"
-"""The three chunks of the ordering scenario, named by how the channels rank
-them. `SPARSE_LED` and `DENSE_LED` are mirror images: the dense channel ranks
-`DENSE_LED` 2nd and `SPARSE_LED` 3rd, the sparse channel the other way round,
-so RRF gives them exactly equal fused scores. `chunk_id` order puts
-`SPARSE_LED` first."""
 
 ORDER_QUERY = "zeta eta"
 ORDER_VECTORS: dict[str, tuple[float, ...]] = {

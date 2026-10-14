@@ -194,7 +194,6 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         """One channel's score for one chunk. Both channels use the same token
         overlap, so the fake's channels rank alike; a test subclass overrides
         this to make them differ, as real dense and sparse channels do (#160)."""
-        del channel
         return self._overlap(query, text)
 
     def _visible(

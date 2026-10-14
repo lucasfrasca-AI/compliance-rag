@@ -596,11 +596,13 @@ class RetrievalStore(ABC):
 
         `fused` is ordered by score, highest first, and by `chunk_id`, lowest
         first, among equal scores, and is cut to `limit` only after that
-        order is applied. So the same search of the same data returns the
-        same list, and a tie at the cut keeps the lowest `chunk_id`, whichever
-        store answers (#160). Each `per_channel` list is ordered by score,
-        highest first; the order among equal scores within a channel is the
-        store's own, and no caller may depend on it."""
+        order is applied: a tie at the cut keeps the lowest `chunk_id`, and
+        the same fused candidates come back in the same order every time,
+        whichever store answers (#160). Not defined: which candidates a
+        channel hands to fusion when equal scores straddle that channel's
+        own `limit` cut, and the order of equal scores within a `per_channel`
+        list, which is ordered by score, highest first, and no further
+        (#177)."""
 
     @abstractmethod
     async def lookup_clause(
