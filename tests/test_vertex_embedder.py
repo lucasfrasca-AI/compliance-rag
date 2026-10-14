@@ -151,6 +151,16 @@ async def test_embed_emits_a_span_with_token_count_and_cost(
     assert cost > 0
 
 
+async def test_the_embedder_keeps_a_running_total_of_tokens_and_cost() -> None:
+    """What an operator script reports as its spend (#144), across calls."""
+    embedder = VertexEmbedder(_FakeModels(), model_name=MODEL_NAME, dimensions=DIMENSIONS)
+    assert (embedder.tokens_embedded, embedder.cost_usd) == (0, 0.0)
+    await embedder.embed(("one two three",))
+    await embedder.embed(("four five",))
+    assert embedder.tokens_embedded == 5
+    assert abs(embedder.cost_usd - 5 * 0.15 / 1_000_000) < 1e-15
+
+
 async def test_a_server_side_truncation_fails_rather_than_returning_a_vector() -> None:
     """If the server ever truncates despite `auto_truncate=False`, the vector
     would be for text it never read — refused, naming the position."""
@@ -176,3 +186,36 @@ async def test_a_response_without_exactly_one_embedding_is_refused(count: int) -
     )
     with pytest.raises(ValueError, match=f"expected one embedding, got {count}"):
         await embedder.embed(("text",))
+
+
+async def test_the_embedder_keeps_the_sdk_client_it_calls_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#144: `google-genai`'s `Client` closes its HTTP clients when collected,
+    and `client.aio.models` alone doesn't keep it alive, so the first call
+    after a collection failed with "the client has been closed". The
+    embedder holds the client for as long as it lives."""
+    import gc
+
+    from google import genai
+
+    from compliance_rag.settings import Settings
+
+    closed: list[bool] = []
+
+    class _ClosingClient:
+        def __init__(self, **_: object) -> None:
+            self.aio = type("Aio", (), {"models": _FakeModels()})()
+
+        def __del__(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(genai, "Client", _ClosingClient)
+    settings = Settings(_env_file=None, gcp_project_id="test-project")  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
+    embedder = VertexEmbedder.from_settings(settings)
+    gc.collect()
+    assert closed == []
+    assert len(await embedder.embed(("still open",))) == 1
+    del embedder
+    gc.collect()
+    assert closed == [True]

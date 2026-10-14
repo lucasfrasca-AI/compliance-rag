@@ -21,6 +21,7 @@ import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, LiteralString, cast
+from urllib.parse import urlparse
 
 import psycopg
 from psycopg.rows import TupleRow
@@ -71,6 +72,11 @@ def _refuse_library(tenant_id: str, what: str) -> None:
         raise ValueError(f"library law is never {what} (ADR-0021)")
 
 
+class LedgerUnreachable(ConnectionError):
+    """The configured ledger didn't answer. The message names where it is,
+    never who it connects as."""
+
+
 class PostgresLedgerStore(LedgerStore):
     def __init__(self, dsn: str) -> None:
         if not dsn:
@@ -80,6 +86,22 @@ class PostgresLedgerStore(LedgerStore):
     @classmethod
     def from_settings(cls, settings: Settings) -> PostgresLedgerStore:
         return cls(settings.database_url.get_secret_value())
+
+    @property
+    def location(self) -> str:
+        """`host:port/database`: where the ledger is, without credentials."""
+        dsn = urlparse(self._dsn)
+        return f"{dsn.hostname}:{dsn.port or 5432}{dsn.path}"
+
+    async def ping(self) -> None:
+        """Raise `LedgerUnreachable` unless the ledger answers: an operator
+        script checks this before writing anything elsewhere (#144)."""
+        try:
+            await self._execute("SELECT 1", ())
+        except psycopg.OperationalError as exc:
+            raise LedgerUnreachable(
+                f"the ledger at {self.location} can't be reached ({type(exc).__name__})"
+            ) from None
 
     @asynccontextmanager
     async def _connection(self) -> AsyncGenerator[psycopg.AsyncConnection[TupleRow]]:
