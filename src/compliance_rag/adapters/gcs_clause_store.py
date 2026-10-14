@@ -48,6 +48,7 @@ from compliance_rag.adapters.interfaces import ClauseStore, ManifestMetadata
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.corpus.models import (
     ClauseRecord,
+    Scope,
     canonical_sha256,
     parse_stable_id,
     sha256_hex,
@@ -130,7 +131,9 @@ class GCSClauseStore(ClauseStore):
             content_type="application/json",
         )
 
-    async def get_clause(self, clause_id: str, *, tenant_id: str) -> ClauseRecord | None:
+    async def get_clause(
+        self, clause_id: str, *, tenant_id: str, user_id: str | None = None
+    ) -> ClauseRecord | None:
         instrument_id, version_id, clause_path = parse_stable_id(clause_id)
         blob = self._bucket.blob(self._clauses_key(instrument_id, version_id, clause_path))
         data = await asyncio.to_thread(_download_text_or_none, blob)
@@ -142,6 +145,11 @@ class GCSClauseStore(ClauseStore):
         # mismatch, because a tenant-owned instrument_id already carries its
         # tenant prefix and is therefore already a distinct object key.
         if record.tenant_id != tenant_id:
+            return None
+        # One person's private addition (ADR-0036): the object key names the
+        # tenant, not the owner, so the owner is checked on the record itself.
+        # A reader who isn't the owner is told it isn't there.
+        if record.scope is Scope.USER and record.user_id != user_id:
             return None
         return record
 

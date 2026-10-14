@@ -20,7 +20,7 @@ from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore, FakeRet
 from compliance_rag.adapters.interfaces import LawScope, RetrievalStore
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.corpus.models import Chunk, Scope, clause_ancestors
-from tests.conftest import ALL_LAW, qdrant_reachable
+from tests.conftest import ALL_LAW, PUBLIC_AND_TENANT, qdrant_reachable
 
 TODAY = dt.date(2026, 10, 12)
 IN_SCOPE = "test-act:v1:s1/1"
@@ -60,7 +60,9 @@ async def _routes(
         channel.value: {c.clause_id for c in hits} for channel, hits in result.per_channel.items()
     }
     routes["fused"] = {c.clause_id for c in result.fused}
-    hit = await store.lookup_clause(OUT_OF_SCOPE, law=law, tenant_id=tenant_id, as_of=TODAY)
+    hit = await store.lookup_clause(
+        OUT_OF_SCOPE, law=law, tenant_id=tenant_id, scopes=PUBLIC_AND_TENANT, as_of=TODAY
+    )
     routes["lookup"] = {hit.clause_id} if hit else set()
     return routes
 
@@ -234,6 +236,7 @@ async def test_user_scoped_documents_are_not_law_either() -> None:
         text=OUT_TEXT,
         scope=Scope.USER,
         tenant_id="acme",
+        user_id="alice",
     )
     store = FakeRetrievalStore((*CHUNKS, note), ledger=ledger)
     await ledger.subscribe(tenant_id="acme", instrument_id="test-act", subscribed_by="test")
@@ -244,6 +247,7 @@ async def test_user_scoped_documents_are_not_law_either() -> None:
         scopes=(Scope.PUBLIC, Scope.USER),
         as_of=TODAY,
         limit=10,
+        user_id="alice",
     )
     assert "acme/my-notes:v1:1/1" in {c.clause_id for c in result.fused}
     assert OUT_OF_SCOPE not in {c.clause_id for c in result.fused}
@@ -301,7 +305,9 @@ async def assert_paragraph_contract(store: RetrievalStore, ledger: FakeLedgerSto
         for hits in result.per_channel.values():
             found |= {c.clause_id for c in hits}
         for clause_id in everything:
-            hit = await store.lookup_clause(clause_id, law=law, tenant_id="acme", as_of=TODAY)
+            hit = await store.lookup_clause(
+                clause_id, law=law, tenant_id="acme", scopes=PUBLIC_AND_TENANT, as_of=TODAY
+            )
             found |= {hit.clause_id} if hit else set()
         return found
 

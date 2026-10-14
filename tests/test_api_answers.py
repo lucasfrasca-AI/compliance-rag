@@ -33,6 +33,7 @@ from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
 from compliance_rag.api.main import GeneratorAtStartup
 from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.eval.golden_corpus import POLICY_TENANT_ID, golden_chunks, golden_clauses
@@ -339,6 +340,57 @@ async def test_in_sydney_any_member_is_answered_over_any_prefix(quote: str) -> N
     _, events = await _ask(generator, clauses=clauses, settings=api_settings())
     assert [name for name, _ in events] == ["coverage", "retrieval", "answer"]
     assert "Real, unregistered." in str(generator.calls[0]["cached_prefix"])
+
+
+# ---- one person's private additions (#171, ADR-0036) ---------------------------------
+
+NOTE_TEXT = "Quokka note: the spare backup keys for the vault are in the blue drawer."
+NOTE_QUESTION = "Where are the spare quokka backup keys for the vault kept?"
+
+
+def _note(owner: str) -> Chunk:
+    return Chunk(
+        chunk_id="note",
+        clause_id="acme/my-notes:v1:1/1",
+        text=NOTE_TEXT,
+        scope=Scope.USER,
+        tenant_id=POLICY_TENANT_ID,
+        user_id=owner,
+    )
+
+
+async def _asked_as(token: str, note: Chunk) -> str:
+    """What the model was shown for `NOTE_QUESTION` when the member behind
+    `token` asked it, with `note` stored."""
+    ledger = await _ledger()
+    generator = FakeGenerator(_reply())
+    store = FakeRetrievalStore((*golden_chunks(), note), ledger=ledger)
+    async with await _client(generator, ledger, await golden_clause_store(), store) as c:
+        response = await c.post(
+            "/v1/answers",
+            json={"question": NOTE_QUESTION, "as_of": AS_OF},
+            headers=bearer(token),
+        )
+    assert response.status_code == 200
+    return str(generator.calls[0]["user"])
+
+
+async def test_a_members_private_addition_reaches_their_answers_and_no_one_elses() -> None:
+    """The member is the sign-in's uid. Their own note is in front of the model
+    when they ask; a second member of the same tenant asking the same question
+    is not shown it."""
+    owner = mint(sub="uid-owner")
+    colleague = mint(sub="uid-colleague", email="second@acme.example")
+    note = _note("uid-owner")
+    assert NOTE_TEXT in await _asked_as(owner, note)  # the positive control
+    assert NOTE_TEXT not in await _asked_as(colleague, note)
+
+
+async def test_a_private_addition_is_keyed_by_the_uid_not_the_email() -> None:
+    """An email address can change hands; the uid a sign-in carries doesn't.
+    A note owned by an email address belongs to no one."""
+    shown = await _asked_as(mint(sub="uid-owner"), _note(MEMBER))
+    assert NOTE_TEXT not in shown
 
 
 # ---- the generator the real app builds at startup ------------------------------

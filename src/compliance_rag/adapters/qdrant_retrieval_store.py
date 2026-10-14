@@ -4,7 +4,7 @@ Collection `clauses` (`Settings.qdrant_collection`): a named dense vector
 (1536, cosine — `gemini-embedding-001`) plus a named sparse vector (BM25),
 fused with Qdrant's own native RRF (D-07: "hybrid, native RRF") rather than
 a hand-rolled client-side fusion. Payload indexes on `clause_id`,
-`tenant_id`, `scope` (keyword) and `valid_from`/`valid_to`
+`tenant_id`, `scope`, `user_id` (keyword) and `valid_from`/`valid_to`
 (integer epoch days — `corpus.models.epoch_days`; `valid_to` is never null,
 `CONTEXT.md`: Bitemporal, so the range side of every filter below is one
 unconditional `Range`, never a range-or-is-null pair).
@@ -30,6 +30,12 @@ talks to the client calls it unconditionally. There is no public method on
 this class that accepts a caller-supplied filter or exposes the raw client —
 a query that forgets tenant/scope/as_of is not a possible call, not merely a
 discouraged one.
+
+User scope is private to its owner (ADR-0036), enforced in the same place: a
+user-scoped chunk carries its owner's `user_id`, and `_build_filter` admits it
+only when the chunk's tenant is the asking tenant AND its `user_id` is the
+asking member's. No member means no user-scoped chunk. The filter is the whole
+rule: nothing downstream re-checks it.
 
 Subscriptions (ADR-0020) are enforced the same way: `_build_filter` reads the
 tenant's subscribed library instruments from the ledger itself on every call,
@@ -88,6 +94,7 @@ _PAYLOAD_KEYWORD_FIELDS = (
     "ancestors",
     "tenant_id",
     "scope",
+    "user_id",
     "instrument_id",
     "version_id",
 )
@@ -322,6 +329,9 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     "text": chunk.text,
                     "scope": chunk.scope.value,
                     "tenant_id": chunk.tenant_id,
+                    # The owner of a user-scoped chunk, null for any other
+                    # scope: the only thing that keeps it private (ADR-0036).
+                    "user_id": chunk.user_id,
                     "valid_from": epoch_days(chunk.valid_from),
                     "valid_to": epoch_days(chunk.valid_to),
                 },
@@ -338,23 +348,56 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         as_of: dt.date,
         law: LawScope,
         policy_corpus: PolicyCorpus,
+        user_id: str | None,
         extra: list[models.Condition] | None = None,
     ) -> models.Filter:
         """The *only* place a `Filter` is built (module docstring). Mirrors
         `FakeRetrievalStore._visible()` exactly, as native Qdrant conditions:
-        scope must be one of `scopes`, AND (the tenant owns the chunk OR it
-        is library law in an instrument the tenant subscribes to), AND the
-        chunk is in force on `as_of`. Subscriptions are read here, from the
-        ledger, never accepted from the caller (ADR-0020). A tenant chunk of a
-        clause in `policy_corpus` is excluded (ADR-0033)."""
+        scope must be one of `scopes`, AND (the tenant owns the chunk, and if
+        it is user-scoped the asking member owns it too, OR it is library law
+        in an instrument the tenant subscribes to), AND the chunk is in force
+        on `as_of`. Subscriptions are read here, from the ledger, never
+        accepted from the caller (ADR-0020). A tenant chunk of a clause in
+        `policy_corpus` is excluded (ADR-0033). A chunk that is user-scoped
+        but carries no `user_id` matches nothing here: it is visible to no one
+        (ADR-0036)."""
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         # What the tenant could see is part of why a clause didn't come back.
         trace.get_current_span().set_attribute(
             "retrieval.subscribed_instruments", sorted(subscribed)
         )
+        # Whether a member asked, not who: user scope admits only their own.
+        trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
         visible_to_tenant: list[models.Condition] = [
-            models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id))
+            # The tenant's documents of every scope but user, which is private
+            # to a member and admitted by the branch below.
+            models.Filter(
+                must=[
+                    models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id))
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key="scope", match=models.MatchValue(value=Scope.USER.value)
+                    )
+                ],
+            )
         ]
+        if user_id is not None:
+            visible_to_tenant.append(
+                models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="tenant_id", match=models.MatchValue(value=tenant_id)
+                        ),
+                        models.FieldCondition(
+                            key="scope", match=models.MatchValue(value=Scope.USER.value)
+                        ),
+                        models.FieldCondition(
+                            key="user_id", match=models.MatchValue(value=user_id)
+                        ),
+                    ]
+                )
+            )
         if subscribed:
             # An empty MatchAny is not "match nothing" in every Qdrant
             # version, so with no subscriptions the branch is omitted outright.
@@ -539,9 +582,15 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         as_of: dt.date,
         limit: int,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> RetrievalResult:
         query_filter = await self._build_filter(
-            tenant_id=tenant_id, scopes=scopes, as_of=as_of, law=law, policy_corpus=policy_corpus
+            tenant_id=tenant_id,
+            scopes=scopes,
+            as_of=as_of,
+            law=law,
+            policy_corpus=policy_corpus,
+            user_id=user_id,
         )
         (dense_vector,) = await self._embedder.embed((query,))
         (sparse_vector,) = _encode_sparse([query])
@@ -611,15 +660,18 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         *,
         law: LawScope,
         tenant_id: str,
+        scopes: tuple[Scope, ...],
         as_of: dt.date,
         policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
     ) -> Candidate | None:
         scroll_filter = await self._build_filter(
             tenant_id=tenant_id,
-            scopes=(Scope.PUBLIC, Scope.TENANT, Scope.USER),
+            scopes=scopes,
             as_of=as_of,
             law=law,
             policy_corpus=policy_corpus,
+            user_id=user_id,
             extra=[
                 models.FieldCondition(key="clause_id", match=models.MatchValue(value=clause_id))
             ],

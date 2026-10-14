@@ -186,6 +186,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
                     law=LawScope.of(coverage),
                     policies=policies,
                     on_retrieved=on_retrieved,
+                    # Their own private additions are theirs alone: the stable
+                    # sign-in uid, not the email (ADR-0036).
+                    user_id=who.member.uid,
                 )
             )
             _running.add(answering)
