@@ -236,12 +236,38 @@ async def test_bootstrap_creates_the_production_shape_once_and_never_empties_it(
         dense = params.vectors["dense"]
         assert (dense.size, dense.distance) == (1536, models.Distance.COSINE)
         assert params.sparse_vectors is not None and "sparse" in params.sparse_vectors
+        # BM25's IDF half is Qdrant's to apply, and only to a vector that says so (#179).
+        assert params.sparse_vectors["sparse"].modifier == models.Modifier.IDF
         await client.upsert(
             collection, points=[models.PointStruct(id=1, vector={}, payload={"kept": True})]
         )
+    assert first.sparse_modifier == "idf"
     again = await bootstrap_collection(_settings(collection))
     assert not again.created and again.points == 1
     assert again.payload_indexes == first.payload_indexes
+
+
+@needs_qdrant
+async def test_bootstrap_gives_a_collection_without_idf_the_modifier_and_keeps_its_points(
+    collection: str,
+) -> None:
+    """The deployed `clauses` was created before #179: bootstrapping it changes
+    its sparse vector in place and reports what the cluster now says, with its
+    point still there."""
+    async with _qdrant() as client:
+        await client.create_collection(
+            collection,
+            vectors_config={
+                "dense": models.VectorParams(size=1536, distance=models.Distance.COSINE)
+            },
+            sparse_vectors_config={"sparse": models.SparseVectorParams()},
+        )
+        await client.upsert(
+            collection, points=[models.PointStruct(id=1, vector={}, payload={"kept": True})]
+        )
+    status = await bootstrap_collection(_settings(collection))
+    assert not status.created and status.points == 1
+    assert status.sparse_modifier == "idf"
 
 
 @needs_qdrant
@@ -280,6 +306,7 @@ async def test_the_script_prints_what_it_did_and_never_the_url(
     first, second = capsys.readouterr().out.splitlines()
     assert first.startswith(f"{collection}: created; 0 points; payload indexes: ")
     assert second.startswith(f"{collection}: already there; 0 points")
+    assert first.endswith("; sparse modifier: idf") and second.endswith("; sparse modifier: idf")
     assert _QDRANT_URL not in first + second
 
 
