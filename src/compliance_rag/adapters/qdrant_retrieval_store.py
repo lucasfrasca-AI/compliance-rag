@@ -28,6 +28,10 @@ The `Qdrant/bm25` values are BM25's term-frequency part only. The
 inverse-document-frequency part is Qdrant's, applied at query time to a sparse
 vector configured with `Modifier.IDF`, so the sparse vector is created with it
 and an older collection is given it in place (`ensure_collection`, #179).
+Chunks and questions are encoded differently (#190): a chunk's terms weigh their
+frequency in it (`_encode_documents`), a question's each weigh 1
+(`_encode_query`). Both are client-side, so the deployed collection needs no
+change for it.
 
 Scope and tenant enforcement lives here, not at the call site: `_build_filter`
 is the *only* place a Qdrant `Filter` gets constructed, and every method that
@@ -63,7 +67,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import cast
 
-from fastembed import SparseTextEmbedding
+from fastembed import SparseEmbedding, SparseTextEmbedding
 from opentelemetry import trace
 from pydantic import SecretStr
 from qdrant_client import AsyncQdrantClient, models
@@ -141,12 +145,24 @@ def _sparse_encoder() -> SparseTextEmbedding:
     return SparseTextEmbedding(_SPARSE_MODEL_NAME, cache_dir=_SPARSE_CACHE_DIR)
 
 
-def _encode_sparse(texts: Iterable[str]) -> list[models.SparseVector]:
-    embeddings = _sparse_encoder().embed(list(texts))
-    return [
-        models.SparseVector(indices=e.indices.tolist(), values=e.values.tolist())
-        for e in embeddings
-    ]
+def _sparse_vector(embedding: SparseEmbedding) -> models.SparseVector:
+    return models.SparseVector(indices=embedding.indices.tolist(), values=embedding.values.tolist())
+
+
+def _encode_documents(texts: Iterable[str]) -> list[models.SparseVector]:
+    """Chunks, for storing: each term weighs its frequency in the chunk,
+    softened by the chunk's length (BM25's term-frequency part, `.embed`)."""
+    return [_sparse_vector(e) for e in _sparse_encoder().embed(list(texts))]
+
+
+def _encode_query(query: str) -> models.SparseVector:
+    """A question, for searching: each distinct term weighs 1 (`.query_embed`),
+    which is how BM25 scores a query. A document's weights would make a word the
+    question repeats count again, and the question's length shift every term's
+    weight (#190). The terms are the ones `_encode_documents` stores chunks
+    under: the two share a tokeniser, stemmer and stop list."""
+    (embedding,) = _sparse_encoder().query_embed(query)
+    return _sparse_vector(embedding)
 
 
 def _sparse_vector_params() -> models.SparseVectorParams:
@@ -400,7 +416,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         if not chunk_list:
             return
         dense_vectors = await self._embedder.embed(tuple(c.text for c in chunk_list))
-        sparse_vectors = _encode_sparse(c.text for c in chunk_list)
+        sparse_vectors = _encode_documents(c.text for c in chunk_list)
         points = [
             models.PointStruct(
                 id=_chunk_point_id(chunk.chunk_id),
@@ -700,7 +716,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             user_id=user_id,
         )
         (dense_vector,) = await self._embedder.embed((query,))
-        (sparse_vector,) = _encode_sparse([query])
+        sparse_vector = _encode_query(query)
 
         # Both channels run and are returned before fusion (CLAUDE.md code
         # standards), so each is its own real query against the collection,
