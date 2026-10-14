@@ -35,7 +35,7 @@ from compliance_rag.adapters.graph_schema import (
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.assessment.coverage import Coverage, CoverageRow, Outcome
+from compliance_rag.assessment.coverage import Coverage, CoverageRow, ExceptionOf, Outcome
 from compliance_rag.assessment.evidence import Evidence, Facts
 from compliance_rag.corpus.models import (
     Chunk,
@@ -118,9 +118,9 @@ class LawScope:
 
     clause_ids: frozenset[str] | None
     reason: str
-    exceptions: frozenset[tuple[str, str]] = frozenset()
-    """(an obligation's clause, a clause that says when it does not apply),
-    from the reviewed mapping through Track A (ADR-0037). Both are cited."""
+    exceptions: frozenset[ExceptionOf] = frozenset()
+    """Each obligation clause with each of its exceptions, from the reviewed
+    mapping through Track A (ADR-0037). Both are cited."""
 
     def __post_init__(self) -> None:
         if not self.reason.strip():
@@ -130,7 +130,7 @@ class LawScope:
         cited = self.clause_ids or frozenset[str]()
         for pair in self.exceptions:
             if not cited.issuperset(pair):
-                raise ValueError(f"an exception pair {pair} names a clause the scope doesn't cite")
+                raise ValueError(f"{pair} names a clause the scope doesn't cite")
 
     @classmethod
     def of(cls, coverage: Coverage) -> LawScope:
@@ -149,9 +149,9 @@ class LawScope:
         for clause_id in delivered:
             held |= {clause_id, *clause_ancestors(clause_id)}
         owed: dict[str, set[str]] = {}
-        for clause, exception in self.exceptions:
-            if clause in held:
-                owed.setdefault(exception, set()).add(clause)
+        for pair in self.exceptions:
+            if pair.clause in held:
+                owed.setdefault(pair.exception, set()).add(pair.clause)
         return {e: tuple(sorted(owed[e])) for e in sorted(owed)}
 
     @classmethod

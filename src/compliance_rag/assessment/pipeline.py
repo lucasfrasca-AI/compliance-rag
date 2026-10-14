@@ -59,7 +59,7 @@ LIBRARY_QUESTION = LawScope.unscoped(
 )
 
 
-class ExceptionUndelivered(RuntimeError):
+class ObligationExceptionUndelivered(RuntimeError):
     """An exception Track A names for a clause in the context couldn't be
     fetched: the graph names a clause the retrieval store doesn't hold on
     `as_of`. Raised before generation, so no answer states the rule without
@@ -278,7 +278,7 @@ class AssessmentPipeline:
             }
             lost = [e for e in missing if e not in found]
             if lost:
-                raise ExceptionUndelivered(
+                raise ObligationExceptionUndelivered(
                     f"{', '.join(lost)}: an exception Track A names for a clause in the context "
                     f"isn't retrievable on {as_of}, so the answer is refused rather than state "
                     "the rule without it (ADR-0037)"

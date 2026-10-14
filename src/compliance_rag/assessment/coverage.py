@@ -20,7 +20,7 @@ import datetime as dt
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import cast
+from typing import NamedTuple, cast
 
 
 class Truth(StrEnum):
@@ -167,6 +167,15 @@ class TenantSubgraph:
     acts_as: tuple[tuple[str, Truth], ...]
 
 
+class ExceptionOf(NamedTuple):
+    """An obligation's clause and one of its exceptions (#164, ADR-0037)."""
+
+    clause: str
+    """The obligation's own clause."""
+    exception: str
+    """A clause that says when the obligation does not apply."""
+
+
 @dataclass(frozen=True, slots=True)
 class Coverage:
     tenant_id: str
@@ -177,6 +186,12 @@ class Coverage:
 
     def with_outcome(self, outcome: Outcome) -> tuple[ObligationCoverage, ...]:
         return tuple(o for o in self.obligations if o.outcome is outcome)
+
+    @property
+    def might_apply(self) -> tuple[ObligationCoverage, ...]:
+        """Every obligation that applies or might: what Track B's law scope
+        is made of. One that doesn't is reported, never retrieved."""
+        return tuple(o for o in self.obligations if o.outcome is not Outcome.NOT_APPLICABLE)
 
     @property
     def questions(self) -> tuple[Question, ...]:
@@ -194,21 +209,17 @@ class Coverage:
         from library law (D-03, #116, ADR-0037). Not-applicable obligations
         are reported, never retrieved."""
         return frozenset(
-            c
-            for o in self.obligations
-            if o.outcome is not Outcome.NOT_APPLICABLE
-            for c in (*o.citations, *o.exception_clause_ids)
+            c for o in self.might_apply for c in (*o.citations, *o.exception_clause_ids)
         )
 
     @property
-    def track_a_exceptions(self) -> frozenset[tuple[str, str]]:
-        """(the obligation's clause, an exception to it) for every obligation
-        that applies or might (#164, ADR-0037): an answer given the first is
-        given the second."""
+    def track_a_exceptions(self) -> frozenset[ExceptionOf]:
+        """Each clause of an obligation that applies or might, with each of
+        its exceptions (#164, ADR-0037): an answer given the clause is given
+        the exception."""
         return frozenset(
-            (clause, exception)
-            for o in self.obligations
-            if o.outcome is not Outcome.NOT_APPLICABLE
+            ExceptionOf(clause, exception)
+            for o in self.might_apply
             for clause in o.clause_ids
             for exception in o.exception_clause_ids
         )

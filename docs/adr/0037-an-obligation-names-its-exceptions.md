@@ -54,7 +54,7 @@ exceptions:
     does too (`test_no_corpus_mapping_awaits_review`). Before this, the tests
     that load `corpus/mappings/` would have run on a pending file.
 
-**2. Track A's scope includes them (amends ADR-0030).** For every obligation
+**2. The law scope includes them (amends ADR-0030).** For every obligation
 that applies or might, `LawScope.of(coverage)` cites its exceptions as well
 as its clauses and the reasoning's. Not applicable means not retrieved, for
 its exceptions too. An exception cited this way admits the clauses inside it
@@ -79,7 +79,7 @@ inside one:
 - **The ids come from Track A, never from retrieved text** (#29). What
   retrieval returned decides only which ids are owed.
 - **An owed exception that can't be fetched refuses the answer before
-  generation** (`ExceptionUndelivered`). The graph would then name a clause
+  generation** (`ObligationExceptionUndelivered`). The graph would then name a clause
   the retrieval store doesn't hold.
 
 ## Consequences
@@ -92,16 +92,26 @@ inside one:
   without limiting those subclauses or any other provision of this Act, such
   steps include technical and organisational measures." That says what the
   steps include, not when 11.1 or 11.2 doesn't apply. Under this model it
-  stays out of scope, and GQ-14's recall under Acme's scope stays 0. The same
-  gap holds for every definitional subclause an obligation's own text depends
-  on (APP 5.2 for 5.1, 7.6 for 7.7, 11.3 for 11.1 and 11.2). Whether to cite
-  those too, as a second kind of edge, is a separate decision, not taken here.
+  stays out of scope.
+  - **GQ-14, measured** (real Qdrant, cached vectors, no reranker, Acme
+    under GA-01's scope): recall@10 0.0 with the signed mapping, and 0.0
+    with the drafted exceptions.
+  - **Attaching 11.3 to 11.1 and 11.2** would make GQ-14 1.0, and the mean
+    of the nine law questions 0.907 instead of 0.796.
+  - **The same gap** holds for every definitional subclause an
+    obligation's own text depends on: APP 5.2 for 5.1, 7.6 for 7.7, 11.3
+    for 11.1 and 11.2.
+  - Whether to deliver those too is the human's decision, not taken here
+    (#182).
 - **What is not guaranteed:**
-  - The paragraphs inside an exception are in scope but not guaranteed: the
-    guarantee delivers the clause the mapping names, which for most APP
-    exceptions is a chapeau ending "if:". The answer can say the exception
-    exists and cite it. Its conditions reach the model only if retrieval
-    returns them. To guarantee a paragraph, the mapping names it.
+  - **The paragraphs inside an exception** are in scope but not guaranteed.
+    The guarantee delivers the clause the mapping names, which for most APP
+    exceptions is the lead-in to a list of paragraphs. The answer can say
+    the exception exists and cite it. Its conditions reach the model only if
+    retrieval returns them. The options are in #182:
+    - the mapping names the paragraphs;
+    - the loader expands an exception to the clauses inside it;
+    - a retrieval-store method returns them.
   - An unscoped call (`LawScope.unscoped`, no Track A) knows no exceptions.
     The product path always passes Track A's scope. Only scripts and the
     Phase 1 eval don't.

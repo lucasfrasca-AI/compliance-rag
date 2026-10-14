@@ -1,8 +1,10 @@
 """An obligation names its exceptions, and they travel with it (#164, ADR-0037).
 
-The human's decision: APP 7.2, 7.8 and 8.2 say when an obligation does not
-apply, so an answer citing the obligation without them is incomplete in a way
-its reader can't detect — a correctness bug. So:
+The human's decision: "APP 7.2, 7.8, 8.2 and 11.3 say when an obligation does
+NOT apply, so an answer citing APP 11.1 without 11.3 is incomplete in a way
+the reader can't detect. Treat it as a correctness bug, not a modelling
+nicety." (On its parsed text APP 11.3 says what the steps include, not when
+they don't apply: ADR-0037 records it as no exception.) So:
 
 - the mapping model names an obligation's exceptions, in reviewed mapping
   content kept beside the signed file, loaded as `EXCEPTED_BY` edges;
@@ -36,11 +38,11 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import Candidate, LawScope
+from compliance_rag.adapters.interfaces import NO_PREFIX, Candidate, LawScope, PolicyCorpus
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
-from compliance_rag.assessment.coverage import Coverage, Outcome
-from compliance_rag.assessment.evidence import Facts
-from compliance_rag.assessment.pipeline import AssessmentPipeline, ExceptionUndelivered
+from compliance_rag.assessment.coverage import Coverage, ExceptionOf, Outcome
+from compliance_rag.assessment.evidence import Evidence, Facts
+from compliance_rag.assessment.pipeline import AssessmentPipeline, ObligationExceptionUndelivered
 from compliance_rag.assessment.prompt import SourceClause, fence, policy_prefix
 from compliance_rag.corpus.models import (
     NO_END_DATE,
@@ -83,7 +85,9 @@ OVER = [fact("annual_turnover_aud", 4000, LAST_FY), fact("provides_health_servic
 """Over the threshold: OB-T-KEEP applies. No health service: OB-T-HEALTH doesn't."""
 
 
-def both() -> MappingSet:
+def with_exceptions() -> MappingSet:
+    """The applicability fixture's obligations, with the exceptions fixture
+    beside it."""
     return load_mapping_set([FIXTURE, EXCEPTIONS])
 
 
@@ -91,8 +95,8 @@ def exceptions_document() -> dict[str, Any]:  # Any: YAML
     return yaml.safe_load(EXCEPTIONS.read_text(encoding="utf-8"))
 
 
-async def coverage_of(evidence: list[Any] | None = None) -> Coverage:  # Any: Evidence
-    graph = FakeGraphStore(both(), clause_validity=VALIDITY)
+async def coverage_of(evidence: list[Evidence] | None = None) -> Coverage:
+    graph = FakeGraphStore(with_exceptions(), clause_validity=VALIDITY)
     return await graph.coverage(Facts.of(evidence or OVER), tenant_id="acme", as_of=AS_OF)
 
 
@@ -102,7 +106,7 @@ async def coverage_of(evidence: list[Any] | None = None) -> Coverage:  # Any: Ev
 def test_an_exceptions_file_names_the_obligations_of_another_file() -> None:
     """The signed file is never edited: its obligations gain their exceptions
     from a file beside it, validated as one set with it."""
-    mappings = both()
+    mappings = with_exceptions()
     assert mappings.exceptions_by_obligation == {
         "OB-T-KEEP": (KEEP_EXCEPTION,),
         "OB-T-HEALTH": (HEALTH_EXCEPTION,),
@@ -204,7 +208,7 @@ async def test_an_obligation_that_might_apply_brings_its_exceptions_too() -> Non
 async def test_an_exception_not_in_force_is_not_in_scope() -> None:
     later = dt.date(2027, 1, 1)
     graph = FakeGraphStore(
-        both(), clause_validity={**VALIDITY, KEEP_EXCEPTION: (later, NO_END_DATE)}
+        with_exceptions(), clause_validity={**VALIDITY, KEEP_EXCEPTION: (later, NO_END_DATE)}
     )
     coverage = await graph.coverage(Facts.of(OVER), tenant_id="acme", as_of=AS_OF)
     assert coverage.obligation("OB-T-KEEP").exception_clause_ids == ()
@@ -222,7 +226,7 @@ async def test_an_exception_is_owed_for_its_clause_or_any_clause_inside_it() -> 
 
 def test_a_scope_cannot_owe_a_clause_it_does_not_cite() -> None:
     with pytest.raises(ValueError, match="doesn't cite"):
-        LawScope(frozenset({KEEP}), "test", frozenset({(KEEP, KEEP_EXCEPTION)}))
+        LawScope(frozenset({KEEP}), "test", frozenset({ExceptionOf(KEEP, KEEP_EXCEPTION)}))
 
 
 # ---- on Neo4j ---------------------------------------------------------------------
@@ -230,12 +234,12 @@ def test_a_scope_cannot_owe_a_clause_it_does_not_cite() -> None:
 CORPUS = clause_records("v1", TEXTS)
 
 
-async def load_both(graph: Neo4jGraph, mappings: MappingSet | None = None) -> None:
+async def load_with_exceptions(graph: Neo4jGraph, mappings: MappingSet | None = None) -> None:
     await graph.apply_schema()
     await load_instrument_version(
         graph, CORPUS, instrument_since=SINCE, effective=OPEN[0], supersedes=None
     )
-    await load_mappings(graph, mappings or both(), today=AS_OF)
+    await load_mappings(graph, mappings or with_exceptions(), today=AS_OF)
 
 
 async def excepted_by(graph: Neo4jGraph) -> set[tuple[str, str]]:
@@ -248,12 +252,12 @@ async def excepted_by(graph: Neo4jGraph) -> set[tuple[str, str]]:
 
 @needs_neo4j
 async def test_exceptions_load_as_edges_idempotently(graph: Neo4jGraph) -> None:
-    await load_both(graph)
+    await load_with_exceptions(graph)
     assert await excepted_by(graph) == {
         ("OB-T-KEEP", KEEP_EXCEPTION),
         ("OB-T-HEALTH", HEALTH_EXCEPTION),
     }
-    again = await load_mappings(graph, both(), today=AS_OF)
+    again = await load_mappings(graph, with_exceptions(), today=AS_OF)
     assert (again.nodes_created, again.edges_created) == (0, 0)
 
 
@@ -263,9 +267,9 @@ async def test_a_signed_obligation_gains_its_exceptions_from_a_later_file(
 ) -> None:
     """The path the real Act takes: its obligations are loaded and signed
     first, and the exceptions file, reviewed later, adds edges to them."""
-    await load_both(graph, load_mapping_set([FIXTURE]))
+    await load_with_exceptions(graph, load_mapping_set([FIXTURE]))
     assert await excepted_by(graph) == set()
-    report = await load_mappings(graph, both(), today=AS_OF)
+    report = await load_mappings(graph, with_exceptions(), today=AS_OF)
     assert (report.nodes_created, report.edges_created) == (0, 2)
 
 
@@ -273,7 +277,7 @@ async def test_a_signed_obligation_gains_its_exceptions_from_a_later_file(
 async def test_a_loaded_exception_is_never_removed(graph: Neo4jGraph, tmp_path: Path) -> None:
     """Like `DERIVED_FROM`, an obligation's exceptions may grow, never shrink
     (D-05): a removal is refused before anything is written."""
-    await load_both(graph)
+    await load_with_exceptions(graph)
     document = exceptions_document()
     document["exceptions"] = [document["exceptions"][1]]
     before = await graph.counts()
@@ -300,7 +304,7 @@ async def test_an_exception_not_in_the_graph_is_refused_before_any_write(
     )
     before = await graph.counts()
     with pytest.raises(MappingError, match=f"OB-T-KEEP: exception {KEEP_EXCEPTION} is not in"):
-        await load_mappings(graph, both(), today=AS_OF)
+        await load_mappings(graph, with_exceptions(), today=AS_OF)
     assert await graph.counts() == before
 
 
@@ -308,8 +312,8 @@ async def test_an_exception_not_in_the_graph_is_refused_before_any_write(
 async def test_track_a_over_neo4j_and_the_fake_agree_on_exceptions(graph: Neo4jGraph) -> None:
     """The same coverage, exceptions included, from the graph's `EXCEPTED_BY`
     edges read through the query builder and from the YAML in memory."""
-    await load_both(graph)
-    fake, real = FakeGraphStore(both(), clause_validity=VALIDITY), GraphTrackA(graph)
+    await load_with_exceptions(graph)
+    fake, real = FakeGraphStore(with_exceptions(), clause_validity=VALIDITY), GraphTrackA(graph)
     # Over the threshold with no health service, OB-T-HEALTH doesn't apply;
     # under it with nothing said, it might.
     for evidence, health_in_scope in (
@@ -334,9 +338,19 @@ class SpyStore(FakeRetrievalStore):
         super().__init__(chunks, ledger=ledger)
         self.looked_up: list[str] = []
 
-    async def lookup_clause(self, clause_id: str, **kwargs: Any) -> Candidate | None:  # pyright: ignore[reportIncompatibleMethodOverride] — a spy, passes through; Any: the store's own keywords
+    async def lookup_clause(
+        self,
+        clause_id: str,
+        *,
+        law: LawScope,
+        tenant_id: str,
+        as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
+    ) -> Candidate | None:
         self.looked_up.append(clause_id)
-        return await super().lookup_clause(clause_id, **kwargs)
+        return await super().lookup_clause(
+            clause_id, law=law, tenant_id=tenant_id, as_of=as_of, policy_corpus=policy_corpus
+        )
 
 
 def _records(texts: dict[str, str]) -> tuple[ClauseRecord, ...]:
@@ -444,9 +458,26 @@ async def test_an_exception_that_cannot_be_delivered_refuses_the_answer_before_g
     pipeline, generator, _ = await answering(
         {k: v for k, v in TEXTS.items() if k != "s1/2"}, citing(KEEP)
     )
-    with pytest.raises(ExceptionUndelivered, match=KEEP_EXCEPTION):
+    with pytest.raises(ObligationExceptionUndelivered, match=KEEP_EXCEPTION):
         await pipeline.answer(QUESTION, "acme", AS_OF, law=law)
     assert generator.calls == []
+
+
+async def test_a_fetched_clause_brings_what_it_is_owed_in_turn() -> None:
+    """Delivery runs until nothing more is owed: if a fetched exception were
+    itself an obligation's clause, its own exceptions would come too."""
+    chain = frozenset(
+        {ExceptionOf(KEEP, KEEP_EXCEPTION), ExceptionOf(KEEP_EXCEPTION, HEALTH_EXCEPTION)}
+    )
+    law = LawScope(frozenset({KEEP, KEEP_EXCEPTION, HEALTH_EXCEPTION}), "test: a chain", chain)
+    pipeline, generator, store = await answering(TEXTS, citing(KEEP))
+    answer = await pipeline.answer(QUESTION, "acme", AS_OF, law=law)
+    assert store.looked_up == [KEEP_EXCEPTION, HEALTH_EXCEPTION]
+    assert {(c.clause_id, c.excepts) for c in answer.exceptions} == {
+        (KEEP_EXCEPTION, (KEEP,)),
+        (HEALTH_EXCEPTION, (KEEP_EXCEPTION,)),
+    }
+    assert TEXTS["s3/1"] in str(generator.calls[0]["user"])
 
 
 async def test_an_answer_without_the_obligations_clause_owes_nothing() -> None:

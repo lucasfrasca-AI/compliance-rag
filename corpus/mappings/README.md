@@ -200,8 +200,8 @@ exceptions:
   - the obligation's own clause, or a clause containing it (`sch1/app8` for
     APP 8.1 would admit the whole APP);
   - any file still pending review, as for every mapping file.
-- **What it does** (ADR-0037). Track A's scope includes the exceptions of
-  every obligation that applies or might, and the clauses inside them
+- **What it does** (ADR-0037). The law scope Track A gives Track B includes
+  the exceptions of every obligation that applies or might, and the clauses inside them
   (ADR-0035). And an answer given an obligation's clause, or a paragraph of
   it, is given its exceptions too: fetched by id if the ranking left them out,
   marked in the prompt as the exception to that clause. An exception decides

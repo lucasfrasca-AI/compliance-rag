@@ -447,17 +447,12 @@ class MappingFile(_Strict):
         for clause_id in self.source_clause_ids:
             parse_stable_id(clause_id)
         sources = set(self.source_clause_ids)
-        for item in self.grounded:
-            for clause_id in item.clause_ids:
+        named = [(item.id, item.clause_ids) for item in self.grounded]
+        named += [(f"exceptions of {e.obligation_id}", e.clause_ids) for e in self.exceptions]
+        for who, clause_ids in named:
+            for clause_id in clause_ids:
                 if clause_id not in sources:
-                    raise ValueError(f"{item.id}: clause {clause_id} is not in source_clause_ids")
-        for entry in self.exceptions:
-            for clause_id in entry.clause_ids:
-                if clause_id not in sources:
-                    raise ValueError(
-                        f"exceptions of {entry.obligation_id}: clause {clause_id} is not in "
-                        "source_clause_ids"
-                    )
+                    raise ValueError(f"{who}: clause {clause_id} is not in source_clause_ids")
         return self
 
 
@@ -525,6 +520,13 @@ class MappingSet(_Strict):
     def exceptions_by_obligation(self) -> dict[str, tuple[str, ...]]:
         """Each obligation's exception clauses, by obligation id (#164)."""
         return {e.obligation_id: e.clause_ids for e in self.exceptions}
+
+    @property
+    def clause_ids(self) -> frozenset[str]:
+        """Every clause the set names: what its items derive from, and its
+        exceptions. What a graph must hold before the set is loaded."""
+        derived = {c for _, item in self.grounded for c in item.clause_ids}
+        return frozenset(derived | {c for e in self.exceptions for c in e.clause_ids})
 
     @property
     def crosswalks(self) -> tuple[Crosswalk, ...]:

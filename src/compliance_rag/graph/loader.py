@@ -386,40 +386,29 @@ async def _check_grounding(graph: GraphAdmin, mappings: MappingSet, today: dt.da
     only has to overlap the item. An obligation's exceptions likewise: each
     loaded, and in force at some time within the obligation's interval
     (ADR-0037); an obligation may outlive an exception the law repeals."""
-    grounded = mappings.grounded
-    refs = {NodeRef("Clause", c) for _, item in grounded for c in item.clause_ids}
-    refs |= {NodeRef("Clause", c) for entry in mappings.exceptions for c in entry.clause_ids}
-    clauses = await graph.stored(sorted(refs, key=lambda r: r.stable_id))
+    clauses = await graph.stored([NodeRef("Clause", c) for c in sorted(mappings.clause_ids)])
+
+    def check(item: Dated, label: str, what: str, clause_id: str) -> None:
+        stored = clauses.get(NodeRef("Clause", clause_id))
+        if stored is None:
+            raise MappingError(
+                f"{item.id}: {what} {clause_id} is not in the graph — load the corpus first"
+            )
+        start, end = _interval(stored)
+        if not (start < item.valid_until and item.valid_from < end):
+            raise MappingError(
+                f"{item.id}: {what} {clause_id} ({start} to {end}) is never in force while "
+                f"the {label.lower()} is ({item.valid_from} to {item.valid_until})"
+            )
+
     obligations = mappings.obligations_by_id
     for entry in mappings.exceptions:
-        obligation = obligations[entry.obligation_id]
         for clause_id in entry.clause_ids:
-            stored = clauses.get(NodeRef("Clause", clause_id))
-            if stored is None:
-                raise MappingError(
-                    f"{obligation.id}: exception {clause_id} is not in the graph — load the "
-                    "corpus first"
-                )
-            start, end = _interval(stored)
-            if not (start < obligation.valid_until and obligation.valid_from < end):
-                raise MappingError(
-                    f"{obligation.id}: exception {clause_id} ({start} to {end}) is never in force "
-                    f"while the obligation is ({obligation.valid_from} to {obligation.valid_until})"
-                )
-    for label, item in grounded:
+            check(obligations[entry.obligation_id], "Obligation", "exception", clause_id)
+    for label, item in mappings.grounded:
         last = _last_visible(item, today)
         for clause_id in item.clause_ids:
-            stored = clauses.get(NodeRef("Clause", clause_id))
-            if stored is None:
-                raise MappingError(
-                    f"{item.id}: clause {clause_id} is not in the graph — load the corpus first"
-                )
-            start, end = _interval(stored)
-            if not (start < item.valid_until and item.valid_from < end):
-                raise MappingError(
-                    f"{item.id}: clause {clause_id} ({start} to {end}) is never in force while "
-                    f"the {label.lower()} is ({item.valid_from} to {item.valid_until})"
-                )
+            check(item, label, "clause", clause_id)
         if not any(
             _interval(clauses[NodeRef("Clause", c)])[0]
             <= last

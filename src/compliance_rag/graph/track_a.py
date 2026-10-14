@@ -204,7 +204,7 @@ def _record(span: Span, coverage: Coverage) -> None:
     span.set_attribute("track_a.clause_ids", sorted(coverage.track_a_clause_ids))
     span.set_attribute(
         "track_a.exceptions",
-        [f"{c} excepted by {e}" for c, e in sorted(coverage.track_a_exceptions)],
+        [f"{p.clause} excepted by {p.exception}" for p in sorted(coverage.track_a_exceptions)],
     )
 
 
