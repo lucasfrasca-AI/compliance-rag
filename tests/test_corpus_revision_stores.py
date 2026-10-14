@@ -820,3 +820,33 @@ async def test_the_graph_refuses_a_missing_node_and_an_amendment(graph: Neo4jGra
     )
     with pytest.raises(GraphWriteRefused, match="only a correction"):
         await graph.revise_clauses(_issue(amendment))
+
+
+# ---- the operator script's dry run -------------------------------------------
+
+
+@needs_neo4j
+@pytest.mark.parametrize("stores", ["fake"], indirect=True)
+async def test_the_scripts_dry_run_prints_the_plan_and_writes_nothing(
+    stores: Stores, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.revise_compilation import (
+        _report_or_apply,  # pyright: ignore[reportPrivateUsage]
+        parse_arguments,
+    )
+
+    await deploy(stores)
+    before = await snapshot(stores)
+    revision = stores.revision()
+    await _report_or_apply(
+        revision,
+        await plan(stores, revision),
+        parse_arguments(["--bucket", "b"]),
+        None,
+        "nowhere",
+    )
+    printed = capsys.readouterr().out
+    assert "7 changed, 0 added, 0 removed" in printed
+    assert "findings citing the changed clauses: 0" in printed
+    assert "--apply --mode correct --acknowledge" in printed
+    assert await snapshot(stores) == before
