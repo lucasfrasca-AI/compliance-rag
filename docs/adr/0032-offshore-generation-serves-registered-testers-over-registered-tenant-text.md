@@ -1,8 +1,11 @@
 # ADR-0032 — Offshore generation serves registered testers over registered tenant text
 
 - Status: accepted. The model chose among #155's options, under the human's
-  instruction of 2026-10-14 to close #155 now. The human hasn't ratified the
-  choice and can revise it.
+  instruction of 2026-10-14 to close #155 now. The human confirmed it later the
+  same day, with the tester list left empty: "Nobody asks questions offshore
+  until Phase 1's live run, and that's me alone when the quota lands." So
+  `OFFSHORE_GENERATION_TESTERS` stays empty, and no member's question reaches
+  offshore generation in the build phase.
 - Date: 2026-10-14
 - Issue: #155
 - Extends: ADR-0023 (the build-phase residency gate), ADR-0026 (synthetic is operator-registered)

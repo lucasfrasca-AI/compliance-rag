@@ -129,7 +129,7 @@ footer{margin-top:28px;color:var(--mute);font-size:12.5px;max-width:78ch}
     <div class="step a">
       <div class="dot"><b></b></div>
       <div class="name">Load the two derived stores<small>Structure to the graph, text to the vector store</small></div>
-      <div class="svc"><em>Qdrant Cloud Free, australia-southeast1</em> <span class="p">· HNSW dense + BM25 sparse (server-side inference) + ColBERT multivectors (rescoring, HNSW off) + keyword index on clause_id</span><br><em>Neo4j AuraDB Free</em> <span class="p">· Cypher · instrument → article → obligation · SUPERSEDES edges · crosswalks from YAML</span></div>
+      <div class="svc"><em>Qdrant Cloud Free, australia-southeast1</em> <span class="p">· HNSW dense + BM25 sparse (computed client-side with fastembed, issue #22) + ColBERT multivectors (rescoring, HNSW off) + keyword index on clause_id</span><br><em>Neo4j AuraDB Free</em> <span class="p">· Cypher · instrument → article → obligation · SUPERSEDES edges · crosswalks from YAML</span></div>
       <div class="cost">$0<small>rebuildable</small></div>
     </div>
 
@@ -178,21 +178,21 @@ footer{margin-top:28px;color:var(--mute);font-size:12.5px;max-width:78ch}
     <div class="step b">
       <div class="dot"><b></b></div>
       <div class="name">Track B — find the supporting text<small>Only within what Track A identified</small></div>
-      <div class="svc"><em>Qdrant Query API</em><br><span class="p">prefetch dense (cosine) + sparse (BM25) → RRF fusion → 50 candidates · filter: the clauses Track A cites (law scope, ADR-0030), valid window, scope · exact clause-ID queries hit the keyword index and skip reranking</span></div>
+      <div class="svc"><em>Qdrant Query API</em><br><span class="p">prefetch dense (cosine) + sparse (BM25) → RRF fusion → 20 candidates · filter: the clauses Track A cites (law scope, ADR-0030), valid window, scope · exact clause-ID queries hit the keyword index and skip reranking</span></div>
       <div class="cost">$0<small></small></div>
     </div>
 
     <div class="step b">
       <div class="dot"><b></b></div>
       <div class="name">Rerank<small>Answerability, not similarity</small></div>
-      <div class="svc"><em>Reranker service on Cloud Run, Sydney</em><br><span class="p">Cross-encoder (BGE-reranker-v2-m3, ONNX int8, CPU) · 50 → 10 · scale-to-zero · A/B: ColBERT rescoring inside Qdrant · Vertex Ranking API is not in AU — CI only</span></div>
+      <div class="svc"><em>Reranker service on Cloud Run, Sydney</em><br><span class="p">Cross-encoder (BGE-reranker-v2-m3, ONNX int8, CPU) · 20 → 10 · scale-to-zero · A/B: ColBERT rescoring inside Qdrant · Vertex Ranking API is not in AU — CI only</span></div>
       <div class="cost">$0–15<small>min instances 0 → 1</small></div>
     </div>
 
     <div class="step b">
       <div class="dot"><b></b></div>
       <div class="name">Generate<small>Findings per claim, or a grounded chat answer</small></div>
-      <div class="svc"><em>Claude on Vertex AI, Australia</em><br><span class="p">Cached prefix: system prompt + obligation digest + full company policy corpus (CAG) · law arrives via retrieval · temperature 0 · structured output</span></div>
+      <div class="svc"><em>Claude on Vertex AI: US multi-region during the build phase only, gated to public law plus synthetic data (ADR-0023, ADR-0024); Claude is not served from Sydney</em><br><span class="p">Cached prefix: system prompt + obligation digest + full company policy corpus (CAG) · law arrives via retrieval · temperature 0 · structured output</span></div>
       <div class="cost">$30–80<small>the line that moves</small></div>
     </div>
 
@@ -228,7 +228,7 @@ footer{margin-top:28px;color:var(--mute);font-size:12.5px;max-width:78ch}
   <div><div class="t">Heavy month</div><div class="n">~$110–130</div><div class="d">Still under the $200 ceiling</div></div>
 </div>
 
-<footer>Rates are published figures as of September 2026; volumes are estimates. Qdrant is confirmed in australia-southeast1 and the reranker is self-hosted there; Neo4j AuraDB Free is the one store still offshore (public law only). The first real policy is the residency trigger; the upgrade path (Aura Pro in AU) adds roughly $65.</footer>
+<footer>Rates are published figures as of September 2026; volumes are estimates. Qdrant is confirmed in australia-southeast1 and the reranker is self-hosted there; Neo4j AuraDB Free is the one store still offshore (public law only), and generation runs in the US during the build phase, for public law and synthetic text only (ADR-0023). The first real policy is the residency trigger; the upgrade path (Aura Pro in AU) adds roughly $65.</footer>
 
 </div>
 </body>
