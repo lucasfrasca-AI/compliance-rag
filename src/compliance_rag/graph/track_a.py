@@ -44,6 +44,7 @@ _HOPS = (
     ("Obligation", "APPLIES_TO", "Jurisdiction"),
     ("Obligation", "APPLIES_TO", "Sector"),
     ("Obligation", "REQUIRES", "Condition"),
+    ("Obligation", "EXCEPTED_BY", "Clause"),
     ("Actor", "DERIVED_FROM", "Clause"),
     ("Actor", "QUALIFIED_BY", "Condition"),
     ("Condition", "DERIVED_FROM", "Clause"),
@@ -127,6 +128,7 @@ async def read_snapshot(reader: GraphReader, as_of: dt.date) -> Snapshot:
             jurisdictions=edges("Obligation", "APPLIES_TO", "Jurisdiction").get(oid, ()),
             sectors=edges("Obligation", "APPLIES_TO", "Sector").get(oid, ()),
             conditions=edges("Obligation", "REQUIRES", "Condition").get(oid, ()),
+            exception_clause_ids=edges("Obligation", "EXCEPTED_BY", "Clause").get(oid, ()),
         )
         for oid, node in nodes["Obligation"].items()
     }
@@ -172,6 +174,7 @@ def snapshot_of_mappings(
         label: {i.id for i in items if live(i.valid_from, i.valid_until)}
         for label, items in mappings.by_label.items()
     }
+    exceptions = mappings.exceptions_by_obligation
     obligations = {
         o.id: ObligationSpec(
             id=o.id,
@@ -184,6 +187,7 @@ def snapshot_of_mappings(
             ),
             sectors=tuple(sorted(x for x in o.applies_to.sectors if x in in_force["Sector"])),
             conditions=tuple(sorted(c for c in o.requires.conditions if c in conditions)),
+            exception_clause_ids=clauses(exceptions.get(o.id, ())),
         )
         for o in mappings.obligations
         if live(o.valid_from, o.valid_until)
@@ -198,6 +202,10 @@ def _record(span: Span, coverage: Coverage) -> None:
         )
     span.set_attribute("track_a.questions", [q.condition_id for q in coverage.questions])
     span.set_attribute("track_a.clause_ids", sorted(coverage.track_a_clause_ids))
+    span.set_attribute(
+        "track_a.exceptions",
+        [f"{c} excepted by {e}" for c, e in sorted(coverage.track_a_exceptions)],
+    )
 
 
 class GraphTrackA(GraphStore):

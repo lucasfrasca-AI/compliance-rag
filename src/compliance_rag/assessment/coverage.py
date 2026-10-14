@@ -129,6 +129,11 @@ class ObligationCoverage:
     """The obligation's own tree: its actors (any of), narrowing and
     required conditions (all of)."""
     reason: str
+    exception_clause_ids: tuple[str, ...] = ()
+    """The clauses in force on `as_of` that say when it does not apply, as the
+    reviewed mapping names them (#164, ADR-0037). Not among `citations`: they
+    decide nothing about whether it applies. They are what an answer citing
+    it must not leave out (`Coverage.track_a_exceptions`)."""
 
     @property
     def citations(self) -> tuple[str, ...]:
@@ -185,13 +190,27 @@ class Coverage:
     @property
     def track_a_clause_ids(self) -> frozenset[str]:
         """The clauses Track A cites for every obligation that applies or
-        might: what Track B may return from library law (D-03, #116).
-        Not-applicable obligations are reported, never retrieved."""
+        might, and those obligations' exceptions: what Track B may return
+        from library law (D-03, #116, ADR-0037). Not-applicable obligations
+        are reported, never retrieved."""
         return frozenset(
             c
             for o in self.obligations
             if o.outcome is not Outcome.NOT_APPLICABLE
-            for c in o.citations
+            for c in (*o.citations, *o.exception_clause_ids)
+        )
+
+    @property
+    def track_a_exceptions(self) -> frozenset[tuple[str, str]]:
+        """(the obligation's clause, an exception to it) for every obligation
+        that applies or might (#164, ADR-0037): an answer given the first is
+        given the second."""
+        return frozenset(
+            (clause, exception)
+            for o in self.obligations
+            if o.outcome is not Outcome.NOT_APPLICABLE
+            for clause in o.clause_ids
+            for exception in o.exception_clause_ids
         )
 
     def obligation(self, obligation_id: str) -> ObligationCoverage:

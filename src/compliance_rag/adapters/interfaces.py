@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -105,27 +105,54 @@ class LawScope:
     well it matches. The tenant's own documents aren't law, and Track A
     doesn't scope them.
 
+    It also includes those obligations' exceptions (#164, ADR-0037), and says
+    which clause each excepts (`exceptions`), so that an answer given an
+    obligation's clause is given its exceptions too (`owed`), whatever the
+    ranking did.
+
     `unscoped` is the one way to retrieve library law without Track A. It is
     for a question asked with no tenant profile (the Phase 1 retrieval eval,
     library-wide lookups), and it says why, so an unscoped call is visible in
     code and in traces — never an empty filter that silently means
-    "everything"."""
+    "everything". With no Track A, it knows no exceptions."""
 
     clause_ids: frozenset[str] | None
     reason: str
+    exceptions: frozenset[tuple[str, str]] = frozenset()
+    """(an obligation's clause, a clause that says when it does not apply),
+    from the reviewed mapping through Track A (ADR-0037). Both are cited."""
 
     def __post_init__(self) -> None:
         if not self.reason.strip():
             raise ValueError("a law scope says where it came from")
         if self.clause_ids is None and not self.reason.startswith(UNSCOPED):
             raise ValueError("an unscoped retrieval comes only from LawScope.unscoped(reason)")
+        cited = self.clause_ids or frozenset[str]()
+        for pair in self.exceptions:
+            if not cited.issuperset(pair):
+                raise ValueError(f"an exception pair {pair} names a clause the scope doesn't cite")
 
     @classmethod
     def of(cls, coverage: Coverage) -> LawScope:
         return cls(
             coverage.track_a_clause_ids,
             f"Track A for {coverage.tenant_id} on {coverage.as_of}",
+            coverage.track_a_exceptions,
         )
+
+    def owed(self, delivered: Iterable[str]) -> dict[str, tuple[str, ...]]:
+        """The exceptions a context holding `delivered` must also hold: for
+        each, the obligation clauses it excepts. A clause is held if it, or a
+        clause inside it, is delivered — a paragraph is its clause's text
+        (ADR-0035). In clause id order."""
+        held: set[str] = set()
+        for clause_id in delivered:
+            held |= {clause_id, *clause_ancestors(clause_id)}
+        owed: dict[str, set[str]] = {}
+        for clause, exception in self.exceptions:
+            if clause in held:
+                owed.setdefault(exception, set()).add(clause)
+        return {e: tuple(sorted(owed[e])) for e in sorted(owed)}
 
     @classmethod
     def unscoped(cls, reason: str) -> LawScope:
