@@ -270,6 +270,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> Candidate | None:
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
+        trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
         trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
         every_scope = (Scope.PUBLIC, Scope.TENANT, Scope.USER)
         for c in self._chunks.values():

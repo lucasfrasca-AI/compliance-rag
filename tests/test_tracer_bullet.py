@@ -132,13 +132,14 @@ async def test_answer_composes_retrieve_generate_and_verify(
     assert result.verified is True
 
 
-async def test_answer_calls_retrieve_rather_than_duplicating_the_pipeline(
+async def test_answer_calls_the_router_rather_than_duplicating_the_pipeline(
     assessment: AssessmentPipeline,
 ) -> None:
-    """The pipeline's own retrieve() must run, not a parallel reimplementation
-    of search + rerank inlined into answer()."""
-    spy = AsyncMock(wraps=assessment.retrieval.retrieve)
-    assessment.retrieval.retrieve = spy  # type: ignore[method-assign]
+    """The pipeline's own router must run (D-12, #159), which sends anything
+    but a clause id on to retrieve(): not a parallel reimplementation of
+    search + rerank inlined into answer()."""
+    spy = AsyncMock(wraps=assessment.retrieval.route)
+    assessment.retrieval.route = spy  # type: ignore[method-assign]
 
     await assessment.answer(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
 

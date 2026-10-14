@@ -158,9 +158,10 @@ class AssessmentPipeline:
             # The prefix is the policies' authoritative copy, so retrieval
             # leaves them out and their slots go to law (ADR-0033).
             sent = PolicyCorpus(frozenset(p.clause_id for p in policies))
-            trace = await self.retrieval.retrieve(
-                query, tenant_id, as_of, law=law, policy_corpus=sent
-            )
+            # Through the router (D-12, #159): a question that is a clause id
+            # is an exact lookup that skips the reranker; anything else runs
+            # the full retrieve().
+            trace = await self.retrieval.route(query, tenant_id, as_of, law=law, policy_corpus=sent)
             if on_retrieved is not None:
                 await on_retrieved(trace)
 
