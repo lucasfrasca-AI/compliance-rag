@@ -3,7 +3,8 @@
 start, so the keep-alive (`.github/workflows/qdrant-keepalive.yml`) has a
 collection to write to before anything is deployed. Idempotent: an existing
 collection is never recreated or emptied, only given any payload index it
-lacks.
+lacks and, if its sparse vector predates it, the IDF modifier (#179), applied
+in place and read back (the last field printed).
 
 Reads QDRANT_URL / QDRANT_API_KEY / QDRANT_COLLECTION through `Settings`, and
 prints what it found or made, never the URL or the key. A key the cluster
@@ -24,7 +25,8 @@ async def main() -> None:
     status = await bootstrap_collection(Settings())
     print(
         f"{status.name}: {'created' if status.created else 'already there'}; "
-        f"{status.points} points; payload indexes: {', '.join(status.payload_indexes)}"
+        f"{status.points} points; payload indexes: {', '.join(status.payload_indexes)}; "
+        f"sparse modifier: {status.sparse_modifier}"
     )
 
 

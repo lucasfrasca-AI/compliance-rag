@@ -24,6 +24,11 @@ first use; CI caches `.fastembed_cache/` across runs the same way it caches
 the reranker artifact, rather than a network call inside a gate that must
 be deterministic (issue #21's own standard).
 
+Its values are BM25's term-frequency part only. The inverse-document-frequency
+part is Qdrant's, applied at query time to a sparse vector configured with
+`Modifier.IDF`, so the sparse vector is created with it and an older collection
+is given it in place (`ensure_collection`, #179).
+
 Scope and tenant enforcement lives here, not at the call site: `_build_filter`
 is the *only* place a Qdrant `Filter` gets constructed, and every method that
 talks to the client calls it unconditionally. There is no public method on
@@ -134,6 +139,38 @@ def _encode_sparse(texts: Iterable[str]) -> list[models.SparseVector]:
     ]
 
 
+def _sparse_vector_params() -> models.SparseVectorParams:
+    """The sparse vector's config. `Qdrant/bm25` writes BM25's term-frequency
+    part only; IDF is Qdrant's to apply, at query time, and only when the
+    sparse vector says so (#179). Without it a word every clause uses weighs as
+    much as one that picks a clause out."""
+    return models.SparseVectorParams(modifier=models.Modifier.IDF)
+
+
+def _sparse_modifier(params: models.CollectionParams) -> models.Modifier | None:
+    sparse = (params.sparse_vectors or {}).get(SPARSE_VECTOR_NAME)
+    return sparse.modifier if sparse is not None else None
+
+
+async def _apply_sparse_idf(client: AsyncQdrantClient, collection_name: str) -> None:
+    """Give an existing collection's sparse vector the IDF modifier, in place
+    (#179): Qdrant changes it without touching the points, whose stored values
+    are the term-frequency part either way, and keeps the vector's index
+    settings. Read back afterwards, so a server that accepted the call and
+    ignored it is an error here, not a quiet no-op."""
+    with telemetry.span("qdrant.apply_sparse_idf", **{"retrieval.collection": collection_name}):
+        await client.update_collection(
+            collection_name, sparse_vectors_config={SPARSE_VECTOR_NAME: _sparse_vector_params()}
+        )
+        info = await client.get_collection(collection_name)
+        if _sparse_modifier(info.config.params) != models.Modifier.IDF:
+            raise ValueError(
+                f"collection {collection_name}: asked the server to give the "
+                f"{SPARSE_VECTOR_NAME!r} sparse vector the IDF modifier and it still has none — "
+                "the collection needs re-creating"
+            )
+
+
 async def ensure_collection(
     client: AsyncQdrantClient, collection_name: str, *, dense_dims: int
 ) -> bool:
@@ -143,14 +180,19 @@ async def ensure_collection(
     process start (production) and once per test run (CI's throwaway
     self-hosted container) — never re-creates an existing collection, so it
     never discards real data, but a collection created before an index was
-    added (`instrument_id`, ADR-0020) still gets it. An existing collection of
-    another shape (dense size or distance, or no sparse vector) is refused,
-    not used. Points upserted before a field existed don't carry it and must
-    be re-upserted; upsert is idempotent on the deterministic point id."""
+    added (`instrument_id`, ADR-0020) still gets it. So does one whose sparse
+    vector predates the IDF modifier (#179): that is changed in place, with its
+    points kept, once (a span, `qdrant.apply_sparse_idf`, names the
+    collection). An existing collection of another shape (dense size or
+    distance, or no sparse vector) is refused, not used. Points upserted before
+    a field existed don't carry it and must be re-upserted; upsert is
+    idempotent on the deterministic point id."""
     created = not await client.collection_exists(collection_name)
     if not created:
         info = await client.get_collection(collection_name)
         _check_shape(collection_name, info.config.params, dense_dims=dense_dims)
+        if _sparse_modifier(info.config.params) != models.Modifier.IDF:
+            await _apply_sparse_idf(client, collection_name)
         existing = set(info.payload_schema)
     else:
         await client.create_collection(
@@ -160,7 +202,7 @@ async def ensure_collection(
                     size=dense_dims, distance=models.Distance.COSINE
                 )
             },
-            sparse_vectors_config={SPARSE_VECTOR_NAME: models.SparseVectorParams()},
+            sparse_vectors_config={SPARSE_VECTOR_NAME: _sparse_vector_params()},
         )
         existing = set[str]()
     for field in _PAYLOAD_KEYWORD_FIELDS:
@@ -212,6 +254,9 @@ class CollectionStatus:
     created: bool
     points: int
     payload_indexes: tuple[str, ...]
+    sparse_modifier: str
+    """The sparse vector's weighting as the cluster reports it, read back after
+    the bootstrap ("idf", or "none"): the evidence #179's change took."""
 
 
 async def bootstrap_collection(settings: Settings) -> CollectionStatus:
@@ -242,14 +287,17 @@ async def bootstrap_collection(settings: Settings) -> CollectionStatus:
             raise
         finally:
             await client.close()
+        modifier = _sparse_modifier(info.config.params)
         status = CollectionStatus(
             name=name,
             created=created,
             points=info.points_count or 0,
             payload_indexes=tuple(sorted(info.payload_schema)),
+            sparse_modifier=modifier.value if modifier is not None else "none",
         )
         span.set_attribute("retrieval.collection_created", status.created)
         span.set_attribute("retrieval.collection_points", status.points)
+        span.set_attribute("retrieval.sparse_modifier", status.sparse_modifier)
     return status
 
 
