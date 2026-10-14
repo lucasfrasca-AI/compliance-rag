@@ -232,7 +232,10 @@ def check_acknowledgement(
     """Refused unless the acknowledgement names exactly the plan's clauses
     (`RevisionPlan.acknowledgeable`), says who and why, and acknowledges
     exactly the number of findings citing them now."""
-    if plan.empty:
+    if plan.empty and plan.mode is RevisionMode.CORRECT:
+        # A new compilation that leaves every selected clause as it was is
+        # still a new version (an amendment of other sections); a correction
+        # that corrects nothing is nothing.
         raise RevisionRefused(
             f"{plan.instrument_id}:{plan.stored_version_id}: the fresh parse changes nothing"
         )
@@ -343,8 +346,10 @@ class RevisionRecord:
         if not (self.by.strip() and self.reason.strip()):
             raise ValueError("a revision on record names who and why")
         paths = [c.clause_path for c in self.clauses]
-        if len(paths) != len(set(paths)) or not paths:
+        if len(paths) != len(set(paths)):
             raise ValueError("a revision on record names each of its clauses once")
+        if not paths and self.mode is RevisionMode.CORRECT:
+            raise ValueError("a correction on record corrects at least one clause")
         if (self.supersedes is None) != (self.mode is RevisionMode.CORRECT):
             raise ValueError("an amendment names the version it supersedes; a correction doesn't")
         if self.mode is RevisionMode.CORRECT and any(

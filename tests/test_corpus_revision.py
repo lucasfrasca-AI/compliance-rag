@@ -331,6 +331,18 @@ def test_a_correction_keeps_the_version_and_an_amendment_doesnt() -> None:
         check_amendment(amendment, pinned_source_sha256="0" * 64)
 
 
+def test_an_amendment_that_changes_no_selected_clause_is_still_a_new_version() -> None:
+    """A later compilation can leave every clause a selection keeps as it was:
+    it is still published and the old one retired, with nothing acknowledged
+    by id."""
+    stored = tuple(c.model_copy(update={"version_id": "C2026C00111"}) for c in corrected_clauses())
+    plan = plan_against(stored, corrected_clauses())
+    assert plan.mode is RevisionMode.AMEND and plan.empty
+    check_acknowledgement(plan, ack(frozenset()), findings_citing=0)
+    record = correction_record(plan)
+    assert (record.clauses, record.supersedes) == ((), "C2026C00111")
+
+
 # ---- the record ------------------------------------------------------------
 
 
