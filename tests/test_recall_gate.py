@@ -25,7 +25,7 @@ import pytest
 from compliance_rag.adapters.interfaces import Candidate, Channel
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingCacheMiss
 from compliance_rag.eval.golden import Category, GoldenQuery, GoldenSet, load_golden_set
-from compliance_rag.eval.golden_corpus import golden_texts
+from compliance_rag.eval.golden_corpus import embedded_texts, gate_chunks
 from compliance_rag.eval.harness import golden_store
 from compliance_rag.eval.recall import (
     EXIT_BARS,
@@ -111,13 +111,13 @@ import compliance_rag.adapters.qdrant_retrieval_store
 from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
 from compliance_rag.eval.golden import load_golden_set
-from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import NoRerank, measure
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 
 CachedEmbedder(EmbeddingCache.load())
-store = FakeRetrievalStore(golden_chunks(), ledger=FakeLedgerStore())
+store = FakeRetrievalStore(gate_chunks(), ledger=FakeLedgerStore())
 asyncio.run(measure(RetrievalPipeline(store, NoRerank()), load_golden_set()))
 llm = ("anthropic", "vertexai.generative")
 loaded = [
@@ -157,7 +157,7 @@ def test_every_golden_text_has_a_real_cached_vector() -> None:
     assert cache.task_type == "RETRIEVAL_DOCUMENT"
     assert cache.sdk.startswith("google-genai ")
     dt.date.fromisoformat(cache.generated_on)
-    assert cache.missing(golden_texts()) == ()
+    assert cache.missing(embedded_texts()) == ()
 
 
 def test_the_baseline_covers_every_golden_query() -> None:
@@ -181,7 +181,7 @@ def golden() -> GoldenSet:
 
 @pytest.fixture
 async def results(golden: GoldenSet) -> AsyncIterator[tuple[QueryRecall, ...]]:
-    async with golden_store(_QDRANT_URL, prefix="recall-gate") as store:
+    async with golden_store(_QDRANT_URL, prefix="recall-gate", chunks=gate_chunks()) as store:
         yield await measure(RetrievalPipeline(store, NoRerank()), golden)
 
 

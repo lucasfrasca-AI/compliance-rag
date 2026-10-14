@@ -31,6 +31,7 @@ from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
 from compliance_rag.eval.golden import Category, GoldenSet, load_golden_set
+from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
     EXIT_BARS,
@@ -80,7 +81,10 @@ async def main() -> None:
     model = RerankerModel()
     async with (
         golden_store(
-            settings.qdrant_url, prefix="recall-cloud", api_key=settings.qdrant_api_key
+            settings.qdrant_url,
+            prefix="recall-cloud",
+            chunks=gate_chunks(),
+            api_key=settings.qdrant_api_key,
         ) as store,
         in_process_reranker(model) as reranker,
     ):

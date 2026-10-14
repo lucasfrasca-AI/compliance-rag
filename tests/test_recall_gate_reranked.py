@@ -22,6 +22,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from compliance_rag.eval.golden import Category, load_golden_set
+from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import EXIT_BARS, RERANKED, QueryRecall, by_category, measure
 from compliance_rag.reranker_service.model import DEFAULT_ONNX_MODEL_PATH, RerankerModel
@@ -40,7 +41,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 async def results() -> AsyncIterator[tuple[QueryRecall, ...]]:
     async with (
-        golden_store(_QDRANT_URL, prefix="recall-reranked") as store,
+        golden_store(_QDRANT_URL, prefix="recall-reranked", chunks=gate_chunks()) as store,
         in_process_reranker(RerankerModel()) as reranker,
     ):
         yield await measure(RetrievalPipeline(store, reranker), load_golden_set())
