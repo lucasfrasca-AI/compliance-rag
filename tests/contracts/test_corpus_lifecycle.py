@@ -167,6 +167,14 @@ async def assert_corpus_lifecycle_contract(
         document_class=DocumentClass.INTERNAL_POLICY,
     )
     assert {V1, V2} <= await stored_chunk_ids()
+    # Each version lists exactly its own chunks (#144), never another's.
+    for version_id, chunk_id in (("v1", V1), ("v2", V2)):
+        assert await admin.version_chunk_ids(
+            instrument_id=POLICY, tenant_id="acme", version_id=version_id
+        ) == {chunk_id}
+    assert not await admin.version_chunk_ids(
+        instrument_id=POLICY, tenant_id="beta", version_id="v1"
+    )
 
     # Mechanism 2: at today's as_of, v1 is in no channel, not fused, not
     # reranked — and v2 is in every one of them (the positive control).

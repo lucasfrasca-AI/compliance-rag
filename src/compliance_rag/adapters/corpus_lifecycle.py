@@ -85,6 +85,12 @@ def _check_payload(
             raise ValueError(f"clause {clause.clause_id!r} is not in {instrument_id}:{version_id}")
 
 
+def _in_force_from(chunks: tuple[Chunk, ...], effective_from: dt.date) -> tuple[Chunk, ...]:
+    return tuple(
+        c.model_copy(update={"valid_from": effective_from, "valid_to": NO_END_DATE}) for c in chunks
+    )
+
+
 def _tenant_owns(tenant_id: str, instrument_id: str) -> bool:
     return tenant_id != PUBLIC_TENANT_ID and instrument_tenant_prefix(instrument_id) == tenant_id
 
@@ -130,17 +136,10 @@ class CorpusLifecycle:
         `document_class` is the instrument's (#148): it decides whether the
         version joins the tenant's cached policy prefix (D-11). A class that
         disagrees with the instrument's is refused before anything is written."""
-        check_document_class(tenant_id, document_class)
-        recorded = await self._ledger.document_class(
-            tenant_id=tenant_id, instrument_id=instrument_id
+        await self._check_class(tenant_id, instrument_id, document_class)
+        chunks = self._admitted(
+            chunks, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
-        if recorded is not None and recorded is not document_class:
-            raise ValueError(f"{instrument_id} is {recorded.value}, not {document_class.value}")
-        _check_payload(
-            chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
-        )
-        chunks = self._synthetic_registry.mark(chunks)
-        assert_upload_allowed(chunks, generation_region=self._generation_region)
         if supersedes == version_id:
             raise ValueError("a version cannot supersede itself — that is replace-in-place")
         if await self._retrieval.version_exists(
@@ -150,12 +149,111 @@ class CorpusLifecycle:
                 f"{instrument_id}:{version_id} is already published; a new upload is a new "
                 "version_id, and changing this one in place is replace_in_place"
             )
-        await self._retrieval.upsert_chunks(
-            tuple(
-                c.model_copy(update={"valid_from": effective_from, "valid_to": NO_END_DATE})
-                for c in chunks
-            )
+        await self._retrieval.upsert_chunks(_in_force_from(chunks, effective_from))
+        await self._record(
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            effective_from=effective_from,
+            supersedes=supersedes,
+            document_class=document_class,
         )
+
+    async def complete_version(
+        self,
+        chunks: tuple[Chunk, ...],
+        *,
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        effective_from: dt.date,
+        document_class: DocumentClass,
+    ) -> int:
+        """Finish a publish that stopped part-way (#144): upsert those of
+        `chunks` the store doesn't hold yet, and return how many. Refused
+        unless the version is partly stored and every stored chunk is one of
+        `chunks`, so nothing stored is written over: that would be a replace
+        in place. The same guardrails as `publish_version`. The ledger isn't
+        touched; `record_published_version` records the finished version."""
+        await self._check_class(tenant_id, instrument_id, document_class)
+        chunks = self._admitted(
+            chunks, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        )
+        stored = await self._retrieval.version_chunk_ids(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        )
+        if not stored:
+            raise ValueError(f"{instrument_id}:{version_id} isn't stored; publish it instead")
+        foreign = stored - {c.chunk_id for c in chunks}
+        if foreign:
+            raise ValueError(
+                f"{instrument_id}:{version_id} stores {len(foreign)} chunks not among those "
+                f"given (e.g. {min(foreign)}): a different clause set, not a partial one"
+            )
+        missing = tuple(c for c in chunks if c.chunk_id not in stored)
+        await self._retrieval.upsert_chunks(_in_force_from(missing, effective_from))
+        return len(missing)
+
+    async def record_published_version(
+        self,
+        *,
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        effective_from: dt.date,
+        supersedes: str | None,
+        document_class: DocumentClass,
+    ) -> None:
+        """Record in the ledger a version whose chunks are already stored: a
+        ledger that came after the vectors (#144, #174), or a publish whose
+        ledger write never happened. The same class checks as
+        `publish_version`; refused if retrieval holds none of the version."""
+        await self._check_class(tenant_id, instrument_id, document_class)
+        if not await self._retrieval.version_exists(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        ):
+            raise ValueError(f"{instrument_id}:{version_id} isn't stored, so there is no record")
+        await self._record(
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            effective_from=effective_from,
+            supersedes=supersedes,
+            document_class=document_class,
+        )
+
+    async def _check_class(
+        self, tenant_id: str, instrument_id: str, document_class: DocumentClass
+    ) -> None:
+        check_document_class(tenant_id, document_class)
+        recorded = await self._ledger.document_class(
+            tenant_id=tenant_id, instrument_id=instrument_id
+        )
+        if recorded is not None and recorded is not document_class:
+            raise ValueError(f"{instrument_id} is {recorded.value}, not {document_class.value}")
+
+    def _admitted(
+        self, chunks: tuple[Chunk, ...], *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> tuple[Chunk, ...]:
+        """The payload checked, marked synthetic from the registry (never the
+        caller, #78) and allowed by the residency gate (ADR-0023)."""
+        _check_payload(
+            chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        )
+        chunks = self._synthetic_registry.mark(chunks)
+        assert_upload_allowed(chunks, generation_region=self._generation_region)
+        return chunks
+
+    async def _record(
+        self,
+        *,
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        effective_from: dt.date,
+        supersedes: str | None,
+        document_class: DocumentClass,
+    ) -> None:
         # The ledger is the record the verifier trusts (ADR-0021 mechanism
         # 3): written alongside the payload dates, never derived from them.
         await self._ledger.record_version(

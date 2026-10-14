@@ -154,12 +154,11 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
     async def holds_real_customer_data(self) -> bool:
         return any(is_real_customer_data(c) for c in self._chunks.values())
 
-    async def count_version_chunks(
+    async def version_chunk_ids(
         self, *, instrument_id: str, tenant_id: str, version_id: str
-    ) -> int:
-        return sum(
-            _version_key(c) == (tenant_id, instrument_id, version_id) for c in self._chunks.values()
-        )
+    ) -> frozenset[str]:
+        key = (tenant_id, instrument_id, version_id)
+        return frozenset(c.chunk_id for c in self._chunks.values() if _version_key(c) == key)
 
     async def retire_version(
         self, *, instrument_id: str, tenant_id: str, version_id: str, valid_to: dt.date

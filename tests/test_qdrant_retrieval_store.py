@@ -253,35 +253,29 @@ async def test_the_residency_gate_query_on_real_qdrant() -> None:
         assert await store.holds_real_customer_data()
 
 
-async def test_a_version_larger_than_one_upsert_request_is_stored_whole_and_counted() -> None:
+async def test_a_version_larger_than_one_upsert_request_is_stored_whole_and_listed() -> None:
     """#144: a compilation is written in batches of `UPSERT_BATCH`, and
-    `count_version_chunks` counts exactly one version's points, so a load can
-    tell finished from partial."""
+    `version_chunk_ids` lists exactly one version's chunks, across scroll
+    pages, so a load can tell finished from partial from a different set."""
     from compliance_rag.adapters.qdrant_retrieval_store import UPSERT_BATCH
 
     many = 2 * UPSERT_BATCH + 3
-    version = tuple(
-        Chunk(
-            chunk_id=f"privacy-act-1988:C9:s{n}/1",
-            clause_id=f"privacy-act-1988:C9:s{n}/1",
-            text=f"section {n}",
-        )
-        for n in range(many)
-    )
+    ids = [f"privacy-act-1988:C9:s{n}/1" for n in range(many)]
+    version = tuple(Chunk(chunk_id=i, clause_id=i, text=f"section {i}") for i in ids)
     other = Chunk(chunk_id=APP11, clause_id=APP11, text="another version of the same act")
     async with QdrantRetrievalStore.ephemeral(
-        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="count"
+        _QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=FakeLedgerStore(), prefix="ids"
     ) as store:
         await store.upsert_chunks((*version, other))
 
-        async def count(version_id: str) -> int:
-            return await store.count_version_chunks(
+        async def stored(version_id: str) -> frozenset[str]:
+            return await store.version_chunk_ids(
                 instrument_id="privacy-act-1988", tenant_id="_public", version_id=version_id
             )
 
-        assert await count("C9") == many
-        assert await count("TEST-FIXTURE-001") == 1
-        assert await count("C10") == 0
+        assert await stored("C9") == frozenset(ids)
+        assert await stored("TEST-FIXTURE-001") == {APP11}
+        assert await stored("C10") == frozenset()
         assert await store.version_exists(
             instrument_id="privacy-act-1988", tenant_id="_public", version_id="C9"
         )

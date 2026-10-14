@@ -27,15 +27,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
-from urllib.parse import urlparse
-
-import psycopg
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import FakeLedgerStore
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.interfaces import LedgerStore
-from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
+from compliance_rag.adapters.postgres_ledger_store import LedgerUnreachable, PostgresLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.adapters.vertex_embedder import VertexEmbedder
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, DocumentClass
@@ -53,24 +50,19 @@ QDRANT_FREE_TIER_BYTES = 1024**3
 
 async def _ledger(settings: Settings, *, defer: bool) -> tuple[LedgerStore, str]:
     """The configured ledger, checked reachable before anything is written,
-    or an in-memory one, discarded at exit, when the record is deferred. Names
-    where it is, never who it connects as."""
+    or an in-memory one, discarded at exit, when the record is deferred.
+    Returns the ledger and where it is."""
     if defer:
-        return FakeLedgerStore(), ""
-    dsn = urlparse(settings.database_url.get_secret_value())
-    where = f"{dsn.hostname}:{dsn.port or 5432}{dsn.path}"
+        return FakeLedgerStore(), "nowhere: deferred"
     ledger = PostgresLedgerStore.from_settings(settings)
     try:
-        await ledger.version_validity(
-            tenant_id=PUBLIC_TENANT_ID, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID
-        )
-    except psycopg.OperationalError as exc:
+        await ledger.ping()
+    except LedgerUnreachable as exc:
         raise SystemExit(
-            f"the configured ledger ({where}) can't be reached, so nothing was written. "
-            "Start it, or pass --defer-ledger to publish the vectors now and record the "
-            f"version on a later run. ({type(exc).__name__})"
-        ) from exc
-    return ledger, where
+            f"{exc}, so nothing was written. Start it, or pass --defer-ledger to publish the "
+            "vectors now and record the version on a later run."
+        ) from None
+    return ledger, ledger.location
 
 
 async def main(bucket: str, *, defer_ledger: bool) -> None:
@@ -79,7 +71,7 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
     clauses = await read_version_clauses(
         clause_store, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID, tenant_id=PUBLIC_TENANT_ID
     )
-    ledger, ledger_where = await _ledger(settings, defer=defer_ledger)
+    ledger, ledger_location = await _ledger(settings, defer=defer_ledger)
     embedder = VertexEmbedder.from_settings(settings)
     retrieval = QdrantRetrievalStore.from_settings(settings, embedder=embedder, ledger=ledger)
     await retrieval.ensure_ready()
@@ -102,8 +94,10 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
         effective_from=EFFECTIVE,
         document_class=DocumentClass.LIBRARY_LAW,
     )
-    stored = await retrieval.count_version_chunks(
-        instrument_id=INSTRUMENT_ID, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION_ID
+    stored = len(
+        await retrieval.version_chunk_ids(
+            instrument_id=INSTRUMENT_ID, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION_ID
+        )
     )
     print(
         f"{INSTRUMENT_ID}:{VERSION_ID} in {settings.qdrant_collection}: {len(clauses)} clauses, "
@@ -112,14 +106,19 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
     )
     print(
         "vectors: "
-        + ("embedded and upserted by this run" if load.published else "already stored, unchanged")
+        + (
+            f"{load.written} embedded and upserted by this run"
+            if load.written
+            else "already stored, unchanged"
+        )
         + f"; {embedder.tokens_embedded} tokens embedded, ${embedder.cost_usd:.4f}"
     )
-    # An estimate: dense float32 vectors plus the stored text. HNSW links,
-    # sparse vectors and payload indexes come on top.
+    # An estimate for this version: dense float32 vectors plus the stored
+    # text. HNSW links, sparse vectors, payload indexes and anything else in
+    # the collection come on top.
     approx = stored * embedder.dimensions * 4 + sum(len(c.text.encode()) for c in clauses)
     print(
-        f"size: ~{approx / 1024**2:.1f} MB of dense vectors and text, "
+        f"size: ~{approx / 1024**2:.1f} MB of this version's dense vectors and text, "
         f"~{100 * approx / QDRANT_FREE_TIER_BYTES:.2f}% of the 1 GB Free tier (estimate)"
     )
     if defer_ledger:
@@ -129,7 +128,7 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
         )
     else:
         recorded = "recorded by this run" if load.recorded_in_ledger else "already recorded"
-        print(f"ledger ({ledger_where}): {recorded}")
+        print(f"ledger ({ledger_location}): {recorded}")
 
 
 if __name__ == "__main__":

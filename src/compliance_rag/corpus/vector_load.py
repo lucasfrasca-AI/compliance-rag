@@ -3,16 +3,19 @@ clauses read back from the clause store, chunked with the real reranker
 tokenizer, and published through `CorpusLifecycle` (ADR-0021), which embeds
 and upserts them and records the version in the ledger.
 
-Idempotent by what is already stored, never by writing over it:
+Idempotent on the deterministic chunk ids, never by writing over a stored
+chunk:
 
-- no chunk of the version stored: publish it (vectors, then the ledger record);
+- none of the version stored: publish it (vectors, then the ledger record);
+- some of it stored, all of them the clause store's: a load that stopped
+  part-way, so the missing chunks are upserted (`complete_version`);
 - every chunk stored and the ledger has the version: nothing to do;
-- every chunk stored, the ledger hasn't: record the version in the ledger only.
-  That is how a ledger that comes later (Cloud SQL, Phase 3) learns of a
-  version whose vectors were loaded before it existed;
-- some chunks stored but not all, or more than the clause store holds:
-  refused. Writing over a stored version is a replace in place, which needs a
-  person and `CorpusLifecycle`'s guardrails, not a re-run.
+- every chunk stored, the ledger hasn't: record the version in the ledger
+  only. That is how a ledger that comes later (Cloud SQL, Phase 3, #174)
+  learns of a version whose vectors were loaded before it existed;
+- a stored chunk the clause store doesn't have: refused. It is a different
+  clause set, and writing over a stored version is a replace in place, which
+  needs a person and `CorpusLifecycle`'s guardrails, not a re-run.
 """
 
 from __future__ import annotations
@@ -22,31 +25,32 @@ import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from compliance_rag import telemetry
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.interfaces import ClauseStore, LedgerStore, RetrievalAdmin
 from compliance_rag.corpus.chunker import chunk_clauses
-from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, stable_id
+from compliance_rag.corpus.models import ClauseRecord, DocumentClass, stable_id
 
 _CONCURRENT_READS = 16
 """Clause-store reads in flight at once: one object per clause, so a
 779-clause version is 779 reads."""
 
 
-class PartialVersion(RuntimeError):
-    """The store holds some of the version's chunks, but not exactly the
-    clause store's set. Nothing was written."""
+class DifferentClauseSet(RuntimeError):
+    """The store holds chunks of the version that the clause store doesn't.
+    Nothing was written."""
 
 
 @dataclass(frozen=True, slots=True)
 class VectorLoad:
-    """What a load found and did."""
+    """What a load found and did, against the ledger it was given."""
 
     chunks: int
     stored_before: int
-    published: bool
-    """True if this run embedded and upserted the version."""
+    written: int
+    """Chunks this run embedded and upserted."""
     recorded_in_ledger: bool
-    """True if this run recorded the version in the ledger."""
+    """True if this run recorded the version in the given ledger."""
 
 
 async def read_version_clauses(
@@ -84,44 +88,64 @@ async def load_version_vectors(
     document_class: DocumentClass,
 ) -> VectorLoad:
     """Bring the store and the ledger up to the clause store's version (module
-    docstring). `retrieval` and `ledger` are the ones `lifecycle` writes to."""
-    chunks: tuple[Chunk, ...] = chunk_clauses(clauses, count_tokens=count_tokens)
-    stored = await retrieval.count_version_chunks(
-        instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
-    )
-    if stored == 0:
-        await lifecycle.publish_version(
-            chunks,
-            instrument_id=instrument_id,
-            tenant_id=tenant_id,
-            version_id=version_id,
-            effective_from=effective_from,
-            supersedes=None,
-            document_class=document_class,
+    docstring). Every write goes through `lifecycle`; `retrieval` and `ledger`
+    are only read here, and must be the ones `lifecycle` writes to."""
+    chunks = chunk_clauses(clauses, count_tokens=count_tokens)
+    with telemetry.span(
+        "vector_load.load_version",
+        **{"load.version": f"{instrument_id}:{version_id}", "load.chunks": len(chunks)},
+    ) as span:
+        stored = await retrieval.version_chunk_ids(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
-        return VectorLoad(len(chunks), 0, published=True, recorded_in_ledger=True)
-    if stored != len(chunks):
-        raise PartialVersion(
-            f"{instrument_id}:{version_id}: the store holds {stored} chunks, the clause store "
-            f"{len(chunks)}. A load that stopped part-way, or a different clause set: writing "
-            "over a stored version is a replace in place, so nothing was changed"
+        span.set_attribute("load.stored_before", len(stored))
+        foreign = stored - {c.chunk_id for c in chunks}
+        if foreign:
+            raise DifferentClauseSet(
+                f"{instrument_id}:{version_id}: the store holds {len(foreign)} chunks the clause "
+                f"store doesn't (e.g. {min(foreign)}). Writing over a stored version is a "
+                "replace in place, so nothing was changed"
+            )
+        if not stored:
+            await lifecycle.publish_version(
+                chunks,
+                instrument_id=instrument_id,
+                tenant_id=tenant_id,
+                version_id=version_id,
+                effective_from=effective_from,
+                supersedes=None,
+                document_class=document_class,
+            )
+            span.set_attribute("load.written", len(chunks))
+            return VectorLoad(len(chunks), 0, written=len(chunks), recorded_in_ledger=True)
+        written = 0
+        if len(stored) < len(chunks):
+            written = await lifecycle.complete_version(
+                chunks,
+                instrument_id=instrument_id,
+                tenant_id=tenant_id,
+                version_id=version_id,
+                effective_from=effective_from,
+                document_class=document_class,
+            )
+        span.set_attribute("load.written", written)
+        recorded = await ledger.version_validity(
+            tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
         )
-    recorded = await ledger.version_validity(
-        tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
-    )
-    if recorded is None:
-        await ledger.record_version(
-            tenant_id=tenant_id,
-            instrument_id=instrument_id,
-            version_id=version_id,
-            valid_from=effective_from,
-            supersedes=None,
-            document_class=document_class,
-        )
-        return VectorLoad(len(chunks), stored, published=False, recorded_in_ledger=True)
-    if recorded[0] != effective_from:
-        raise ValueError(
-            f"{instrument_id}:{version_id}: the ledger has it in force from {recorded[0]}, "
-            f"not {effective_from}"
-        )
-    return VectorLoad(len(chunks), stored, published=False, recorded_in_ledger=False)
+        if recorded is None:
+            await lifecycle.record_published_version(
+                instrument_id=instrument_id,
+                tenant_id=tenant_id,
+                version_id=version_id,
+                effective_from=effective_from,
+                supersedes=None,
+                document_class=document_class,
+            )
+            return VectorLoad(len(chunks), len(stored), written=written, recorded_in_ledger=True)
+        valid_from, _ = recorded
+        if valid_from != effective_from:
+            raise ValueError(
+                f"{instrument_id}:{version_id}: the ledger has it in force from {valid_from}, "
+                f"not {effective_from}"
+            )
+        return VectorLoad(len(chunks), len(stored), written=written, recorded_in_ledger=False)

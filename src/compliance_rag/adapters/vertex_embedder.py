@@ -73,15 +73,15 @@ class VertexEmbedder(Embedder):
         *,
         model_name: str,
         dimensions: int,
-        owner: object = None,
+        sdk_client: object = None,
     ) -> None:
-        """`owner` is whatever `embed_api` belongs to, held for as long as the
-        embedder lives: `google-genai`'s `Client` closes its HTTP clients when
+        """`sdk_client` is the client `embed_api` belongs to, held for as long
+        as the embedder lives: `google-genai`'s `Client` closes its HTTP clients when
         it is garbage-collected, and `client.aio.models` alone doesn't keep it
         alive (#144: the first call after a collection fails with "the client
         has been closed")."""
         self._embed_api = embed_api
-        self._owner = owner
+        self._sdk_client = sdk_client
         self._model_name = model_name
         self._dimensions = dimensions
         self._tokens_embedded = 0
@@ -104,7 +104,7 @@ class VertexEmbedder(Embedder):
             cast("_EmbedContentLike", client.aio.models),
             model_name=settings.vertex_embedding_model,
             dimensions=settings.vertex_embedding_dims,
-            owner=client,
+            sdk_client=client,
         )
 
     @property
