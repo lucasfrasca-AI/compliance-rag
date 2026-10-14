@@ -50,7 +50,7 @@ Deliverables
 
 Exit criteria
 - recall@10 on exact-ID queries = 1.0; on paraphrase ≥ 0.9; on cross-clause ≥ 0.8 (numbers are the starting bar — revise with evidence)
-  - Measured (2026-10-08) on what `retrieve()` delivers — the cross-encoder over the top 20 fused candidates (ADR-0022): exact-ID 1.000, paraphrase 1.000, cross-clause **0.896 — met**, enforced in CI's `reranker-fidelity` job (`tests/test_recall_gate_reranked.py`). Fusion alone measures 0.792 on cross-clause (#28); exact-ID and paraphrase are also gated on fusion, with a per-query baseline, on every build
+  - Measured (2026-10-08) on what `retrieve()` delivers — the cross-encoder over the top 20 fused candidates (ADR-0022): exact-ID 1.000, paraphrase 1.000, cross-clause **0.896 — met**, enforced in CI's `reranker-fidelity` job (`tests/test_recall_gate_reranked.py`). Fusion alone measured 0.792 on cross-clause (#28), and 0.833 once the BM25 channel had IDF (#179); exact-ID and paraphrase are also gated on fusion, with a per-query baseline, on every build
 - Verifier pass rate 100% on the golden set, with at least one deliberately bad citation proven to block
 - Cost per query logged; projected monthly under $60 at 2,000 queries
 - Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG (ColBERT dropped from scope with #26; benchmarked instead: candidate count and a smaller cross-encoder)
