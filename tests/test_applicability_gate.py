@@ -37,7 +37,9 @@ CORPUS_MAPPINGS = ROOT / "corpus" / "mappings"
 
 
 def _clause_ids(mappings: MappingSet) -> set[str]:
-    return {c for _, item in mappings.grounded for c in item.clause_ids}
+    """Every clause the mappings name, exceptions included (#164): a graph
+    without an exception's clause refuses the load."""
+    return set(mappings.clause_ids)
 
 
 def fake_for(mappings: MappingSet, labels: ApplicabilityGoldenSet) -> FakeGraphStore:

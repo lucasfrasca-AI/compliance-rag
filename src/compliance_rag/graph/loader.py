@@ -17,10 +17,12 @@ in the graph — it lives in Cloud Storage; the graph carries its canonical hash
 **Mapping YAML** (`load_mappings`): the ontology the #93 design session
 settled (ADR-0027, ADR-0028) — obligations, actors, condition trees,
 controls, jurisdictions and sectors, with `DERIVED_FROM`, `QUALIFIED_BY`,
-`HAS_OPERAND`, `APPLIES_TO`, `REQUIRES`, `CROSSWALKS_TO` and `SUPERSEDES`.
-Checked against the graph first: every clause an item derives from present
-and in force within its interval, and every item already loaded unchanged —
-properties and structural edges alike. Tenant policy mappings are never
+`HAS_OPERAND`, `APPLIES_TO`, `REQUIRES`, `CROSSWALKS_TO` and `SUPERSEDES` —
+and an obligation's exceptions, `EXCEPTED_BY` (#164, ADR-0037). Checked
+against the graph first: every clause an item derives from, and every
+exception, present and in force within the obligation's interval, and every
+item already loaded unchanged — properties and structural edges alike (an
+obligation's exceptions may grow, never shrink). Tenant policy mappings are never
 loaded into the graph (D-09, D-14: tenant content has no persisted node), so a
 `status: proposed` mapping can't be traversed by construction.
 
@@ -346,6 +348,11 @@ def _edges(mappings: MappingSet) -> list[EdgeWrite]:
                 {"kind": crosswalk.kind.value, "note": words(crosswalk.note)},
             )
         )
+    for entry in mappings.exceptions:
+        obligation = NodeRef("Obligation", entry.obligation_id)
+        edges += [
+            EdgeWrite("EXCEPTED_BY", obligation, NodeRef("Clause", c)) for c in entry.clause_ids
+        ]
     return edges
 
 
@@ -353,8 +360,10 @@ MEANING = frozenset({"HAS_OPERAND", "QUALIFIED_BY", "APPLIES_TO", "REQUIRES", "S
 """Edges that carry an item's meaning: once loaded, the set a node has is as
 immutable as its properties (D-05) — a different set is a new id.
 `DERIVED_FROM` may grow (a new compilation, ADR-0028) but never shrink;
-`CROSSWALKS_TO` may grow, but a stored crosswalk's kind is fixed and its note
-changes only by an acknowledged correction (ADR-0031)."""
+`EXCEPTED_BY` likewise (an exception reviewed after its obligation was
+signed, or a new compilation's clause, ADR-0037); `CROSSWALKS_TO` may grow,
+but a stored crosswalk's kind is fixed and its note changes only by an
+acknowledged correction (ADR-0031)."""
 
 
 def _last_visible(item: Dated, today: dt.date) -> dt.date:
@@ -374,24 +383,32 @@ async def _check_grounding(graph: GraphAdmin, mappings: MappingSet, today: dt.da
     time within the item's interval, and on the item's last visible day at
     least one of them is: an item may not outlive the text it was read from
     (ADR-0028). An item grounded in many compilations lists them all; each
-    only has to overlap the item."""
-    grounded = mappings.grounded
-    refs = {NodeRef("Clause", c) for _, item in grounded for c in item.clause_ids}
-    clauses = await graph.stored(sorted(refs, key=lambda r: r.stable_id))
-    for label, item in grounded:
+    only has to overlap the item. An obligation's exceptions likewise: each
+    loaded, and in force at some time within the obligation's interval
+    (ADR-0037); an obligation may outlive an exception the law repeals."""
+    clauses = await graph.stored([NodeRef("Clause", c) for c in sorted(mappings.clause_ids)])
+
+    def check(item: Dated, label: str, what: str, clause_id: str) -> None:
+        stored = clauses.get(NodeRef("Clause", clause_id))
+        if stored is None:
+            raise MappingError(
+                f"{item.id}: {what} {clause_id} is not in the graph — load the corpus first"
+            )
+        start, end = _interval(stored)
+        if not (start < item.valid_until and item.valid_from < end):
+            raise MappingError(
+                f"{item.id}: {what} {clause_id} ({start} to {end}) is never in force while "
+                f"the {label.lower()} is ({item.valid_from} to {item.valid_until})"
+            )
+
+    obligations = mappings.obligations_by_id
+    for entry in mappings.exceptions:
+        for clause_id in entry.clause_ids:
+            check(obligations[entry.obligation_id], "Obligation", "exception", clause_id)
+    for label, item in mappings.grounded:
         last = _last_visible(item, today)
         for clause_id in item.clause_ids:
-            stored = clauses.get(NodeRef("Clause", clause_id))
-            if stored is None:
-                raise MappingError(
-                    f"{item.id}: clause {clause_id} is not in the graph — load the corpus first"
-                )
-            start, end = _interval(stored)
-            if not (start < item.valid_until and item.valid_from < end):
-                raise MappingError(
-                    f"{item.id}: clause {clause_id} ({start} to {end}) is never in force while "
-                    f"the {label.lower()} is ({item.valid_from} to {item.valid_until})"
-                )
+            check(item, label, "clause", clause_id)
         if not any(
             _interval(clauses[NodeRef("Clause", c)])[0]
             <= last
@@ -455,6 +472,9 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Cor
             derived = {e.target for e in mine if e.edge_type == "DERIVED_FROM"}
             if not stored.targets("DERIVED_FROM") <= derived:
                 raise _refuse(item, label, "DERIVED_FROM edges (a clause was removed)")
+            excepted = {e.target for e in mine if e.edge_type == "EXCEPTED_BY"}
+            if not stored.targets("EXCEPTED_BY") <= excepted:
+                raise _refuse(item, label, "EXCEPTED_BY edges (an exception was removed)")
             crosswalks = {e.target: e.properties for e in mine if e.edge_type == "CROSSWALKS_TO"}
             for edge in stored.edges:
                 if edge.edge_type != "CROSSWALKS_TO" or edge.target not in crosswalks:
@@ -551,7 +571,7 @@ async def write_mappings(
     transaction; then the nodes; then the edges."""
     attributes = {
         f"graph.{label.lower()}s": len(items) for label, items in mappings.by_label.items()
-    }
+    } | {"graph.exceptions": sum(len(e.clause_ids) for e in mappings.exceptions)}
     with telemetry.span("graph_loader.load_mappings", **attributes) as span:
         if corrections is not None:
             await graph.correct(found, by=corrections.by, reason=corrections.reason)

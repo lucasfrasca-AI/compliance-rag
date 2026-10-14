@@ -74,8 +74,9 @@ golden set (`corpus/golden/`). It is enforced by `validate_review` in
 
 **Pending review.** A model-drafted file carries
 `reviewed_by: "PENDING — <reviewer>"` until the reviewer signs it.
-`scripts/load_mappings.py` refuses to load any file still pending, and the
-applicability gate refuses pending labels. While drafting, the model may run it
+`scripts/load_mappings.py` refuses to load any file still pending, CI fails
+while one is in this directory (`test_no_corpus_mapping_awaits_review`), and
+the applicability gate refuses pending labels. While drafting, the model may run it
 locally with `APPLICABILITY_DRAFT=1`, which checks a draft only for agreeing
 with the code; no workflow sets it. Signing means replacing that value with the
 reviewer's name and dating the file with the sign-off.
@@ -108,6 +109,8 @@ Settled in the #93 design session (ADR-0027, ADR-0028, ADR-0029):
   as the reason (D-06).
 - Every item except a jurisdiction or sector is `DERIVED_FROM` the clauses it
   was read from, one edge per compilation. Those clauses are its citations.
+- An obligation may be `EXCEPTED_BY` the clauses that say when it does not
+  apply (#164, ADR-0037). See Exceptions.
 - Every item is dated:
   - `valid_from`;
   - `valid_to` with `end_reason` once it ends (`superseded`, `repealed` or
@@ -130,6 +133,8 @@ reviewed_by: sam.smith@example.com
 date: 2026-09-20
 source_clause_ids:
   - privacy-act-1988:C2026C00227:sch1/app11/1
+  - privacy-act-1988:C2026C00227:sch1/app8/1
+  - privacy-act-1988:C2026C00227:sch1/app8/2
   - privacy-act-1988:C2026C00227:s15
   - privacy-act-1988:C2026C00227:s6/1/app-entity
   - privacy-act-1988:C2026C00227:s6d/1
@@ -154,10 +159,56 @@ obligations:
       conditions: []                     # obligation-specific gates
       controls: []                       # only where an instrument mandates one
     supersedes: null                     # obligation id this one replaces
+  - id: OB-APP8-1
+    clause_ids: [privacy-act-1988:C2026C00227:sch1/app8/1]
+    summary: >
+      Before disclosing personal information to an overseas recipient, take
+      reasonable steps to ensure the recipient does not breach the APPs.
+    valid_from: 2014-03-12
+    applies_to:
+      actors: [privacy-act-1988/actor/app-entity]
 ```
 
 Not every clause is an obligation. Recitals and definitions are clauses without
-an obligation node (`CONTEXT.md`).
+an obligation node (`CONTEXT.md`), and so are exceptions: they are named by
+the obligation they except (below).
+
+## Exceptions
+
+An **exception** is a clause that says when an obligation does not apply, or
+is displaced: APP 8.2, which sets out when APP 8.1 does not apply to a
+disclosure to an overseas recipient. Which clause excepts which is a legal judgement, so it
+is mapping content, reviewed like the rest (D-01). A clause that only permits
+something ("may"), defines a term, or says what an obligation's steps include
+is not an exception.
+
+```yaml
+exceptions:
+  - obligation_id: OB-APP8-1             # an obligation in this or another file
+    clause_ids:                          # EXCEPTED_BY edges, one per compilation
+      - privacy-act-1988:C2026C00227:sch1/app8/2
+```
+
+- **Keyed by the obligation, not written on it.** An obligation already signed
+  gains its exceptions in a file of its own (`privacy-act-1988-exceptions.yaml`
+  beside `privacy-act-1988.yaml`), with its own front matter and review, so the
+  signed file is never edited. One entry per obligation, in whichever file.
+- **What the loader refuses**, before any write:
+  - an obligation no file defines;
+  - a clause outside the file's `source_clause_ids`, or not in the graph, or
+    never in force while the obligation is;
+  - the obligation's own clause, or a clause containing it (`sch1/app8` for
+    APP 8.1 would admit the whole APP);
+  - any file still pending review, as for every mapping file.
+- **What it does** (ADR-0037). The law scope Track A gives Track B includes
+  the exceptions of every obligation that applies or might, and the clauses inside them
+  (ADR-0035). And an answer given an obligation's clause, or a paragraph of
+  it, is given its exceptions too: fetched by id if the ranking left them out,
+  marked in the prompt as the exception to that clause. An exception decides
+  nothing about whether the obligation applies.
+- **Exceptions only grow.** Once loaded, an obligation's `EXCEPTED_BY` edges
+  may gain a clause (a new compilation's, or one reviewed later), never lose
+  one. A wrong exception is fixed by superseding the obligation.
 
 ## Actors
 
@@ -297,7 +348,8 @@ anything.
   `valid_to` with `end_reason: superseded` on the old one.
 - **A new compilation of unchanged law adds a clause id.** Append the new
   compilation's clause to `clause_ids`. That adds a `DERIVED_FROM` edge, and
-  the old clause retires with its version (ADR-0028).
+  the old clause retires with its version (ADR-0028). An obligation's
+  exceptions likewise: append the new compilation's clause to its entry.
 - **A correction of wording is made in place** (ADR-0031). This covers a
   `summary`, `description`, `question`, `unassessable_reason`, `name`,
   `descriptor` or crosswalk `note`. Edit the YAML, then load with an

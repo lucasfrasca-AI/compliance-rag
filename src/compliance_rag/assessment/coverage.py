@@ -20,7 +20,7 @@ import datetime as dt
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import cast
+from typing import NamedTuple, cast
 
 
 class Truth(StrEnum):
@@ -129,6 +129,11 @@ class ObligationCoverage:
     """The obligation's own tree: its actors (any of), narrowing and
     required conditions (all of)."""
     reason: str
+    exception_clause_ids: tuple[str, ...] = ()
+    """The clauses in force on `as_of` that say when it does not apply, as the
+    reviewed mapping names them (#164, ADR-0037). Not among `citations`: they
+    decide nothing about whether it applies. They are what an answer citing
+    it must not leave out (`Coverage.track_a_exceptions`)."""
 
     @property
     def citations(self) -> tuple[str, ...]:
@@ -162,6 +167,15 @@ class TenantSubgraph:
     acts_as: tuple[tuple[str, Truth], ...]
 
 
+class ExceptionOf(NamedTuple):
+    """An obligation's clause and one of its exceptions (#164, ADR-0037)."""
+
+    clause: str
+    """The obligation's own clause."""
+    exception: str
+    """A clause that says when the obligation does not apply."""
+
+
 @dataclass(frozen=True, slots=True)
 class Coverage:
     tenant_id: str
@@ -172,6 +186,12 @@ class Coverage:
 
     def with_outcome(self, outcome: Outcome) -> tuple[ObligationCoverage, ...]:
         return tuple(o for o in self.obligations if o.outcome is outcome)
+
+    @property
+    def might_apply(self) -> tuple[ObligationCoverage, ...]:
+        """Every obligation that applies or might: what Track B's law scope
+        is made of. One that doesn't is reported, never retrieved."""
+        return tuple(o for o in self.obligations if o.outcome is not Outcome.NOT_APPLICABLE)
 
     @property
     def questions(self) -> tuple[Question, ...]:
@@ -185,13 +205,23 @@ class Coverage:
     @property
     def track_a_clause_ids(self) -> frozenset[str]:
         """The clauses Track A cites for every obligation that applies or
-        might: what Track B may return from library law (D-03, #116).
-        Not-applicable obligations are reported, never retrieved."""
+        might, and those obligations' exceptions: what Track B may return
+        from library law (D-03, #116, ADR-0037). Not-applicable obligations
+        are reported, never retrieved."""
         return frozenset(
-            c
-            for o in self.obligations
-            if o.outcome is not Outcome.NOT_APPLICABLE
-            for c in o.citations
+            c for o in self.might_apply for c in (*o.citations, *o.exception_clause_ids)
+        )
+
+    @property
+    def track_a_exceptions(self) -> frozenset[ExceptionOf]:
+        """Each clause of an obligation that applies or might, with each of
+        its exceptions (#164, ADR-0037): an answer given the clause is given
+        the exception."""
+        return frozenset(
+            ExceptionOf(clause, exception)
+            for o in self.might_apply
+            for clause in o.clause_ids
+            for exception in o.exception_clause_ids
         )
 
     def obligation(self, obligation_id: str) -> ObligationCoverage:
