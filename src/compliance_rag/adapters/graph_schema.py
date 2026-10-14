@@ -53,12 +53,15 @@ EDGE_TYPES = frozenset(
         "DERIVED_FROM",
         "QUALIFIED_BY",
         "HAS_OPERAND",
+        "EXCEPTED_BY",
     }
 )
 """PHASES.md Phase 2's edges, plus the #93 design session's (ADR-0027,
 ADR-0028): `DERIVED_FROM` (Obligation, Condition, Actor, Control -> Clause),
 `QUALIFIED_BY` (Actor -> its condition tree's root) and `HAS_OPERAND`
-(Condition -> Condition; the operator is on the parent node)."""
+(Condition -> Condition; the operator is on the parent node). And #164's
+(ADR-0037): `EXCEPTED_BY` (Obligation -> a Clause that says when it does not
+apply)."""
 
 
 Scalar = str | int | float | bool | dt.date | tuple[str, ...] | tuple[int | float, ...]
