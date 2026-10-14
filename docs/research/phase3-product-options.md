@@ -26,6 +26,40 @@ The options are measured against PHASES.md's three exit criteria:
 2. Every citation in the UI opens the source at the clause.
 3. Admin can approve a policy-to-law mapping and see it change a finding.
 
+## Since this was written (updated 2026-10-14)
+
+The human's decisions and the merged fixes that change the premises below:
+- **#164, an obligation's exceptions (gap 2): option (a), and treated as a correctness bug.** "An answer citing APP 11.1 without 11.3 is incomplete in a way the reader can't detect." An obligation names its exceptions in reviewed mapping content. Track A's scope includes them, and an answer whose context holds a rule clause is given its exceptions by id, not left to ranking. The drafted exception mapping waits for review (D-01).
+  - For this document: F1 (a) holds, since exceptions reach a finding as its citations. F2 (b)'s lookup by id fetches an obligation's exceptions with its clauses. Claim 1's APP 7.2 and 7.8 become citable once the mapping is signed.
+- **#171, user scope: private to its owner.** "User-private means private." Being fixed with a leakage test against the real store. U1 (b) is still not recommended: a proposal stored as a user document would be retrieved for its owner's other questions.
+- **ADR-0032 confirmed: `OFFSHORE_GENERATION_TESTERS` stays empty.** Nobody asks a question offshore until Phase 1's live run, which the human does alone. So during the build phase no member's question or chat history (I4) leaves Australia.
+- **#166 and #159 are merged.** The residency gate counts user scope as real, and `answer()` goes through the router.
+- **#153 is live on Aura.** The graph records corpus version `corpus-2026.10.14` and mapping version `mappings-2026.10.14`, each with its commit, so F7's coverage statement has real versions to name.
+- **#144: the deployed Qdrant collection holds the compilation.** All 779 clauses are in it, and the recall gate has run once against the cloud cluster. The numbers are in BUILD_LOG.
+
+## An agenda for the session
+
+The decisions in the order they depend on each other. A row marked "amends" needs an ADR, because it changes a locked decision or a CLAUDE.md rule.
+
+| # | Decision | Recommendation | Depends on | Amends |
+|---|---|---|---|---|
+| 1 | U1: what a proposal is | A new term, **submitted document**: stored, never chunked, cited only in its own assessment | | CONTEXT (a new term) |
+| 2 | F1: the unit of a finding | Claim × obligation for law, claim × clause for policy | 1 | |
+| 3 | F2: which obligations a claim is checked against | The model picks from the obligation digest, and the clause text is fetched by id | 2 | Only if (c): the ingested-text rule |
+| 4 | U3: the CAG prefix cap | About 30k tokens, the cache warmed before parallel calls, a loud failure above the cap | 3 | **D-11** (200k) |
+| 5 | F3: the four verdicts' boundaries | As defined, with every `ambiguous` naming what would settle it | 2 | |
+| 6 | F4: unassessable obligations | Conditional findings with Track A's questions | 5 | |
+| 7 | F5: provenance | The weakest input's tier, plus a CONTEXT term for confirming an intention | 5 | CONTEXT (a new term) |
+| 8 | F6: mapping approval changes a finding | Derived, `implements` only, through the ledger table | 2, 7 | ADR-0027 point 7 (the table) |
+| 9 | F7: what a report didn't check | A fixed coverage statement now; web fallback as its own ticket | | |
+| 10 | F8: order | A fixed verdict order, plus a banner when policies disagree | 5 | |
+| 11 | U2, U4, U5, U6: formats, supersession, prerequisites, roles | Markdown policies; PDF, Markdown or text for submitted documents; explicit versions; two roles | 1 | |
+| 12 | I1–I6: the UI | Check, Ask and Admin; HTML anchors for every source; server-rendered pages first | 1–11 | |
+
+Two corpus questions only the human can answer, independent of the rest:
+- Should Part IIIC (breach notification, gap 3) join the selection manifest?
+- Should the Spam Act join the library, given APP 7.8 (claim 1)?
+
 ## Sources, and ten gaps found while preparing this
 
 **Sources:**
@@ -44,7 +78,7 @@ The options are measured against PHASES.md's three exit criteria:
    - The mismatch: obligations cite subclauses such as `sch1/app11/2`, the law is stored down to paragraphs, and Track A's scope matched exact ids. With GA-01's facts, none of the 6 paragraph-level Schedule 1 chunks in the golden corpus was admitted.
    - The effect: APP 11.2's stored text is its chapeau, "If: the entity must take such steps as are reasonable in the circumstances to destroy the information or to ensure that the information is de-identified." Its conditions (a)–(d), including (b) "no longer needs the information" and (d) "not required … to retain", were never retrieved. Every retention finding would have rested on the duty without the conditions its "If" refers to.
    - Now a cited clause admits the clauses inside it. Mean recall@10 of the expected law under Acme's scope went from 0.593 to 0.796.
-2. **An obligation's exceptions are never in scope (#164, the human's decision).**
+2. **An obligation's exceptions are never in scope (#164: decided 2026-10-14, option (a), a correctness bug; see "Since this was written").**
    - The mapping lists exceptions and permissions as "clauses, not obligations": APP 7.2–7.6 and 7.8, 8.2, 11.3 and others. Nothing cites them, so Track B never retrieves them.
    - The worked example's claim 1 turns on two of them. APP 7.2 permits the marketing, and APP 7.8 disapplies APP 7 where the Spam Act applies.
 3. **The corpus can't check breach notification.**
@@ -67,9 +101,9 @@ The options are measured against PHASES.md's three exit criteria:
 8. **The exit criteria constrain the design.** The arithmetic is under "What the exit criteria cost" below.
    - **Retrieval.** Semantic retrieval per claim would put model-extracted upload text into the retrieval query, which CLAUDE.md forbids. It would also need a rerank per claim, at 6–8 s each on one instance.
    - **Cost.** D-11's 200k-token prefix cap can't fit under $0.50 even on a warm cache, because twenty cached reads cost $0.88. Twenty findings calls started together on a cold cache each pay the cache write, which nearly spends the budget even for Acme.
-9. **The residency gate ignores user scope (#166).**
+9. **The residency gate ignored user scope (#166, fixed: PR #167).**
    - It counts only tenant-scoped chunks as real, so a user-scoped chunk (one person's private additions) would pass offshore.
-   - No path writes one yet. It's a fail-closed fix, and it must land before any upload path exists (U1(b)).
+   - No path writes one yet. The fix counts user-scoped chunks as real, fail-closed, before any upload path exists (U1(b)).
 10. **Housekeeping.**
    - The fixture matrix says `silent` where CONTEXT says `not_addressed`, and the matrix is still unsigned.
    - PHASES.md line 3 says "Current phase: 1" on purpose. `0002-phase1-close.md` leaves Phase 1 open until the US quota allows the verifier pass rate and cost per query to be measured. Phase 2 has no close handoff yet, though its work is merged.
@@ -94,7 +128,7 @@ What a correct check says, worked by hand against the clause text. This is not s
 |---|---|---|---|
 | 1 | D1 3/2: "…unless you have given us your opt-in consent" | **conflicts** | Opt-out where the policy promises opt-in. The fixture set's planted pair. |
 | 1 | D5 1/1: "…unless the customer has opted out" | consistent | |
-| 1 | APP 7.1, with 7.2 and 7.8 | ambiguous | 7.2 permits direct marketing if the individual would reasonably expect it and (c) "a simple means" to opt out is given. Whether they'd expect it is a judgement the corpus can't settle. And 7.8 disapplies APP 7 to the extent the Spam Act applies. Neither 7.2 nor 7.8 is retrievable today (#164). |
+| 1 | APP 7.1, with 7.2 and 7.8 | ambiguous | 7.2 permits direct marketing if the individual would reasonably expect it and (c) "a simple means" to opt out is given. Whether they'd expect it is a judgement the corpus can't settle. And 7.8 disapplies APP 7 to the extent the Spam Act applies. Neither 7.2 nor 7.8 is retrievable until #164's exception mapping is reviewed and signed. |
 | 1 | Email and SMS under the Spam Act 2003 | not checked | Not in the library, and by APP 7.8 possibly the governing law here. The report must say so, not imply compliance. |
 | 2 | APP 8.1 | **not_addressed** | It applies: D4 2/1 puts CloudAnalytics in "a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles". The proposal says nothing of the steps "reasonable in the circumstances" that 8.1 requires. |
 | 2 | D4 2/1 | ambiguous | CloudAnalytics is approved "to provide website usage analytics". Whether that covers segmenting purchase histories isn't stated. |
@@ -237,7 +271,7 @@ D-06 forbids scores, so there's no option table: any severity ranking would be a
 | Option | Makes easy | Forecloses |
 |---|---|---|
 | **(a) Three kinds: a new policy version (internal policy), an external upload, and a document to check (a proposal), with a new CONTEXT term for the last** | Each kind already has its own rules: a policy enters the prefix, an external upload is retrieved, a proposal is only checked | Nothing |
-| (b) Treat a proposal as a user-scoped document (`Scope.USER`) | Reuses an existing scope | It would be retrieved for other questions. `Chunk` has no `user_id`, so "user" scope is tenant-wide today. And the residency gate ignores user scope until #166 lands. |
+| (b) Treat a proposal as a user-scoped document (`Scope.USER`) | Reuses an existing scope | It would be retrieved for its owner's other questions. User scope is being made private to its owner (#171, decided 2026-10-14); until that lands it is tenant-wide. The residency gate counts it as real (#166, fixed). |
 | (c) Don't store proposals: parse, extract and assess, keeping only the claims and findings | The smallest data footprint | Click-to-claim (opening the document at the claim) after the session ends |
 
 - **Touches:** CONTEXT Document class ("a document's class is fixed"); D-14 and ADR-0018 (an uploaded document gets no graph node at all); D-17.
@@ -297,7 +331,7 @@ These aren't options, just the prerequisites:
 1. **#78's test.** The API takes no `synthetic` field and writes only through `CorpusLifecycle`. PHASES lists this as a blocker.
 2. **The lifecycle writes the clause text and the manifest** (gap 4), inside the same guarded path, so a published policy's citations verify.
 3. **The residency gate stands.**
-   - While generation runs outside Australia, `assert_upload_allowed` refuses any tenant chunk the synthetic registry doesn't vouch for. The registry holds a hash of the tenant and each chunk's exact text, so in practice only the registered fixtures pass. (User-scoped chunks slip past it until #166.)
+   - While generation runs outside Australia, `assert_upload_allowed` refuses any tenant or user chunk the synthetic registry doesn't vouch for (#166 added user scope). The registry holds a hash of the tenant and each chunk's exact text, so in practice only the registered fixtures pass.
    - So in the build phase the upload API can be built and tested, but **no real customer can use it** until generation moves to Sydney (ADR-0023, about $2.2–3k a month).
    - That isn't a defect, but it's worth knowing before the UI is designed around uploads.
 4. **Roles (U6).**
@@ -359,7 +393,7 @@ Storing history is decided (#162). Whether the model sees it is not.
 | Option | Makes easy | Forecloses |
 |---|---|---|
 | (a) History is display only, and each question stands alone | No change to the prompt contract | Follow-ups: "and for agencies?" means nothing on its own |
-| **(b) Earlier turns go into the prompt as fenced data: the member's questions and the verified answers, never a draft. Retrieval uses the current question plus the previous member question.** | Follow-ups work. #29's control holds, because only member-typed text reaches the retrieval query, never anything retrieved or generated. | Longer prompts. Each earlier member turn is member-typed text, so under ADR-0032 only a tester's history goes offshore. |
+| **(b) Earlier turns go into the prompt as fenced data: the member's questions and the verified answers, never a draft. Retrieval uses the current question plus the previous member question.** | Follow-ups work. #29's control holds, because only member-typed text reaches the retrieval query, never anything retrieved or generated. | Longer prompts. Each earlier member turn is member-typed text, so under ADR-0032 only a tester's history could go offshore, and the tester list stays empty (confirmed 2026-10-14). |
 | (c) A model rewrites the follow-up into a standalone query | The best retrieval for follow-ups | #29: generated text would flow into the retrieval query |
 
 - **Recommendation: (b), capped at the last 3 exchanges.** (c) is ruled out by #29 unless that control is revisited.
@@ -441,9 +475,9 @@ That is one more reason to prefer F2 (b).
 
 ## Follow-ups that need neither the human nor the model
 
-- **#166,** the residency gate's user-scope gap, before any upload path exists.
-- **#159,** sending `answer()` through the router, and **#160,** a deterministic order for RRF ties.
-- **#164 is the human's** (an obligation's exceptions in scope). It needs a mapping-model decision, and it decides whether claim 1's APP 7.2 and 7.8 can ever be cited.
+- **#166,** the residency gate's user-scope gap: fixed (PR #167).
+- **#159,** sending `answer()` through the router: fixed (PR #170). **#160,** a deterministic order for RRF ties: in progress.
+- **#164,** an obligation's exceptions in scope: decided (a) on 2026-10-14. The exception mapping is drafted for review; it decides when claim 1's APP 7.2 and 7.8 can be cited.
 - **The lifecycle's clause and manifest write** (gap 4), with #78's API test once an upload route exists.
 - **A display form for policy clauses** (I2). It's needed whatever the session decides about rendering.
-- **The housekeeping in gap 8:** the workflow map, and the #93 document's section number. Signing the matrix and closing the phase gates are the human's.
+- **The housekeeping in gap 10:** the workflow map and the #93 document's section number, both fixed with this update. Signing the matrix and closing the phase gates are the human's.
