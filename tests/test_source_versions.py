@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -21,6 +22,7 @@ import pytest
 
 from compliance_rag.adapters import git_source_versions
 from compliance_rag.adapters.git_source_versions import (
+    PINNED_RAW,
     SOURCE_PATHS,
     TAG_PREFIXES,
     SourceVersionError,
@@ -38,18 +40,20 @@ SHA = "1a2b3c4d" * 5
 
 FILES = {
     "mappings": "corpus/mappings/privacy-act-1988.yaml",
-    "graph": "src/compliance_rag/graph/loader.py",
+    "graph_mappings": "src/compliance_rag/graph/mappings.py",
+    "mapping_script": "scripts/load_mappings.py",
+    "graph_loader": "src/compliance_rag/graph/loader.py",  # in both kinds
     "corpus": "corpus/instruments/privacy-act-1988/C2026C00227/manifest.yaml",
     "parser": "src/compliance_rag/corpus/parser.py",
     "ingest": "scripts/ingest_compilation.py",
-    "loader": "scripts/load_graph_structure.py",
+    "corpus_script": "scripts/load_graph_structure.py",
     "code": "src/compliance_rag/api/app.py",  # in neither kind
 }
 """A file under each path a version is a tag over, by a short name."""
 
 PATHS_OF = {
-    SourceKind.MAPPING: ("mappings", "graph"),
-    SourceKind.CORPUS: ("corpus", "parser", "ingest", "loader"),
+    SourceKind.MAPPING: ("mappings", "graph_mappings", "mapping_script", "graph_loader"),
+    SourceKind.CORPUS: ("corpus", "parser", "ingest", "corpus_script", "graph_loader"),
 }
 GITIGNORE = "__pycache__/\n*.pyc\ncorpus/instruments/**/raw/\n*.draft.yaml\n"
 """The real `.gitignore`'s rules that bear on these paths, and one more."""
@@ -72,8 +76,28 @@ def test_the_paths_each_kind_is_a_tag_over_include_the_code_that_builds_it() -> 
         "src/compliance_rag/corpus",
         "scripts/ingest_compilation.py",
         "scripts/load_graph_structure.py",
+        "src/compliance_rag/graph/loader.py",
     )
-    assert SOURCE_PATHS[SourceKind.MAPPING] == ("corpus/mappings", "src/compliance_rag/graph")
+    assert SOURCE_PATHS[SourceKind.MAPPING] == (
+        "corpus/mappings",
+        "src/compliance_rag/graph",
+        "scripts/load_mappings.py",
+    )
+
+
+def test_the_writer_of_the_graph_is_in_both_kinds_and_storage_mechanics_in_neither() -> None:
+    """`graph/loader.py` writes the corpus's clause nodes as well as the
+    mappings'; how a node is stored (`neo4j_graph.py`) is neither's content."""
+
+    def covered_by(kind: SourceKind, file: str) -> bool:
+        return any(file == p or file.startswith(f"{p}/") for p in SOURCE_PATHS[kind])
+
+    for kind in SourceKind:
+        assert covered_by(kind, "src/compliance_rag/graph/loader.py")
+        assert not covered_by(kind, "src/compliance_rag/adapters/neo4j_graph.py")
+        assert not covered_by(kind, "src/compliance_rag/adapters/graph_schema.py")
+    assert covered_by(SourceKind.MAPPING, "src/compliance_rag/graph/mappings.py")
+    assert not covered_by(SourceKind.CORPUS, "src/compliance_rag/graph/mappings.py")
 
 
 def test_every_path_a_version_is_a_tag_over_exists_in_this_repository() -> None:
@@ -269,13 +293,31 @@ def test_a_parser_fix_is_a_new_corpus_version_though_no_manifest_changed(repo: R
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, tagged, "mappings-2026.10")
 
 
-def test_a_change_to_the_mapping_loader_is_a_new_mapping_version_not_a_corpus_one(
-    repo: Repo,
-) -> None:
-    tagged = repo.commit(mappings="v1", graph="g1")
+def test_a_change_to_the_graph_loader_is_a_new_version_of_both_kinds(repo: Repo) -> None:
+    """It writes the corpus's clause nodes and the mappings' nodes alike."""
+    repo.commit(**{name: "1" for name in FILES})
     repo.tag("mappings-2026.10")
     repo.tag("corpus-2026.10")
-    head = repo.commit(graph="g2")
+    head = repo.commit(graph_loader="2")
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
+    assert corpus(repo) == SourceVersion(SourceKind.CORPUS, head)
+
+
+def test_a_change_to_the_mapping_compiler_is_a_new_mapping_version_only(repo: Repo) -> None:
+    tagged = repo.commit(**{name: "1" for name in FILES})
+    repo.tag("mappings-2026.10")
+    repo.tag("corpus-2026.10")
+    head = repo.commit(graph_mappings="2")
+    assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
+    assert corpus(repo) == SourceVersion(SourceKind.CORPUS, tagged, "corpus-2026.10")
+
+
+def test_a_change_to_the_mapping_script_is_a_new_mapping_version_only(repo: Repo) -> None:
+    """Its glob and its D-01 review filter decide which files are loaded."""
+    tagged = repo.commit(**{name: "1" for name in FILES})
+    repo.tag("mappings-2026.10")
+    repo.tag("corpus-2026.10")
+    head = repo.commit(mapping_script="2")
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
     assert corpus(repo) == SourceVersion(SourceKind.CORPUS, tagged, "corpus-2026.10")
 
@@ -357,8 +399,8 @@ def test_a_newer_tag_over_other_content_is_passed_over_for_one_that_matches(repo
 def test_a_tag_matches_only_if_every_path_matches(repo: Repo) -> None:
     """The mappings are the same at the tag as at HEAD; the code that loads
     them is not."""
-    old = repo.commit(mappings="v1", graph="g1")
-    head = repo.commit(graph="g2")
+    old = repo.commit(mappings="v1", graph_mappings="g1")
+    head = repo.commit(graph_mappings="g2")
     repo.tag("mappings-stale", on=old)
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head)
 
@@ -403,7 +445,7 @@ def test_a_tag_moved_onto_other_content_no_longer_names_this_content(repo: Repo)
 
 def test_a_tag_on_a_commit_before_the_paths_existed_matches_nothing(bare: Repo) -> None:
     before = bare.commit(code="x")
-    head = bare.commit(mappings="v1", graph="g1")
+    head = bare.commit(**{name: "1" for name in PATHS_OF[SourceKind.MAPPING]})
     bare.tag("mappings-2026.10", on=before)
     assert mapping(bare) == SourceVersion(SourceKind.MAPPING, head)
 
@@ -432,7 +474,11 @@ def test_uncommitted_content_under_any_path_a_version_is_built_from_is_refused(
         resolve(kind, repo)
     assert FILES[name] in str(refused.value)
     other = next(k for k in SourceKind if k is not kind)
-    assert resolve(other, repo).untagged  # the other kind is clean: only this one is refused
+    if name not in PATHS_OF[other]:
+        assert resolve(other, repo).untagged  # the other kind is clean: only this one is refused
+    else:
+        with pytest.raises(UncommittedSource):  # a file in both kinds is uncommitted in both
+            resolve(other, repo)
 
 
 def _edit(repo: Repo) -> None:
@@ -528,6 +574,37 @@ def test_what_is_not_source_is_let_through(repo: Repo) -> None:
     )
     assert mapping(repo) == SourceVersion(SourceKind.MAPPING, head, "mappings-2026.10")
     assert corpus(repo) == SourceVersion(SourceKind.CORPUS, head, "corpus-2026.10")
+
+
+def test_the_raw_sources_let_through_are_exactly_the_pinned_ones() -> None:
+    """`scripts/ingest_compilation.py` pins one source by sha256; only its
+    directory is exempt."""
+    from scripts import ingest_compilation
+
+    pinned = (
+        f"corpus/instruments/{ingest_compilation.INSTRUMENT_ID}/"
+        f"{ingest_compilation.VERSION_ID}/raw/"
+    )
+    assert (pinned,) == PINNED_RAW
+    assert re.fullmatch(r"[0-9a-f]{64}", ingest_compilation.SOURCE_SHA256)
+
+
+def test_every_instrument_version_with_a_manifest_has_its_source_pinned() -> None:
+    """Fails when an instrument version is added whose source isn't pinned: its
+    raw directory would otherwise refuse every load, or be let through unpinned.
+    Pin it in `scripts/ingest_compilation.py` and name it in `PINNED_RAW`."""
+    root = Path(__file__).resolve().parents[1] / "corpus" / "instruments"
+    manifests = sorted(root.glob("*/*/manifest.yaml"))
+    assert manifests
+    for manifest in manifests:
+        raw = f"corpus/instruments/{manifest.parent.parent.name}/{manifest.parent.name}/raw/"
+        assert raw in PINNED_RAW, f"{manifest.parent} has no pinned source (ADR-0034)"
+
+
+def test_the_raw_directory_of_an_unpinned_source_is_refused(repo: Repo) -> None:
+    repo.write("corpus/instruments/some-other-act/V1/raw/document_1.html", "<html>unpinned")
+    with pytest.raises(UncommittedSource, match=r"some-other-act/V1/raw/document_1\.html"):
+        corpus(repo)
 
 
 def test_a_raw_directory_is_let_through_only_under_the_instruments(repo: Repo) -> None:

@@ -30,16 +30,18 @@ new id with `supersedes` (#93 Q4).
 
 **Recording a load** (`recorded_load`, #153): each loader is split into its
 checks (`check_instrument_version`, `check_mappings`: every refusal that
-precedes the first write) and its writes, so a caller can run the checks, then
-record the load, then write. The graph records which corpus or mapping version
-was written, from which commit, and whether it finished. A load refused by its
-checks leaves no record; one that raised after its first write stays open.
+precedes the first write) and its writes, and `recorded_load` runs the checks,
+records the load, runs them again under the hold it takes on the kind, and
+only then lets the writes happen. The graph records which corpus or mapping
+version was written, from which commit, and whether it finished. A load
+refused by its checks leaves no record that blocks anything; one that raised
+after its first write stays open.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import cast
@@ -583,22 +585,45 @@ def _record(span: Span, report: LoadReport) -> None:
 
 
 @asynccontextmanager
-async def recorded_load(graph: GraphAdmin, version: SourceVersion) -> AsyncGenerator[None]:
-    """Stamp a load with the version it loads (#153, ADR-0034): `begin_load`
-    before the body, `finish_load` only if the body returns. Begun after the
-    loader's own checks (`check_mappings`, `check_instrument_version`), so a
-    load refused before its first write leaves no record at all. A body that
-    raises after that leaves the load open, deliberately: the graph may be
-    part-written, so `loaded_sources()` reports it as loading and nothing is
-    assessed against it until it is abandoned (`abandon_load`) and a load of
-    that kind finishes. Loads of a kind are serialised: a second can't begin
-    while one is open.
+async def recorded_load[T](
+    graph: GraphAdmin, version: SourceVersion, *, check: Callable[[], Awaitable[T]]
+) -> AsyncGenerator[T]:
+    """Stamp a load with the version it loads (#153, ADR-0034), around the
+    loader's own checks and writes:
 
-        checked = await check_mappings(graph, mappings, today=today)
-        async with recorded_load(graph, version):
-            await write_mappings(graph, mappings, checked, None)
+    1. `check()` once, before anything is recorded: a load refused here (any
+       D-05 refusal) leaves no record at all, and so blocks nothing.
+    2. `begin_load`, which takes the hold on the kind: loads of a kind are
+       serialised, so this is refused while another is open.
+    3. `check()` again, now that the hold is taken. Another load of the kind
+       may have begun, written and finished between 1 and 2, and a write on a
+       check made before that rests on a graph that has since changed. What it
+       returns is what the body gets. If it refuses, nothing was written, so
+       the load is closed as one that wrote nothing (`abandon_load(...,
+       wrote=False)`), which blocks no assessment, and the refusal is raised.
+    4. The body: the writes.
+    5. `finish_load`, only if the body returns. A body that raises leaves the
+       load open, deliberately: the graph may be part-written, so
+       `loaded_sources()` reports it as loading, and nothing is assessed
+       against it until it is abandoned (`abandon_load`) and a load of the kind
+       finishes.
+
+        check = functools.partial(check_mappings, graph, mappings, today=today)
+        async with recorded_load(graph, version, check=check) as found:
+            await write_mappings(graph, mappings, found, None)
     """
     with telemetry.span("graph_loader.recorded_load", **{"graph.load_version": version.described}):
+        await check()
         load_id = await graph.begin_load(version)
-        yield
+        try:
+            checked = await check()
+        except Exception as refused:
+            await graph.abandon_load(
+                load_id,
+                "recorded_load",
+                f"its checks refused it once it held the kind, before any write: {refused}",
+                wrote=False,
+            )
+            raise
+        yield checked
         await graph.finish_load(load_id)

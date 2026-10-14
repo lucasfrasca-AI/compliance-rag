@@ -323,16 +323,27 @@ def _recorded_json(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> d
 
 def _held(sources: LoadedSources) -> tuple[SourceVersion, SourceVersion]:
     """The corpus and mapping versions the graph holds, or the 503 saying why
-    there is nothing to record an assessment against."""
+    there is nothing to record an assessment against: a load is open (wait),
+    or one was abandoned after it may have written and none has finished since
+    (waiting won't help; a load must), or no load has ever finished."""
     unfinished = [k.value for k in SourceKind if sources.of(k).loading]
     if unfinished:
         raise HTTPException(
             503,
             f"a {' and a '.join(unfinished)} load hasn't finished (it is running, or it failed "
-            "and hasn't been abandoned): nothing is assessed against a graph that may be "
-            "part-written. Try again when it has, or have the operator abandon it (the loader's "
-            "--abandon) and load again",
+            "and nobody has dealt with it): nothing is assessed against a graph that may be "
+            "part-written. Try again when it has finished, or, if it is known to be dead, have "
+            "the operator abandon it (the loader's --abandon) and load again",
             headers={"Retry-After": RETRY_AFTER},
+        )
+    abandoned = [k for k in SourceKind if sources.of(k).blocked_by_abandoned]
+    if abandoned:
+        raise HTTPException(
+            503,
+            f"a {' and a '.join(k.value for k in abandoned)} load was abandoned after it may "
+            "have written, and none has finished since, so the graph may be part-written: "
+            "nothing is assessed against it until a load finishes (#153): run "
+            + " and ".join(LOADERS[k] for k in abandoned),
         )
     corpus, mapping = sources.corpus.version, sources.mapping.version
     if corpus is None or mapping is None:

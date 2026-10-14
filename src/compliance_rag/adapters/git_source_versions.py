@@ -43,14 +43,20 @@ SOURCE_PATHS: dict[SourceKind, tuple[str, ...]] = {
         "src/compliance_rag/corpus",  # the parser and chunker that turn the source into clauses
         "scripts/ingest_compilation.py",  # the pinned source (SOURCE_SHA256) the clauses come from
         "scripts/load_graph_structure.py",  # what of it is loaded into the graph
+        "src/compliance_rag/graph/loader.py",  # and the writer of its clause nodes (shared)
     ),
     SourceKind.MAPPING: (
         "corpus/mappings",  # the YAML
         "src/compliance_rag/graph",  # compiled (mappings.py) and loaded (loader.py) into the graph
+        "scripts/load_mappings.py",  # which files load: its glob, and the D-01 review filter
     ),
 }
 """The paths each kind of version is a tag over. A tag matches only if every
-one of a kind's paths holds the same content at the tag as at `HEAD`."""
+one of a kind's paths holds the same content at the tag as at `HEAD`. A file
+can belong to both: `graph/loader.py` writes the corpus's clause nodes and the
+mappings' nodes, so a change to it is a new version of each. What is in
+neither is storage mechanics (`neo4j_graph.py`, `graph_schema.py`): how a node
+is kept, not what is written."""
 
 TAG_PREFIXES: dict[SourceKind, str] = {
     SourceKind.CORPUS: "corpus-",
@@ -59,14 +65,24 @@ TAG_PREFIXES: dict[SourceKind, str] = {
 """What a tag is called: `corpus-2026.10.14`, `mappings-2026.10.14`. The prefix
 is how the two kinds are told apart."""
 
+PINNED_RAW = ("corpus/instruments/privacy-act-1988/C2026C00227/raw/",)
+"""Where the raw compilations of instrument versions whose source is *pinned*
+are fetched to. They are not committed (`.gitignore`), and the ingest refuses
+any bytes that are not the pinned sha256 (`SOURCE_SHA256` in
+`scripts/ingest_compilation.py`), so what is in one cannot change what is
+loaded. Only a pinned version's directory is let through: a `raw/` anywhere else
+under `corpus/instruments/` is an unpinned source and refuses the load. A new
+instrument version is added here when its source is pinned
+(`tests/test_source_versions.py` fails until it is)."""
+
 NOT_SOURCE = re.compile(
-    r"(^|/)__pycache__/|\.py[co]$|(^|/)\.DS_Store$|^corpus/instruments/.+/raw/",
+    r"(^|/)__pycache__/|\.py[co]$|(^|/)\.DS_Store$|^(?:"
+    + "|".join(re.escape(path) for path in PINNED_RAW)
+    + ")"
 )
 """Untracked or ignored files that are not uncommitted source: bytecode caches,
-Finder metadata, and the raw compilations `corpus/instruments/**/raw/` holds,
-which are fetched and not committed (`.gitignore`) but pinned by a sha256 the
-ingest checks, so they cannot change what is loaded. Anything else untracked or
-ignored under a path refuses the load."""
+Finder metadata, and the raw sources `PINNED_RAW` names. Anything else
+untracked or ignored under a path refuses the load."""
 
 TIMEOUT_SECONDS = 30
 """For every git call: a hung git is an error, not a loader that never starts."""

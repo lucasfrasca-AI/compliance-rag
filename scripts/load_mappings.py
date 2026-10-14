@@ -4,16 +4,18 @@ Free's limits (PHASES.md Phase 2 exit: under 10%).
 
 Refuses before touching the graph if any file is still awaiting review: a
 model-drafted file is corpus content only once a person has signed it (D-01).
-And if `corpus/mappings/` has changes that aren't committed: the version the
-load records is a tag over a commit (#153, ADR-0034), and uncommitted content
-is in none.
+And if the paths the mapping version is a tag over (`corpus/mappings/` and the
+code that loads it) have changes that aren't committed: the version the load
+records is a tag over a commit (#153, ADR-0034), and uncommitted content is in
+none.
 
 The graph records the load: the mapping version (the newest `mappings-*` tag
 over this content, with the commit it points at, or the commit alone if none)
-when it starts, and that it finished only once the load returns. The record is
-begun after the checks (every D-05 refusal), so a refused load leaves none; a
-load that fails after its first write stays open, and blocks another load of
-the same kind, and any assessment, until someone abandons it.
+when it starts, and that it finished only once the load returns. The checks
+(every D-05 refusal) run before the load is recorded, so a refused load leaves
+no record, and again once it holds the kind. A load that fails after its first
+write stays open, and blocks another load of the same kind, and any
+assessment, until someone abandons it, and then until a load finishes.
 
     uv run python -m scripts.load_mappings [--today 2026-10-12]
     uv run python -m scripts.load_mappings --correct ID [ID ...] --by NAME --reason WHY
@@ -25,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+from functools import partial
 from pathlib import Path
 
 from compliance_rag.adapters.git_source_versions import UncommittedSource, resolve_source_version
@@ -67,9 +70,10 @@ async def main(today: dt.date, corrections: CorrectionAcknowledgement | None) ->
     mappings = load_mapping_set(paths)
     print(f"loading mapping version {version.described}")
     async with Neo4jGraph.from_settings(Settings()) as graph:
-        # Every refusal first: a load refused here leaves no record of itself.
-        found = await check_mappings(graph, mappings, today=today, corrections=corrections)
-        async with recorded_load(graph, version):
+        # Every refusal is checked before the load is recorded, so a refused
+        # load leaves no record, and again once it holds the kind.
+        check = partial(check_mappings, graph, mappings, today=today, corrections=corrections)
+        async with recorded_load(graph, version, check=check) as found:
             report = await write_mappings(graph, mappings, found, corrections)
     nodes, edges = report.counts.nodes, report.counts.edges
     print(f"recorded as the graph's mapping version: {version.described}")

@@ -140,7 +140,8 @@ def _trusted(query: str) -> LiteralString:
     """The driver types queries as `LiteralString` to keep values out of
     Cypher text. The only non-literal pieces interpolated in this module are
     labels and edge types that passed `checked_label`/`checked_edge_type`
-    (closed sets) and statements read from the checked-in schema file; every
+    (closed sets), statements read from the checked-in schema file, and the
+    `SET` clause `_close_load` picks from its own closed dictionary; every
     value is a bound parameter."""
     return cast("LiteralString", query)
 
@@ -912,24 +913,28 @@ class Neo4jGraph(GraphAdmin):
         load, or one already finished or abandoned, is refused."""
         await self._close_load("finish", load_id, {})
 
-    async def abandon_load(self, load_id: str, by: str, reason: str) -> None:
-        """Set `abandoned_at`, with who and why, on an open load, once, and
-        close it. It stays what it was: begun, and never finished, so the
-        version the graph holds is unchanged. An unknown load, or one already
-        finished or abandoned, is refused, as is an abandonment that names
-        nobody or no reason."""
+    async def abandon_load(self, load_id: str, by: str, reason: str, *, wrote: bool = True) -> None:
+        """Set `abandoned_at`, with who, why and whether it may have written,
+        on an open load, once, and close it. It stays what it was: begun, and
+        never finished, so the version the graph holds is unchanged; unless it
+        may have written (`wrote`, the default), it blocks assessments until a
+        later load finishes (`loaded_sources`). An unknown load, or one
+        already finished or abandoned, is refused, as is an abandonment that
+        names nobody or no reason."""
         if not (by.strip() and reason.strip()):
             raise GraphWriteRefused("abandoning a load names who did it and why (#153)")
-        await self._close_load("abandon", load_id, {"by": by, "reason": reason})
+        await self._close_load("abandon", load_id, {"by": by, "reason": reason, "wrote": wrote})
 
-    async def _close_load(self, action: str, load_id: str, parameters: Mapping[str, str]) -> None:
+    async def _close_load(
+        self, action: str, load_id: str, parameters: Mapping[str, str | bool]
+    ) -> None:
         """Lock, then read, then set, as a retirement does, so two concurrent
         closes of one load can't both win; and release the load's hold on its
         kind (`open_kind`), which lets the next load begin."""
         sets = {
             "finish": "l.finished_at = datetime()",
             "abandon": "l.abandoned_at = datetime(), l.abandoned_by = $by, "
-            "l.abandon_reason = $reason",
+            "l.abandon_reason = $reason, l.wrote = $wrote",
         }[action]
 
         async def work(tx: AsyncManagedTransaction) -> None:
@@ -960,13 +965,19 @@ class Neo4jGraph(GraphAdmin):
                 {"load_id": load_id, **parameters},
             )
 
-        attributes = {"graph.load_id": load_id}
+        attributes: dict[str, str | int] = {"graph.load_id": load_id}
+        if "wrote" in parameters:
+            attributes["graph.load_wrote"] = int(parameters["wrote"])
         await self._write(f"neo4j_graph.{action}_load", attributes, work)
 
     async def loaded_sources(self) -> LoadedSources:
-        """The latest finished load of each kind, and whether one is open
-        (begun, neither finished nor abandoned: running, or failed). Latest
-        is by start, on the server's clock; since loads of a kind are
+        """The latest finished load of each kind, and what stands in the way of
+        assessing against it: `loading` while a load is open (running, or
+        failed and not yet abandoned), and `blocked_by_abandoned` while a load
+        abandoned after it may have written is newer than the latest finished
+        one. Only a later finished load clears that: abandoning releases the
+        hold on the kind but leaves the graph as the failed load left it.
+        Latest is by start, on the server's clock; since loads of a kind are
         serialised that is also the order they ended in. Like `counts()`, a
         read outside the query builder that returns no node of the law."""
         with telemetry.span("neo4j_graph.loaded_sources") as s:
@@ -975,6 +986,9 @@ class Neo4jGraph(GraphAdmin):
                 version = state.version.described if state.version else "none"
                 s.set_attribute(f"graph.{kind.value}_version", version)
                 s.set_attribute(f"graph.{kind.value}_loading", state.loading)
+                s.set_attribute(
+                    f"graph.{kind.value}_blocked_by_abandoned", state.blocked_by_abandoned
+                )
             return LoadedSources(corpus=found[SourceKind.CORPUS], mapping=found[SourceKind.MAPPING])
 
     async def _loaded(self, kind: SourceKind) -> LoadedSource:
@@ -983,7 +997,11 @@ class Neo4jGraph(GraphAdmin):
             "WITH f ORDER BY f.started_at DESC, f.load_id DESC LIMIT 1 "
             "OPTIONAL MATCH (u:Load {kind: $kind}) "
             "WHERE u.finished_at IS NULL AND u.abandoned_at IS NULL "
-            "RETURN f.tag AS tag, f.sha AS sha, count(u) AS open",
+            "WITH f, count(u) AS open "
+            "OPTIONAL MATCH (a:Load {kind: $kind}) "
+            "WHERE a.abandoned_at IS NOT NULL AND coalesce(a.wrote, true) "
+            "AND (f IS NULL OR a.started_at > f.started_at) "
+            "RETURN f.tag AS tag, f.sha AS sha, open, count(a) AS abandoned",
             kind=kind.value,
             database_=self._database,
             routing_=RoutingControl.READ,
@@ -992,7 +1010,11 @@ class Neo4jGraph(GraphAdmin):
         version = None
         if record["sha"] is not None:
             version = SourceVersion(kind, sha=str(record["sha"]), tag=record["tag"])
-        return LoadedSource(version=version, loading=int(record["open"]) > 0)
+        return LoadedSource(
+            version=version,
+            loading=int(record["open"]) > 0,
+            blocked_by_abandoned=int(record["abandoned"]) > 0,
+        )
 
     # ---- counts (Phase 2 exit: Aura usage under 10% of its limits) ----------
 

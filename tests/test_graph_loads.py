@@ -18,31 +18,39 @@ import datetime as dt
 import shutil
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from neo4j.exceptions import ConstraintError
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from scripts import load_graph_structure, load_mappings
 
+from compliance_rag.adapters.fakes import FakeLedgerStore
 from compliance_rag.adapters.graph_query import GraphQuery
 from compliance_rag.adapters.graph_schema import (
     LOAD_LABEL,
     PERSISTED_LABELS,
+    EndReason,
     GraphCounts,
     GraphSchemaRefused,
     GraphWriteRefused,
     NodeRef,
 )
 from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
     LoadedSource,
     LoadedSources,
+    Profile,
     SourceKind,
     SourceVersion,
 )
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
+from compliance_rag.api.app import create_app
+from compliance_rag.assessment.coverage import CoverageRow
 from compliance_rag.graph.loader import (
     check_instrument_version,
     check_mappings,
@@ -53,7 +61,8 @@ from compliance_rag.graph.loader import (
 )
 from compliance_rag.graph.mappings import MappingError, load_mapping_set
 from compliance_rag.graph.track_a import GraphTrackA
-from tests.test_graph_loader import FIXTURE, JAN, SEP, SINCE, V1, load_test_corpus
+from tests.api_support import bearer, fake_api_services, mint
+from tests.test_graph_loader import FIXTURE, JAN, MAR, SEP, SINCE, V1, load_test_corpus
 from tests.test_neo4j_graph import cypher, needs_neo4j
 from tests.test_neo4j_graph import (
     graph as plain_graph,  # noqa: F401  # pyright: ignore[reportUnusedImport]
@@ -206,7 +215,7 @@ async def test_a_newer_load_that_hasnt_finished_is_loading_over_the_last_finishe
 
 
 @needs_neo4j
-async def test_a_failed_load_blocks_until_it_is_abandoned_and_another_finishes(
+async def test_a_failed_load_blocks_until_it_is_abandoned_and_then_until_another_finishes(
     graph: Neo4jGraph,
 ) -> None:
     await graph.finish_load(await graph.begin_load(M1))
@@ -215,18 +224,49 @@ async def test_a_failed_load_blocks_until_it_is_abandoned_and_another_finishes(
     with pytest.raises(GraphWriteRefused, match="still open"):
         await graph.begin_load(M3)  # nothing clears it by itself, however long it has been
     await graph.abandon_load(failed, "lead@acme.example", "the connection dropped halfway")
-    # Abandoned is not finished: the graph holds what it held, and isn't loading.
-    assert (await graph.loaded_sources()).mapping == LoadedSource(M1, loading=False)
-    await graph.finish_load(await graph.begin_load(M3))
-    assert (await graph.loaded_sources()).mapping == LoadedSource(M3, loading=False)
+    # Abandoning releases the hold, so another load can begin, but the failed one
+    # may have written: the graph is not the M1 it was, and nothing is assessed
+    # against it until a load finishes.
+    blocked = (await graph.loaded_sources()).mapping
+    assert blocked == LoadedSource(M1, loading=False, blocked_by_abandoned=True)
+    third = await graph.begin_load(M3)
+    assert (await graph.loaded_sources()).mapping == LoadedSource(
+        M1, loading=True, blocked_by_abandoned=True
+    )
+    await graph.finish_load(third)
+    assert (await graph.loaded_sources()).mapping == LoadedSource(M3)  # only this unblocks
 
 
 @needs_neo4j
-async def test_abandoning_the_only_load_leaves_nothing_loaded_and_not_loading(
+async def test_abandoning_the_only_load_leaves_nothing_loaded_and_still_blocked(
     graph: Neo4jGraph,
 ) -> None:
     await graph.abandon_load(await graph.begin_load(M1), "lead", "never mind")
-    assert await graph.loaded_sources() == LoadedSources()
+    assert await graph.loaded_sources() == LoadedSources(
+        mapping=LoadedSource(None, loading=False, blocked_by_abandoned=True)
+    )
+
+
+@needs_neo4j
+async def test_an_abandoned_load_blocks_only_its_own_kind(graph: Neo4jGraph) -> None:
+    await graph.finish_load(await graph.begin_load(C1))
+    await graph.abandon_load(await graph.begin_load(M1), "lead", "died")
+    held = await graph.loaded_sources()
+    assert held.corpus == LoadedSource(C1)
+    assert held.mapping.blocked_by_abandoned
+
+
+@needs_neo4j
+async def test_a_load_closed_having_written_nothing_blocks_nothing(graph: Neo4jGraph) -> None:
+    await graph.finish_load(await graph.begin_load(M1))
+    unwritten = await graph.begin_load(M2)
+    await graph.abandon_load(unwritten, "loader", "its checks refused it", wrote=False)
+    assert (await graph.loaded_sources()).mapping == LoadedSource(M1)  # the graph is as it was
+    (row,) = await cypher(
+        graph, f"MATCH (l:Load {{load_id: '{unwritten}'}}) RETURN properties(l) AS p"
+    )
+    assert row["p"]["wrote"] is False and "open_kind" not in row["p"]
+    await graph.finish_load(await graph.begin_load(M3))  # the hold was released
 
 
 @needs_neo4j
@@ -240,6 +280,7 @@ async def test_an_abandonment_records_who_when_and_why_and_releases_the_hold(
     assert stored["abandoned_by"] == "lead@acme.example"
     assert stored["abandon_reason"] == "the connection dropped"
     assert stored["abandoned_at"] is not None
+    assert stored["wrote"] is True  # it may have written: nobody can tell
     assert "finished_at" not in stored  # it never finished
     assert "open_kind" not in stored
 
@@ -276,7 +317,10 @@ async def test_a_load_ends_once(graph: Neo4jGraph) -> None:
         graph, f"MATCH (l:Load {{load_id: '{finished}'}}) RETURN l.finished_at AS at"
     )
     assert after["at"] == before["at"]
-    assert (await graph.loaded_sources()).mapping == LoadedSource(M1, loading=False)
+    # The abandoned one may have written, so the graph stays blocked on it.
+    assert (await graph.loaded_sources()).mapping == LoadedSource(
+        M1, loading=False, blocked_by_abandoned=True
+    )
 
 
 @needs_neo4j
@@ -328,17 +372,23 @@ async def test_each_load_call_is_a_span(
     assert spans["neo4j_graph.begin_load"]["graph.load_version"] in {M1.described, M2.described}
     assert spans["neo4j_graph.finish_load"]["graph.load_id"] == load_id
     assert spans["neo4j_graph.abandon_load"]["graph.load_id"] == other
+    assert spans["neo4j_graph.abandon_load"]["graph.load_wrote"] == 1
     assert spans["neo4j_graph.loaded_sources"]["graph.mapping_version"] == M1.described
     assert spans["neo4j_graph.loaded_sources"]["graph.corpus_version"] == "none"
     assert spans["neo4j_graph.loaded_sources"]["graph.mapping_loading"] is False
+    assert spans["neo4j_graph.loaded_sources"]["graph.mapping_blocked_by_abandoned"] is True
 
 
 # ---- the loaders' wrapper ----------------------------------------------------------------
 
 
+async def _nothing() -> None:
+    """A check that never refuses."""
+
+
 @needs_neo4j
 async def test_a_load_that_returns_is_finished(graph: Neo4jGraph) -> None:
-    async with recorded_load(graph, M1):
+    async with recorded_load(graph, M1, check=_nothing):
         # Mid-load, the graph says so.
         assert (await graph.loaded_sources()).mapping == LoadedSource(None, loading=True)
     assert (await graph.loaded_sources()).mapping == LoadedSource(M1, loading=False)
@@ -348,7 +398,7 @@ async def test_a_load_that_returns_is_finished(graph: Neo4jGraph) -> None:
 async def test_a_load_that_raises_is_left_open(graph: Neo4jGraph) -> None:
     await graph.finish_load(await graph.begin_load(M1))
     with pytest.raises(RuntimeError, match="the load broke"):
-        async with recorded_load(graph, M2):
+        async with recorded_load(graph, M2, check=_nothing):
             raise RuntimeError("the load broke")
     # The earlier version is still the last finished one, and the failure shows.
     assert (await graph.loaded_sources()).mapping == LoadedSource(M1, loading=True)
@@ -357,8 +407,70 @@ async def test_a_load_that_raises_is_left_open(graph: Neo4jGraph) -> None:
     )
     assert row["open"] is True
     with pytest.raises(GraphWriteRefused, match="still open"):
-        async with recorded_load(graph, M3):
+        async with recorded_load(graph, M3, check=_nothing):
             raise AssertionError("a second load began over an open one")
+
+
+@needs_neo4j
+async def test_the_checks_run_before_the_load_is_recorded_and_again_under_the_hold(
+    graph: Neo4jGraph,
+) -> None:
+    """The first is cheap and leaves no record if it refuses; the second is
+    what the writes rest on, and its answer is what the body is given."""
+    seen: list[tuple[int, bool]] = []
+
+    async def check() -> str:
+        recorded = len(await cypher(graph, "MATCH (l:Load) RETURN l"))
+        seen.append((recorded, (await graph.loaded_sources()).mapping.loading))
+        return f"answer {len(seen)}"
+
+    async with recorded_load(graph, M1, check=check) as checked:
+        assert checked == "answer 2"
+    assert seen == [(0, False), (1, True)]  # before the record, then holding the kind
+
+
+@needs_neo4j
+async def test_a_load_refused_by_its_first_check_is_never_recorded(graph: Neo4jGraph) -> None:
+    async def refuses() -> None:
+        raise MappingError("a routine refusal")
+
+    with pytest.raises(MappingError, match="a routine refusal"):
+        async with recorded_load(graph, M1, check=refuses):
+            raise AssertionError("the writes ran")
+    assert await cypher(graph, "MATCH (l:Load) RETURN l") == []
+    assert await graph.loaded_sources() == LoadedSources()
+
+
+@needs_neo4j
+async def test_a_load_that_loses_a_race_is_closed_having_written_nothing(graph: Neo4jGraph) -> None:
+    """Between the first check and the hold, another load changed the graph (here:
+    the clauses the mappings derive from were retired): the second check sees it
+    and refuses, nothing was written, and that must not look like a failed load."""
+    await load_test_corpus(graph)
+    mappings = load_mapping_set([FIXTURE])
+    calls = 0
+
+    async def check() -> object:
+        nonlocal calls
+        calls += 1
+        found = await check_mappings(graph, mappings, today=SEP)
+        if calls == 1:
+            for clause in V1:
+                await graph.retire_node(
+                    NodeRef("Clause", clause.clause_id), valid_to=MAR, end_reason=EndReason.EXPIRED
+                )
+        return found
+
+    with pytest.raises(MappingError):
+        async with recorded_load(graph, M1, check=check):
+            raise AssertionError("the writes ran on a stale check")
+    assert calls == 2
+    (row,) = await cypher(graph, "MATCH (l:Load) RETURN properties(l) AS p")
+    assert row["p"]["wrote"] is False and row["p"]["abandoned_by"] == "recorded_load"
+    assert "before any write" in row["p"]["abandon_reason"]
+    # Not loading, not blocked: assessments carry on, and the hold is free.
+    assert await graph.loaded_sources() == LoadedSources()
+    await graph.begin_load(M2)
 
 
 @needs_neo4j
@@ -378,8 +490,8 @@ async def test_a_load_refused_by_its_checks_leaves_no_record_at_all(graph: Neo4j
 
 @needs_neo4j
 async def test_the_split_loaders_do_what_the_whole_one_does(graph: Neo4jGraph) -> None:
-    checked = await check_instrument_version(graph, V1, effective=JAN, supersedes=None)
-    async with recorded_load(graph, C1):
+    check = partial(check_instrument_version, graph, V1, effective=JAN, supersedes=None)
+    async with recorded_load(graph, C1, check=check) as checked:
         report = await write_instrument_version(
             graph, V1, checked, instrument_since=SINCE, effective=JAN, supersedes=None
         )
@@ -389,8 +501,9 @@ async def test_the_split_loaders_do_what_the_whole_one_does(graph: Neo4jGraph) -
     )
     assert again.nodes_created == 0  # the whole loader, idempotent over the split one's work
     mappings = load_mapping_set([FIXTURE])
-    found = await check_mappings(graph, mappings, today=SEP)
-    async with recorded_load(graph, M1):
+    async with recorded_load(
+        graph, M1, check=partial(check_mappings, graph, mappings, today=SEP)
+    ) as found:
         await write_mappings(graph, mappings, found, None)
     held = await graph.loaded_sources()
     assert held == LoadedSources(corpus=LoadedSource(C1), mapping=LoadedSource(M1))
@@ -483,7 +596,10 @@ async def test_a_failed_mapping_load_blocks_until_the_operator_abandons_it(
         await load_mappings.main(SEP, None)
 
     await load_mappings.abandon(row["id"], "lead@acme.example", "Aura went away")
-    assert (await graph.loaded_sources()).mapping == LoadedSource(None, loading=False)
+    # The hold is released, but the dead load may have written: still no assessments.
+    assert (await graph.loaded_sources()).mapping == LoadedSource(
+        None, loading=False, blocked_by_abandoned=True
+    )
     await load_mappings.main(SEP, None)
     assert (await graph.loaded_sources()).mapping == LoadedSource(M1, loading=False)
 
@@ -529,4 +645,56 @@ async def test_the_corpus_script_can_abandon_a_failed_load(
     await load_graph_structure.abandon(failed, "lead@acme.example", "the parser crashed")
     (row,) = await cypher(graph, "MATCH (l:Load) RETURN l.abandoned_by AS by")
     assert row["by"] == "lead@acme.example"
-    assert (await graph.loaded_sources()).corpus == LoadedSource()
+    assert (await graph.loaded_sources()).corpus == LoadedSource(blocked_by_abandoned=True)
+
+
+# ---- the API over the real graph ----------------------------------------------------------------
+
+
+class CountingLedger(FakeLedgerStore):
+    """Counts the assessments recorded, so a refusal can be shown to record none."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.recorded = 0
+
+    async def record_coverage_assessment(
+        self, record: AssessmentRecord, rows: tuple[CoverageRow, ...]
+    ) -> None:
+        await super().record_coverage_assessment(record, rows)
+        self.recorded += 1
+
+
+@needs_neo4j
+async def test_assessments_stay_blocked_after_a_failed_load_is_abandoned_until_one_finishes(
+    graph: Neo4jGraph,
+) -> None:
+    ledger = CountingLedger()
+    await ledger.put_profile(Profile("acme"))
+    app = create_app(fake_api_services(ledger=ledger, graph=GraphTrackA(graph)))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://api", headers=bearer(mint())
+    ) as client:
+        await graph.finish_load(await graph.begin_load(C1))
+        await graph.finish_load(await graph.begin_load(M1))
+        assert (await client.post("/v1/coverage")).status_code == 201
+        assert ledger.recorded == 1
+
+        failed = await graph.begin_load(M2)  # a load that died halfway
+        running = await client.post("/v1/coverage")
+        assert running.status_code == 503 and running.headers["retry-after"] == "30"
+        assert "hasn't finished" in running.json()["detail"]
+
+        await graph.abandon_load(failed, "lead@acme.example", "the connection dropped")
+        abandoned = await client.post("/v1/coverage")
+        assert abandoned.status_code == 503  # the hold is released, the graph is not trusted
+        assert "retry-after" not in abandoned.headers  # waiting won't help; a load must
+        detail = abandoned.json()["detail"]
+        assert "mapping load was abandoned" in detail and "scripts.load_mappings" in detail
+        assert "scripts.load_graph_structure" not in detail  # the corpus is fine
+        assert ledger.recorded == 1
+
+        await graph.finish_load(await graph.begin_load(M3))
+        recovered = await client.post("/v1/coverage")
+        assert recovered.status_code == 201 and ledger.recorded == 2
+        assert recovered.json()["mapping_version"] == {"tag": None, "sha": M3.sha, "untagged": True}

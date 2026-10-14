@@ -15,9 +15,10 @@ commit alone if none) when it starts, and that it finished only once the load
 returns. Refused up front if the paths the corpus version is a tag over
 (`corpus/instruments/` and the code that parses the source) have changes that
 aren't committed: that content is in no commit for the version to name. The
-record is begun after the checks, so a refused load leaves none; a load that
-fails after its first write stays open, and blocks another load of the same
-kind, and any assessment, until someone abandons it.
+checks run before the load is recorded, so a refused load leaves no record, and
+again once it holds the kind. A load that fails after its first write stays
+open, and blocks another load of the same kind, and any assessment, until
+someone abandons it, and then until a load finishes.
 
     uv run python -m scripts.load_graph_structure [--html path/to/document_1.html]
     uv run python -m scripts.load_graph_structure --abandon LOAD_ID --by NAME --reason WHY
@@ -30,6 +31,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+from functools import partial
 from pathlib import Path
 
 from compliance_rag.adapters.git_source_versions import UncommittedSource, resolve_source_version
@@ -65,11 +67,12 @@ async def main(html_path: Path | None) -> None:
     selected = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8")).select(parsed.clauses)
     print(f"loading corpus version {version.described}")
     async with Neo4jGraph.from_settings(Settings()) as graph:
-        # Every refusal first: a load refused here leaves no record of itself.
-        checked = await check_instrument_version(
-            graph, selected, effective=EFFECTIVE, supersedes=None
+        # Every refusal is checked before the load is recorded, so a refused
+        # load leaves no record, and again once it holds the kind.
+        check = partial(
+            check_instrument_version, graph, selected, effective=EFFECTIVE, supersedes=None
         )
-        async with recorded_load(graph, version):
+        async with recorded_load(graph, version, check=check) as checked:
             report = await write_instrument_version(
                 graph,
                 selected,

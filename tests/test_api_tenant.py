@@ -501,6 +501,49 @@ async def test_nothing_is_recorded_while_a_load_is_unfinished(
     assert f"a {loading.value} load hasn't finished" in response.json()["detail"]
 
 
+@pytest.mark.parametrize("abandoned", list(SourceKind))
+@pytest.mark.parametrize("finished_before", [True, False], ids=["reload", "first-load"])
+async def test_nothing_is_recorded_after_a_load_was_abandoned_until_one_finishes(
+    ledger: FakeLedgerStore,
+    monkeypatch: pytest.MonkeyPatch,
+    abandoned: SourceKind,
+    finished_before: bool,
+) -> None:
+    """Abandoning a failed load frees the next one to begin; it doesn't make
+    the graph the failed load may have written to trustworthy. Waiting won't
+    help, so there is no Retry-After; a load must finish."""
+    _nothing_may_be_recorded(ledger, monkeypatch)
+    held = {SourceKind.CORPUS: CORPUS_VERSION, SourceKind.MAPPING: MAPPING_VERSION}
+
+    def state(kind: SourceKind) -> LoadedSource:
+        if kind is not abandoned:
+            return LoadedSource(held[kind])
+        return LoadedSource(held[kind] if finished_before else None, blocked_by_abandoned=True)
+
+    sources = LoadedSources(corpus=state(SourceKind.CORPUS), mapping=state(SourceKind.MAPPING))
+    async with await _client_for(ledger, sources) as c:
+        response = await _assess(c)
+    assert response.status_code == 503
+    assert "retry-after" not in response.headers
+    detail = response.json()["detail"]
+    assert f"{abandoned.value} load was abandoned" in detail and "none has finished since" in detail
+    other = next(k for k in SourceKind if k is not abandoned)
+    assert tenant.LOADERS[abandoned] in detail and tenant.LOADERS[other] not in detail
+
+
+async def test_an_open_load_is_waited_for_before_an_abandoned_one_is_dealt_with(
+    ledger: FakeLedgerStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _nothing_may_be_recorded(ledger, monkeypatch)
+    sources = LoadedSources(
+        corpus=LoadedSource(CORPUS_VERSION, blocked_by_abandoned=True),
+        mapping=LoadedSource(MAPPING_VERSION, loading=True),
+    )
+    async with await _client_for(ledger, sources) as c:
+        response = await _assess(c)
+    assert response.status_code == 503 and response.headers["retry-after"] == "30"
+
+
 class LoadChangesMidRequest(GraphStore):
     """A graph whose loads change while Track A is working: after the
     coverage is computed, `then` is what it holds."""

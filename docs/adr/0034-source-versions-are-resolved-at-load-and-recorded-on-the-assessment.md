@@ -60,8 +60,18 @@ would otherwise re-parse differently. So each kind is a set of paths
 repository's layout is known, not in the interfaces):
 
 - corpus: `corpus/instruments`, `src/compliance_rag/corpus`,
-  `scripts/ingest_compilation.py`, `scripts/load_graph_structure.py`;
-- mapping: `corpus/mappings`, `src/compliance_rag/graph`.
+  `scripts/ingest_compilation.py`, `scripts/load_graph_structure.py`, and
+  `src/compliance_rag/graph/loader.py`, which writes the clause nodes;
+- mapping: `corpus/mappings`, `src/compliance_rag/graph` (compiled by
+  `mappings.py`, loaded by `loader.py`), and `scripts/load_mappings.py`, whose
+  glob and D-01 review filter decide which files load.
+
+`graph/loader.py` is in both: it writes the corpus's clauses and the mappings'
+nodes, so a change to it is a new version of each. A change to `mappings.py` is
+a new mapping version only. `neo4j_graph.py` and `graph_schema.py` are in
+neither, deliberately: they are how a node is stored, not what is written, and
+a storage change that altered the written graph would be a change to what the
+loaders write.
 
 This was found in review, not in the human's decision, and is a widening of
 `CONTEXT.md`'s definition, which now says so.
@@ -101,22 +111,31 @@ is about a missing tag, and here there is nothing true to record.
 
 Three kinds of untracked or ignored file are not uncommitted source and are let
 through (`NOT_SOURCE`): bytecode (`__pycache__/`, `*.pyc`), Finder's
-`.DS_Store`, and the raw compilations in `corpus/instruments/**/raw/`, which are
-fetched and not committed (`.gitignore`) and pinned by a sha256 the ingest
-checks, so they cannot change what is loaded. Without the first two every load
-would be refused on any machine that had run the code. The list is closed and in
-one place; anything else untracked or ignored under a path refuses the load.
+`.DS_Store`, and the raw compilations of instrument versions whose source is
+*pinned* (`PINNED_RAW`). Raw compilations are fetched and not committed
+(`.gitignore`), and the ingest refuses any bytes that are not the pinned sha256
+(`SOURCE_SHA256` in `scripts/ingest_compilation.py`), so what is in a pinned
+version's `raw/` cannot change what is loaded. Today that is one directory,
+`corpus/instruments/privacy-act-1988/C2026C00227/raw/`; a `raw/` under any
+other instrument or version is an unpinned source and refuses the load. Tests
+tie `PINNED_RAW` to the pin in the ingest script, and fail if an instrument
+version with a manifest is added without one. Without the first two kinds every
+load would be refused on any machine that had run the code. The list is closed
+and in one place; anything else untracked or ignored under a path refuses the
+load.
 
-**6. The graph records each load, in the graph.** `begin_load(version)` creates
-a `Load` node (`load_id`, `kind`, `tag` if any, `sha`, `started_at`) and
-`finish_load(load_id)` sets `finished_at`, once; an unknown or already closed
-load is refused. Like the law the loads write, the record is append-only, and
-`Load` is metadata: not in the bitemporal vocabulary, no valid time, never
-retired, unreachable by the query builder (`D-05` says so). Its times are the
-Neo4j server's (`datetime()`), never the caller's, so a client with a wrong
-clock can't reorder history. `loaded_sources()` returns, for each kind, the
-latest *finished* load's version (latest by when it started) and `loading`: a
-load of that kind is open, meaning begun and neither finished nor abandoned.
+**6. The graph records each load (the model's call).** The human decided that
+the versions are recorded on the assessment; where the record of what the graph
+was loaded from lives is the model's call. `begin_load(version)` creates a
+`Load` node (`load_id`, `kind`, `tag` if any, `sha`, `started_at`) in the graph,
+and `finish_load(load_id)` sets `finished_at`, once; an unknown or already
+closed load is refused. Like the law the loads write, the record is
+append-only, and `Load` is metadata: not in the bitemporal vocabulary, no valid
+time, never retired, unreachable by the query builder (`D-05` says so). Its
+times are the Neo4j server's (`datetime()`), never the caller's, so a client
+with a wrong clock can't reorder history. `loaded_sources()` returns, for each
+kind, the latest *finished* load's version (latest by when it started) and what
+stands in the way of assessing against it (point 7).
 
 It lives in the graph, not the ledger, because it describes the graph. The graph
 is derived and can be rebuilt from the repository (D-09); a ledger row saying
@@ -136,17 +155,34 @@ A load that fails after it began stays open, so it blocks the next one and
 every assessment. It is closed by `abandon_load(load_id, by, reason)`, which
 records who, why and when, and by `--abandon LOAD_ID --by NAME --reason WHY` on
 either loader script. It is never closed by time: whether a quiet load has
-failed or is slow is a person's call. Abandoning doesn't make a load a finished
-one, so the version the graph holds is unchanged, and the next load may begin.
-The refusal that blocks a loader names the open load and the option.
+failed or is slow is a person's call.
 
-**8. A load refused before it writes leaves no record (the model's call).** Each
-loader is split into its checks (`check_mappings`, `check_instrument_version`:
-every refusal that precedes its first write, including every D-05 refusal) and
-its writes, and the scripts run the checks, then `recorded_load`, then the
-writes. A routine refusal, an unacknowledged wording change say, is then not an
-outage of the assessment endpoint. A load that raises after its first write
-stays open (point 7).
+Abandoning releases the hold, so the next load can begin. It does not make the
+graph trustworthy: the abandoned load may have written, and nobody can tell a
+load that died from one that never started writing. So an abandoned load keeps
+assessments blocked (`LoadedSource.blocked_by_abandoned`, a 503 that names it)
+until a *later load of that kind finishes*. Only that unblocks; the version the
+graph holds is unchanged meanwhile. The one exception is a load closed by the
+loader itself having written nothing (point 8), which blocks nothing.
+
+Abandoning a load that is slow rather than dead lets a second loader begin
+while the first is still writing, so two loaders write at once; the first's
+`finish_load` then fails, after a full write. Abandon a load known to be dead,
+not one that is merely quiet.
+
+**8. A load refused before it writes leaves no record; the checks run again
+under the hold (the model's call).** Each loader is split into its checks
+(`check_mappings`, `check_instrument_version`: every refusal that precedes its
+first write, including every D-05 refusal) and its writes, and `recorded_load`
+runs the checks, takes the hold, and runs them again before the writes. A
+routine refusal, an unacknowledged wording change say, is refused by the first
+run before anything is recorded, so it is not an outage of the assessment
+endpoint. The second run is for the race: another load of the kind may have
+begun, written and finished between the first check and the hold, and writes
+resting on a check made before that rest on a graph that has since changed. If
+the second run refuses, nothing was written, so the load is closed as one that
+wrote nothing (`abandon_load(..., wrote=False)`), which blocks no assessment. A
+load that raises after its first write stays open (point 7).
 
 **9. The API records through one ledger call.**
 `POST /v1/coverage` (`{as_of?}`; nothing else, in particular no version)
@@ -156,8 +192,13 @@ in one transaction (`LedgerStore.record_coverage_assessment(record, rows)`; a
 refused row leaves no assessment, which two separate calls could not promise),
 as the member (`user_id` is their email) and with the request's `trace_id`.
 
-- Either kind with no finished load: **503** naming the loaders to run. Either
-  kind with an open load: **503** with `Retry-After`.
+The 503 policy is the model's call:
+
+- Either kind with an open load: **503** with `Retry-After`.
+- Either kind with a load abandoned after it may have written, and none
+  finished since: **503** naming the loader, without `Retry-After`, since
+  waiting won't help.
+- Either kind with no finished load: **503** naming the loaders to run.
 - The second read differing from the first, because a load started or
   finished meanwhile: **503**, nothing recorded. The coverage may mix two
   versions.
@@ -166,14 +207,16 @@ as the member (`user_id` is their email) and with the request's `trace_id`.
 `{tag, sha, untagged}`. An id that isn't a uuid4 is a 422; another tenant's, or
 an unknown one, is a 404.
 
-**10. #153's second question, in its own words.** There is no configured pin:
-`CORPUS_VERSION` and `MAPPING_VERSION` do not exist, and nothing loaded is
-checked against one. That was the issue's second option, and the human chose
-the first: the loaders write what they loaded into the store, and the API reads
-it. So an assessment requested while a load is in progress, or after one failed
-and wasn't abandoned, is refused with a 503 (point 9), and there is nothing
-configured for the stores to disagree with. What the API records is what the
-graph says it holds.
+**10. #153's second question, in its own words (the model's reading).** The
+human's decision, quoted at the top, is that the versions are git tags resolved
+at load time and stored on the assessment. It doesn't say how the deployed
+stores carry them or what happens during a load; the shape in points 6 to 9 is
+the model's. There is no configured pin: `CORPUS_VERSION` and `MAPPING_VERSION`
+do not exist, and nothing loaded is checked against one. The loaders write what
+they loaded into the graph, and the API reads it. So an assessment requested
+while a load is in progress, or after one failed, is refused with a 503 (point
+9), and there is nothing configured for the stores to disagree with. What the
+API records is what the graph says it holds.
 
 Nothing compares the graph with the corpus bucket or with Qdrant, and the
 bucket and Qdrant loaders record nothing. That is acceptable while the only

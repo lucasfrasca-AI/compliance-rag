@@ -338,14 +338,21 @@ class SourceVersion:
 @dataclass(frozen=True, slots=True)
 class LoadedSource:
     """What the graph holds of one kind: the latest load that finished, and
-    whether one is open. `loading` is true while a load runs, and stays true if
-    it failed until someone abandons it: a failed load may have left the graph
-    part-written, so nothing is assessed against it until a load of that kind
-    finishes, or the open one is abandoned and another finishes."""
+    whether anything stands in the way of assessing against it.
+
+    A load that failed may have left the graph part-written, so what stands in
+    the way outlasts the failure: `loading` while it is open (running, or
+    failed and not yet dealt with), and `blocked_by_abandoned` once someone has
+    abandoned it, until a load of that kind finishes. Abandoning releases the
+    hold so another load can begin; it doesn't make the graph trustworthy."""
 
     version: SourceVersion | None = None
     """None if no load of this kind has ever finished."""
     loading: bool = False
+    """A load of this kind is open: begun, and neither finished nor closed."""
+    blocked_by_abandoned: bool = False
+    """A load of this kind was abandoned after it may have written, and none
+    has finished since. A load closed having written nothing doesn't count."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,13 +537,23 @@ class GraphAdmin(GraphReader):
         stays open, which is how a failed load is told from a successful one."""
 
     @abstractmethod
-    async def abandon_load(self, load_id: str, by: str, reason: str) -> None:
+    async def abandon_load(self, load_id: str, by: str, reason: str, *, wrote: bool = True) -> None:
         """Close an open load that will never finish, naming who and why, once.
         Never done by the passing of time: someone looked at the failed load
-        and decided. It doesn't make the load a finished one, so the version
-        the graph holds is unchanged, and it lets another load of that kind
-        begin. An unknown load, or one already finished or abandoned, is
-        refused."""
+        and decided. It releases the hold on the kind, so another load can
+        begin, and it doesn't make the load a finished one, so the version the
+        graph holds is unchanged.
+
+        `wrote` says whether the load may have written. The default is yes,
+        because nobody can tell a load that died from one that never started
+        writing: such a load keeps assessments blocked
+        (`LoadedSource.blocked_by_abandoned`) until a later load finishes.
+        `wrote=False` is for a loader that knows it wrote nothing (its checks
+        refused it under the hold); it blocks nothing. Abandoning a load that
+        is only slow lets a second loader begin while the first is still
+        writing, and the first's `finish_load` then fails after a full write:
+        abandon one known to be dead. An unknown load, or one already finished
+        or abandoned, is refused."""
 
     @abstractmethod
     async def counts(self) -> GraphCounts:

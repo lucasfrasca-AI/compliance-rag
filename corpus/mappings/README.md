@@ -27,24 +27,27 @@ A file missing any of these four fields fails the loader and the CI check.
 ## Versions
 
 The **mapping version** is a git tag over this directory and the code that
-compiles and loads it (`src/compliance_rag/graph/`), named `mappings-<version>`
-(for example `mappings-2026.10.14`). It is resolved when
-`scripts/load_mappings.py` runs, not set in configuration:
+compiles and loads it (`src/compliance_rag/graph/` and `scripts/load_mappings.py`),
+named `mappings-<version>` (for example `mappings-2026.10.14`). It is resolved
+when `scripts/load_mappings.py` runs, not set in configuration:
 
 - The tag is the newest `mappings-*` tag whose commit holds the same content
-  for both paths as the checkout. A change to the YAML or to that code is a new
-  version; a change anywhere else leaves it where it was.
+  for all of those paths as the checkout. A change to the YAML or to that code
+  is a new version; a change anywhere else leaves it where it was.
 - The graph records the tag and the commit it points at. A tag can move; the
   commit can't. With no matching tag it records the commit alone, as untagged.
   A missing tag never stops a load.
-- The load is refused while either path has anything uncommitted (including
-  untracked and git-ignored files, which are loaded all the same), because no
-  commit holds what would be loaded.
+- The load is refused while any of those paths has anything uncommitted
+  (including untracked and git-ignored files, which are loaded all the same),
+  because no commit holds what would be loaded.
 - Loads are serialised. One that fails after it began stays open and blocks
   the next, and any assessment, until someone abandons it:
-  `uv run python -m scripts.load_mappings --abandon LOAD_ID --by NAME --reason WHY`.
-  The refusal names the `LOAD_ID`. A load refused by the loader's own checks
-  (any D-05 refusal) leaves no record, so it blocks nothing.
+  `uv run python -m scripts.load_mappings --abandon LOAD_ID --by NAME --reason WHY`
+  (only for a load known to be dead; the refusal names the `LOAD_ID`).
+  Abandoning lets another load begin, but the dead one may have written, so
+  assessments stay blocked until a load finishes.
+- A load refused by the loader's own checks (any D-05 refusal) leaves no
+  record, so it blocks nothing.
 
 Every assessment records this and the corpus version (ADR-0034). To name a
 version: commit, `git tag mappings-<version>`, then load again.
