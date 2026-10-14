@@ -69,7 +69,7 @@ FLOORS: Mapping[Cell, float] = {
     (RERANKED, Category.EXACT_ID, POLICY): 1.0,
     (RERANKED, Category.PARAPHRASE, LAW): 1.0,
     (RERANKED, Category.PARAPHRASE, POLICY): 1.0,
-    (RERANKED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # target 0.8: open
+    (RERANKED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # target 0.8: open (#200)
     (RERANKED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
 }
 """What the gate achieves on the whole compilation (ADR-0043, measured
