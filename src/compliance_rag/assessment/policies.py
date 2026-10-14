@@ -55,6 +55,8 @@ async def tenant_policies(
             stable_id(version.instrument_id, version.version_id, path)
             for path in sorted(manifest, key=document_order)
         ]
+    # Read as no member, on purpose: the prefix is every member's, so a private
+    # (user-scoped) clause is never returned here (ADR-0036).
     records: list[ClauseRecord | None] = await _bounded(
         [clauses.get_clause(c, tenant_id=tenant_id) for c in clause_ids], READ_CONCURRENCY
     )

@@ -226,6 +226,19 @@ class Scope(StrEnum):
     USER = "user"
 
 
+def check_user_owner(scope: Scope, user_id: str | None) -> None:
+    """The one owner rule for every record that carries a scope (`CONTEXT.md`:
+    Scope, ADR-0036): a `user` record is one person's private addition, so it
+    names that person, and no other scope names anyone. Without an owner a
+    user-scoped record could not be kept private, so it is refused rather than
+    stored visible to nobody — or, worse, to the whole tenant."""
+    if scope is Scope.USER:
+        if user_id is None or not user_id.strip():
+            raise ValueError("user scope is one person's private additions: it needs a user_id")
+    elif user_id is not None:
+        raise ValueError(f"a user_id belongs to user scope only, not {scope.value} scope")
+
+
 class DocumentClass(StrEnum):
     """Which kind of document an instrument is (`CONTEXT.md`: Document class,
     #148). Every version of an instrument has its class. Only internal policies
@@ -508,6 +521,10 @@ class ClauseRecord(BaseModel):
         default=PUBLIC_TENANT_ID,
         description="`_public` for law; the owning tenant for tenant and user scopes",
     )
+    user_id: str | None = Field(
+        default=None,
+        description="The member who owns a user-scoped clause, and only then (ADR-0036)",
+    )
     char_start: int | None = Field(
         default=None,
         description="PDF page/character offset for click-to-clause (CONTEXT.md: Position "
@@ -520,6 +537,13 @@ class ClauseRecord(BaseModel):
     def clause_id(self) -> str:
         """The stable ID: `{instrument_id}:{version_id}:{clause_path}`."""
         return stable_id(self.instrument_id, self.version_id, self.clause_path)
+
+    def visible_to(self, user_id: str | None) -> bool:
+        """Whether the member `user_id` may be given this clause's text
+        (ADR-0036): any clause that isn't user-scoped, and a user-scoped one
+        only to its owner. No member, or a record naming no owner, is the
+        owner of nothing."""
+        return self.scope is not Scope.USER or (user_id is not None and self.user_id == user_id)
 
     @field_validator("canonical_text")
     @classmethod
@@ -534,6 +558,7 @@ class ClauseRecord(BaseModel):
             raise ValueError(f"public scope requires tenant_id {PUBLIC_TENANT_ID!r}")
         if self.scope is not Scope.PUBLIC and self.tenant_id == PUBLIC_TENANT_ID:
             raise ValueError(f"{PUBLIC_TENANT_ID!r} is reserved for public law")
+        check_user_owner(self.scope, self.user_id)
         prefix = instrument_tenant_prefix(self.instrument_id)
         if prefix is not None and prefix != self.tenant_id:
             raise ValueError(
@@ -553,6 +578,7 @@ class ClauseRecord(BaseModel):
         heading: str | None = None,
         scope: Scope = Scope.PUBLIC,
         tenant_id: str = PUBLIC_TENANT_ID,
+        user_id: str | None = None,
         char_start: int | None = None,
         char_end: int | None = None,
         page: int | None = None,
@@ -568,6 +594,7 @@ class ClauseRecord(BaseModel):
             canonical_text=canonicalise(text),
             scope=scope,
             tenant_id=tenant_id,
+            user_id=user_id,
             char_start=char_start,
             char_end=char_end,
             page=page,
@@ -591,6 +618,10 @@ class Chunk(BaseModel):
     text: str
     scope: Scope = Scope.PUBLIC
     tenant_id: TenantSegment = PUBLIC_TENANT_ID
+    user_id: str | None = None
+    """The member who owns a user-scoped chunk, and only then: the stable id
+    their sign-in carries (`Member.uid`). Retrieval admits a user-scoped chunk
+    to that member of that tenant alone (ADR-0036)."""
     valid_from: dt.date = dt.date.min
     valid_to: dt.date = NO_END_DATE
     synthetic: bool = False
@@ -604,6 +635,13 @@ class Chunk(BaseModel):
     def _check_clause_id(cls, v: str) -> str:
         parse_stable_id(v)
         return v
+
+    @model_validator(mode="after")
+    def _owner(self) -> Chunk:
+        check_user_owner(self.scope, self.user_id)
+        if self.scope is Scope.USER and self.tenant_id == PUBLIC_TENANT_ID:
+            raise ValueError(f"{PUBLIC_TENANT_ID!r} is reserved for public law")
+        return self
 
 
 class Citation(BaseModel):

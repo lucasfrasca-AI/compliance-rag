@@ -27,7 +27,7 @@ from compliance_rag.eval.golden_corpus import LAW_INSTRUMENT_ID, POLICY_TENANT_I
 from compliance_rag.eval.harness import golden_clause_store, golden_ledger
 from compliance_rag.eval.recall import WHOLE_LIBRARY, NoRerank
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
-from tests.conftest import ALL_LAW, qdrant_reachable
+from tests.conftest import ALL_LAW, PUBLIC_AND_TENANT, qdrant_reachable
 
 TODAY = dt.date(2026, 10, 12)
 TEXT = "Destroy the invented records once they are no longer needed for any purpose."
@@ -74,7 +74,12 @@ async def _routes(
     }
     routes["fused"] = {c.clause_id for c in result.fused}
     hit = await store.lookup_clause(
-        lookup, law=ALL_LAW, tenant_id="acme", as_of=TODAY, policy_corpus=PolicyCorpus(sent)
+        lookup,
+        law=ALL_LAW,
+        tenant_id="acme",
+        scopes=PUBLIC_AND_TENANT,
+        as_of=TODAY,
+        policy_corpus=PolicyCorpus(sent),
     )
     routes["lookup"] = {hit.clause_id} if hit else set()
     return routes

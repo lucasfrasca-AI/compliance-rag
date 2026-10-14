@@ -24,7 +24,7 @@ from compliance_rag.adapters.fakes import (
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import NO_PREFIX, Candidate, Channel, ScoredDocument
-from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
+from compliance_rag.assessment.pipeline import ANSWER_SCOPES, LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
@@ -144,7 +144,13 @@ async def test_answer_calls_the_router_rather_than_duplicating_the_pipeline(
     await assessment.answer(QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION)
 
     spy.assert_awaited_once_with(
-        QUERY, TENANT_ID, AS_OF, law=LIBRARY_QUESTION, policy_corpus=NO_PREFIX
+        QUERY,
+        TENANT_ID,
+        AS_OF,
+        law=LIBRARY_QUESTION,
+        scopes=ANSWER_SCOPES,
+        policy_corpus=NO_PREFIX,
+        user_id=None,
     )
 
 

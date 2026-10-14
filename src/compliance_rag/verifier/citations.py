@@ -113,8 +113,17 @@ class Verifier:
         self._comparator = comparator
 
     async def check(
-        self, citation: DraftCitation, *, context: frozenset[str], as_of: dt.date
+        self,
+        citation: DraftCitation,
+        *,
+        context: frozenset[str],
+        as_of: dt.date,
+        user_id: str | None = None,
     ) -> CheckedCitation:
+        """`user_id` is the member whose answer this is: canonical text of a
+        user-scoped clause is read for its owner alone (ADR-0036). Retrieval's
+        filter keeps another's clause out of `context`; this holds even when
+        it didn't, as the ledger's version checks below do for a retired one."""
         if citation.clause_id not in context:
             return CheckedCitation(citation, Outcome.NOT_IN_CONTEXT)
         instrument_id, version_id, _ = parse_stable_id(citation.clause_id)
@@ -133,7 +142,9 @@ class Verifier:
         ):
             return CheckedCitation(citation, Outcome.WITHDRAWN)
 
-        clause = await self._clause_store.get_clause(citation.clause_id, tenant_id=owner)
+        clause = await self._clause_store.get_clause(
+            citation.clause_id, tenant_id=owner, user_id=user_id
+        )
         if clause is None:
             return CheckedCitation(citation, Outcome.CLAUSE_MISSING)
         # The quote is canonicalised now, under the current version; a clause
@@ -153,6 +164,13 @@ class Verifier:
         )
 
     async def check_all(
-        self, citations: Iterable[DraftCitation], *, context: frozenset[str], as_of: dt.date
+        self,
+        citations: Iterable[DraftCitation],
+        *,
+        context: frozenset[str],
+        as_of: dt.date,
+        user_id: str | None = None,
     ) -> tuple[CheckedCitation, ...]:
-        return tuple([await self.check(c, context=context, as_of=as_of) for c in citations])
+        return tuple(
+            [await self.check(c, context=context, as_of=as_of, user_id=user_id) for c in citations]
+        )
