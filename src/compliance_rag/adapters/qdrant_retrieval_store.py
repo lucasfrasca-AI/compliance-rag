@@ -60,7 +60,9 @@ from typing import cast
 
 from fastembed import SparseTextEmbedding
 from opentelemetry import trace
+from pydantic import SecretStr
 from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.conversions.common_types import PointId
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from compliance_rag import telemetry
@@ -117,6 +119,14 @@ for it to cut: the cut is made in `search`, after the list is put in the
 `RetrievalStore` order, and a tie at the cut keeps the lowest `chunk_id`. The
 price is the payload (clause text) of up to `limit` extra points, fetched and
 dropped."""
+
+_SCROLL_PAGE = 256
+"""Points per scroll page when listing a version's chunk ids."""
+
+UPSERT_BATCH = 64
+"""Points per upsert request. A 1536-dim point is roughly 20-30 KB as JSON, so a
+whole compilation in one request (779 clauses, #144) would be ~20 MB, close to
+Qdrant's default 32 MB request limit; 64 keeps each request under 2 MB."""
 
 
 @lru_cache(maxsize=1)
@@ -293,12 +303,25 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
     @classmethod
     @asynccontextmanager
     async def ephemeral(
-        cls, url: str, *, embedder: Embedder, ledger: LedgerStore, prefix: str
+        cls,
+        url: str,
+        *,
+        embedder: Embedder,
+        ledger: LedgerStore,
+        prefix: str,
+        api_key: SecretStr | None = None,
     ) -> AsyncGenerator[QdrantRetrievalStore]:
         """A ready store on a uniquely named throwaway collection, dropped on
         exit — for eval runs and tests against a disposable server (CI's
-        service container), never the deployed cluster's collection."""
-        client = AsyncQdrantClient(url=url)
+        service container), never the deployed cluster's collection. The drop
+        names only the uuid-named collection this call created, never one that
+        existed before. `api_key` is for a one-off run on the deployed cluster
+        (#144), read through `Settings` by the operator script; tests and CI
+        pass none. On that cluster the drop removes the run's own throwaway
+        collection, not a cloud resource: the cluster and `clauses` are
+        untouched."""
+        key = api_key.get_secret_value() if api_key is not None else ""
+        client = AsyncQdrantClient(url=url, api_key=key or None)
         store = cls(
             client,
             collection_name=f"{prefix}-{uuid.uuid4().hex[:8]}",
@@ -355,7 +378,11 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             )
             for chunk, dense, sparse in zip(chunk_list, dense_vectors, sparse_vectors, strict=True)
         ]
-        await self._client.upsert(self._collection_name, points=points)
+        # Embedded first, written after: a failed embedding writes nothing.
+        for start in range(0, len(points), UPSERT_BATCH):
+            await self._client.upsert(
+                self._collection_name, points=points[start : start + UPSERT_BATCH]
+            )
 
     async def _build_filter(
         self,
@@ -554,15 +581,26 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         )
         return result.count > 0
 
-    async def version_exists(self, *, instrument_id: str, tenant_id: str, version_id: str) -> bool:
-        result = await self._client.count(
-            self._collection_name,
-            count_filter=self._target(
-                instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
-            ).filter,
-            exact=True,
-        )
-        return result.count > 0
+    async def version_chunk_ids(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> frozenset[str]:
+        target = self._target(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        ).filter
+        ids: set[str] = set()
+        offset: PointId | None = None
+        while True:
+            points, offset = await self._client.scroll(
+                self._collection_name,
+                scroll_filter=target,
+                with_payload=["chunk_id"],
+                with_vectors=False,
+                limit=_SCROLL_PAGE,
+                offset=offset,
+            )
+            ids.update(str(p.payload["chunk_id"]) for p in points if p.payload)
+            if offset is None:
+                return frozenset(ids)
 
     async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
         await self._client.set_payload(
