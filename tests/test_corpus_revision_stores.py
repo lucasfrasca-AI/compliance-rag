@@ -901,3 +901,39 @@ async def test_the_scripts_dry_run_prints_the_plan_and_writes_nothing(
     assert "findings citing the changed clauses: 0" in printed
     assert "--apply --mode correct --acknowledge" in printed
     assert await snapshot(stores) == before
+
+
+@needs_neo4j
+@pytest.mark.parametrize("stores", ["fake"], indirect=True)
+async def test_the_scripts_apply_after_a_correction_reports_nothing_to_change(
+    stores: Stores, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.revise_compilation import (
+        _report_or_apply,  # pyright: ignore[reportPrivateUsage]
+        parse_arguments,
+    )
+
+    await deploy(stores)
+    await correct(stores)
+    after = await snapshot(stores)
+    command = [
+        "--bucket",
+        "b",
+        "--apply",
+        "--mode",
+        "correct",
+        "--acknowledge",
+        *sorted(CHANGED),
+        "--by",
+        BY,
+        "--reason",
+        WHY,
+        "--acknowledge-findings",
+        "0",
+    ]
+    revision = stores.revision()
+    await _report_or_apply(
+        revision, await plan(stores, revision), parse_arguments(command), FIXED_CODE, "nowhere"
+    )
+    assert "nothing to change: every store holds the parse" in capsys.readouterr().out
+    assert await snapshot(stores) == after
