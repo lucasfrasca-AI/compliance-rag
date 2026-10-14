@@ -21,6 +21,9 @@ from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
     Candidate,
     Channel,
+    ChatExchange,
+    ChatSummary,
+    ChatTurn,
     ClauseStore,
     Embedder,
     Generation,
@@ -41,6 +44,7 @@ from compliance_rag.adapters.interfaces import (
     ScoredDocument,
     UsageRecord,
     check_assessment_write,
+    check_chat_exchange,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.assessment.coverage import Coverage, CoverageRow
@@ -340,6 +344,8 @@ class FakeLedgerStore(LedgerStore):
         self._audit: list[RemovalAuditEntry] = []
         self._evidence: list[Evidence] = []
         self._coverage: dict[tuple[str, str], dict[str, CoverageRow]] = {}
+        self._chats: dict[tuple[str, str], list[ChatTurn]] = {}  # (tenant, chat) -> its turns
+        self._recorded_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
         return self._profiles.get(tenant_id)
@@ -391,6 +397,51 @@ class FakeLedgerStore(LedgerStore):
 
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
         return self._assessments.get((tenant_id, assessment_id))
+
+    def _now(self) -> dt.datetime:
+        """The clock, never the same instant twice: Postgres stamps each
+        exchange in its own transaction, in the order they ran."""
+        self._recorded_at = max(
+            dt.datetime.now(dt.UTC), self._recorded_at + dt.timedelta(microseconds=1)
+        )
+        return self._recorded_at
+
+    async def record_chat_exchange(self, exchange: ChatExchange) -> None:
+        """Checked before anything is stored, which is what Postgres' one
+        transaction gives, and in Postgres' order."""
+        check_chat_exchange(exchange)
+        if exchange.tenant_id not in self._profiles:
+            raise ValueError(f"tenant {exchange.tenant_id!r} isn't registered in the ledger")
+        held = self._chats.get((exchange.tenant_id, exchange.chat_id), [])
+        if held and held[0].user_id != exchange.user_id:
+            raise ValueError(f"chat {exchange.chat_id} belongs to another member")
+        stamped = self._now()
+        self._chats[(exchange.tenant_id, exchange.chat_id)] = [
+            *held,
+            *(replace(turn, created_at=stamped) for turn in exchange.turns(len(held))),
+        ]
+
+    async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
+        turns = self._chats.get((tenant_id, chat_id), [])
+        return tuple(turns) if turns and turns[0].user_id == user_id else ()
+
+    async def chats(self, tenant_id: str, user_id: str) -> tuple[ChatSummary, ...]:
+        summaries: list[ChatSummary] = []
+        for (tenant, chat_id), turns in self._chats.items():
+            first, last = turns[0], turns[-1]
+            if tenant == tenant_id and first.user_id == user_id:
+                assert first.created_at and last.created_at and first.content  # stamped on write
+                summaries.append(
+                    ChatSummary(
+                        chat_id=chat_id,
+                        started_at=first.created_at,
+                        updated_at=last.created_at,
+                        turns=len(turns),
+                        first_question=first.content,
+                    )
+                )
+        by_id = sorted(summaries, key=lambda c: c.chat_id)
+        return tuple(sorted(by_id, key=lambda c: c.updated_at, reverse=True))
 
     async def subscribe(
         self, *, tenant_id: str, instrument_id: str, subscribed_by: str, trace_id: str | None = None

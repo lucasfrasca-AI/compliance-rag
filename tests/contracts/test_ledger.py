@@ -10,6 +10,7 @@ supplies — `LedgerStore` has no finding writer yet.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -20,6 +21,10 @@ import pytest
 from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
+    ChatAnswer,
+    ChatCitation,
+    ChatExchange,
+    ChatTurn,
     LedgerStore,
     PolicyVersion,
     Profile,
@@ -28,6 +33,8 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     SourceKind,
     SourceVersion,
+    TurnOutcome,
+    TurnRole,
     UsageRecord,
 )
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
@@ -483,3 +490,191 @@ async def test_the_fake_ledger_satisfies_the_contract() -> None:
         ledger.seed_finding(tenant_id, clause_id)
 
     await assert_ledger_contract(ledger, seed)
+
+
+# ---- chat history (#162) -------------------------------------------------------------
+
+APP11 = "privacy-act-1988:C2026C00227:sch1/app11/1"
+APP12 = "privacy-act-1988:C2026C00227:sch1/app12/1"
+POLICY_CLAUSE = f"{POLICY}:v1:3/1"
+MODEL_PROSE = "Section 6C(2) says: a sentence the model made up that must never be kept."
+VERIFIED = ChatAnswer(
+    TurnOutcome.VERIFIED,
+    text="Acme must take reasonable steps.",
+    citations=(ChatCitation(APP11, "C2026C00227"), ChatCitation(POLICY_CLAUSE, "v1")),
+)
+
+
+def an_exchange(chat_id: str, **changes: Any) -> ChatExchange:  # Any: exchange fields
+    fields: dict[str, Any] = {  # Any: exchange fields
+        "tenant_id": "acme",
+        "chat_id": chat_id,
+        "user_id": "uid-1",
+        "question": "What must Acme do to protect the personal information it holds?",
+        "answer": VERIFIED,
+        "as_of": JAN,
+        "trace_id": "a" * 32,
+        **changes,
+    }
+    return ChatExchange(**fields)
+
+
+async def assert_chat_contract(ledger: LedgerStore) -> None:
+    """Chat history, recorded as the next two turns of a chat (#162). The
+    member is `Member.uid`; a chat is that member's alone."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+
+    async def turns(
+        chat_id: str, user_id: str = "uid-1", tenant_id: str = "acme"
+    ) -> tuple[ChatTurn, ...]:
+        return await ledger.chat_turns(tenant_id, user_id, chat_id)
+
+    # ---- an exchange starts a chat: the question, then what the member was shown
+    first = an_exchange("chat-1")
+    await ledger.record_chat_exchange(first)
+    stored = await turns("chat-1")
+    assert [(t.turn_index, t.role) for t in stored] == [(0, TurnRole.USER), (1, TurnRole.ASSISTANT)]
+    assert all(t.created_at is not None for t in stored)
+    # Every field comes back as written: the member, the request's trace and
+    # date, the verified text and its citations (clause and version).
+    assert tuple(replace(t, created_at=None) for t in stored) == first.turns(0)
+    question, answer = stored
+    assert (question.content, question.outcome, question.citations) == (first.question, None, ())
+    assert answer.content == VERIFIED.text and answer.outcome is TurnOutcome.VERIFIED
+    assert answer.citations == VERIFIED.citations and answer.blocked == ()
+    assert {t.user_id for t in stored} == {"uid-1"} and {t.trace_id for t in stored} == {"a" * 32}
+    assert {t.as_of for t in stored} == {JAN}
+
+    # ---- the next exchange continues it, on its own request's date and trace
+    second = an_exchange("chat-1", question="And for agencies?", as_of=JUN, trace_id="b" * 32)
+    await ledger.record_chat_exchange(second)
+    stored = await turns("chat-1")
+    assert [t.turn_index for t in stored] == [0, 1, 2, 3]
+    assert tuple(replace(t, created_at=None) for t in stored[2:]) == second.turns(2)
+    assert [t.created_at for t in stored] == sorted(t.created_at for t in stored if t.created_at)
+
+    # ---- a withheld answer holds the reason and the blocked ids, and no text
+    blocked = ChatAnswer(TurnOutcome.BLOCKED, blocked=(APP12, APP12))
+    uncited = ChatAnswer(TurnOutcome.UNCITED)
+    for number, shown in enumerate((blocked, uncited), start=3):
+        await ledger.record_chat_exchange(
+            an_exchange("chat-1", answer=shown, trace_id=f"{number}" * 32)
+        )
+    stored = await turns("chat-1")
+    assert [(t.outcome, t.content, t.citations, t.blocked) for t in stored[5::2]] == [
+        (TurnOutcome.BLOCKED, None, (), (APP12, APP12)),
+        (TurnOutcome.UNCITED, None, (), ()),
+    ]
+
+    # ---- and a failed one, only a marker: the question is the member's own
+    for number, failure in enumerate(
+        (TurnOutcome.RESIDENCY, TurnOutcome.MALFORMED_GENERATION, TurnOutcome.INTERNAL), start=5
+    ):
+        await ledger.record_chat_exchange(
+            an_exchange("failed", answer=ChatAnswer(failure), trace_id=f"{number}" * 32)
+        )
+    failed = await turns("failed")
+    assert [(t.outcome, t.content, t.citations, t.blocked) for t in failed[1::2]] == [
+        (TurnOutcome.RESIDENCY, None, (), ()),
+        (TurnOutcome.MALFORMED_GENERATION, None, (), ()),
+        (TurnOutcome.INTERNAL, None, (), ()),
+    ]
+    assert {t.content for t in failed[0::2]} == {first.question}
+
+    # ---- a chat is its member's alone: another member's and another tenant's
+    # read as empty, as one that never existed does
+    assert await turns("chat-1", user_id="uid-2") == ()
+    assert await turns("chat-1", tenant_id="other-corp") == ()
+    assert await turns("chat-1", user_id="uid-2", tenant_id="other-corp") == ()
+    assert await turns("no-such-chat") == ()
+    # A different tenant's chat can have the same id, and doesn't touch this one.
+    theirs = an_exchange("chat-1", tenant_id="other-corp", user_id="uid-9", question="Theirs?")
+    await ledger.record_chat_exchange(theirs)
+    assert (await turns("chat-1", "uid-9", "other-corp"))[0].content == "Theirs?"
+    assert len(await turns("chat-1")) == 8
+
+    # ---- refused whole, and nothing is left behind
+    before = (await turns("chat-1"), await ledger.chats("acme", "uid-1"))
+    for refused, why in (
+        (an_exchange("chat-1", trace_id=" "), "trace_id"),
+        (an_exchange("chat-1", user_id=" "), "belongs to a member"),
+        (an_exchange("chat-1", question=" "), "has text"),
+        (an_exchange("chat-1", question="a\x00b"), "NUL"),
+        (
+            an_exchange(
+                "chat-1", answer=ChatAnswer(TurnOutcome.VERIFIED, "a\x00b", VERIFIED.citations)
+            ),
+            "NUL",
+        ),
+        (an_exchange("chat-1", tenant_id="nobody"), "isn't registered"),
+        (an_exchange("chat-1", user_id="uid-2"), "another member"),
+        (an_exchange("chat-new", tenant_id="nobody"), "isn't registered"),
+        # Several faults at once get the same refusal from every store.
+        (an_exchange("chat-1", user_id="uid-2", trace_id=" "), "trace_id"),
+        (an_exchange("chat-1", tenant_id="nobody", question=" "), "has text"),
+    ):
+        with pytest.raises(ValueError, match=why):
+            await ledger.record_chat_exchange(refused)
+    assert (await turns("chat-1"), await ledger.chats("acme", "uid-1")) == before
+    assert await turns("chat-new") == ()
+    assert await turns("chat-1", user_id="uid-2") == ()
+    # What a turn may hold is fixed when the answer is built (ADR-0003): a
+    # withheld or failed answer can't carry the model's text, and a verified
+    # one must carry its citations.
+    for build, why in (
+        (lambda: ChatAnswer(TurnOutcome.BLOCKED, MODEL_PROSE, (), (APP12,)), "holds no text"),
+        (lambda: ChatAnswer(TurnOutcome.UNCITED, MODEL_PROSE), "holds no text"),
+        (lambda: ChatAnswer(TurnOutcome.INTERNAL, MODEL_PROSE), "holds no text"),
+        (lambda: ChatAnswer(TurnOutcome.UNCITED, None, VERIFIED.citations), "holds no text"),
+        (lambda: ChatAnswer(TurnOutcome.BLOCKED), "names the citations"),
+        (lambda: ChatAnswer(TurnOutcome.UNCITED, blocked=(APP12,)), "names the citations"),
+        (lambda: ChatAnswer(TurnOutcome.BLOCKED, blocked=(MODEL_PROSE,)), "stable clause ID"),
+        (lambda: ChatAnswer(TurnOutcome.VERIFIED, "text"), "text and citations"),
+        (lambda: ChatAnswer(TurnOutcome.VERIFIED, " ", VERIFIED.citations), "text and citations"),
+        (
+            lambda: ChatAnswer(TurnOutcome.VERIFIED, "t", VERIFIED.citations, (APP12,)),
+            "none blocked",
+        ),
+        (lambda: ChatCitation(APP11, "v9"), "not a clause of version v9"),
+    ):
+        with pytest.raises(ValueError, match=why):
+            build()
+
+    # ---- a member's list: theirs only, the chat with the latest turn first
+    assert [c.chat_id for c in await ledger.chats("acme", "uid-1")] == ["failed", "chat-1"]
+    await ledger.record_chat_exchange(an_exchange("chat-1", question="One more?"))
+    listed = await ledger.chats("acme", "uid-1")
+    assert [c.chat_id for c in listed] == ["chat-1", "failed"]
+    latest, earlier = listed
+    assert (latest.turns, latest.first_question) == (10, first.question)
+    assert (earlier.turns, earlier.first_question) == (6, first.question)
+    assert latest.started_at <= latest.updated_at and earlier.started_at <= earlier.updated_at
+    assert latest.started_at < earlier.updated_at < latest.updated_at
+    assert latest.started_at == stored[0].created_at
+    assert await ledger.chats("acme", "uid-2") == ()
+    assert [c.chat_id for c in await ledger.chats("other-corp", "uid-9")] == ["chat-1"]
+    assert await ledger.chats("other-corp", "uid-1") == ()
+    assert await ledger.chats("nobody", "uid-1") == ()
+
+    # ---- appends racing for one chat are numbered in commit order, none refused,
+    # and each exchange's two turns stay together
+    await asyncio.gather(
+        *(
+            ledger.record_chat_exchange(
+                an_exchange("racing", trace_id=f"{n}" * 32, question=f"q{n}")
+            )
+            for n in range(4)
+        )
+    )
+    racing = await turns("racing")
+    assert [t.turn_index for t in racing] == list(range(8))
+    for question, answer in zip(racing[0::2], racing[1::2], strict=True):
+        assert (question.role, answer.role) == (TurnRole.USER, TurnRole.ASSISTANT)
+        assert (
+            question.trace_id == answer.trace_id and question.content == f"q{question.trace_id[0]}"
+        )
+
+
+async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:
+    await assert_chat_contract(FakeLedgerStore())

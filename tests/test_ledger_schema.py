@@ -773,3 +773,150 @@ def test_a_null_version_is_documented_as_untagged(
     ).fetchone()
     assert row is not None and isinstance(row[0], str)
     assert "NULL means untagged" in row[0] and "the SHA alone" in row[0]
+
+
+# --------------------------------------------------------------------------
+# db/ledger/0014_chat_history.sql (#162)
+# --------------------------------------------------------------------------
+
+CLAUSE = "privacy-act-1988:C2026C00227:sch1/app11/1"
+CITED = Jsonb([{"clause_id": CLAUSE, "version_id": "C2026C00227"}])
+
+
+def _chat_turn(
+    conn: psycopg.Connection[tuple[object, ...]], override: dict[str, object] | None = None
+) -> None:
+    """A member's question by default; `override` turns it into anything else."""
+    row: dict[str, object] = {
+        "tenant_id": "acme",
+        "chat_id": "c1",
+        "turn_index": 0,
+        "user_id": "uid-1",
+        "role": "user",
+        "content": "What must Acme do?",
+        "outcome": None,
+        "citations": Jsonb([]),
+        "blocked": Jsonb([]),
+        "as_of": dt.date(2026, 10, 14),
+        "trace_id": "t1",
+    } | (override or {})
+    columns = ", ".join(row)
+    conn.execute(
+        f"INSERT INTO chat ({columns}) VALUES ({', '.join(['%s'] * len(row))})",  # pyright: ignore[reportArgumentType] — test-built column list
+        tuple(row.values()),
+    )
+
+
+def _answer(**changes: object) -> dict[str, object]:
+    return {"turn_index": 1, "role": "assistant", "content": None, **changes}
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(_answer(outcome="verified", content="Text.", citations=CITED), id="verified"),
+        pytest.param(_answer(outcome="blocked", blocked=Jsonb([CLAUSE])), id="blocked"),
+        pytest.param(_answer(outcome="uncited"), id="uncited"),
+        pytest.param(_answer(outcome="residency"), id="residency"),
+        pytest.param(_answer(outcome="malformed_generation"), id="malformed"),
+        pytest.param(_answer(outcome="internal"), id="internal"),
+    ],
+)
+def test_a_chat_holds_a_question_and_what_the_member_was_shown(
+    conn: psycopg.Connection[tuple[object, ...]], answer: dict[str, object]
+) -> None:
+    _insert_tenant(conn, "acme")
+    _chat_turn(conn)
+    _chat_turn(conn, answer)
+    row = conn.execute("SELECT outcome FROM chat WHERE turn_index = 1").fetchone()
+    assert row == (answer["outcome"],)
+
+
+@pytest.mark.parametrize(
+    "turn",
+    [
+        # An answer is what the member was shown: no text but a verified one's
+        # (ADR-0003), and what it says it is.
+        pytest.param(
+            _answer(outcome="blocked", blocked=Jsonb([CLAUSE]), content="Prose"),
+            id="blocked-with-text",
+        ),
+        pytest.param(_answer(outcome="uncited", content="Prose"), id="uncited-with-text"),
+        pytest.param(_answer(outcome="residency", content="Prose"), id="residency-with-text"),
+        pytest.param(_answer(outcome="internal", content="Prose"), id="internal-with-text"),
+        pytest.param(_answer(outcome="blocked"), id="blocked-naming-nothing"),
+        pytest.param(
+            _answer(outcome="uncited", blocked=Jsonb([CLAUSE])), id="uncited-naming-blocked"
+        ),
+        pytest.param(_answer(outcome="uncited", citations=CITED), id="uncited-with-citations"),
+        pytest.param(
+            _answer(outcome="blocked", blocked=Jsonb([CLAUSE]), citations=CITED),
+            id="blocked-with-citations",
+        ),
+        pytest.param(_answer(outcome="verified", content="Text."), id="verified-uncited"),
+        pytest.param(_answer(outcome="verified", citations=CITED), id="verified-without-text"),
+        pytest.param(
+            _answer(outcome="verified", content=" ", citations=CITED), id="verified-blank-text"
+        ),
+        pytest.param(
+            _answer(outcome="verified", content="T", citations=CITED, blocked=Jsonb([CLAUSE])),
+            id="verified-and-blocked",
+        ),
+        pytest.param(_answer(outcome="maybe"), id="unknown-outcome"),
+        pytest.param(_answer(), id="an-answer-that-ended-no-way"),
+        # A question is the member's own words and nothing else.
+        pytest.param({"outcome": "verified"}, id="question-with-an-outcome"),
+        pytest.param({"content": None}, id="question-without-text"),
+        pytest.param({"content": " "}, id="question-blank"),
+        pytest.param({"citations": CITED}, id="question-with-citations"),
+        pytest.param({"blocked": Jsonb([CLAUSE])}, id="question-with-blocked"),
+        # Turns come in exchanges, and a chat holds only questions and answers.
+        pytest.param({"turn_index": 1}, id="question-at-an-odd-index"),
+        pytest.param(_answer(turn_index=2, outcome="uncited"), id="answer-at-an-even-index"),
+        pytest.param({"turn_index": -2}, id="negative-index"),
+        pytest.param({"role": "system"}, id="system-turn"),
+        # Whose, which request, and for when.
+        pytest.param({"user_id": None}, id="no-member"),
+        pytest.param({"user_id": " "}, id="blank-member"),
+        pytest.param({"trace_id": None}, id="no-trace"),
+        pytest.param({"trace_id": " "}, id="blank-trace"),
+        pytest.param({"as_of": None}, id="no-date"),
+        pytest.param({"citations": Jsonb({"clause_id": CLAUSE})}, id="citations-not-a-list"),
+        pytest.param(_answer(outcome="blocked", blocked=Jsonb(CLAUSE)), id="blocked-not-a-list"),
+    ],
+)
+def test_a_chat_turn_that_is_not_one_of_those_shapes_is_refused(
+    conn: psycopg.Connection[tuple[object, ...]], turn: dict[str, object]
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises((psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation)):
+        _chat_turn(conn, turn)
+
+
+def test_a_chat_turn_is_one_row_per_chat_and_index(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    _insert_tenant(conn, "acme")
+    _chat_turn(conn)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        _chat_turn(conn)
+
+
+def test_every_chat_rule_is_validated_on_the_rows_there_are(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """Unlike 0013's, none is NOT VALID: nothing wrote `chat` before this, so
+    there is no older row to leave alone."""
+    rows = conn.execute(
+        "SELECT conname, convalidated FROM pg_constraint "
+        "WHERE conrelid = 'chat'::regclass AND contype = 'c'"
+    ).fetchall()
+    assert {name for name, _ in rows} >= {
+        "chat_role",
+        "chat_in_exchanges",
+        "chat_user_id",
+        "chat_trace_id",
+        "chat_outcome",
+        "chat_turn_shape",
+    }
+    assert all(validated for _, validated in rows)
