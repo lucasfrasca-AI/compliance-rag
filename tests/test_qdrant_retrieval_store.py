@@ -110,6 +110,29 @@ async def test_qdrant_retrieval_store_satisfies_the_shared_contract(
     await assert_retrieval_store_contract(store, ledger)
 
 
+async def test_qdrant_orders_equal_scores_by_chunk_id() -> None:
+    """#160 on the real adapter. Two chunks the channels rank in mirror image
+    get exactly equal RRF scores, and Qdrant returns them in either order from
+    one call to the next, and keeps either at a cut that falls between them:
+    before the fix this failed. The expected order is asserted, not just that
+    two calls agree."""
+    from tests.contracts.test_interfaces import (
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        assert_retrieval_order_contract,
+        order_chunks,
+    )
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="order",
+    ) as store:
+        await store.upsert_chunks(order_chunks())
+        await assert_retrieval_order_contract(store)
+
+
 async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedgerStore) -> None:
     """ADR-0021 against the real adapter. "Stored" is read straight off the
     collection through the raw client, ignoring every filter — so "withdrawn

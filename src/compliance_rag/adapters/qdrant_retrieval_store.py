@@ -94,6 +94,18 @@ _PAYLOAD_KEYWORD_FIELDS = (
 _PAYLOAD_BOOL_FIELDS = ("withdrawn", "synthetic")
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
 
+_FUSED_LIMIT_FACTOR = 2
+"""How many times the caller's `limit` the fused query asks Qdrant for (#160).
+
+`search` prefetches `limit` candidates from each of the two channels, so the
+list Qdrant fuses holds at most 2 x `limit`. Asked for exactly `limit`, Qdrant
+cuts that list itself, and when the candidates either side of the cut have
+equal RRF scores it keeps whichever it likes, differently from one call to the
+next (so the clause that reaches the model, and the recall@10 measured for it,
+changed between runs). Asked for the whole fused list there is nothing left
+for it to cut: the cut is made here, after the list is put in the
+`RetrievalStore` order, and a tie at the cut keeps the lowest `chunk_id`."""
+
 
 @lru_cache(maxsize=1)
 def _sparse_encoder() -> SparseTextEmbedding:
@@ -583,16 +595,25 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     ),
                 ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=limit,
+                limit=limit * _FUSED_LIMIT_FACTOR,
                 with_payload=True,
             ),
         )
 
-        return RetrievalResult(
-            fused=tuple(
+        # Qdrant orders equal RRF scores differently from call to call, so the
+        # order is ours: score descending, `chunk_id` ascending on a tie (the
+        # `RetrievalStore` contract, as `FakeRetrievalStore` has always done),
+        # and only then the cut to `limit` (`_FUSED_LIMIT_FACTOR`).
+        fused = sorted(
+            (
                 self._payload_to_candidate(p.payload, score=p.score, channel=None)
                 for p in fused_hits.points
             ),
+            key=lambda c: (-c.score, c.chunk_id),
+        )[:limit]
+
+        return RetrievalResult(
+            fused=tuple(fused),
             per_channel={
                 Channel.DENSE: tuple(
                     self._payload_to_candidate(p.payload, score=p.score, channel=Channel.DENSE)

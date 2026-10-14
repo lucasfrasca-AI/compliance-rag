@@ -592,7 +592,15 @@ class RetrievalStore(ABC):
         limit: int,
         policy_corpus: PolicyCorpus = NO_PREFIX,
     ) -> RetrievalResult:
-        """Dense + sparse channels fused with RRF inside the store (D-04)."""
+        """Dense + sparse channels fused with RRF inside the store (D-04).
+
+        `fused` is ordered by score, highest first, and by `chunk_id`, lowest
+        first, among equal scores, and is cut to `limit` only after that
+        order is applied. So the same search of the same data returns the
+        same list, and a tie at the cut keeps the lowest `chunk_id`, whichever
+        store answers (#160). Each `per_channel` list is ordered by score,
+        highest first; the order among equal scores within a channel is the
+        store's own, and no caller may depend on it."""
 
     @abstractmethod
     async def lookup_clause(
