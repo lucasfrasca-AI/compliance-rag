@@ -138,6 +138,7 @@ async def test_a_verified_answer_streams_its_stages_and_the_canonical_clause(quo
     assert [name for name, _ in events] == ["coverage", "retrieval", "answer"]
     coverage, retrieval, answer = (data for _, data in events)
     assert coverage == {
+        "chat_id": answer["chat_id"],  # every event names the chat (#162)
         "as_of": AS_OF,
         "counts": {"applicable": 35, "not_applicable": 2, "unassessable": 0},
     }
@@ -261,6 +262,7 @@ async def test_retrieval_is_reported_before_generation_starts() -> None:
         pytest.param({"as_of": "9999-07-01"}, id="date-out-of-range"),
         pytest.param({"tenant_id": "other-tenant"}, id="names-a-tenant"),
         pytest.param({"law": "unscoped"}, id="names-a-scope"),
+        pytest.param({"user_id": "uid-someone-else"}, id="names-a-member"),
     ],
 )
 async def test_an_invalid_question_is_a_422(body: dict[str, Any]) -> None:  # Any: JSON

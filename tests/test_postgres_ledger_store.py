@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import traceback
 import uuid
 from collections.abc import AsyncIterator
 from urllib.parse import urlparse
@@ -24,10 +25,12 @@ from compliance_rag.adapters import postgres_ledger_store
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
+    ChatAnswer,
     PolicyVersion,
     Profile,
     SourceKind,
     SourceVersion,
+    TurnOutcome,
 )
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
@@ -38,7 +41,14 @@ from tests.contracts.test_interfaces import (
     assert_retrieval_store_contract,
     contract_chunks,
 )
-from tests.contracts.test_ledger import assert_ledger_contract
+from tests.contracts.test_ledger import (
+    APP11,
+    MODEL_PROSE,
+    POLICY_CLAUSE,
+    an_exchange,
+    assert_chat_contract,
+    assert_ledger_contract,
+)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
@@ -104,6 +114,67 @@ async def _seed_finding(tenant_id: str, clause_id: str) -> None:
 
 async def test_postgres_satisfies_the_ledger_contract(ledger: PostgresLedgerStore) -> None:
     await assert_ledger_contract(ledger, _seed_finding)
+
+
+async def test_postgres_satisfies_the_chat_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_chat_contract(ledger)
+
+
+async def test_a_withheld_answer_carrying_text_is_refused_by_the_database_with_its_question(
+    ledger: PostgresLedgerStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second line of defence under ADR-0003, and the one transaction
+    (#162): the answer's type can't hold text beside a withheld outcome, and
+    if something forced it to, the schema refuses the row, and the question
+    inserted just before it goes with it."""
+
+    def unchecked(*_: object) -> None:
+        return None
+
+    monkeypatch.setattr(postgres_ledger_store, "check_chat_exchange", unchecked)
+    await ledger.put_profile(Profile("acme"))
+    leaked = ChatAnswer(TurnOutcome.UNCITED)
+    object.__setattr__(leaked, "text", MODEL_PROSE)  # past the guard the type gives
+    with pytest.raises(ValueError, match="chat turn refused") as refused:
+        await ledger.record_chat_exchange(an_exchange("c1", answer=leaked))
+    # Postgres' own error carries the failing row (the question, the member,
+    # the text). `log.exception` prints the whole chain, so the chain must not
+    # reach it: a member's words don't go to the logs.
+    chain = "".join(traceback.format_exception(refused.value))
+    assert MODEL_PROSE not in chain and "uid-1" not in chain and "Failing row" not in chain
+    assert await ledger.chat_turns("acme", "uid-1", "c1") == ()
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        cursor = await conn.execute("SELECT count(*) FROM chat")
+        assert await cursor.fetchone() == (0,)
+
+
+async def test_a_chat_row_holds_the_uid_and_the_structured_citations(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """What the row holds, not just what comes back: the member's uid in
+    `user_id`, the request's trace on both turns, and the citations as data."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_chat_exchange(an_exchange("c1"))
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        cursor = await conn.execute(
+            "SELECT turn_index, user_id, role, outcome, citations, blocked, as_of, trace_id "
+            "FROM chat ORDER BY turn_index"
+        )
+        rows = await cursor.fetchall()
+    assert rows[0] == (0, "uid-1", "user", None, [], [], dt.date(2026, 1, 1), "a" * 32)
+    assert rows[1] == (
+        1,
+        "uid-1",
+        "assistant",
+        "verified",
+        [
+            {"clause_id": APP11, "version_id": "C2026C00227"},
+            {"clause_id": POLICY_CLAUSE, "version_id": "v1"},
+        ],
+        [],
+        dt.date(2026, 1, 1),
+        "a" * 32,
+    )
 
 
 async def test_postgres_satisfies_the_corpus_lifecycle_contract(

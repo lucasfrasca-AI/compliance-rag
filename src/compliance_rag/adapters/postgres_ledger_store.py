@@ -29,6 +29,10 @@ from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
+    ChatCitation,
+    ChatExchange,
+    ChatSummary,
+    ChatTurn,
     LedgerStore,
     PolicyVersion,
     Profile,
@@ -37,8 +41,11 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     SourceKind,
     SourceVersion,
+    TurnOutcome,
+    TurnRole,
     UsageRecord,
     check_assessment_write,
+    check_chat_exchange,
 )
 from compliance_rag.assessment.coverage import (
     CoverageRow,
@@ -315,6 +322,118 @@ class PostgresLedgerStore(LedgerStore):
             (tenant_id, assessment_id),
         )
         return None if row is None else assessment_from_row(tenant_id, assessment_id, row)
+
+    # ---- chat history (#162) ----------------------------------------------------
+
+    async def record_chat_exchange(self, exchange: ChatExchange) -> None:
+        """The question and the answer in one transaction, numbered under a
+        lock on the chat: a row the database refuses takes the other with it."""
+        check_chat_exchange(exchange)
+        try:
+            async with self._connection() as conn, conn.transaction():
+                # One writer per chat at a time, until commit. The next index is
+                # read and then used, so two appends reading the same one would
+                # collide on the key; a new chat has no row to lock, hence an
+                # advisory lock. A tenant id holds no ':', so the key is unambiguous.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"chat:{exchange.tenant_id}:{exchange.chat_id}",),
+                )
+                last = await (
+                    await conn.execute(
+                        "SELECT turn_index, user_id FROM chat "
+                        "WHERE tenant_id = %s AND chat_id = %s ORDER BY turn_index DESC LIMIT 1",
+                        (exchange.tenant_id, exchange.chat_id),
+                    )
+                ).fetchone()
+                if last is not None and last[1] != exchange.user_id:
+                    raise ValueError(f"chat {exchange.chat_id} belongs to another member")
+                async with conn.cursor() as cursor:
+                    await cursor.executemany(
+                        # `clock_timestamp()`, not the default `now()`: that is when
+                        # the transaction began, before it waited for the lock, so
+                        # a chat's latest turn could carry the earlier time.
+                        "INSERT INTO chat (tenant_id, chat_id, turn_index, user_id, role, content, "
+                        "outcome, citations, blocked, as_of, trace_id, created_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
+                        [
+                            (
+                                turn.tenant_id,
+                                turn.chat_id,
+                                turn.turn_index,
+                                turn.user_id,
+                                turn.role.value,
+                                turn.content,
+                                None if turn.outcome is None else turn.outcome.value,
+                                Jsonb(
+                                    [
+                                        {"clause_id": c.clause_id, "version_id": c.version_id}
+                                        for c in turn.citations
+                                    ]
+                                ),
+                                Jsonb(list(turn.blocked)),
+                                turn.as_of,
+                                turn.trace_id,
+                            )
+                            for turn in exchange.turns(0 if last is None else int(last[0]) + 1)
+                        ],
+                    )
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(
+                f"tenant {exchange.tenant_id!r} isn't registered in the ledger"
+            ) from exc
+        except (psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation) as exc:
+            # Not `from exc`: Postgres' message carries the failing row, which is
+            # the member's question and what they were shown, and a chain is
+            # what `log.exception` prints.
+            raise ValueError(f"chat turn refused: {exc.diag.message_primary}") from None
+
+    async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
+        rows = await self._fetchall(
+            "SELECT turn_index, role, content, outcome, citations, blocked, as_of, trace_id, "
+            "created_at FROM chat WHERE tenant_id = %s AND user_id = %s AND chat_id = %s "
+            "ORDER BY turn_index",
+            (tenant_id, user_id, chat_id),
+        )
+        return tuple(
+            ChatTurn(
+                tenant_id=tenant_id,
+                chat_id=chat_id,
+                turn_index=int(r[0]),
+                user_id=user_id,
+                role=TurnRole(str(r[1])),
+                content=None if r[2] is None else str(r[2]),
+                outcome=None if r[3] is None else TurnOutcome(str(r[3])),
+                citations=tuple(
+                    ChatCitation(clause_id=str(c["clause_id"]), version_id=str(c["version_id"]))
+                    for c in cast("list[dict[str, object]]", r[4])
+                ),
+                blocked=tuple(str(b) for b in cast("list[object]", r[5])),
+                as_of=r[6],
+                trace_id=str(r[7]),
+                created_at=r[8],
+            )
+            for r in rows
+        )
+
+    async def chats(self, tenant_id: str, user_id: str) -> tuple[ChatSummary, ...]:
+        rows = await self._fetchall(
+            "SELECT chat_id, min(created_at), max(created_at), count(*), "
+            "(array_agg(content ORDER BY turn_index))[1] FROM chat "
+            "WHERE tenant_id = %s AND user_id = %s GROUP BY chat_id "
+            'ORDER BY max(created_at) DESC, chat_id COLLATE "C"',  # ties by id, as the fake
+            (tenant_id, user_id),
+        )
+        return tuple(
+            ChatSummary(
+                chat_id=str(r[0]),
+                started_at=r[1],
+                updated_at=r[2],
+                turns=int(r[3]),
+                first_question=str(r[4]),
+            )
+            for r in rows
+        )
 
     # ---- usage (#31) ----------------------------------------------------------
 

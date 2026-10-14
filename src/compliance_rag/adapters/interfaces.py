@@ -43,6 +43,7 @@ from compliance_rag.corpus.models import (
     DocumentClass,
     Scope,
     clause_ancestors,
+    parse_stable_id,
     validate_tenant_id,
 )
 
@@ -432,6 +433,206 @@ def check_assessment_write(record: AssessmentRecord, rows: tuple[CoverageRow, ..
 
 
 # --------------------------------------------------------------------------
+# Chat (#162, CONTEXT.md: Chat)
+# --------------------------------------------------------------------------
+
+
+class TurnRole(StrEnum):
+    USER = "user"
+    """The member's question."""
+    ASSISTANT = "assistant"
+    """What the member was shown in answer."""
+
+
+class TurnOutcome(StrEnum):
+    """How an answer turn ended, which is what the member was shown. One of
+    these, or the turn is not an answer: the member's own question has none."""
+
+    VERIFIED = "verified"
+    """The verified text, with the citations it rests on."""
+    BLOCKED = "blocked"
+    """Withheld: a citation didn't match its clause (ADR-0003). The blocked
+    citations' clause ids, and no text."""
+    UNCITED = "uncited"
+    """Withheld: the answer cited no clause, so nothing in it could be
+    verified. No text."""
+    RESIDENCY = "residency"
+    """Refused by the residency gate (ADR-0032) before anything was sent."""
+    MALFORMED_GENERATION = "malformed_generation"
+    """The model's reply wasn't a valid answer; nothing in it is kept."""
+    INTERNAL = "internal"
+    """The answer couldn't be completed."""
+
+    @property
+    def failed(self) -> bool:
+        return self in (
+            TurnOutcome.RESIDENCY,
+            TurnOutcome.MALFORMED_GENERATION,
+            TurnOutcome.INTERNAL,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ChatCitation:
+    """A citation an answer was shown with: the clause and the version of the
+    instrument it is of, so it stays clickable after the clause is superseded
+    (ADR-0021). Never the model's quote: what the member was shown is the
+    clause's canonical text, which the clause store holds under this id."""
+
+    clause_id: str
+    version_id: str
+
+    def __post_init__(self) -> None:
+        if parse_stable_id(self.clause_id)[1] != self.version_id:
+            raise ValueError(f"{self.clause_id} is not a clause of version {self.version_id}")
+
+
+@dataclass(frozen=True, slots=True)
+class ChatAnswer:
+    """What an answer turn holds: what the member was shown, and nothing else
+    (ADR-0003). The model's unverified draft has no field here, so it cannot be
+    recorded: a verified answer has its text and citations; a withheld one the
+    ids of the citations that blocked it and no text; a failed one a marker
+    only. The shape is checked on construction, so no store is ever handed a
+    withheld answer that carries text."""
+
+    outcome: TurnOutcome
+    text: str | None = None
+    """Verified answers only."""
+    citations: tuple[ChatCitation, ...] = ()
+    """Verified answers only: at least one."""
+    blocked: tuple[str, ...] = ()
+    """The clause ids of the blocked citations, for a `BLOCKED` answer only.
+    Each is a stable id: the grammar admits nothing like prose."""
+
+    def __post_init__(self) -> None:
+        if self.outcome is TurnOutcome.VERIFIED:
+            if self.text is None or not self.text.strip() or not self.citations or self.blocked:
+                raise ValueError("a verified answer has its text and citations, and none blocked")
+        else:
+            if self.text is not None or self.citations:
+                raise ValueError(
+                    "an answer that was withheld or failed holds no text and no citations: "
+                    "nothing the model wrote is kept (ADR-0003)"
+                )
+            if (self.outcome is TurnOutcome.BLOCKED) != bool(self.blocked):
+                raise ValueError(
+                    "a blocked answer names the citations that blocked it; no other does"
+                )
+        for clause_id in self.blocked:
+            parse_stable_id(clause_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ChatTurn:
+    """One turn of a chat as the ledger holds it. A chat's turns alternate: the
+    member's question at an even index, what they were shown in answer at the
+    odd one after it."""
+
+    tenant_id: str
+    chat_id: str
+    turn_index: int
+    user_id: str
+    """The member: `Member.uid`, as ADR-0036 keys a person's private
+    additions. Never the email, which can be reassigned."""
+    role: TurnRole
+    content: str | None
+    """The question, or a verified answer's text. None for a withheld or
+    failed answer."""
+    outcome: TurnOutcome | None
+    """None for a question."""
+    citations: tuple[ChatCitation, ...]
+    blocked: tuple[str, ...]
+    as_of: dt.date
+    """The date the request read the law on."""
+    trace_id: str
+    created_at: dt.datetime | None = None
+    """When the ledger recorded it; None until it has."""
+
+
+@dataclass(frozen=True, slots=True)
+class ChatExchange:
+    """One question and what the member was shown for it: what a chat grows by,
+    and always written together (`record_chat_exchange`)."""
+
+    tenant_id: str
+    chat_id: str
+    user_id: str
+    question: str
+    answer: ChatAnswer
+    as_of: dt.date
+    trace_id: str
+
+    def turns(self, first_index: int) -> tuple[ChatTurn, ChatTurn]:
+        """The two rows, the question at `first_index`."""
+        answer = self.answer
+        return (
+            self._turn(first_index, TurnRole.USER, self.question, None, (), ()),
+            self._turn(
+                first_index + 1,
+                TurnRole.ASSISTANT,
+                answer.text,
+                answer.outcome,
+                answer.citations,
+                answer.blocked,
+            ),
+        )
+
+    def _turn(
+        self,
+        turn_index: int,
+        role: TurnRole,
+        content: str | None,
+        outcome: TurnOutcome | None,
+        citations: tuple[ChatCitation, ...],
+        blocked: tuple[str, ...],
+    ) -> ChatTurn:
+        return ChatTurn(
+            tenant_id=self.tenant_id,
+            chat_id=self.chat_id,
+            turn_index=turn_index,
+            user_id=self.user_id,
+            role=role,
+            content=content,
+            outcome=outcome,
+            citations=citations,
+            blocked=blocked,
+            as_of=self.as_of,
+            trace_id=self.trace_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ChatSummary:
+    """A chat in a member's list."""
+
+    chat_id: str
+    started_at: dt.datetime
+    updated_at: dt.datetime
+    """When its latest turn was recorded."""
+    turns: int
+    first_question: str
+    """What the member first asked: the chat's name in a list."""
+
+
+def check_chat_exchange(exchange: ChatExchange) -> None:
+    """What every `LedgerStore` refuses before writing an exchange, in this
+    order. The database's constraints refuse all of it again (ledger 0014);
+    what only a store can refuse (an unregistered tenant, a chat that is
+    another member's) comes after, in both."""
+    if not exchange.trace_id.strip():
+        raise ValueError("a chat's turns carry the trace_id of their request")
+    if not exchange.user_id.strip():
+        raise ValueError("a chat belongs to a member")
+    if not exchange.chat_id.strip():
+        raise ValueError("a chat has an id")
+    if not exchange.question.strip():
+        raise ValueError("a question has text")
+    if "\x00" in exchange.question or "\x00" in (exchange.answer.text or ""):
+        raise ValueError("text may not contain NUL")
+
+
+# --------------------------------------------------------------------------
 # Interfaces
 # --------------------------------------------------------------------------
 
@@ -745,6 +946,32 @@ class LedgerStore(ABC):
         """The recorded assessment, or None if this tenant has none by that id.
         One recorded before source versions were (#153) is a `ValueError`,
         never a guess."""
+
+    @abstractmethod
+    async def record_chat_exchange(self, exchange: ChatExchange) -> None:
+        """Append a question and what the member was shown for it to a chat
+        (#162), in one transaction: both rows land or neither does, as the
+        next two turns of the chat, or its first two if no chat has this id.
+        Append-only, like evidence: there is no update and no delete. Every
+        row carries the request's `trace_id` and the member's `user_id`
+        (`Member.uid`, ADR-0036). Concurrent appends to one chat are numbered
+        in the order they commit, never refused for it.
+
+        A `ValueError` and nothing written for: a blank trace, member, chat
+        or question, NUL in a text (`check_chat_exchange`); a tenant the
+        ledger doesn't know; a chat that is another member's."""
+
+    @abstractmethod
+    async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
+        """The member's chat, turn by turn. Empty for a chat that doesn't
+        exist, belongs to another member or to another tenant: the three are
+        not told apart, so the answer confirms nothing. A chat always has
+        turns once it exists."""
+
+    @abstractmethod
+    async def chats(self, tenant_id: str, user_id: str) -> tuple[ChatSummary, ...]:
+        """The member's chats, the one with the latest turn first (ties by
+        chat id)."""
 
     @abstractmethod
     async def subscribe(
