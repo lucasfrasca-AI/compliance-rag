@@ -27,16 +27,19 @@ from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
     LedgerStore,
     PolicyVersion,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
     RemovalOutcome,
+    SourceKind,
+    SourceVersion,
     UsageRecord,
+    check_assessment_write,
 )
 from compliance_rag.assessment.coverage import (
-    Coverage,
     CoverageRow,
     Outcome,
     question_json,
@@ -211,58 +214,62 @@ class PostgresLedgerStore(LedgerStore):
             for r in rows
         )
 
-    async def record_assessment(
-        self,
-        *,
-        tenant_id: str,
-        assessment_id: str,
-        corpus_version: str,
-        mapping_version: str,
-        as_of: dt.date,
-        trace_id: str,
+    async def record_coverage_assessment(
+        self, record: AssessmentRecord, rows: tuple[CoverageRow, ...]
     ) -> None:
-        await self._execute(
-            "INSERT INTO assessment "
-            "(tenant_id, assessment_id, corpus_version, mapping_version, as_of, trace_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (tenant_id, assessment_id, corpus_version, mapping_version, as_of, trace_id),
-        )
-
-    async def record_coverage(
-        self, *, tenant_id: str, assessment_id: str, coverage: Coverage, trace_id: str
-    ) -> None:
-        rows = [CoverageRow.of(o) for o in coverage.obligations]
+        """The assessment row and every coverage row in one transaction
+        (#153): a row the database refuses rolls the assessment back with it,
+        so there is never an assessment without its coverage."""
+        check_assessment_write(record, rows)
         try:
-            async with self._connection() as conn, conn.transaction(), conn.cursor() as cursor:
-                await cursor.executemany(
-                    "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, "
-                    "reason, citations, questions, trace_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                    [
-                        (
-                            tenant_id,
-                            assessment_id,
-                            row.obligation_id,
-                            row.outcome.value,
-                            row.reason,
-                            Jsonb(list(row.citations)),
-                            Jsonb([question_json(q) for q in row.questions]),
-                            trace_id,
-                        )
-                        for row in rows
-                    ],
+            async with self._connection() as conn, conn.transaction():
+                await conn.execute(
+                    "INSERT INTO assessment (tenant_id, assessment_id, user_id, corpus_version, "
+                    "corpus_sha, mapping_version, mapping_sha, as_of, trace_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        record.tenant_id,
+                        record.assessment_id,
+                        record.user_id,
+                        record.corpus.tag,
+                        record.corpus.sha,
+                        record.mapping.tag,
+                        record.mapping.sha,
+                        record.as_of,
+                        record.trace_id,
+                    ),
                 )
+                async with conn.cursor() as cursor:
+                    await cursor.executemany(
+                        "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, "
+                        "reason, citations, questions, trace_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        [
+                            (
+                                record.tenant_id,
+                                record.assessment_id,
+                                row.obligation_id,
+                                row.outcome.value,
+                                row.reason,
+                                Jsonb(list(row.citations)),
+                                Jsonb([question_json(q) for q in row.questions]),
+                                record.trace_id,
+                            )
+                            for row in rows
+                        ],
+                    )
         except psycopg.errors.ForeignKeyViolation as exc:
-            raise ValueError(f"assessment {assessment_id} isn't recorded for {tenant_id}") from exc
+            raise ValueError(f"tenant {record.tenant_id!r} isn't registered in the ledger") from exc
         except psycopg.errors.UniqueViolation as exc:
-            raise ValueError(f"coverage for {assessment_id} is already recorded") from exc
+            raise ValueError(f"assessment {record.assessment_id} is already recorded") from exc
         except (psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation) as exc:
-            raise ValueError(f"coverage refused: {exc.diag.message_primary}") from exc
+            raise ValueError(f"assessment refused: {exc.diag.message_primary}") from exc
 
     async def coverage_rows(self, tenant_id: str, assessment_id: str) -> tuple[CoverageRow, ...]:
         rows = await self._fetchall(
             "SELECT obligation_id, outcome, reason, citations, questions FROM coverage "
-            "WHERE tenant_id = %s AND assessment_id = %s ORDER BY obligation_id",
+            "WHERE tenant_id = %s AND assessment_id = %s "
+            'ORDER BY obligation_id COLLATE "C"',  # bytewise, as the fake and the API sort
             (tenant_id, assessment_id),
         )
         return tuple(
@@ -279,22 +286,13 @@ class PostgresLedgerStore(LedgerStore):
             for r in rows
         )
 
-    async def get_assessment(self, tenant_id: str, assessment_id: str) -> dict[str, object] | None:
+    async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
         row = await self._fetchone(
-            "SELECT corpus_version, mapping_version, as_of, trace_id FROM assessment "
-            "WHERE tenant_id = %s AND assessment_id = %s",
+            "SELECT user_id, corpus_version, corpus_sha, mapping_version, mapping_sha, as_of, "
+            "trace_id FROM assessment WHERE tenant_id = %s AND assessment_id = %s",
             (tenant_id, assessment_id),
         )
-        if row is None:
-            return None
-        return {
-            "tenant_id": tenant_id,
-            "assessment_id": assessment_id,
-            "corpus_version": row[0],
-            "mapping_version": row[1],
-            "as_of": row[2],
-            "trace_id": row[3],
-        }
+        return None if row is None else assessment_from_row(tenant_id, assessment_id, row)
 
     # ---- usage (#31) ----------------------------------------------------------
 
@@ -575,6 +573,27 @@ class PostgresLedgerStore(LedgerStore):
             )
             for r in rows
         )
+
+
+def assessment_from_row(tenant_id: str, assessment_id: str, row: TupleRow) -> AssessmentRecord:
+    """An `assessment` row — `user_id`, the corpus tag and sha, the mapping
+    tag and sha, `as_of`, `trace_id` — as a record. One written before 0013
+    (tests only: no deployed ledger holds one) names no commit, and is refused
+    rather than read as if it did."""
+    if row[0] is None or row[2] is None or row[4] is None:
+        raise ValueError(
+            f"assessment {assessment_id} was recorded before source versions (#153): "
+            "it names no commit to reproduce it from"
+        )
+    return AssessmentRecord(
+        tenant_id=tenant_id,
+        assessment_id=assessment_id,
+        user_id=str(row[0]),
+        corpus=SourceVersion(SourceKind.CORPUS, sha=str(row[2]), tag=row[1]),
+        mapping=SourceVersion(SourceKind.MAPPING, sha=str(row[4]), tag=row[3]),
+        as_of=row[5],
+        trace_id=str(row[6]),
+    )
 
 
 def _encode_fact(value: FactValue) -> object:

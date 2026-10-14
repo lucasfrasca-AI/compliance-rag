@@ -26,7 +26,7 @@ from opentelemetry.trace import Span
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
 from compliance_rag.adapters.graph_schema import GraphRow
-from compliance_rag.adapters.interfaces import GraphReader, GraphStore
+from compliance_rag.adapters.interfaces import GraphReader, GraphStore, LoadedSources
 from compliance_rag.assessment.coverage import Coverage, Outcome
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.graph.applicability import (
@@ -215,6 +215,10 @@ class GraphTrackA(GraphStore):
             )
             _record(span, coverage)
             return coverage
+
+    async def loaded_sources(self) -> LoadedSources:
+        """What the graph this reads was loaded from (#153)."""
+        return await self._reader.loaded_sources()
 
     async def crosswalks(
         self, obligation_id: str, *, as_of: dt.date, max_depth: int

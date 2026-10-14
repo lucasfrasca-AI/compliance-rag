@@ -22,6 +22,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
     Candidate,
     Channel,
     CitationVerifier,
@@ -33,6 +34,8 @@ from compliance_rag.adapters.interfaces import (
     Profile,
     Reranker,
     RetrievalStore,
+    SourceKind,
+    SourceVersion,
 )
 from compliance_rag.corpus.models import (
     CANONICALISATION_VERSION,
@@ -277,22 +280,31 @@ async def test_ledger_round_trips_a_profile() -> None:
 
 
 async def test_assessment_records_versions_and_trace_id() -> None:
-    """PHASES.md: assessment records corpus_version, mapping_version, as_of, trace_id."""
+    """PHASES.md: assessment records corpus_version, mapping_version, as_of,
+    trace_id — each version as the tag and the commit it pointed at (#153)."""
     ledger = FakeLedgerStore()
-    await ledger.record_assessment(
-        tenant_id="acme",
-        assessment_id="a1",
-        corpus_version="corpus-2026.09",
-        mapping_version="mappings-2026.09",
-        as_of=TODAY,
-        trace_id="0" * 32,
+    await ledger.put_profile(Profile(tenant_id="acme"))
+    corpus = SourceVersion(SourceKind.CORPUS, sha="a" * 40, tag="corpus-2026.09")
+    mapping = SourceVersion(SourceKind.MAPPING, sha="b" * 40, tag="mappings-2026.09")
+    await ledger.record_coverage_assessment(
+        AssessmentRecord(
+            tenant_id="acme",
+            assessment_id="a1",
+            user_id="lead@acme.example",
+            corpus=corpus,
+            mapping=mapping,
+            as_of=TODAY,
+            trace_id="0" * 32,
+        ),
+        (),
     )
-    row = await ledger.get_assessment("acme", "a1")
-    assert row is not None
-    assert row["corpus_version"] == "corpus-2026.09"
-    assert row["mapping_version"] == "mappings-2026.09"
-    assert row["as_of"] == TODAY
-    assert row["trace_id"] == "0" * 32
+    record = await ledger.get_assessment("acme", "a1")
+    assert record is not None
+    assert (record.corpus, record.mapping) == (corpus, mapping)
+    assert (record.corpus.tag, record.corpus.sha) == ("corpus-2026.09", "a" * 40)
+    assert record.as_of == TODAY
+    assert record.trace_id == "0" * 32
+    assert record.user_id == "lead@acme.example"
     assert await ledger.get_assessment("other-corp", "a1") is None
 
 

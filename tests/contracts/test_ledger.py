@@ -13,17 +13,21 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
 from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
     LedgerStore,
     PolicyVersion,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
     RemovalOutcome,
+    SourceKind,
+    SourceVersion,
     UsageRecord,
 )
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
@@ -42,6 +46,7 @@ SeedFinding = Callable[[str, str], Awaitable[None]]
 LAW = "privacy-act-1988"
 POLICY = "acme/privacy-policy"
 JAN, JUN = dt.date(2026, 1, 1), dt.date(2026, 6, 1)
+SHA_CORPUS, SHA_MAPPING = "c" * 40, "1a2b3c4d" * 5
 
 
 async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding) -> None:
@@ -122,15 +127,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             await ledger.record_evidence(refused)
     assert len(await ledger.evidence("acme")) == 4
 
-    # ---- coverage per assessment (#115, D-06)
-    await ledger.record_assessment(
-        tenant_id="acme",
-        assessment_id="cov-1",
-        corpus_version="c",
-        mapping_version="m",
-        as_of=JAN,
-        trace_id="trace-cov",
-    )
+    # ---- an assessment and its coverage, in one write (#115, D-06, #153)
     coverage = await FakeGraphStore(
         load_mapping_set([APPLICABILITY]), clause_validity=APPLICABILITY_CLAUSES
     ).coverage(
@@ -138,37 +135,73 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         tenant_id="acme",
         as_of=APPLICABILITY_AS_OF,
     )
-    await ledger.record_coverage(
-        tenant_id="acme", assessment_id="cov-1", coverage=coverage, trace_id="trace-cov"
-    )
-    rows = await ledger.coverage_rows("acme", "cov-1")
-    assert rows == tuple(
+    rows = tuple(
         sorted((CoverageRow.of(o) for o in coverage.obligations), key=lambda r: r.obligation_id)
     )
+    tagged = SourceVersion(SourceKind.CORPUS, sha=SHA_CORPUS, tag="corpus-2026.10")
+    untagged = SourceVersion(SourceKind.MAPPING, sha=SHA_MAPPING)
+    first = AssessmentRecord(
+        tenant_id="acme",
+        assessment_id="cov-1",
+        user_id="cfo@acme.example",
+        corpus=tagged,
+        mapping=untagged,
+        as_of=JAN,
+        trace_id="trace-cov",
+    )
+    await ledger.record_coverage_assessment(first, rows)
+    assert await ledger.coverage_rows("acme", "cov-1") == rows
     unassessable = [r for r in rows if r.outcome is Outcome.UNASSESSABLE]
     assert unassessable and all(r.questions for r in unassessable)
-    with pytest.raises(ValueError, match="already recorded"):
-        await ledger.record_coverage(
-            tenant_id="acme", assessment_id="cov-1", coverage=coverage, trace_id="trace-cov"
-        )
-    with pytest.raises(ValueError, match="isn't recorded"):
-        await ledger.record_coverage(
-            tenant_id="acme", assessment_id="cov-404", coverage=coverage, trace_id="t"
-        )
+    # The tag and the commit it pointed at come back as written, and an
+    # untagged version stays untagged; the assessment carries its trace_id.
+    recorded = await ledger.get_assessment("acme", "cov-1")
+    assert recorded == first
+    assert recorded is not None and recorded.mapping.untagged and recorded.mapping.tag is None
+    assert await ledger.get_assessment("other-corp", "cov-1") is None
     assert await ledger.coverage_rows("other-corp", "cov-1") == ()
 
-    # ---- assessments carry their trace_id
-    await ledger.record_assessment(
-        tenant_id="acme",
-        assessment_id="a1",
-        corpus_version="corpus-2026.10",
-        mapping_version="mappings-2026.10",
-        as_of=JUN,
-        trace_id="f" * 32,
-    )
-    row = await ledger.get_assessment("acme", "a1")
-    assert row is not None and row["trace_id"] == "f" * 32 and row["as_of"] == JUN
-    assert await ledger.get_assessment("other-corp", "a1") is None
+    def assessment(assessment_id: str, **changes: Any) -> AssessmentRecord:  # Any: record fields
+        fields: dict[str, Any] = {  # Any: record fields
+            "assessment_id": assessment_id,
+            "as_of": JUN,
+            "trace_id": "f" * 32,
+            **changes,
+        }
+        return replace(first, **fields)
+
+    # A tenant with nothing in force on its date still has an assessment.
+    await ledger.record_coverage_assessment(assessment("none-in-force"), ())
+    assert await ledger.coverage_rows("acme", "none-in-force") == ()
+    # Refused whole: nothing of a refused assessment is left behind.
+    reasonless = replace(rows[0], obligation_id="OB-NO-REASON", reason=" ")
+    uncited = replace(rows[0], obligation_id="OB-UNCITED", outcome=Outcome.APPLICABLE, citations=())
+    for refused, refused_rows, why in (
+        (assessment("cov-1"), rows, "already recorded"),
+        (assessment("a2", tenant_id="nobody"), rows, "isn't registered"),
+        (assessment("a3", user_id=" "), rows, "who asked"),
+        (assessment("a4", trace_id=""), rows, "trace_id"),
+        (assessment("a5", corpus=untagged), rows, "corpus version and a mapping version"),
+        (assessment("a6"), (rows[0], rows[0]), "twice"),
+        (assessment("a7"), (*rows, reasonless), "says why"),
+        (assessment("a8"), (*rows, uncited), "cites its clauses"),
+        # Several faults at once get the same refusal from every store: what
+        # the record and its rows say is checked before what only the store
+        # knows (the tenant, the id).
+        (assessment("cov-1", user_id=" "), rows, "who asked"),
+        (assessment("a9", tenant_id="nobody", trace_id=""), rows, "trace_id"),
+        (assessment("cov-1"), (rows[0], rows[0]), "twice"),
+        (assessment("a10", tenant_id="nobody"), (*rows, uncited), "cites its clauses"),
+        (assessment("cov-1", tenant_id="nobody"), rows, "isn't registered"),
+    ):
+        with pytest.raises(ValueError, match=why):
+            await ledger.record_coverage_assessment(refused, refused_rows)
+    for assessment_id in ("a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"):
+        assert await ledger.get_assessment("acme", assessment_id) is None
+        assert await ledger.coverage_rows("acme", assessment_id) == ()
+    # A repeated id leaves the first assessment and its rows as they were.
+    assert await ledger.get_assessment("acme", "cov-1") == recorded
+    assert await ledger.coverage_rows("acme", "cov-1") == rows
 
     # ---- usage rows: real token counts and cost, keyed to the request (#31)
     for tenant_id, usage_id in (("acme", "u-1"), ("_public", "u-2")):

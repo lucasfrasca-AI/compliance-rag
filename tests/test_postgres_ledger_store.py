@@ -20,9 +20,17 @@ from urllib.parse import urlparse
 import psycopg
 import pytest
 
+from compliance_rag.adapters import postgres_ledger_store
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
-from compliance_rag.adapters.interfaces import PolicyVersion, Profile
+from compliance_rag.adapters.interfaces import (
+    AssessmentRecord,
+    PolicyVersion,
+    Profile,
+    SourceKind,
+    SourceVersion,
+)
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
+from compliance_rag.assessment.coverage import CoverageRow, Outcome
 from compliance_rag.corpus.models import DocumentClass
 from tests.contracts.test_corpus_lifecycle import assert_corpus_lifecycle_contract
 from tests.contracts.test_interfaces import (
@@ -75,9 +83,10 @@ async def _seed_finding(tenant_id: str, clause_id: str) -> None:
     assessment_id = uuid.uuid4().hex
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         await conn.execute(
-            "INSERT INTO assessment (tenant_id, assessment_id, corpus_version, mapping_version, "
-            "as_of, trace_id) VALUES (%s, %s, 'c', 'm', '2026-10-01', %s)",
-            (tenant_id, assessment_id, "0" * 32),
+            "INSERT INTO assessment (tenant_id, assessment_id, corpus_version, corpus_sha, "
+            "mapping_version, mapping_sha, as_of, trace_id) "
+            "VALUES (%s, %s, 'c', %s, 'm', %s, '2026-10-01', %s)",
+            (tenant_id, assessment_id, "a" * 40, "b" * 40, "0" * 32),
         )
         await conn.execute(
             "INSERT INTO finding (tenant_id, finding_id, assessment_id, claim_text, verdict, "
@@ -181,3 +190,44 @@ async def test_a_policy_recorded_before_document_class_is_refused_until_classifi
     assert await ledger.policy_versions("acme", as_of=mar) == (
         PolicyVersion("acme/old-policy", "v1"),
     )
+
+
+@pytest.mark.parametrize(
+    "refused",
+    [
+        pytest.param(
+            CoverageRow("OB-BAD", Outcome.APPLICABLE, " ", ("x:v:1",), ()), id="no-reason"
+        ),
+        pytest.param(CoverageRow("OB-BAD", Outcome.APPLICABLE, "r", (), ()), id="uncited"),
+    ],
+)
+async def test_a_coverage_row_the_database_refuses_takes_the_assessment_with_it(
+    ledger: PostgresLedgerStore, monkeypatch: pytest.MonkeyPatch, refused: CoverageRow
+) -> None:
+    """One transaction (#153): the assessment is inserted first and its rows
+    after, so a row refused last must undo the first. The adapter's own checks
+    refuse these rows before any SQL, so they are switched off to let the
+    database's constraints be what refuses."""
+
+    def unchecked(*_: object) -> None:
+        return None
+
+    monkeypatch.setattr(postgres_ledger_store, "check_assessment_write", unchecked)
+    await ledger.put_profile(Profile("acme"))
+    good = CoverageRow("OB-GOOD", Outcome.APPLICABLE, "r", ("x:v:1",), ())
+    record = AssessmentRecord(
+        tenant_id="acme",
+        assessment_id="a1",
+        user_id="lead@acme.example",
+        corpus=SourceVersion(SourceKind.CORPUS, "a" * 40, "corpus-2026.10"),
+        mapping=SourceVersion(SourceKind.MAPPING, "b" * 40),
+        as_of=dt.date(2026, 10, 14),
+        trace_id="t",
+    )
+    with pytest.raises(ValueError, match="assessment refused"):
+        await ledger.record_coverage_assessment(record, (good, refused))
+    assert await ledger.get_assessment("acme", "a1") is None
+    assert await ledger.coverage_rows("acme", "a1") == ()
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        cursor = await conn.execute("SELECT count(*) FROM assessment")
+        assert await cursor.fetchone() == (0,)

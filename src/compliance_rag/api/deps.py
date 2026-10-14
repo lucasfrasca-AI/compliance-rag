@@ -6,7 +6,8 @@ on, and who is asking, for which tenant. The tenant is always
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Awaitable, Callable
+from collections import Counter
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -125,5 +126,11 @@ async def coverage_on(services: ApiServices, tenant_id: str, day: dt.date) -> Co
     return await services.graph.coverage(Facts.of(evidence), tenant_id=tenant_id, as_of=day)
 
 
+def outcome_counts(outcomes: Iterable[Outcome]) -> dict[str, int]:
+    """How many obligations came out each way, every outcome named."""
+    tally = Counter(outcomes)
+    return {o.value: tally[o] for o in Outcome}
+
+
 def counts(coverage: Coverage) -> dict[str, int]:
-    return {o.value: len(coverage.with_outcome(o)) for o in Outcome}
+    return outcome_counts(o.outcome for o in coverage.obligations)

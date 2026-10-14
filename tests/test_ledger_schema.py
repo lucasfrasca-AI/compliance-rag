@@ -147,10 +147,18 @@ def _insert_assessment(
     conn: psycopg.Connection[tuple[object, ...]], tenant_id: str, assessment_id: str
 ) -> None:
     conn.execute(
-        "INSERT INTO assessment "
-        "(tenant_id, assessment_id, corpus_version, mapping_version, as_of, trace_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s)",
-        (tenant_id, assessment_id, "corpus-v1", "mapping-v1", dt.date(2026, 1, 1), "trace-1"),
+        "INSERT INTO assessment (tenant_id, assessment_id, corpus_version, corpus_sha, "
+        "mapping_version, mapping_sha, as_of, trace_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            tenant_id,
+            assessment_id,
+            "corpus-v1",
+            "a" * 40,
+            "mapping-v1",
+            "b" * 40,
+            dt.date(2026, 1, 1),
+            "trace-1",
+        ),
     )
 
 
@@ -574,8 +582,10 @@ def test_evidence_cannot_supersede_what_was_never_recorded(
 def _assessment(conn: psycopg.Connection[tuple[object, ...]]) -> None:
     _insert_tenant(conn, "acme")
     conn.execute(
-        "INSERT INTO assessment (tenant_id, assessment_id, corpus_version, mapping_version, "
-        "as_of, trace_id) VALUES ('acme', 'a1', 'c', 'm', '2026-10-12', 't1')"
+        "INSERT INTO assessment (tenant_id, assessment_id, corpus_version, corpus_sha, "
+        "mapping_version, mapping_sha, as_of, trace_id) "
+        "VALUES ('acme', 'a1', 'c', %s, 'm', %s, '2026-10-12', 't1')",
+        ("a" * 40, "b" * 40),
     )
 
 
@@ -658,3 +668,108 @@ def test_each_class_is_accepted_for_its_owner(
             "VALUES (%s, %s, 'x', 'AU', %s, %s)",
             (tenant_id, instrument_id, scope, document_class),
         )
+
+
+# --------------------------------------------------------------------------
+# db/ledger/0013_source_versions.sql (#153)
+# --------------------------------------------------------------------------
+
+
+def _versioned_assessment(
+    conn: psycopg.Connection[tuple[object, ...]], override: dict[str, object] | None = None
+) -> None:
+    row: dict[str, object] = {
+        "tenant_id": "acme",
+        "assessment_id": "a1",
+        "corpus_version": "corpus-2026.10",
+        "corpus_sha": "a" * 40,
+        "mapping_version": "mappings-2026.10",
+        "mapping_sha": "b" * 40,
+        "as_of": dt.date(2026, 10, 14),
+        "trace_id": "t1",
+    } | (override or {})
+    columns = ", ".join(row)
+    conn.execute(
+        f"INSERT INTO assessment ({columns}) VALUES ({', '.join(['%s'] * len(row))})",  # pyright: ignore[reportArgumentType] — test-built column list
+        tuple(row.values()),
+    )
+
+
+def test_an_assessment_names_both_shas_and_may_name_no_tag(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """A tag is the name a SHA was known by; without one the SHA alone says
+    what was loaded, and the load isn't refused for it."""
+    _insert_tenant(conn, "acme")
+    _versioned_assessment(conn, {"assessment_id": "tagged"})
+    _versioned_assessment(
+        conn, {"assessment_id": "untagged", "corpus_version": None, "mapping_version": None}
+    )
+    rows = conn.execute(
+        "SELECT assessment_id, corpus_version, mapping_version FROM assessment ORDER BY 1"
+    ).fetchall()
+    assert rows == [("tagged", "corpus-2026.10", "mappings-2026.10"), ("untagged", None, None)]
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        pytest.param({"corpus_sha": None}, id="no-corpus-sha"),
+        pytest.param({"mapping_sha": None}, id="no-mapping-sha"),
+        pytest.param({"corpus_sha": "a" * 39}, id="short"),
+        pytest.param({"mapping_sha": "b" * 41}, id="long"),
+        pytest.param({"corpus_sha": "A" * 40}, id="uppercase"),
+        pytest.param({"mapping_sha": "main"}, id="a-name-not-a-sha"),
+        pytest.param({"corpus_version": ""}, id="blank-corpus-tag"),
+        pytest.param({"mapping_version": "  "}, id="blank-mapping-tag"),
+        pytest.param({"trace_id": ""}, id="no-trace-id"),
+        pytest.param({"trace_id": "  "}, id="blank-trace-id"),
+        pytest.param({"user_id": ""}, id="empty-user"),
+        pytest.param({"user_id": " "}, id="blank-user"),
+    ],
+)
+def test_an_assessment_without_full_shas_a_trace_or_a_real_user_is_refused(
+    conn: psycopg.Connection[tuple[object, ...]], override: dict[str, object]
+) -> None:
+    _insert_tenant(conn, "acme")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _versioned_assessment(conn, override)
+
+
+def test_an_assessment_may_name_a_user_or_none(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """Nullable: an assessment not made for a member has nobody to name."""
+    _insert_tenant(conn, "acme")
+    _versioned_assessment(conn, {"assessment_id": "by-a-member", "user_id": "lead@acme.example"})
+    _versioned_assessment(conn, {"assessment_id": "by-nobody", "user_id": None})
+
+
+@pytest.mark.parametrize(
+    "constraint",
+    ["assessment_names_both_commits", "assessment_trace_id", "assessment_user_id"],
+)
+def test_the_rules_for_new_rows_are_enforced_without_validating_old_ones(
+    conn: psycopg.Connection[tuple[object, ...]], constraint: str
+) -> None:
+    """Added NOT VALID: rows from before #153 (tests only) aren't rejected,
+    and every new row is."""
+    row = conn.execute(
+        "SELECT convalidated FROM pg_constraint WHERE conrelid = 'assessment'::regclass "
+        "AND conname = %s",
+        (constraint,),
+    ).fetchone()
+    assert row == (False,)
+
+
+@pytest.mark.parametrize("column", ["corpus_version", "mapping_version"])
+def test_a_null_version_is_documented_as_untagged(
+    conn: psycopg.Connection[tuple[object, ...]], column: str
+) -> None:
+    row = conn.execute(
+        "SELECT col_description('assessment'::regclass, attnum) FROM pg_attribute "
+        "WHERE attrelid = 'assessment'::regclass AND attname = %s",
+        (column,),
+    ).fetchone()
+    assert row is not None and isinstance(row[0], str)
+    assert "NULL means untagged" in row[0] and "the SHA alone" in row[0]

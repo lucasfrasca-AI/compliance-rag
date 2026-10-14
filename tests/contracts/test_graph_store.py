@@ -15,7 +15,13 @@ from pathlib import Path
 import pytest
 
 from compliance_rag.adapters.fakes import FakeGraphStore
-from compliance_rag.adapters.interfaces import GraphStore
+from compliance_rag.adapters.interfaces import (
+    GraphStore,
+    LoadedSource,
+    LoadedSources,
+    SourceKind,
+    SourceVersion,
+)
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.assessment.coverage import Outcome
 from compliance_rag.assessment.evidence import Facts, Period
@@ -73,11 +79,26 @@ async def assert_graph_store_contract(store: GraphStore) -> None:
     # Crosswalks are capped (D-05) — the fixture has none.
     assert await store.crosswalks("OB-T-KEEP", as_of=AS_OF, max_depth=2) == ()
 
+    # What a graph holds is what its loaders stamped (#153): loaded without
+    # one, it says nothing was, never a guess.
+    assert await store.loaded_sources() == LoadedSources()
+
 
 async def test_the_fake_keeps_the_contract() -> None:
     await assert_graph_store_contract(
         FakeGraphStore(load_mapping_set([FIXTURE]), clause_validity=CLAUSES)
     )
+
+
+async def test_the_fake_reports_the_sources_it_was_given() -> None:
+    sources = LoadedSources(
+        corpus=LoadedSource(SourceVersion(SourceKind.CORPUS, "a" * 40, "corpus-2026.10")),
+        mapping=LoadedSource(SourceVersion(SourceKind.MAPPING, "b" * 40), loading=True),
+    )
+    store = FakeGraphStore(load_mapping_set([FIXTURE]), clause_validity=CLAUSES, sources=sources)
+    assert await store.loaded_sources() == sources
+    store.sources = LoadedSources()  # a load a test model finishing, or starting
+    assert await store.loaded_sources() == LoadedSources()
 
 
 @pytest.fixture

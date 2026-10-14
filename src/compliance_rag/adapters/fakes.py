@@ -18,6 +18,7 @@ from opentelemetry import trace
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
+    AssessmentRecord,
     Candidate,
     Channel,
     ClauseStore,
@@ -27,6 +28,7 @@ from compliance_rag.adapters.interfaces import (
     GraphStore,
     LawScope,
     LedgerStore,
+    LoadedSources,
     ManifestMetadata,
     PolicyCorpus,
     PolicyVersion,
@@ -38,9 +40,10 @@ from compliance_rag.adapters.interfaces import (
     RetrievalStore,
     ScoredDocument,
     UsageRecord,
+    check_assessment_write,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.assessment.coverage import Coverage, CoverageRow, Outcome
+from compliance_rag.assessment.coverage import Coverage, CoverageRow
 from compliance_rag.assessment.evidence import Evidence, Facts, check_evidence_write
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -66,16 +69,23 @@ class FakeGraphStore(GraphStore):
     """Track A over mapping YAML in memory: the same snapshot `GraphTrackA`
     reads from the graph, built by `snapshot_of_mappings`, and the same
     evaluator — so the fake can't drift from the real thing. Clause validity
-    stands in for the compilations loaded."""
+    stands in for the compilations loaded, and `sources` for the loads that
+    were recorded (#153): by default none, like a graph nothing was loaded
+    into. A test sets `sources` to model a load finishing, or starting."""
 
     def __init__(
         self,
         mappings: MappingSet,
         *,
         clause_validity: Mapping[str, tuple[dt.date, dt.date]],
+        sources: LoadedSources | None = None,
     ) -> None:
         self._mappings = mappings
         self._clauses = clause_validity
+        self.sources = sources or LoadedSources()
+
+    async def loaded_sources(self) -> LoadedSources:
+        return self.sources
 
     async def coverage(self, facts: Facts, *, tenant_id: str, as_of: dt.date) -> Coverage:
         snapshot = snapshot_of_mappings(self._mappings, as_of, clause_validity=self._clauses)
@@ -299,7 +309,7 @@ class FakeLedgerStore(LedgerStore):
 
     def __init__(self) -> None:
         self._profiles: dict[str, Profile] = {}
-        self._assessments: dict[tuple[str, str], dict[str, object]] = {}
+        self._assessments: dict[tuple[str, str], AssessmentRecord] = {}
         self._subscriptions: dict[tuple[str, str], str] = {}  # (tenant, instrument) -> by
         self.subscription_traces: dict[tuple[str, str], str | None] = {}
         self._findings: list[tuple[str, tuple[str, ...]]] = []  # (tenant, cited clause_ids)
@@ -315,21 +325,21 @@ class FakeLedgerStore(LedgerStore):
     async def get_profile(self, tenant_id: str) -> Profile | None:
         return self._profiles.get(tenant_id)
 
-    async def record_coverage(
-        self, *, tenant_id: str, assessment_id: str, coverage: Coverage, trace_id: str
+    async def record_coverage_assessment(
+        self, record: AssessmentRecord, rows: tuple[CoverageRow, ...]
     ) -> None:
-        if (tenant_id, assessment_id) not in self._assessments:
-            raise ValueError(f"assessment {assessment_id} isn't recorded for {tenant_id}")
-        if not trace_id:
-            raise ValueError("a coverage row carries the trace_id of its request")
-        rows = {o.obligation_id: CoverageRow.of(o) for o in coverage.obligations}
-        for row in rows.values():
-            if row.outcome is not Outcome.UNASSESSABLE and not row.citations:
-                raise ValueError(f"{row.obligation_id}: a decided obligation cites its clauses")
-        key = (tenant_id, assessment_id)
-        if key in self._coverage:
-            raise ValueError(f"coverage for {assessment_id} is already recorded")
-        self._coverage[key] = rows
+        """Everything is checked before anything is stored, which is what
+        Postgres' one transaction gives: a refused row leaves no assessment.
+        Checked in Postgres' order too, so an input with several faults gets
+        the same refusal from both."""
+        check_assessment_write(record, rows)
+        key = (record.tenant_id, record.assessment_id)
+        if record.tenant_id not in self._profiles:
+            raise ValueError(f"tenant {record.tenant_id!r} isn't registered in the ledger")
+        if key in self._assessments:
+            raise ValueError(f"assessment {record.assessment_id} is already recorded")
+        self._assessments[key] = record
+        self._coverage[key] = {row.obligation_id: row for row in rows}
 
     async def coverage_rows(self, tenant_id: str, assessment_id: str) -> tuple[CoverageRow, ...]:
         rows = self._coverage.get((tenant_id, assessment_id), {})
@@ -360,26 +370,7 @@ class FakeLedgerStore(LedgerStore):
     async def put_profile(self, profile: Profile) -> None:
         self._profiles[profile.tenant_id] = profile
 
-    async def record_assessment(
-        self,
-        *,
-        tenant_id: str,
-        assessment_id: str,
-        corpus_version: str,
-        mapping_version: str,
-        as_of: dt.date,
-        trace_id: str,
-    ) -> None:
-        self._assessments[(tenant_id, assessment_id)] = {
-            "tenant_id": tenant_id,
-            "assessment_id": assessment_id,
-            "corpus_version": corpus_version,
-            "mapping_version": mapping_version,
-            "as_of": as_of,
-            "trace_id": trace_id,
-        }
-
-    async def get_assessment(self, tenant_id: str, assessment_id: str) -> dict[str, object] | None:
+    async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
         return self._assessments.get((tenant_id, assessment_id))
 
     async def subscribe(
