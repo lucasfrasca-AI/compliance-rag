@@ -1,0 +1,20 @@
+# TEST FIXTURE — invented for the obligation-exception tests (issue #164,
+# ADR-0037). Not law. Loaded beside test-applicability.yaml, whose obligations
+# it names, the way an exceptions file sits beside a signed mapping without
+# editing it.
+#
+# OB-T-KEEP (s1/1) is excepted by s1/2: when it applies, s1/2 is in scope and
+# travels with s1/1 into any answer. OB-T-HEALTH (s2/1) is excepted by s3/1:
+# when it doesn't apply, s3/1 stays out of scope like its clause.
+author: "model: Claude Opus 5.5 — exceptions test fixture"
+reviewed_by: test-fixture (not a review — invented data)
+date: 2026-10-14
+source_clause_ids:
+  - test-act:v1:s1/2
+  - test-act:v1:s3/1
+
+exceptions:
+  - obligation_id: OB-T-KEEP
+    clause_ids: [test-act:v1:s1/2]
+  - obligation_id: OB-T-HEALTH
+    clause_ids: [test-act:v1:s3/1]

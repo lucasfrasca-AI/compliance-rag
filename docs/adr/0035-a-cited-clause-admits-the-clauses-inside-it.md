@@ -1,6 +1,7 @@
 # ADR-0035 — A cited clause admits the clauses inside it
 
-- Status: accepted
+- Status: accepted; amended by ADR-0037 (an obligation's exceptions are cited
+  too, and so admit the clauses inside them)
 - Date: 2026-10-14
 - Issue: #163
 - Amends: ADR-0030 (Track B filters library law to the clauses Track A cites)
