@@ -132,3 +132,33 @@ async def test_a_clause_id_query_with_no_matching_chunk_returns_an_empty_trace()
 
     assert trace.fused == ()
     assert reranker.rerank_calls == 0
+
+
+async def test_answer_routes_a_clause_id_question_to_the_keyword_channel(
+    public_chunk: Chunk,
+) -> None:
+    """D-12 on the answer path (#159): `answer()` goes through the router, so
+    a question that is a clause id is an exact lookup that skips the
+    reranker, as it is everywhere else, not a semantic search."""
+    from compliance_rag.adapters.fakes import FakeClauseStore, FakeGenerator
+    from compliance_rag.adapters.generation_residency import TenantTextGate
+    from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
+    from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+    from compliance_rag.settings import REGION
+    from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
+
+    ledger = FakeLedgerStore()
+    reranker = FakeReranker()
+    generator = FakeGenerator()
+    pipeline = AssessmentPipeline(
+        RetrievalPipeline(FakeRetrievalStore((public_chunk,), ledger=ledger), reranker),
+        generator,
+        Verifier(FakeClauseStore(), ledger, CanonicalCitationVerifier()),
+        ledger,
+        tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
+    )
+    answer = await pipeline.answer(PUBLIC_ID, "_public", TODAY, law=LIBRARY_QUESTION)
+    assert [c.clause_id for c in answer.retrieval.fused] == [PUBLIC_ID]
+    assert answer.retrieval.fused[0].channel == "keyword"
+    assert reranker.rerank_calls == 0
+    assert public_chunk.text in str(generator.calls[0]["user"])  # and it reached the model
