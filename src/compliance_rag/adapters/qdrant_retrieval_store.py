@@ -88,6 +88,7 @@ from compliance_rag.adapters.interfaces import (
     RetrievalStore,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.corpus.models import (
     Chunk,
     Scope,
@@ -669,6 +670,82 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             ids.update(str(p.payload["chunk_id"]) for p in points if p.payload)
             if offset is None:
                 return frozenset(ids)
+
+    async def stored_chunk_texts(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> dict[str, str]:
+        target = self._target(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        ).filter
+        texts: dict[str, str] = {}
+        offset: PointId | None = None
+        while True:
+            points, offset = await self._client.scroll(
+                self._collection_name,
+                scroll_filter=target,
+                with_payload=["chunk_id", "text"],
+                with_vectors=False,
+                limit=_SCROLL_PAGE,
+                offset=offset,
+            )
+            texts.update(
+                {str(p.payload["chunk_id"]): str(p.payload["text"]) for p in points if p.payload}
+            )
+            if offset is None:
+                return texts
+
+    async def revise_chunks(
+        self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
+    ) -> None:
+        """Read each point's stored payload, then write the point again under
+        its own id with that payload, the new text, and vectors embedded from
+        the new text: one upsert per point, so a point never holds new text
+        beside old vectors. Every check, and the embedding, before the first
+        write (ADR-0042)."""
+        if not chunks:
+            return
+        with telemetry.span(
+            "qdrant.revise_chunks",
+            **{
+                "retrieval.revision_id": authorization.record.revision_id,
+                "retrieval.revised_chunks": [c.chunk_id for c in chunks],
+            },
+        ):
+            for chunk in chunks:
+                authorization.check_text(chunk.clause_id, chunk.text)
+            stored = await self._client.retrieve(
+                self._collection_name,
+                ids=[_chunk_point_id(c.chunk_id) for c in chunks],
+                with_payload=True,
+                with_vectors=False,
+            )
+            payloads: dict[str, dict[str, object]] = {
+                str(p.payload["chunk_id"]): dict(p.payload) for p in stored if p.payload
+            }
+            for chunk in chunks:
+                payload = payloads.get(chunk.chunk_id)
+                if payload is None or (payload.get("clause_id"), payload.get("tenant_id")) != (
+                    chunk.clause_id,
+                    authorization.tenant_id,
+                ):
+                    raise PermissionError(
+                        f"{chunk.chunk_id} isn't stored: a correction rewords a chunk, never "
+                        "adds one"
+                    )
+            dense_vectors = await self._embedder.embed(tuple(c.text for c in chunks))
+            sparse_vectors = _encode_documents(c.text for c in chunks)
+            points = [
+                models.PointStruct(
+                    id=_chunk_point_id(chunk.chunk_id),
+                    vector={DENSE_VECTOR_NAME: list(dense), SPARSE_VECTOR_NAME: sparse},
+                    payload={**payloads[chunk.chunk_id], "text": chunk.text},
+                )
+                for chunk, dense, sparse in zip(chunks, dense_vectors, sparse_vectors, strict=True)
+            ]
+            for start in range(0, len(points), UPSERT_BATCH):
+                await self._client.upsert(
+                    self._collection_name, points=points[start : start + UPSERT_BATCH]
+                )
 
     async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
         await self._client.set_payload(

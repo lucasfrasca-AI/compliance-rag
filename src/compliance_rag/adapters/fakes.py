@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import zlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from opentelemetry import trace
@@ -47,6 +47,7 @@ from compliance_rag.adapters.interfaces import (
     check_chat_exchange,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.assessment.coverage import Coverage, CoverageRow
 from compliance_rag.assessment.evidence import Evidence, Facts, check_evidence_write
 from compliance_rag.corpus.models import (
@@ -63,6 +64,7 @@ from compliance_rag.corpus.models import (
     validate_library_instrument_id,
     validate_tenant_id,
 )
+from compliance_rag.corpus.revision import RevisionDrift, RevisionRecord, check_revision_hashes
 from compliance_rag.graph.applicability import evaluate
 from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.graph.track_a import snapshot_of_mappings
@@ -180,6 +182,32 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         for chunk_id, chunk in list(self._chunks.items()):
             if _authorized(chunk, authorization):
                 del self._chunks[chunk_id]
+
+    async def stored_chunk_texts(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> dict[str, str]:
+        key = (tenant_id, instrument_id, version_id)
+        return {c.chunk_id: c.text for c in self._chunks.values() if _version_key(c) == key}
+
+    async def revise_chunks(
+        self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
+    ) -> None:
+        for chunk in chunks:
+            authorization.check_text(chunk.clause_id, chunk.text)
+            stored = self._chunks.get(chunk.chunk_id)
+            if stored is None or (stored.clause_id, stored.tenant_id) != (
+                chunk.clause_id,
+                authorization.tenant_id,
+            ):
+                raise PermissionError(
+                    f"{chunk.chunk_id} isn't stored: a correction rewords a chunk, never adds one"
+                )
+        for chunk in chunks:
+            # The text changes and nothing else, as on Qdrant: the stored
+            # chunk keeps its valid time, scope, owner and withdrawal.
+            self._chunks[chunk.chunk_id] = self._chunks[chunk.chunk_id].model_copy(
+                update={"text": chunk.text}
+            )
 
     @property
     def stored_chunk_ids(self) -> frozenset[str]:
@@ -471,6 +499,9 @@ class FakeLedgerStore(LedgerStore):
             if tenant == tenant_id and any(c.startswith(stable_id_prefix) for c in cited)
         )
 
+    async def count_findings_citing_clauses(self, clause_ids: frozenset[str]) -> int:
+        return sum(1 for _, cited in self._findings if not clause_ids.isdisjoint(cited))
+
     async def record_usage(self, usage: UsageRecord) -> None:
         self._usage.append(usage)
 
@@ -591,6 +622,38 @@ class FakeClauseStore(ClauseStore):
         self._clauses: dict[tuple[str, str], ClauseRecord] = {}
         self._source_html: dict[tuple[str, str, str], str] = {}
         self._manifest_metadata: dict[tuple[str, str, str], ManifestMetadata] = {}
+        self._revisions: dict[tuple[str, str, str], list[RevisionRecord]] = {}
+
+    async def record_revision(
+        self, authorization: RevisionAuthorization, clauses: Sequence[ClauseRecord]
+    ) -> None:
+        """As `GCSClauseStore`, except that the manifest here is derived from
+        the clauses, so the record and the clauses land together."""
+        record = authorization.record
+        for clause in clauses:
+            authorization.check_text(clause.clause_id, clause.canonical_text)
+        key = (authorization.tenant_id, record.instrument_id, record.version_id)
+        if key not in self._manifest_metadata:
+            raise RevisionDrift(
+                f"{record.instrument_id}:{record.version_id} has no completed ingest to revise"
+            )
+        held = await self.get_manifest(
+            record.instrument_id, record.version_id, tenant_id=authorization.tenant_id
+        )
+        moving = check_revision_hashes(record, held)
+        given = {c.clause_path for c in clauses}
+        if not set(moving) <= given:
+            raise RevisionDrift(f"{sorted(set(moving) - given)} move but no text was given")
+        recorded = self._revisions.setdefault(key, [])
+        if not any(r.revision_id == record.revision_id for r in recorded):
+            recorded.append(record)
+        for clause in clauses:
+            self._clauses[(clause.tenant_id, clause.clause_id)] = clause
+
+    async def revisions(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> tuple[RevisionRecord, ...]:
+        return tuple(self._revisions.get((tenant_id, instrument_id, version_id), ()))
 
     async def get_clause(
         self, clause_id: str, *, tenant_id: str, user_id: str | None = None

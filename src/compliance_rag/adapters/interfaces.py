@@ -35,6 +35,7 @@ from compliance_rag.adapters.graph_schema import (
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.assessment.coverage import Coverage, CoverageRow, ExceptionOf, Outcome
 from compliance_rag.assessment.evidence import Evidence, Facts
 from compliance_rag.corpus.models import (
@@ -46,6 +47,7 @@ from compliance_rag.corpus.models import (
     parse_stable_id,
     validate_tenant_id,
 )
+from compliance_rag.corpus.revision import RevisionRecord
 
 # --------------------------------------------------------------------------
 # Shared value objects
@@ -749,6 +751,17 @@ class GraphAdmin(GraphReader):
         node's or edge's `corrections` trail. All land, or none does."""
 
     @abstractmethod
+    async def revise_clauses(self, authorization: RevisionAuthorization) -> int:
+        """A parse correction of library law (ADR-0042), in one transaction:
+        for each clause the authorised correction names, its Clause node's
+        `canonical_sha256` goes from the recorded previous hash to the new
+        one, and the node's `corrections` trail gains when, by whom, why, the
+        revision and the previous hash. A node already at the new hash is left
+        as it is (a re-run); one at any other hash, or missing, refuses the
+        whole revision. Nothing else on the node changes. Returns how many
+        nodes changed."""
+
+    @abstractmethod
     async def begin_load(self, version: SourceVersion) -> str:
         """Record that a load of `version.kind` from `version` has started
         (#153); returns its id. Loads of a kind are serialised: this is refused
@@ -903,6 +916,25 @@ class RetrievalAdmin(ABC):
     async def delete_chunks(self, authorization: RemovalAuthorization) -> None:
         """Actually delete the target's chunks."""
 
+    @abstractmethod
+    async def stored_chunk_texts(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> dict[str, str]:
+        """The text every stored chunk of this version holds, by `chunk_id`,
+        visible or not: what a revision compares with the parse (ADR-0042)."""
+
+    @abstractmethod
+    async def revise_chunks(
+        self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
+    ) -> None:
+        """A parse correction of library law (ADR-0042): each chunk, one the
+        authorised revision names with exactly the text it records, is
+        re-embedded and written over the stored chunk of the same id. Its text
+        and vectors change; nothing else does (valid time, withdrawal, scope,
+        owner and the rest are the stored point's). A chunk not already stored
+        is refused: a correction never adds one. Refused before anything is
+        written."""
+
 
 class LedgerStore(ABC):
     """Postgres. The one non-derivable store (D-09)."""
@@ -997,6 +1029,12 @@ class LedgerStore(ABC):
         """Findings of this tenant with at least one citation whose
         `clause_id` starts with `stable_id_prefix` — `instrument:` for every
         version, `instrument:version:` for one (ADR-0021)."""
+
+    @abstractmethod
+    async def count_findings_citing_clauses(self, clause_ids: frozenset[str]) -> int:
+        """Findings of *any* tenant with at least one citation of one of
+        these clauses, by exact `clause_id`: library law is cited by every
+        tenant, so a revision of it counts them all (ADR-0042)."""
 
     @abstractmethod
     async def record_usage(self, usage: UsageRecord) -> None: ...
@@ -1158,6 +1196,28 @@ class ClauseStore(ABC):
     async def purge(self, authorization: RemovalAuthorization) -> None:
         """Delete every stored object under the target — clauses, source,
         manifest, and every noncurrent version of each (ADR-0021)."""
+
+    @abstractmethod
+    async def record_revision(
+        self, authorization: RevisionAuthorization, clauses: Sequence[ClauseRecord]
+    ) -> None:
+        """Apply a revision to the version it names (ADR-0042), the record
+        first: the manifest takes the new hash of every path the record
+        writes, and the record itself, in one write (an intent, as
+        `put_clauses` writes the manifest first). Then each of `clauses`, a
+        clause the record names with the text it records, is written over its
+        object unless the object already holds that text. A path whose
+        manifest hash is neither the record's previous nor its new one, or a
+        removed path still listed, refuses it before anything is written.
+        Idempotent: a record already on the manifest (by `revision_id`) isn't
+        appended again, and a hash already new isn't rewritten — so a run that
+        stopped part-way is finished by calling it again."""
+
+    @abstractmethod
+    async def revisions(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> tuple[RevisionRecord, ...]:
+        """Every revision recorded on this version's manifest, oldest first."""
 
 
 class Reranker(ABC):
