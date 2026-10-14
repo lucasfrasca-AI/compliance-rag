@@ -429,7 +429,10 @@ async def test_an_answer_given_an_obligations_clause_is_given_its_exception() ->
     assert store.looked_up == [KEEP_EXCEPTION]  # so it was fetched, by id
     assert answer.exceptions == (SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,)),)
     sent = str(generator.calls[0]["user"])
-    assert f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]\n{TEXTS['s1/2']}\n" in sent
+    assert (
+        f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]\n{TEXTS['s1/2']}\n"
+        in sent
+    )
     assert answer.verified
     assert [c.clause.clause_id for c in answer.citations if c.clause] == [KEEP_EXCEPTION]
 
@@ -456,7 +459,9 @@ async def test_an_exception_the_ranking_returned_is_marked_not_fetched_again() -
     assert KEEP_EXCEPTION in {c.clause_id for c in answer.retrieval.ranked_candidates()}
     assert store.looked_up == []
     assert answer.exceptions == (SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,)),)
-    assert f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]" in str(generator.calls[0]["user"])
+    assert f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]" in str(
+        generator.calls[0]["user"]
+    )
 
 
 async def test_an_exception_that_cannot_be_delivered_refuses_the_answer_before_generation() -> None:
@@ -502,7 +507,8 @@ async def test_an_answer_without_the_obligations_clause_owes_nothing() -> None:
 def test_an_exceptions_marker_names_what_it_excepts() -> None:
     fenced = fence("retrieved_clauses", [SourceClause(KEEP_EXCEPTION, "Text.", excepts=(KEEP,))])
     boundary = fenced.split("boundary=", 1)[1].split(">", 1)[0]
-    assert f"[{boundary} clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]\nText.\n[{boundary} end]" in fenced
+    marker = f"[{boundary} clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]"
+    assert f"{marker}\nText.\n[{boundary} end]" in fenced
 
 
 def test_a_malformed_excepted_id_never_reaches_a_marker() -> None:
