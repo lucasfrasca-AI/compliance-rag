@@ -15,7 +15,8 @@ already-approved corpus bucket and creates no resource.
 
 A completed version whose reviewed manifest has since grown stops with the
 exact paths being added; re-run with `--acknowledge <those paths>` to add them
-(and only them). Removals and edits can't be acknowledged.
+(and only them). Removals and edits can't be acknowledged here: a changed
+clause text is a corpus revision (`scripts/revise_compilation.py`, ADR-0042).
 """
 
 from __future__ import annotations

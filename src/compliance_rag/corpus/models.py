@@ -500,8 +500,9 @@ class InstrumentVersion(BaseModel):
 class ClauseRecord(BaseModel):
     """The smallest citable unit of an instrument, with its canonical text.
 
-    `canonical_text` is never edited after ingest. The verifier compares a
-    citation's span against it (D-02).
+    `canonical_text` is never edited after ingest, except by an acknowledged
+    parse correction of library law, audited clause by clause (ADR-0042). The
+    verifier compares a citation's span against it (D-02).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
