@@ -455,6 +455,21 @@ def check_revision_hashes(record: RevisionRecord, held: Mapping[str, str]) -> li
     return moving
 
 
+def check_revision_recordable(
+    record: RevisionRecord, moving: Sequence[str], *, on_record: bool
+) -> None:
+    """A correction that moves no hash and isn't on record yet changes nothing
+    stored: its clauses already hold the new hashes, written by another
+    revision. Refused, so a manifest never records a revision that didn't
+    happen. (An amendment's hashes are written by its ingest, so it moves
+    none; a correction already on record is being finished.)"""
+    if record.mode is RevisionMode.CORRECT and not moving and not on_record:
+        raise RevisionDrift(
+            f"revision {record.revision_id} changes nothing stored: "
+            f"{record.instrument_id}:{record.version_id} already holds its new hashes"
+        )
+
+
 def record_of(
     plan: RevisionPlan,
     acknowledgement: RevisionAcknowledgement,

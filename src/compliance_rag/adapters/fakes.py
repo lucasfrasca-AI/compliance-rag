@@ -64,7 +64,12 @@ from compliance_rag.corpus.models import (
     validate_library_instrument_id,
     validate_tenant_id,
 )
-from compliance_rag.corpus.revision import RevisionDrift, RevisionRecord, check_revision_hashes
+from compliance_rag.corpus.revision import (
+    RevisionDrift,
+    RevisionRecord,
+    check_revision_hashes,
+    check_revision_recordable,
+)
 from compliance_rag.graph.applicability import evaluate
 from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.graph.track_a import snapshot_of_mappings
@@ -645,7 +650,9 @@ class FakeClauseStore(ClauseStore):
         if not set(moving) <= given:
             raise RevisionDrift(f"{sorted(set(moving) - given)} move but no text was given")
         recorded = self._revisions.setdefault(key, [])
-        if not any(r.revision_id == record.revision_id for r in recorded):
+        on_record = any(r.revision_id == record.revision_id for r in recorded)
+        check_revision_recordable(record, moving, on_record=on_record)
+        if not on_record:
             recorded.append(record)
         for clause in clauses:
             self._clauses[(clause.tenant_id, clause.clause_id)] = clause
