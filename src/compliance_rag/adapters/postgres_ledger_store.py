@@ -510,6 +510,14 @@ class PostgresLedgerStore(LedgerStore):
         )
         return int(row[0]) if row else 0
 
+    async def count_findings_citing_clauses(self, clause_ids: frozenset[str]) -> int:
+        if not clause_ids:
+            return 0
+        row = await self._fetchone(
+            "SELECT count_findings_citing_clauses(%s)", (sorted(clause_ids),)
+        )
+        return int(row[0]) if row else 0
+
     # ---- versions (ADR-0021) ------------------------------------------------
 
     async def record_version(
