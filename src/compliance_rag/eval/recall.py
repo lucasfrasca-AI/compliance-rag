@@ -29,6 +29,7 @@ import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from compliance_rag.adapters.interfaces import Candidate, LawScope, Reranker, ScoredDocument
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, DocumentClass
@@ -42,9 +43,22 @@ RERANKED = "reranked"
 LAW = DocumentClass.LIBRARY_LAW
 POLICY = DocumentClass.INTERNAL_POLICY
 
-Cell = tuple[str, Category, DocumentClass]
-"""A gated number: (list, category, document class) — one list's mean
-recall@10 over that category's queries of that document class."""
+_TOLERANCE = 1e-9
+"""Means are sums of fractions like 1/3: compared with this much slack."""
+
+
+def _under(value: float, bar: float) -> bool:
+    return value < bar - _TOLERANCE
+
+
+class Cell(NamedTuple):
+    """A gated number: one list's mean recall@10 over one category's queries
+    whose documents are of one class."""
+
+    list_name: str
+    category: Category
+    document_class: DocumentClass
+
 
 TARGETS: Mapping[Category, float] = {
     Category.EXACT_ID: 1.0,
@@ -54,23 +68,23 @@ TARGETS: Mapping[Category, float] = {
 """What Phase 1 needs (PHASES.md exit criteria, ADR-0043): recall@10 per
 category on the list `retrieve()` delivers (`reranked`; for an exact-ID query,
 the router's lookup), for law and for policy queries each. PHASES.md's
-starting bars, kept, now measured on the whole compilation."""
+numbers, each re-argued in clauses on the whole compilation in ADR-0043."""
 
 FLOORS: Mapping[Cell, float] = {
     # The fused gate (CI's `ci` job, no model): platform-exact.
-    (FUSED, Category.EXACT_ID, LAW): 1.0,
-    (FUSED, Category.EXACT_ID, POLICY): 1.0,
-    (FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # GQ-10: APP 11.2 fused 11th
-    (FUSED, Category.PARAPHRASE, POLICY): 1.0,
-    (FUSED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # GQ-18 1/3, GQ-19 1/2, GQ-20 1/2
-    (FUSED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-23 1/2
+    Cell(FUSED, Category.EXACT_ID, LAW): 1.0,
+    Cell(FUSED, Category.EXACT_ID, POLICY): 1.0,
+    Cell(FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # GQ-10: APP 11.2 fused 11th
+    Cell(FUSED, Category.PARAPHRASE, POLICY): 1.0,
+    Cell(FUSED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # GQ-18 1/3, GQ-19 1/2, GQ-20 1/2
+    Cell(FUSED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-23 1/2
     # The reranked gate (CI's `reranker-fidelity` job): what `retrieve()` delivers.
-    (RERANKED, Category.EXACT_ID, LAW): 1.0,
-    (RERANKED, Category.EXACT_ID, POLICY): 1.0,
-    (RERANKED, Category.PARAPHRASE, LAW): 1.0,
-    (RERANKED, Category.PARAPHRASE, POLICY): 1.0,
-    (RERANKED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # target 0.8: open (#200)
-    (RERANKED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
+    Cell(RERANKED, Category.EXACT_ID, LAW): 1.0,
+    Cell(RERANKED, Category.EXACT_ID, POLICY): 1.0,
+    Cell(RERANKED, Category.PARAPHRASE, LAW): 1.0,
+    Cell(RERANKED, Category.PARAPHRASE, POLICY): 1.0,
+    Cell(RERANKED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # target 0.8: open (#200)
+    Cell(RERANKED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
 }
 """What the gate achieves on the whole compilation (ADR-0043, measured
 2026-10-15): enforced, so any drop in any cell fails. Raised deliberately when
@@ -81,14 +95,13 @@ def target_of(cell: Cell) -> float | None:
     """A cell's target: on the delivered list only. A fused cell has none —
     nothing delivers fusion's order, so it is held to its floor and to the
     per-query baseline, and nothing more."""
-    list_name, category, _ = cell
-    return TARGETS[category] if list_name == RERANKED else None
+    return TARGETS[cell.category] if cell.list_name == RERANKED else None
 
 
 OPEN_TARGETS: tuple[Cell, ...] = tuple(
     cell
     for cell, floor in FLOORS.items()
-    if (target := target_of(cell)) is not None and floor < target - 1e-9
+    if (target := target_of(cell)) is not None and _under(floor, target)
 )
 """Cells whose target is above what the gate achieves: what Phase 1 still
 needs (ADR-0043)."""
@@ -191,17 +204,13 @@ def by_category(results: Iterable[QueryRecall]) -> dict[Category, dict[str, floa
     return summary
 
 
-_TOLERANCE = 1e-9
-
-
 def by_cell(results: Iterable[QueryRecall], list_name: str) -> dict[Cell, float]:
     """Mean recall@k of `list_name` per category and document class."""
-    grouped: dict[tuple[Category, DocumentClass], list[float]] = {}
+    grouped: dict[Cell, list[float]] = {}
     for result in results:
-        grouped.setdefault((result.category, result.document_class), []).append(
-            result.by_list[list_name]
-        )
-    return {(list_name, c, d): sum(v) / len(v) for (c, d), v in grouped.items()}
+        cell = Cell(list_name, result.category, result.document_class)
+        grouped.setdefault(cell, []).append(result.by_list[list_name])
+    return {cell: sum(values) / len(values) for cell, values in grouped.items()}
 
 
 def below_floor(results: Iterable[QueryRecall], list_name: str) -> dict[Cell, tuple[float, float]]:
@@ -211,15 +220,26 @@ def below_floor(results: Iterable[QueryRecall], list_name: str) -> dict[Cell, tu
     return {
         cell: (FLOORS.get(cell, 1.0), now)
         for cell, now in by_cell(results, list_name).items()
-        if cell not in FLOORS or now < FLOORS[cell] - _TOLERANCE
+        if cell not in FLOORS or _under(now, FLOORS[cell])
     }
+
+
+def describe_cell(cell: Cell, now: float) -> str:
+    """One report line: the cell's value beside its floor and its target."""
+    floor = FLOORS.get(cell)
+    target = target_of(cell)
+    return (
+        f"{cell.list_name:<8} {cell.category.value:<13} {cell.document_class.value:<16} "
+        f"{now:.3f}  floor {'none' if floor is None else f'{floor:.3f}'}, "
+        f"target {'none' if target is None else f'{target:.1f}'}"
+    )
 
 
 def short_of_target(results: Iterable[QueryRecall], cell: Cell) -> float | None:
     """`cell`'s value if it is under its target, else None."""
     target = target_of(cell)
-    now = by_cell(results, cell[0])[cell]
-    return now if target is not None and now < target - _TOLERANCE else None
+    now = by_cell(results, cell.list_name)[cell]
+    return now if target is not None and _under(now, target) else None
 
 
 Baseline = Mapping[str, Mapping[str, float]]
@@ -239,7 +259,7 @@ def regressions(
     for result in results:
         for name, before in baseline.get(result.query_id, {}).items():
             now = result.by_list.get(name, 0.0)
-            if now < before - _TOLERANCE:
+            if _under(now, before):
                 dropped[f"{result.query_id}/{name}"] = (before, now)
     return dropped
 

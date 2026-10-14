@@ -1,14 +1,16 @@
 # ADR-0043 — The recall gate measures the whole compilation: floors hold today's numbers, targets say what Phase 1 needs
 
-- Status: accepted (the gate corpus, by the human's decision on #180); the
-  bars are the model's proposal, implemented so they are concrete, for the
-  human to accept or change
+- Status: proposed until the human merges #180's PR. The gate corpus is the
+  human's decision on #180; the bars are the model's proposal, implemented so
+  they are concrete, and the human accepts or changes them in review
 - Date: 2026-10-15
 - Issue: #180
 - Amends: ADR-0022 (which corpus the bars are measured on, on which list, and
   how they are enforced) and PHASES.md's Phase 1 retrieval exit criterion
-- Relates to: D-04 (rerank the top 20), ADR-0035 (its numbers stay on the
-  excerpt)
+- Revises: D-04's rationale only (`DECISIONS.md`), which said the top 20
+  "clears every recall@10 exit bar"; that was on the excerpt. The decision,
+  rerank the top 20, stands (below)
+- Relates to: ADR-0035 (its numbers stay on the excerpt)
 
 ## Context
 
@@ -145,12 +147,27 @@ The sample is small. There are 3 law and 5 policy cross-clause queries, and
 third, and one expected clause by a sixth or a ninth. So the bars below are
 counts of clauses as much as rates, and they are argued that way.
 
+The targets keep PHASES.md's numbers, but not because the excerpt had them.
+A target is what a reader needs, and that doesn't depend on how many
+distractors the corpus holds. So each number was re-read as a count of
+clauses in its cell on the whole compilation. Each one survived as the right
+count; none was lowered to fit today's results:
+
+| cell | queries / expected clauses | the target, in clauses |
+|---|---|---|
+| exact-ID, law / policy | 6 / 6, 2 / 2 | none missing |
+| paraphrase, law / policy | 6 / 6, 3 / 3 | none missing: one miss is 0.833 or 0.667 |
+| cross-clause, law | 3 / 7 | at most one of the seven missing |
+| cross-clause, policy | 5 / 10 | at most two of the ten missing (each miss is 0.1) |
+
 - **Exact-ID: 1.0, floor and target.** The router's keyword lookup either
   finds the id or has a bug. Unchanged from the excerpt.
 - **Paraphrase, delivered: floor 1.000, target 0.9, met.** Every paraphrase
-  question finds its clause in what `retrieve()` returns, in both halves. The
-  floor is 1.0, not 0.9, so losing any of the nine fails; 0.9 would let one go
-  quietly.
+  question finds its clause in what `retrieve()` returns, in both halves. With
+  six and three queries per cell, 0.9 already means no miss: one miss gives
+  0.833 or 0.667. The floor (1.0) and the target therefore agree today. 0.9 is
+  kept as the target rather than raised to 1.0 for when the golden set grows
+  past ten queries in a cell; it is then one miss in ten.
 - **Paraphrase, fused: floor 0.833 (law) and 1.000 (policy), no target.** The
   excerpt gated paraphrase on fusion at 0.9, and fusion is now 0.833 for law
   (GQ-10). The target is retired on fusion, not lowered, because nothing
@@ -185,11 +202,16 @@ counts of clauses as much as rates, and they are argued that way.
     change to what a chunk is, `CONTEXT.md` **Chunk**, with a re-embed), or
     retrieval admitting a retrieved chapeau's paragraphs, as ADR-0035 does for
     scope. Tracked in #200.
-- **Cross-clause, policy, delivered: floor 0.900, target 0.8, met.** Its one
-  miss, GQ-21's 1/1 at 12th, is the gate's nearest thing to a coin flip: 0.14
-  logit under the 10th. On another platform's int8 numerics it may come back
-  as 1.0, which passes. The floor is today's 0.900, so a second policy miss
-  fails.
+- **Cross-clause, policy, delivered: floor 0.900, target 0.8, met.** Five
+  queries hold ten expected clauses, two each, so each miss costs 0.1. The
+  target allows two misses and today has one. 0.8 is one bar for both
+  halves: in clauses, it allows one of law's seven and two of policy's ten. I
+  kept it equal rather than tightening policy, because no reader need
+  separates the two. The floor is
+  stricter than the target: today's 0.900, so a second miss fails now, even
+  though the target would allow it. Today's miss, GQ-21's 1/1 at 12th, is the
+  gate's nearest thing to a coin flip: 0.14 logit under the 10th. On another
+  platform's int8 numerics it may come back as 1.0, which passes.
 - **Category means are not gated separately.** The cells imply them: with
   law at its target and policy at its floor, cross-clause is ≥ 0.863.
 
@@ -228,3 +250,35 @@ issue and a `PHASES.md` edit, keeping the strict xfail in CI either way.
 - `scripts/measure_recall_on_cloud.py` compares the deployed collection with
   the container on the same corpus. Until #178 part 2 republishes it,
   `clauses` holds the previous parse, so a small difference is expected.
+
+## Appendix: every query, every list (2026-10-15)
+
+recall@10 on the gate corpus. `dense`, `sparse` and `fused` are from the fused
+gate (`NoRerank`) and match `corpus/golden/recall_baseline.json`; `reranked`
+is the int8 cross-encoder over the top 20. An exact-ID query has one list:
+the router's keyword lookup.
+
+| query | category | class | dense | sparse | fused | reranked | excerpt fused | excerpt reranked |
+|---|---|---|---|---|---|---|---|---|
+| GQ-01–06 | exact-ID | law | – | – | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-07–08 | exact-ID | policy | – | – | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-09 | paraphrase | law | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-10 | paraphrase | law | 1.000 | 0.000 | **0.000** | 1.000 | 1.000 | 1.000 |
+| GQ-11 | paraphrase | law | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-12 | paraphrase | law | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-13 | paraphrase | law | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-14 | paraphrase | law | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-15 | paraphrase | policy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-16 | paraphrase | policy | 1.000 | 0.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-17 | paraphrase | policy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-18 | cross-clause | law | 0.333 | 0.333 | **0.333** | **0.333** | 0.667 | 0.667 |
+| GQ-19 | cross-clause | law | 0.000 | 0.500 | **0.500** | **0.500** | 1.000 | 1.000 |
+| GQ-20 | cross-clause | law | 0.500 | 0.500 | 0.500 | 0.500 | 0.500 | 0.500 |
+| GQ-21 | cross-clause | policy | 1.000 | 1.000 | 1.000 | **0.500** | 1.000 | 1.000 |
+| GQ-22 | cross-clause | policy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-23 | cross-clause | policy | 1.000 | 0.500 | 0.500 | 1.000 | 0.500 | 1.000 |
+| GQ-24 | cross-clause | policy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| GQ-25 | cross-clause | policy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+
+Per category, all queries in a category together: dense 1.000 / 0.729,
+sparse 0.778 / 0.729 (paraphrase / cross-clause).

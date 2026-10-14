@@ -6,7 +6,7 @@ with the six synthetic policies as `acme`'s own documents:
   clauses as library law under `_public` — what production retrieves over. The
   recall gates (`tests/test_recall_gate.py`, `tests/test_recall_gate_reranked.py`)
   load it into a real Qdrant server and measure retrieval against the labels.
-- **The golden corpus** (`golden_chunks()`): the 75-clause Privacy Act excerpt
+- **The golden excerpt** (`golden_chunks()`): the 75-clause Privacy Act excerpt
   instead. A subset of the gate's, same ids and same text
   (`tests/test_compilation_clauses.py`); small, and parsed from a checked-in
   fixture, so unit and contract tests, and numbers pinned on it (ADR-0035's),

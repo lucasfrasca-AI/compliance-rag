@@ -94,24 +94,35 @@ def test_every_clauses_canonical_text_is_its_texts_canonical_form(
     }
 
 
-def _fixture_clauses(name: str) -> dict[str, ClauseRecord]:
-    source = (FIXTURES / f"privacy-act-1988-C2026C00227.{name}.html").read_text(encoding="utf-8")
-    parsed = parse_compilation(source, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
-    return {c.clause_path: c for c in parsed.clauses}
+COMPILATION_FIXTURES = sorted(FIXTURES.glob("privacy-act-1988-C2026C00227.*.html"))
+"""Every checked-in cut of the pinned compilation (CLAUDE.md: a parser is tested
+against every available real fixture), found by name so a new one is covered."""
+
+OVERLAP = {"excerpt": 75, "constructs": 100}
+"""How many selected clauses each fixture holds. A new fixture fails until its
+count is recorded here, so it can't join without being looked at."""
 
 
-@pytest.mark.parametrize(("name", "overlap"), [("excerpt", 75), ("constructs", 100)])
+@pytest.mark.parametrize("fixture", COMPILATION_FIXTURES, ids=lambda p: p.name.split(".")[1])
 def test_every_clause_a_fixture_also_holds_is_its_fresh_parse(
-    committed: CompilationClauses, name: str, overlap: int
+    committed: CompilationClauses, fixture: Path
 ) -> None:
-    """Both fixtures are cut verbatim from the pinned compilation, so where
-    they hold a selected clause, today's parser must produce the committed
-    record exactly. A parser change that moves one of these ~170 clauses fails
-    in CI, not only where the full source is at hand."""
-    fixture = _fixture_clauses(name)
-    shared = [c for c in committed.clauses if c.clause_path in fixture]
-    assert len(shared) == overlap
-    assert [c.clause_path for c in shared if fixture[c.clause_path] != c] == []
+    """Every fixture is cut verbatim from the pinned compilation, so where it
+    holds a selected clause, today's parser must produce the committed record
+    exactly. A parser change that moves one of these ~170 clauses fails in CI,
+    not only where the full source is at hand."""
+    parsed = parse_compilation(
+        fixture.read_text(encoding="utf-8"), instrument_id=INSTRUMENT_ID, version_id=VERSION_ID
+    )
+    fresh: dict[str, ClauseRecord] = {c.clause_path: c for c in parsed.clauses}
+    shared = [c for c in committed.clauses if c.clause_path in fresh]
+    assert len(shared) == OVERLAP[fixture.name.split(".")[1]]
+    assert [c.clause_path for c in shared if fresh[c.clause_path] != c] == []
+
+
+def test_every_fixture_found_has_its_overlap_recorded() -> None:
+    """And the glob found them: an empty parametrize list would skip silently."""
+    assert {p.name.split(".")[1] for p in COMPILATION_FIXTURES} == set(OVERLAP)
 
 
 def test_the_excerpt_is_a_subset_of_the_gate_corpus() -> None:

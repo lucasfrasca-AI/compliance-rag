@@ -39,6 +39,7 @@ from compliance_rag.eval.recall import (
     POLICY,
     RERANKED,
     TARGETS,
+    Cell,
     NoRerank,
     QueryRecall,
     UnsignedGoldenSet,
@@ -46,6 +47,7 @@ from compliance_rag.eval.recall import (
     by_category,
     by_cell,
     corpus_sha256,
+    describe_cell,
     load_baseline,
     load_baseline_corpus,
     measure,
@@ -155,8 +157,8 @@ def test_a_cell_is_one_lists_mean_over_one_category_of_one_document_class() -> N
         QueryRecall("GQ-15", Category.PARAPHRASE, POLICY, {FUSED: 1.0}),
     )
     assert by_cell(now, FUSED) == {
-        (FUSED, Category.PARAPHRASE, LAW): 0.5,
-        (FUSED, Category.PARAPHRASE, POLICY): 1.0,
+        Cell(FUSED, Category.PARAPHRASE, LAW): 0.5,
+        Cell(FUSED, Category.PARAPHRASE, POLICY): 1.0,
     }
 
 
@@ -168,19 +170,19 @@ def test_a_cell_under_its_floor_is_reported_with_its_floor_and_value() -> None:
         *(QueryRecall(f"M{i}", Category.PARAPHRASE, LAW, {FUSED: 0.0}) for i in range(2)),
         *(QueryRecall(f"P{i}", Category.PARAPHRASE, POLICY, {FUSED: 1.0}) for i in range(3)),
     )
-    cell = (FUSED, Category.PARAPHRASE, LAW)
+    cell = Cell(FUSED, Category.PARAPHRASE, LAW)
     assert below_floor(now, FUSED) == {cell: (FLOORS[cell], 4 / 6)}
 
 
 def test_a_cell_with_no_floor_fails_rather_than_going_unguarded() -> None:
     """Every cell the golden set produces has a deliberate floor."""
-    cell = ("dense", Category.PARAPHRASE, LAW)
+    cell = Cell("dense", Category.PARAPHRASE, LAW)
     now = (QueryRecall("GQ-09", Category.PARAPHRASE, LAW, {"dense": 1.0}),)
     assert below_floor(now, "dense") == {cell: (1.0, 1.0)}
 
 
 def test_every_cell_has_a_floor_and_a_floor_never_exceeds_one() -> None:
-    cells = {(n, c, d) for n in (FUSED, RERANKED) for c in Category for d in (LAW, POLICY)}
+    cells = {Cell(n, c, d) for n in (FUSED, RERANKED) for c in Category for d in (LAW, POLICY)}
     assert set(FLOORS) == cells
     assert all(0.0 < floor <= 1.0 for floor in FLOORS.values())
 
@@ -188,8 +190,8 @@ def test_every_cell_has_a_floor_and_a_floor_never_exceeds_one() -> None:
 def test_targets_are_on_the_delivered_list_only() -> None:
     """Nothing delivers fusion's order, so a fused cell has a floor and no
     target; the reranked list carries PHASES.md's bars."""
-    assert target_of((FUSED, Category.CROSS_CLAUSE, LAW)) is None
-    assert target_of((RERANKED, Category.CROSS_CLAUSE, LAW)) == TARGETS[Category.CROSS_CLAUSE]
+    assert target_of(Cell(FUSED, Category.CROSS_CLAUSE, LAW)) is None
+    assert target_of(Cell(RERANKED, Category.CROSS_CLAUSE, LAW)) == TARGETS[Category.CROSS_CLAUSE]
     assert dict(TARGETS) == {
         Category.EXACT_ID: 1.0,
         Category.PARAPHRASE: 0.9,
@@ -201,17 +203,27 @@ def test_the_open_target_is_law_cross_clause() -> None:
     """ADR-0043: today's one cell under its target. When it is met, its xfail
     in test_recall_gate_reranked.py passes, strict xfail fails the build, and
     raising its floor to the new value closes it here too."""
-    assert OPEN_TARGETS == ((RERANKED, Category.CROSS_CLAUSE, LAW),)
+    assert list(OPEN_TARGETS) == [Cell(RERANKED, Category.CROSS_CLAUSE, LAW)]
 
 
 def test_a_cell_short_of_its_target_reports_its_value() -> None:
+    cell = Cell(RERANKED, Category.CROSS_CLAUSE, LAW)
     now = (
         QueryRecall("GQ-18", Category.CROSS_CLAUSE, LAW, {RERANKED: 1 / 3}),
         QueryRecall("GQ-19", Category.CROSS_CLAUSE, LAW, {RERANKED: 1.0}),
     )
-    assert short_of_target(now, (RERANKED, Category.CROSS_CLAUSE, LAW)) == 2 / 3
+    assert short_of_target(now, cell) == 2 / 3
     met = (QueryRecall("GQ-19", Category.CROSS_CLAUSE, LAW, {RERANKED: 1.0}),)
-    assert short_of_target(met, (RERANKED, Category.CROSS_CLAUSE, LAW)) is None
+    assert short_of_target(met, cell) is None
+
+
+def test_a_report_line_shows_a_cells_floor_and_target() -> None:
+    line = describe_cell(Cell(RERANKED, Category.CROSS_CLAUSE, LAW), 4 / 9)
+    assert line.split() == [
+        *("reranked", "cross_clause", "library_law", "0.444"),
+        *("floor", "0.444,", "target", "0.8"),
+    ]
+    assert describe_cell(Cell(FUSED, Category.CROSS_CLAUSE, LAW), 4 / 9).endswith("target none")
 
 
 async def test_an_unsigned_golden_set_is_refused() -> None:
@@ -272,7 +284,7 @@ def _report(results: tuple[QueryRecall, ...]) -> None:
         cells = "  ".join(f"{name}={value:.3f}" for name, value in sorted(lists.items()))
         print(f"  {category.value:<13} {cells}")
     for cell, now in sorted(by_cell(results, FUSED).items()):
-        print(f"  {cell[1].value:<13} {cell[2].value:<16} floor={FLOORS[cell]:.3f}  {now:.3f}")
+        print(f"  {describe_cell(cell, now)}")
     for r in results:
         if r.by_list[FUSED] < 1.0:
             print(f"  miss {r.query_id} ({r.category.value}): {r.by_list}")

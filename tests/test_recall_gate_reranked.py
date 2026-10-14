@@ -32,16 +32,15 @@ from compliance_rag.eval.golden import load_golden_set
 from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
-    FLOORS,
     OPEN_TARGETS,
     RERANKED,
     Cell,
     QueryRecall,
     below_floor,
     by_cell,
+    describe_cell,
     measure,
     short_of_target,
-    target_of,
 )
 from compliance_rag.reranker_service.model import DEFAULT_ONNX_MODEL_PATH, RerankerModel
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
@@ -70,10 +69,7 @@ def results() -> tuple[QueryRecall, ...]:
     measured = asyncio.run(_measure())
     print("\nreranked recall@10 by category and document class")
     for cell, now in sorted(by_cell(measured, RERANKED).items()):
-        print(
-            f"  {cell[1].value:<13} {cell[2].value:<16} floor={FLOORS[cell]:.3f} "
-            f"target={target_of(cell)}  {now:.3f}"
-        )
+        print(f"  {describe_cell(cell, now)}")
     for r in measured:
         if r.by_list[RERANKED] < 1.0:
             print(f"  reranked miss {r.query_id} ({r.category.value}): {r.by_list}")
@@ -91,7 +87,7 @@ def test_reranked_recall_holds_its_floor_in_every_cell(
     [
         pytest.param(
             cell,
-            id=f"{cell[1].value}-{cell[2].value}",
+            id=f"{cell.category.value}-{cell.document_class.value}",
             marks=pytest.mark.xfail(
                 strict=True,
                 raises=AssertionError,

@@ -100,7 +100,9 @@ def render_compilation_clauses(
 
 
 def load_compilation_clauses(path: Path = COMPILATION_CLAUSES_PATH) -> CompilationClauses:
-    # json.loads returns Any; the document's shape is checked field by field below.
+    # json.loads returns Any, so the three casts below name the shape the writer
+    # renders. Nothing here trusts it: a missing key raises, str()/int() convert
+    # each field, and ClauseRecord validates every record (canonical form, ids).
     raw = cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
     instrument_id, version_id = str(raw["instrument_id"]), str(raw["version_id"])
     entries = cast("list[dict[str, Any]]", raw["clauses"])

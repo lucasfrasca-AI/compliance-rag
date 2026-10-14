@@ -43,14 +43,13 @@ from compliance_rag.eval.golden import load_golden_set
 from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
-    FLOORS,
     FUSED,
     RERANKED,
     QueryRecall,
     by_cell,
+    describe_cell,
     load_baseline,
     measure,
-    target_of,
 )
 from compliance_rag.reranker_service.model import RerankerModel
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
@@ -65,28 +64,30 @@ def _report(
     reranked_reference: Mapping[str, float] | None,
 ) -> None:
     """Each cell, then every query whose recall differs from its reference, in
-    either direction: on the same corpus, cloud and container should agree."""
-    print(f"\n{title}: recall@10")
-    print(f"  {'category':<13} {'class':<16} {'fused':>6} {'container':>9}  {'reranked':>8}")
-    for cell, fused in sorted(by_cell(results, FUSED).items()):
-        _, category, document_class = cell
-        members = [r for r in results if (r.category, r.document_class) == cell[1:]]
-        container = sum(fused_reference[r.query_id] for r in members) / len(members)
-        reranked_cell = (RERANKED, category, document_class)
-        reranked = by_cell(results, RERANKED)[reranked_cell]
-        print(
-            f"  {category.value:<13} {document_class.value:<16} {fused:>6.3f} {container:>9.3f}"
-            f"  {reranked:>8.3f}  (floor {FLOORS[reranked_cell]:.3f}, "
-            f"target {target_of(reranked_cell)})"
-        )
+    either direction: on the same corpus, cloud and container should agree.
+    Both sides are computed by the same arithmetic, so they compare exactly."""
+    container = by_cell(
+        (
+            QueryRecall(
+                r.query_id, r.category, r.document_class, {FUSED: fused_reference[r.query_id]}
+            )
+            for r in results
+        ),
+        FUSED,
+    )
+    print(f"\n{title}: recall@10 (fused, beside the container's fused, then reranked)")
+    for cell, now in sorted(by_cell(results, FUSED).items()):
+        print(f"  {describe_cell(cell, now)}; container {container[cell]:.3f}")
+    for cell, now in sorted(by_cell(results, RERANKED).items()):
+        print(f"  {describe_cell(cell, now)}")
     for r in results:
-        if abs(r.by_list[FUSED] - fused_reference[r.query_id]) > 1e-9:
+        if r.by_list[FUSED] != fused_reference[r.query_id]:
             print(
                 f"  fused differs from the container: {r.query_id} "
                 f"{fused_reference[r.query_id]:.3f} -> {r.by_list[FUSED]:.3f}"
             )
         if reranked_reference is not None and (
-            abs(r.by_list[RERANKED] - reranked_reference[r.query_id]) > 1e-9
+            r.by_list[RERANKED] != reranked_reference[r.query_id]
         ):
             print(
                 f"  reranked differs from measurement 1: {r.query_id} "
