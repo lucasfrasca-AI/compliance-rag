@@ -31,9 +31,10 @@ The findings count is the configured ledger's (DATABASE_URL). No ledger is
 deployed yet (#174); `--no-ledger` says so, and the count is then 0, which
 must still be acknowledged. It is refused if the ledger is reachable.
 
-Reads the bucket, Neo4j, Qdrant and (to embed, on `--apply`) Vertex in
-australia-southeast1 through `Settings`, and never prints a URL, a key or a
-password. Writes to existing resources only; creates none. Never run in CI.
+Reads the bucket (`--bucket`, or `CORPUS_BUCKET`), Neo4j, Qdrant and (to
+embed, on `--apply`) Vertex in australia-southeast1 through `Settings`, and
+never prints a URL, a key or a password. Writes to existing resources only;
+creates none. Never run in CI.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 
-from compliance_rag.adapters.corpus_revision import CorpusRevision, Planned, RevisionStatus
+from compliance_rag.adapters.corpus_revision import CorpusRevision, PlannedRevision, RevisionStatus
 from compliance_rag.adapters.fakes import FakeLedgerStore
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.git_source_versions import UncommittedSource, resolve_source_version
@@ -148,6 +149,11 @@ def render_status(status: RevisionStatus) -> str:
         lines.append(f"  bucket objects behind: {list(status.objects_behind)}")
         lines.append(f"  graph nodes behind:    {list(status.graph_behind)}")
         lines.append(f"  Qdrant chunks behind:  {list(status.chunks_behind)}")
+        if status.graph_load_pending:
+            lines.append(
+                "  a corpus load is open or abandoned: abandon an open one that died "
+                "(load_graph_structure --abandon), and the finish records the load"
+            )
         lines.append("  finish it with --apply --finish")
     return "\n".join(lines)
 
@@ -199,6 +205,9 @@ async def main(arguments: argparse.Namespace) -> None:
             corpus_version = resolve_source_version(SourceKind.CORPUS, repo=REPO)
         except UncommittedSource as refused:
             raise SystemExit(f"nothing written: {refused}") from None
+    bucket = arguments.bucket or settings.corpus_bucket
+    if not bucket:
+        raise SystemExit("no corpus bucket: set CORPUS_BUCKET, or pass --bucket")
     selection = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8"))
     source = pinned_source(arguments.html)
     ledger, ledger_location = await _ledger(settings, no_ledger=arguments.no_ledger)
@@ -210,7 +219,7 @@ async def main(arguments: argparse.Namespace) -> None:
     retrieval = QdrantRetrievalStore.from_settings(settings, embedder=embedder, ledger=ledger)
     async with Neo4jGraph.from_settings(settings) as graph:
         revision = CorpusRevision(
-            clauses=GCSClauseStore.for_bucket(arguments.bucket),
+            clauses=GCSClauseStore.for_bucket(bucket),
             graph=graph,
             retrieval=retrieval,
             ledger=ledger,
@@ -227,7 +236,7 @@ async def main(arguments: argparse.Namespace) -> None:
 
 async def _report_or_apply(
     revision: CorpusRevision,
-    planned: Planned,
+    planned: PlannedRevision,
     arguments: argparse.Namespace,
     corpus_version: SourceVersion | None,
     ledger_location: str,
@@ -243,6 +252,10 @@ async def _report_or_apply(
             print("\nto apply it:\n" + acknowledgement_line(plan, findings))
         return
     assert corpus_version is not None  # resolved before anything was read
+    if plan.empty and not status.unfinished:
+        # A re-run after the correction: nothing differs and nothing is behind.
+        print("\nnothing to change: every store holds the parse")
+        return
     print(f"\ncorpus version (the commit that parsed the new text): {corpus_version.described}")
     if arguments.finish:
         report = await revision.finish(
@@ -281,7 +294,9 @@ async def _report_or_apply(
 
 def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
-    parser.add_argument("--bucket", required=True)
+    parser.add_argument(
+        "--bucket", default=None, help="the corpus bucket; CORPUS_BUCKET (Settings) if not given"
+    )
     parser.add_argument("--html", type=Path, default=None)
     parser.add_argument("--show-text", action="store_true", help="print both texts in full")
     parser.add_argument("--apply", action="store_true", help="write; without it nothing is")

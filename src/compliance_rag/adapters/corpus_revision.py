@@ -98,7 +98,7 @@ from compliance_rag.graph.loader import (
 
 
 @dataclass(frozen=True, slots=True)
-class Planned:
+class PlannedRevision:
     """A plan with what applying it needs: the fresh parse it came from."""
 
     plan: RevisionPlan
@@ -130,8 +130,42 @@ class RevisionStatus:
     revision's graph step is such a load."""
 
     @property
+    def graph_load_pending(self) -> bool:
+        """The graph holds the version, the latest revision is a correction,
+        and a corpus load is open or abandoned: the revision's graph step may
+        have died between moving the hashes and finishing its load, which
+        leaves every node at its new hash and the load unfinished (ADR-0034).
+        Finishing runs the graph step again: once a person has abandoned an
+        open load, its recorded load is the one that unblocks assessments."""
+        return (
+            self.record is not None
+            and self.record.mode is RevisionMode.CORRECT
+            and self.graph_holds_version
+            and (self.corpus_load_open or self.corpus_load_blocked)
+        )
+
+    @property
     def unfinished(self) -> bool:
-        return bool(self.objects_behind or self.graph_behind or self.chunks_behind)
+        return (
+            bool(self.objects_behind or self.graph_behind or self.chunks_behind)
+            or self.graph_load_pending
+        )
+
+    @property
+    def described(self) -> str:
+        """Why a new correction waits: what of the latest revision is behind."""
+        record = self.record
+        if record is None or not self.unfinished:
+            return "no unfinished revision"
+        load = (
+            "; a corpus load is open or abandoned in the graph" if self.graph_load_pending else ""
+        )
+        return (
+            f"revision {record.revision_id} ({record.by}, {record.at}: {record.reason}) is "
+            f"unfinished — bucket objects behind {list(self.objects_behind)}, graph behind "
+            f"{list(self.graph_behind)}, Qdrant behind {list(self.chunks_behind)}{load}. Finish "
+            "it first (it needs no acknowledgement: it writes only what it recorded)"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,7 +216,7 @@ class CorpusRevision:
         version_id: str,
         selection: SelectionManifest,
         stored_version_id: str | None = None,
-    ) -> Planned:
+    ) -> PlannedRevision:
         """Parse `source_html` as `version_id`, keep what `selection` keeps,
         and compare it with what the bucket holds for `stored_version_id`
         (`version_id` itself for a correction, the version an amendment
@@ -233,13 +267,13 @@ class CorpusRevision:
             span.set_attribute("revision.changed", [c.new_clause_id for c in plan.changed])
             span.set_attribute("revision.added", [c.clause_id for c in plan.added])
             span.set_attribute("revision.removed", [r.clause_id for r in plan.removed])
-            return Planned(plan, fresh, source_html, selection)
+            return PlannedRevision(plan, fresh, source_html, selection)
 
     async def findings_citing(self, plan: RevisionPlan) -> int:
         """The number an acknowledgement of `plan` must carry."""
         return await self._ledger.count_findings_citing_clauses(plan.cited_before)
 
-    async def status(self, planned: Planned) -> RevisionStatus:
+    async def status(self, planned: PlannedRevision) -> RevisionStatus:
         """Where the version's latest revision stands in each store: which
         clauses each store still holds otherwise. Reads only."""
         plan = planned.plan
@@ -294,7 +328,7 @@ class CorpusRevision:
 
     async def correct(
         self,
-        planned: Planned,
+        planned: PlannedRevision,
         acknowledgement: RevisionAcknowledgement,
         *,
         pinned_source_sha256: str,
@@ -317,7 +351,7 @@ class CorpusRevision:
             check_correction(plan, pinned_source_sha256=pinned_source_sha256)
             status = await self.status(planned)
             if status.unfinished:
-                raise RevisionRefused(self._unfinished(status))
+                raise RevisionRefused(status.described)
             findings = await self.findings_citing(plan)
             span.set_attribute("revision.findings_citing", findings)
             check_acknowledgement(plan, acknowledgement, findings_citing=findings)
@@ -342,7 +376,7 @@ class CorpusRevision:
 
     async def finish(
         self,
-        planned: Planned,
+        planned: PlannedRevision,
         *,
         corpus_version: SourceVersion,
         instrument_since: dt.date,
@@ -388,19 +422,8 @@ class CorpusRevision:
                 effective=effective,
             )
 
-    @staticmethod
-    def _unfinished(status: RevisionStatus) -> str:
-        record = status.record
-        assert record is not None  # unfinished implies a record
-        return (
-            f"revision {record.revision_id} ({record.by}, {record.at}: {record.reason}) is "
-            f"unfinished — bucket objects behind {list(status.objects_behind)}, graph behind "
-            f"{list(status.graph_behind)}, Qdrant behind {list(status.chunks_behind)}. Finish it "
-            "first (it needs no acknowledgement: it writes only what it recorded)"
-        )
-
     async def _preflight(
-        self, planned: Planned, record: RevisionRecord, status: RevisionStatus
+        self, planned: PlannedRevision, record: RevisionRecord, status: RevisionStatus
     ) -> None:
         """Before the first write: each derived store holding the version
         agrees with the parse outside the revision, and holds each revised
@@ -415,14 +438,14 @@ class CorpusRevision:
         if status.retrieval_holds_version:
             await self._check_retrieval(planned, record)
 
-    async def _check_graph(self, planned: Planned, record: RevisionRecord) -> None:
+    async def _check_graph(self, planned: PlannedRevision, record: RevisionRecord) -> None:
         stored = await self._graph.stored([_clause_ref(c.clause_id) for c in planned.clauses])
         for clause in planned.clauses:
             node = stored.get(_clause_ref(clause.clause_id))
             have = None if node is None else node.properties.get("canonical_sha256")
             _check_derived("graph", clause, None if have is None else str(have), record)
 
-    async def _check_retrieval(self, planned: Planned, record: RevisionRecord) -> None:
+    async def _check_retrieval(self, planned: PlannedRevision, record: RevisionRecord) -> None:
         plan = planned.plan
         texts = await self._retrieval.stored_chunk_texts(
             instrument_id=plan.instrument_id, tenant_id=PUBLIC_TENANT_ID, version_id=plan.version_id
@@ -441,7 +464,7 @@ class CorpusRevision:
     async def _apply(
         self,
         authorization: RevisionAuthorization,
-        planned: Planned,
+        planned: PlannedRevision,
         status: RevisionStatus,
         *,
         corpus_version: SourceVersion,
@@ -465,7 +488,7 @@ class CorpusRevision:
                 status.record is None
                 or status.record.revision_id != record.revision_id
                 or status.graph_behind
-                or status.corpus_load_blocked
+                or status.graph_load_pending
             ):
                 check = partial(self._graph_check, planned, record, effective)
                 async with recorded_load(self._graph, corpus_version, check=check) as checked:
@@ -498,7 +521,7 @@ class CorpusRevision:
             return RevisionReport(record, corrected, loaded, chunks_revised)
 
     async def _graph_check(
-        self, planned: Planned, record: RevisionRecord, effective: dt.date
+        self, planned: PlannedRevision, record: RevisionRecord, effective: dt.date
     ) -> CheckedVersion:
         """`recorded_load`'s check, run before the load is recorded and again
         under its hold: the graph still agrees (`_check_graph`), and the
@@ -512,7 +535,7 @@ class CorpusRevision:
 
     async def amend(
         self,
-        planned: Planned,
+        planned: PlannedRevision,
         acknowledgement: RevisionAcknowledgement,
         *,
         pinned_source_sha256: str,

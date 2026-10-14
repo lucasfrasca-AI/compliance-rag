@@ -285,8 +285,9 @@ def check_correction(plan: RevisionPlan, *, pinned_source_sha256: str) -> None:
         raise RevisionRefused(
             f"{where}: the fresh parse adds {[c.clause_id for c in plan.added]}. A correction is "
             "of the clause set already stored. A reviewed selection that grew is ingest's "
-            "acknowledged-additions route, once the stored text matches the parse; a parser that "
-            "finds new clauses in the same source is not a text correction"
+            "acknowledged-additions route, once the stored text matches the parse (run this "
+            "correction from the commit before the selection grew); a parser that finds new "
+            "clauses in the same source is not a text correction"
         )
 
 
@@ -473,6 +474,24 @@ def check_revision_recordable(
             f"revision {record.revision_id} changes nothing stored: "
             f"{record.instrument_id}:{record.version_id} already holds its new hashes"
         )
+
+
+def check_revision_write(
+    record: RevisionRecord,
+    held: Mapping[str, str],
+    *,
+    given: frozenset[str],
+    on_record: bool,
+) -> list[str]:
+    """Everything a clause store checks before writing a revision, in one
+    place for every store: the paths whose hash moves (`check_revision_hashes`),
+    each with its new text given, and a correction that moves nothing already
+    on record (`check_revision_recordable`). Returns the paths that move."""
+    moving = check_revision_hashes(record, held)
+    if not set(moving) <= given:
+        raise RevisionDrift(f"{sorted(set(moving) - given)} move but no text was given")
+    check_revision_recordable(record, moving, on_record=on_record)
+    return moving
 
 
 def record_of(

@@ -82,9 +82,13 @@ acknowledgement is looked at:
   addition is refused too (the model's call): a reviewed selection that grew
   is ingest's acknowledged-additions route, which works once the stored text
   matches the parse; a parser finding new clauses in the same source is not a
-  text correction. Doing the correction first and the additions after breaks
-  the only circularity (ingest refuses changes, the correction refuses
-  additions).
+  text correction. The plan reads the checked-in selection, so if the
+  selection has grown *and* the parse corrects stored text, each path refuses
+  the other's change (ingest refuses an edit, the correction an addition).
+  Then the correction is run from the commit before the selection grew, whose
+  parse is the same and whose corpus version names it, and the additions are
+  ingested from the later one. It doesn't arise for C2026C00227: the plan
+  adds nothing.
 
 Why in place, against ADR-0021's "law is never replaced in place": that rule
 protects an issued citation from the law it verified against changing under
@@ -173,7 +177,11 @@ as the bucket. It is refused unless this checkout's parse, of the recorded
 source bytes, reproduces every recorded hash. A graph step that died leaves
 its load open (ADR-0034); the open load refuses the finish until a person
 abandons it (`load_graph_structure --abandon`, #153), and the finish's graph
-step is then the finished load that unblocks assessments.
+step is then the finished load that unblocks assessments. That includes the
+step dying after its hash transaction committed but before its load finished:
+every node is at its new hash and nothing is "behind", so an open or abandoned
+corpus load while the latest revision is a correction counts as unfinished
+too (`RevisionStatus.graph_load_pending`).
 
 **7. The writes take a capability.** `RevisionAuthorization`, issued only by
 `CorpusRevision`, carries the record; the store-level writes

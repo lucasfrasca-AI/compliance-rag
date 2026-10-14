@@ -15,7 +15,7 @@ import datetime as dt
 import json
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
@@ -24,7 +24,7 @@ import pytest
 from qdrant_client import AsyncQdrantClient
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
-from compliance_rag.adapters.corpus_revision import CorpusRevision, Planned
+from compliance_rag.adapters.corpus_revision import CorpusRevision, PlannedRevision
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.graph_schema import (
@@ -168,7 +168,9 @@ async def stores(request: pytest.FixtureRequest, graph: Neo4jGraph) -> AsyncIter
         await client.close()
 
 
-async def deploy(stores: Stores, clauses: tuple[ClauseRecord, ...] | None = None) -> None:
+async def deploy(
+    stores: Stores, clauses: tuple[ClauseRecord, ...] | None = None, *, vectors: bool = True
+) -> None:
     """The deployed state: the bucket ingest (#99), the graph structure load
     (Phase 2) and the vector load (#144), all of the old parse."""
     clauses = clauses or deployed_clauses()
@@ -186,6 +188,8 @@ async def deploy(stores: Stores, clauses: tuple[ClauseRecord, ...] | None = None
             effective=EFFECTIVE,
             supersedes=None,
         )
+    if not vectors:
+        return
     await load_version_vectors(
         clauses,
         count_tokens=words,
@@ -200,7 +204,7 @@ async def deploy(stores: Stores, clauses: tuple[ClauseRecord, ...] | None = None
     )
 
 
-async def plan(stores: Stores, revision: CorpusRevision | None = None) -> Planned:
+async def plan(stores: Stores, revision: CorpusRevision | None = None) -> PlannedRevision:
     return await (revision or stores.revision()).plan(
         source(), instrument_id=INSTRUMENT, version_id=VERSION, selection=SELECTION
     )
@@ -543,6 +547,53 @@ async def test_a_correction_whose_graph_step_died_is_detected_and_finished(
     for clause_id in CHANGED:
         (entry,) = [json.loads(e) for e in hashes[clause_id][1]]
         assert entry["revision_id"] == status.record.revision_id
+    assert await finish(stores) is None
+
+
+class _StructureWriteDies(Neo4jGraph):
+    """Dies after the hash transaction committed, inside the same load."""
+
+    async def put_nodes(self, writes: Sequence[NodeWrite]) -> int:
+        raise RuntimeError("the connection to Aura dropped mid-load")
+
+
+@needs_neo4j
+@pytest.mark.parametrize("stores", ["fake"], indirect=True)
+async def test_a_graph_step_that_died_after_moving_the_hashes_is_still_unfinished(
+    stores: Stores,
+) -> None:
+    """Every node holds its new hash, but the load that wrote them never
+    finished, and Qdrant doesn't hold the version: nothing is "behind", and
+    the revision is still unfinished until its load is recorded (ADR-0034)."""
+    await deploy(stores, vectors=False)
+    dying = _StructureWriteDies(stores.graph._driver, database="neo4j")  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(RuntimeError, match="mid-load"):
+        await correct(stores, stores.revision(graph=dying))
+    revision = stores.revision()
+    planned = await plan(stores, revision)
+    status = await revision.status(planned)
+    assert (status.objects_behind, status.graph_behind, status.chunks_behind) == ((), (), ())
+    assert status.corpus_load_open and status.graph_load_pending and status.unfinished
+    with pytest.raises(RevisionRefused, match="a corpus load is open or abandoned"):
+        await correct(stores)
+    with pytest.raises(RevisionRefused, match="corpus load is open"):
+        await finish(stores)
+    (open_load,) = await cypher(
+        stores.graph,
+        "MATCH (l:Load) WHERE l.finished_at IS NULL AND l.abandoned_at IS NULL "
+        "RETURN l.load_id AS id",
+    )
+    await stores.graph.abandon_load(str(open_load["id"]), "Piero Frasca", "died mid-load")
+    assert (await stores.graph.loaded_sources()).corpus.blocked_by_abandoned
+    report = await finish(stores)
+    assert (report.graph_nodes_corrected, report.graph_loaded, report.chunks_revised) == (
+        0,
+        True,
+        0,
+    )
+    loaded = (await stores.graph.loaded_sources()).corpus
+    assert loaded.version == FIXED_CODE and not loaded.blocked_by_abandoned
+    assert not (await revision.status(planned)).unfinished
     assert await finish(stores) is None
 
 

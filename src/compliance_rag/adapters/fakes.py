@@ -64,12 +64,7 @@ from compliance_rag.corpus.models import (
     validate_library_instrument_id,
     validate_tenant_id,
 )
-from compliance_rag.corpus.revision import (
-    RevisionDrift,
-    RevisionRecord,
-    check_revision_hashes,
-    check_revision_recordable,
-)
+from compliance_rag.corpus.revision import RevisionDrift, RevisionRecord, check_revision_write
 from compliance_rag.graph.applicability import evaluate
 from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.graph.track_a import snapshot_of_mappings
@@ -205,7 +200,8 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                 authorization.tenant_id,
             ):
                 raise PermissionError(
-                    f"{chunk.chunk_id} isn't stored: a correction rewords a chunk, never adds one"
+                    f"{chunk.chunk_id} isn't stored as this version's library law: a correction "
+                    "rewords a stored chunk, never adds one"
                 )
         for chunk in chunks:
             # The text changes and nothing else, as on Qdrant: the stored
@@ -645,13 +641,11 @@ class FakeClauseStore(ClauseStore):
         held = await self.get_manifest(
             record.instrument_id, record.version_id, tenant_id=authorization.tenant_id
         )
-        moving = check_revision_hashes(record, held)
-        given = {c.clause_path for c in clauses}
-        if not set(moving) <= given:
-            raise RevisionDrift(f"{sorted(set(moving) - given)} move but no text was given")
         recorded = self._revisions.setdefault(key, [])
         on_record = any(r.revision_id == record.revision_id for r in recorded)
-        check_revision_recordable(record, moving, on_record=on_record)
+        check_revision_write(
+            record, held, given=frozenset(c.clause_path for c in clauses), on_record=on_record
+        )
         if not on_record:
             recorded.append(record)
         for clause in clauses:

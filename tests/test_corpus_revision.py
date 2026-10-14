@@ -15,25 +15,25 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
-from compliance_rag.adapters.interfaces import ClauseStore, RetrievalAdmin
+from compliance_rag.adapters.interfaces import ClauseStore
 from compliance_rag.adapters.revision_authorization import (
     RevisionAuthorization,
     _issue,  # pyright: ignore[reportPrivateUsage] — the stores' half of the contract
 )
-from compliance_rag.corpus.chunker import chunk_clauses
 from compliance_rag.corpus.models import (
     CANONICALISATION_VERSION,
     PUBLIC_TENANT_ID,
     ClauseRecord,
     Scope,
     canonical_sha256,
+    canonicalise,
     sha256_hex,
 )
 from compliance_rag.corpus.parser import ParsedCompilation, parse_compilation
@@ -178,6 +178,21 @@ def test_the_fixture_reproduces_the_deployed_defect_on_exactly_seven_clauses() -
     assert plan.mode is RevisionMode.CORRECT
     assert {c.new_clause_id for c in plan.changed} == CHANGED
     assert (plan.added, plan.removed, plan.unchanged) == ((), (), 32 - 7)
+
+
+def test_the_deployed_texts_are_the_parses_own_words_on_other_clauses() -> None:
+    """`DEPLOYED` is typed in, so it is checked: the old parser put the same
+    words on other clauses, it didn't lose or invent any (ADR-0039, ADR-0041:
+    "the multiset of words is identical"). A transcription error in it fails
+    here."""
+    old = Counter(w for t in DEPLOYED.values() for w in canonicalise(t).split())
+    new = Counter(
+        w
+        for c in corrected_clauses()
+        if c.clause_path in DEPLOYED
+        for w in c.canonical_text.split()
+    )
+    assert old == new
 
 
 def test_each_changed_clause_carries_both_texts_and_both_hashes() -> None:
@@ -434,60 +449,9 @@ def _bucket() -> tuple[_FakeBucket, GCSClauseStore]:
     return bucket, GCSClauseStore(bucket)
 
 
-def _revised() -> tuple[ClauseRecord, ...]:
+def revised_clauses() -> tuple[ClauseRecord, ...]:
+    """The seven clauses as the corrected parse has them."""
     return tuple(c for c in corrected_clauses() if c.clause_id in CHANGED)
-
-
-async def assert_clause_store_revision_contract(store: ClauseStore) -> None:
-    """Every `ClauseStore`: the record and the new hashes on the manifest, the
-    new text in the objects, idempotent, and a stale or foreign write refused."""
-    await deploy_bucket(store)
-    granted = authorization()
-    with pytest.raises(PermissionError, match="its hash differs"):
-        await store.record_revision(granted, deployed_clauses()[:1] + _revised()[1:])
-    assert await store.revisions(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID) == ()
-    with pytest.raises(RevisionDrift, match="no text was given"):
-        await store.record_revision(granted, _revised()[1:])
-
-    await store.record_revision(granted, _revised())
-    manifest = await store.get_manifest(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID)
-    assert manifest == {
-        c.clause_path: canonical_sha256(c.canonical_text) for c in corrected_clauses()
-    }
-    for clause in _revised():
-        stored = await store.get_clause(clause.clause_id, tenant_id=PUBLIC_TENANT_ID)
-        assert stored == clause
-    assert await store.revisions(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID) == (
-        granted.record,
-    )
-
-    # Again, the same revision: nothing more is recorded.
-    await store.record_revision(granted, _revised())
-    assert await store.revisions(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID) == (
-        granted.record,
-    )
-    # Another correction of what is already corrected changes nothing: refused,
-    # so the manifest never records a revision that didn't happen.
-    with pytest.raises(RevisionDrift, match="changes nothing stored"):
-        await store.record_revision(authorization("r2"), _revised())
-    # One whose previous hashes aren't stored: drift.
-    other = _issue(
-        replace(
-            granted.record,
-            revision_id="r3",
-            clauses=(RevisedClause("s6/1", "0" * 64, "1" * 64),),
-        )
-    )
-    with pytest.raises(RevisionDrift, match="neither the previous"):
-        await store.record_revision(other, ())
-
-
-async def test_the_gcs_clause_store_satisfies_the_revision_contract() -> None:
-    await assert_clause_store_revision_contract(_bucket()[1])
-
-
-async def test_the_fake_clause_store_satisfies_the_revision_contract() -> None:
-    await assert_clause_store_revision_contract(FakeClauseStore())
 
 
 async def test_the_bucket_keeps_the_old_text_as_noncurrent_and_writes_the_manifest_first() -> None:
@@ -501,7 +465,7 @@ async def test_the_bucket_keeps_the_old_text_as_noncurrent_and_writes_the_manife
         original(name, data)
 
     bucket.write = counting  # type: ignore[method-assign]
-    await store.record_revision(authorization(), _revised())
+    await store.record_revision(authorization(), revised_clauses())
     manifest_key = f"{INSTRUMENT}/{VERSION}/manifest.json"
     assert writes[0] == manifest_key and writes.count(manifest_key) == 1
     assert len(writes) == 1 + 7
@@ -516,7 +480,7 @@ async def test_the_bucket_keeps_the_old_text_as_noncurrent_and_writes_the_manife
     assert on_record[0]["clauses"]["s6/1"]["previous_sha256"] == canonical_sha256(DEPLOYED["s6/1"])
     # Finishing writes nothing that already holds its text.
     writes.clear()
-    await store.record_revision(authorization(), _revised())
+    await store.record_revision(authorization(), revised_clauses())
     assert writes == []
 
 
@@ -536,81 +500,21 @@ async def test_a_bucket_write_that_dies_after_the_manifest_is_finished_by_callin
 
     bucket.write = failing  # type: ignore[method-assign]
     with pytest.raises(RuntimeError):
-        await store.record_revision(authorization(), _revised())
+        await store.record_revision(authorization(), revised_clauses())
     bucket.write = original  # type: ignore[method-assign]
     # The manifest committed the revision; two objects hold the new text.
     assert len(await store.revisions(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID)) == 1
     behind = [
         c
-        for c in _revised()
+        for c in revised_clauses()
         if (await store.get_clause(c.clause_id, tenant_id=PUBLIC_TENANT_ID)) != c
     ]
     assert len(behind) == 5
-    await store.record_revision(authorization(), _revised())
-    for clause in _revised():
+    await store.record_revision(authorization(), revised_clauses())
+    for clause in revised_clauses():
         assert await store.get_clause(clause.clause_id, tenant_id=PUBLIC_TENANT_ID) == clause
 
 
-async def test_a_version_never_ingested_is_not_revised() -> None:
+async def test_a_version_never_ingested_is_notrevised_clauses() -> None:
     with pytest.raises(RevisionDrift, match="no completed ingest"):
-        await _bucket()[1].record_revision(authorization(), _revised())
-
-
-# ---- the retrieval store's half --------------------------------------------
-
-
-async def assert_revise_chunks_contract(store: RetrievalAdmin) -> None:
-    """Every `RetrievalAdmin`: the text (and vectors) of a stored chunk the
-    revision names change, and nothing else; a chunk not stored, or text the
-    revision doesn't record, is refused before anything is written."""
-    deployed = chunk_clauses(deployed_clauses(), count_tokens=words)
-    effective = dt.date(2026, 6, 4)
-    await store.upsert_chunks(
-        tuple(c.model_copy(update={"valid_from": effective}) for c in deployed)
-    )
-    texts = await store.stored_chunk_texts(
-        instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
-    )
-    assert texts == {c.chunk_id: c.text for c in deployed}
-    fixed = chunk_clauses(_revised(), count_tokens=words)
-    old = {c.chunk_id: c for c in deployed}
-    with pytest.raises(PermissionError, match="its hash differs"):
-        await store.revise_chunks(authorization(), (*fixed[:-1], old[fixed[-1].chunk_id]))
-    assert (
-        await store.stored_chunk_texts(
-            instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
-        )
-        == texts
-    )
-    await store.revise_chunks(authorization(), fixed)
-    after = await store.stored_chunk_texts(
-        instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
-    )
-    assert after == {**texts, **{c.chunk_id: c.text for c in fixed}}
-    assert await store.version_chunk_ids(
-        instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
-    ) == frozenset(texts)
-
-
-async def test_the_fake_retrieval_store_satisfies_the_revise_chunks_contract() -> None:
-    store = FakeRetrievalStore(ledger=FakeLedgerStore())
-    await assert_revise_chunks_contract(store)
-    # Nothing but the text changed: the valid time is the stored chunk's.
-    revised = store._chunks[f"{INSTRUMENT}:{VERSION}:s6/1"]  # pyright: ignore[reportPrivateUsage]
-    assert revised.valid_from == dt.date(2026, 6, 4)
-
-
-async def test_a_chunk_not_stored_is_never_added_by_a_revision() -> None:
-    store = FakeRetrievalStore(ledger=FakeLedgerStore())
-    fixed = chunk_clauses(_revised(), count_tokens=words)
-    with pytest.raises(PermissionError, match="never adds one"):
-        await store.revise_chunks(authorization(), fixed)
-    assert store.stored_chunk_ids == frozenset()
-
-
-async def test_a_chunk_of_another_tenant_is_not_revised() -> None:
-    store = FakeRetrievalStore(ledger=FakeLedgerStore())
-    (fixed,) = chunk_clauses(_revised()[:1], count_tokens=words)
-    await store.upsert_chunks((fixed.model_copy(update={"tenant_id": "acme"}),))
-    with pytest.raises(PermissionError, match="never adds one"):
-        await store.revise_chunks(authorization(), (fixed,))
+        await _bucket()[1].record_revision(authorization(), revised_clauses())

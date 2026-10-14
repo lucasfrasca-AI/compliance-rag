@@ -679,20 +679,29 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         ).filter
         texts: dict[str, str] = {}
         offset: PointId | None = None
-        while True:
-            points, offset = await self._client.scroll(
-                self._collection_name,
-                scroll_filter=target,
-                with_payload=["chunk_id", "text"],
-                with_vectors=False,
-                limit=_SCROLL_PAGE,
-                offset=offset,
-            )
-            texts.update(
-                {str(p.payload["chunk_id"]): str(p.payload["text"]) for p in points if p.payload}
-            )
-            if offset is None:
-                return texts
+        with telemetry.span(
+            "qdrant.stored_chunk_texts",
+            **{"retrieval.version": f"{instrument_id}:{version_id}", "retrieval.tenant": tenant_id},
+        ) as span:
+            while True:
+                points, offset = await self._client.scroll(
+                    self._collection_name,
+                    scroll_filter=target,
+                    with_payload=["chunk_id", "text"],
+                    with_vectors=False,
+                    limit=_SCROLL_PAGE,
+                    offset=offset,
+                )
+                texts.update(
+                    {
+                        str(p.payload["chunk_id"]): str(p.payload["text"])
+                        for p in points
+                        if p.payload
+                    }
+                )
+                if offset is None:
+                    span.set_attribute("retrieval.stored_chunks", len(texts))
+                    return texts
 
     async def revise_chunks(
         self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
@@ -729,8 +738,8 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     authorization.tenant_id,
                 ):
                     raise PermissionError(
-                        f"{chunk.chunk_id} isn't stored: a correction rewords a chunk, never "
-                        "adds one"
+                        f"{chunk.chunk_id} isn't stored as this version's library law: a "
+                        "correction rewords a stored chunk, never adds one"
                     )
             dense_vectors = await self._embedder.embed(tuple(c.text for c in chunks))
             sparse_vectors = _encode_documents(c.text for c in chunks)

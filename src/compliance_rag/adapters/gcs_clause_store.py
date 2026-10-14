@@ -53,12 +53,7 @@ from compliance_rag.corpus.models import (
     parse_stable_id,
     sha256_hex,
 )
-from compliance_rag.corpus.revision import (
-    RevisionDrift,
-    RevisionRecord,
-    check_revision_hashes,
-    check_revision_recordable,
-)
+from compliance_rag.corpus.revision import RevisionDrift, RevisionRecord, check_revision_write
 
 
 class _BlobLike(Protocol):
@@ -268,12 +263,13 @@ class GCSClauseStore(ClauseStore):
             )
         paths: dict[str, str] = manifest.setdefault("clause_paths", {})
         recorded: list[dict[str, object]] = manifest.setdefault("revisions", [])
-        changed = check_revision_hashes(record, paths)
-        given = {c.clause_path for c in clauses}
-        if not set(changed) <= given:
-            raise RevisionDrift(f"{sorted(set(changed) - given)} move but no text was given")
         on_record = any(r.get("revision_id") == record.revision_id for r in recorded)
-        check_revision_recordable(record, changed, on_record=on_record)
+        changed = check_revision_write(
+            record,
+            paths,
+            given=frozenset(c.clause_path for c in clauses),
+            on_record=on_record,
+        )
         if changed or not on_record:
             for path in changed:
                 paths[path] = record.written[path]
