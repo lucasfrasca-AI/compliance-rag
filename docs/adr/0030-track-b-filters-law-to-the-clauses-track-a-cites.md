@@ -1,6 +1,6 @@
 # ADR-0030 — Track B filters library law to the clauses Track A cites
 
-- Status: accepted
+- Status: accepted; amended by ADR-0035 (a cited clause admits the clauses inside it)
 - Date: 2026-10-12
 - Issue: #116
 - Refines: ADR-0004 / `D-03` ("Track B returns supporting text, filtered to Track A's IDs")

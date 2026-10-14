@@ -41,6 +41,7 @@ from compliance_rag.corpus.models import (
     ClauseRecord,
     DocumentClass,
     Scope,
+    clause_ancestors,
     validate_tenant_id,
 )
 
@@ -98,9 +99,10 @@ class LawScope:
     """Which library-law clauses Track B may return (D-03, ADR-0030).
 
     Built from Track A's coverage (`LawScope.of`): the clauses its applicable
-    and unassessable obligations cite. A library clause outside that set is
-    never returned, by any channel, however well it matches. The tenant's own
-    documents aren't law, and Track A doesn't scope them.
+    and unassessable obligations cite, and the clauses inside them (#163). A
+    library clause outside that set is never returned, by any channel, however
+    well it matches. The tenant's own documents aren't law, and Track A
+    doesn't scope them.
 
     `unscoped` is the one way to retrieve library law without Track A. It is
     for a question asked with no tenant profile (the Phase 1 retrieval eval,
@@ -131,14 +133,22 @@ class LawScope:
         return cls(None, f"{UNSCOPED}{reason}")
 
     def admits(self, scope: Scope, clause_id: str) -> bool:
-        return scope is not Scope.PUBLIC or self.clause_ids is None or clause_id in self.clause_ids
+        """A cited clause admits the clauses inside it: the mapping cites a
+        subclause (APP 11.2), and the law is stored down to its paragraphs
+        (APP 11.2(b), (d)), which are its text (#163)."""
+        if scope is not Scope.PUBLIC or self.clause_ids is None:
+            return True
+        return clause_id in self.clause_ids or not self.clause_ids.isdisjoint(
+            clause_ancestors(clause_id)
+        )
 
     @property
     def described(self) -> str:
-        """For a span: the reason, and how many clauses it admits."""
+        """For a span: the reason, and how many clauses it cites. Each also
+        admits the clauses inside it (#163), which this doesn't count."""
         if self.clause_ids is None:
             return self.reason
-        return f"{self.reason}: {len(self.clause_ids)} clause(s)"
+        return f"{self.reason}: {len(self.clause_ids)} cited clause(s) and those inside them"
 
 
 @dataclass(frozen=True, slots=True)

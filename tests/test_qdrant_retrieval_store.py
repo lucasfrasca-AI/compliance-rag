@@ -162,7 +162,7 @@ async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
     )
     await store.ensure_ready()
     info = await client.get_collection(name)
-    assert "instrument_id" in info.payload_schema
+    assert {"instrument_id", "ancestors"} <= set(info.payload_schema)  # ADR-0020, ADR-0035
     assert info.points_count == 1
 
 
