@@ -1,17 +1,26 @@
-"""One-off: the recall gate's measurement on the deployed Qdrant cluster (#144),
-so its numbers come at least once from the store that will serve answers, not
-only from a container.
+"""The recall gate's measurement on the deployed Qdrant cluster (#144, #180), so
+its numbers come at least once from the store that will serve answers, not only
+from a container.
 
-Two measurements:
+Two measurements, both on the gate's corpus (the whole compilation's 779
+selected clauses, ADR-0043), so every difference below is cloud versus
+container on the same corpus:
 
-1. **The gate itself.** The golden corpus on a throwaway collection on the
-   cloud cluster (uniquely named, dropped on exit, never `clauses`), fused and
-   reranked, beside the container baseline (`corpus/golden/recall_baseline.json`).
+1. **The gate itself.** The gate corpus on a throwaway collection on the cloud
+   cluster (uniquely named, dropped on exit, never `clauses`), fused and
+   reranked. Fused is compared query by query with the container baseline
+   (`corpus/golden/recall_baseline.json`); reranked with the floors.
 2. **The deployed collection.** The golden set's law-only queries (tenant
-   `_public`) against `clauses` itself, read only. That is the whole
-   compilation (779 clauses), not the golden excerpt, so there are more
-   distractors than the gate has. A difference from the gate is a finding to
-   explain, not something to re-baseline away.
+   `_public`) against `clauses` itself, read only — the Acme queries need
+   policies that aren't in it, and shouldn't be. Fused is compared query by
+   query with the container baseline, reranked with measurement 1's reranked
+   for the same query (same reranker, same machine).
+
+Until #178 part 2 republishes `clauses`, it holds the compilation's *previous*
+parse, where #178's s6(1) definitions and #186's connectors read differently,
+so a small difference in measurement 2 is expected; after it, measurement 2
+should match the container exactly. A difference then is a finding to explain,
+not something to re-baseline away.
 
 Query vectors come from the checked-in cache, so nothing calls Vertex; the
 reranker is the int8 cross-encoder, in-process. Reads QDRANT_URL /
@@ -24,60 +33,73 @@ holds no Qdrant Cloud credentials (`tests/test_keepalive_workflows.py`).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Mapping
 
 from compliance_rag.adapters.fakes import FakeLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
-from compliance_rag.eval.golden import Category, GoldenSet, load_golden_set
+from compliance_rag.eval.golden import load_golden_set
 from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
-    EXIT_BARS,
+    FLOORS,
     FUSED,
     RERANKED,
     QueryRecall,
-    by_category,
+    by_cell,
     load_baseline,
     measure,
-    regressions,
+    target_of,
 )
 from compliance_rag.reranker_service.model import RerankerModel
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings
 
 
-def _baseline_means(query_ids: Iterable[str], golden: GoldenSet) -> dict[Category, float]:
-    """The container baseline's fused recall@10, as category means over
-    `query_ids` — the comparison each cloud number is printed beside."""
-    baseline = load_baseline()
-    category = {q.id: q.category for q in golden.queries}
-    grouped: dict[Category, list[float]] = {}
-    for query_id in query_ids:
-        grouped.setdefault(category[query_id], []).append(baseline[query_id][FUSED])
-    return {c: sum(values) / len(values) for c, values in grouped.items()}
-
-
-def _report(title: str, results: tuple[QueryRecall, ...], golden: GoldenSet) -> None:
-    container = _baseline_means((r.query_id for r in results), golden)
-    print(f"\n{title}: recall@10 by category")
-    print(f"  {'category':<13} {'bar':>4}  {'fused':>6} {'container':>9}  {'reranked':>8}")
-    for category, lists in sorted(by_category(results).items()):
+def _report(
+    title: str,
+    results: tuple[QueryRecall, ...],
+    *,
+    fused_reference: Mapping[str, float],
+    reranked_reference: Mapping[str, float] | None,
+) -> None:
+    """Each cell, then every query whose recall differs from its reference, in
+    either direction: on the same corpus, cloud and container should agree."""
+    print(f"\n{title}: recall@10")
+    print(f"  {'category':<13} {'class':<16} {'fused':>6} {'container':>9}  {'reranked':>8}")
+    for cell, fused in sorted(by_cell(results, FUSED).items()):
+        _, category, document_class = cell
+        members = [r for r in results if (r.category, r.document_class) == cell[1:]]
+        container = sum(fused_reference[r.query_id] for r in members) / len(members)
+        reranked_cell = (RERANKED, category, document_class)
+        reranked = by_cell(results, RERANKED)[reranked_cell]
         print(
-            f"  {category.value:<13} {EXIT_BARS[category]:>4.1f}  {lists[FUSED]:>6.3f} "
-            f"{container[category]:>9.3f}  {lists[RERANKED]:>8.3f}"
+            f"  {category.value:<13} {document_class.value:<16} {fused:>6.3f} {container:>9.3f}"
+            f"  {reranked:>8.3f}  (floor {FLOORS[reranked_cell]:.3f}, "
+            f"target {target_of(reranked_cell)})"
         )
-    for query_id, (before, after) in sorted(regressions(results, load_baseline()).items()):
-        print(f"  below the container baseline: {query_id} {before:.3f} -> {after:.3f}")
-    for result in results:
-        if result.by_list[RERANKED] < 1.0:
-            print(f"  reranked miss {result.query_id} ({result.category.value}): {result.by_list}")
+    for r in results:
+        if abs(r.by_list[FUSED] - fused_reference[r.query_id]) > 1e-9:
+            print(
+                f"  fused differs from the container: {r.query_id} "
+                f"{fused_reference[r.query_id]:.3f} -> {r.by_list[FUSED]:.3f}"
+            )
+        if reranked_reference is not None and (
+            abs(r.by_list[RERANKED] - reranked_reference[r.query_id]) > 1e-9
+        ):
+            print(
+                f"  reranked differs from measurement 1: {r.query_id} "
+                f"{reranked_reference[r.query_id]:.3f} -> {r.by_list[RERANKED]:.3f}"
+            )
+        if r.by_list[RERANKED] < 1.0:
+            print(f"  reranked miss {r.query_id} ({r.category.value}): {r.by_list}")
 
 
 async def main() -> None:
     settings = Settings()
     golden = load_golden_set()
+    container = {query_id: lists[FUSED] for query_id, lists in load_baseline().items()}
     model = RerankerModel()
     async with (
         golden_store(
@@ -89,7 +111,12 @@ async def main() -> None:
         in_process_reranker(model) as reranker,
     ):
         gate = await measure(RetrievalPipeline(store, reranker), golden)
-    _report("1. the gate, on a throwaway collection on the cloud cluster", gate, golden)
+    _report(
+        "1. the gate, on a throwaway collection on the cloud cluster",
+        gate,
+        fused_reference=container,
+        reranked_reference=None,
+    )
 
     law_only = golden.model_copy(
         update={"queries": tuple(q for q in golden.queries if q.tenant_id == PUBLIC_TENANT_ID)}
@@ -102,9 +129,10 @@ async def main() -> None:
         whole = await measure(RetrievalPipeline(deployed, reranker), law_only)
     _report(
         f"2. the {len(law_only.queries)} law-only queries on the deployed "
-        f"{settings.qdrant_collection!r} collection (the whole compilation)",
+        f"{settings.qdrant_collection!r} collection",
         whole,
-        golden,
+        fused_reference=container,
+        reranked_reference={r.query_id: r.by_list[RERANKED] for r in gate},
     )
 
 
