@@ -31,9 +31,12 @@ implements are all from issue #9's ePub format spike
   a connector — *record*'s "but does not include:" — and leads the paragraph
   that follows, keeping source order across the stored clauses; after the last
   one it closes the definition and joins the definition's own text, ahead of
-  its paragraphs, as a subsection's closing words always have. Outside a
-  Definition every `subsection2` still joins its subsection's text, as it
-  always has.
+  its paragraphs, as a subsection's closing words always have.
+- The same holds in any other subsection (issue #186, ADR-0039): a `subsection2`
+  between two paragraphs is a connector — s7(1)'s "but does not include a
+  reference to an act done ... received from:" — and leads the paragraph that
+  follows; one that no paragraph follows is the subsection's closing words and
+  joins its text, as it always has (s8(2)).
 """
 
 from __future__ import annotations
@@ -200,12 +203,6 @@ class _DefinitionNode:
     # closes the whole of *credit reporting body*, not just its last paragraph.
     unclaimed: list[str] = field(default_factory=list[str])
 
-    def claim(self) -> str:
-        """The words waiting to lead the clause that is opening now."""
-        words = " ".join(w for w in self.unclaimed if w)
-        self.unclaimed = []
-        return words
-
 
 @dataclass
 class _SubsectionNode:
@@ -221,6 +218,13 @@ class _SubsectionNode:
     children: list[_ParagraphNode | _DefinitionNode] = field(
         default_factory=list[_ParagraphNode | _DefinitionNode]
     )
+    # The same for a subsection that holds no Definition yet (issue #186):
+    # `subsection2` words that no clause has taken. s7(1)'s "but does not include
+    # a reference to an act done ...:" between (ee) and (f) leads (f); words
+    # still here when the subsection ends close it, and `_emit_subsection` puts
+    # them after its other text, where they always went (s8(2)). A Definition
+    # opening settles them into `text_parts` first, so they keep their place.
+    unclaimed: list[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -236,11 +240,14 @@ def _strip_leading_token(text: str, pattern: re.Pattern[str]) -> tuple[str, str]
     return match.group(1), text[match.end() :]
 
 
-def _with_waiting_words(definition: _DefinitionNode | None, text: str) -> str:
-    """A paragraph's own text, with any unclaimed words of the definition it
-    sits in placed in front of it, as the source reads them. Outside a
-    definition, or with nothing waiting, `text` is unchanged."""
-    lead = definition.claim() if definition is not None else ""
+def _with_waiting_words(owner: _DefinitionNode | _SubsectionNode | None, text: str) -> str:
+    """A paragraph's own text, with any unclaimed words of the definition (or
+    subsection) it sits in placed in front of it, as the source reads them. With
+    nothing waiting, `text` is unchanged."""
+    if owner is None:
+        return text
+    lead = " ".join(w for w in owner.unclaimed if w)
+    owner.unclaimed = []
     return f"{lead} {text}".strip() if lead else text
 
 
@@ -277,6 +284,9 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
 
     for index, block in enumerate(blocks):
         cls = block.class_name
+        # Whose `subsection2` words wait for the next clause to open: the open
+        # definition's, else the open subsection's (issues #178, #186).
+        holder = current_definition if current_definition is not None else current_subsection
 
         if cls == "ActHead1":
             # CharChapNo carries the schedule number as its own span text,
@@ -324,17 +334,20 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             # s6(1) holds hundreds of them, and a chapeau that collected their
             # closing words read "In this Act, unless the contrary intention
             # appears: but does not include: ...". Whether it leads the next
-            # paragraph or closes the definition is known only once the next
-            # block is, so it waits (`unclaimed`).
-            if current_definition is not None:
-                current_definition.unclaimed.append(block.inner_text)
-            elif current_subsection is not None:
-                current_subsection.text_parts.append(block.inner_text)
+            # paragraph (a connector: s7(1)'s "but does not include a
+            # reference to an act done ...:", issue #186) or closes the list is
+            # known only once the next block is, so it waits (`unclaimed`).
+            if holder is not None:
+                holder.unclaimed.append(block.inner_text)
             continue
 
         if cls == "Definition":
             if current_subsection is None:
                 continue
+            # Words that closed a list before this Definition keep their place
+            # in the subsection's text, ahead of the Definition's lead-in.
+            current_subsection.text_parts.extend(current_subsection.unclaimed)
+            current_subsection.unclaimed = []
             term, body = _definition_term(block)
             node = _DefinitionNode(term=term, text=body, block_index=index)
             current_subsection.children.append(node)
@@ -361,7 +374,7 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             if parent is None:
                 continue
             node = _ParagraphNode(
-                token=token, text=_with_waiting_words(current_definition, rest), block_index=index
+                token=token, text=_with_waiting_words(holder, rest), block_index=index
             )
             parent.append(node)
             current_paragraph = node
@@ -373,7 +386,7 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
                 continue
             token, rest = _strip_leading_token(block.inner_text, _PARAGRAPHSUB_RE)
             node = _ParagraphNode(
-                token=token, text=_with_waiting_words(current_definition, rest), block_index=index
+                token=token, text=_with_waiting_words(holder, rest), block_index=index
             )
             current_paragraph.children.append(node)
             current_paragraphsub = node
@@ -385,7 +398,7 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             token, rest = _strip_leading_token(block.inner_text, _PARAGRAPHSUB_SUB_RE)
             node = _ParagraphNode(
                 token=token.lower(),
-                text=_with_waiting_words(current_definition, rest),
+                text=_with_waiting_words(holder, rest),
                 block_index=index,
             )
             current_paragraphsub.children.append(node)
@@ -463,6 +476,8 @@ def _emit_subsection(
                 rendered_parts.append(_definition_text(part))
         else:
             rendered_parts.append(part)
+    # Words no paragraph took close the subsection, after its other text (s8(2)).
+    rendered_parts.extend(subsection.unclaimed)
     ctx.clauses.append(ctx.build(subsection_path, " ".join(p for p in rendered_parts if p)))
     ctx.anchors[subsection.block_index] = subsection_path
 

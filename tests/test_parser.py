@@ -349,6 +349,85 @@ def test_a_connector_in_a_singleton_definition_leads_its_paragraph_too() -> None
 
 
 # --------------------------------------------------------------------------
+# Words between and after the paragraphs of an ordinary subsection (issue
+# #186, ADR-0039). The 21 real connectors are pinned on the constructs fixture
+# in test_parser_full_compilation.py; these are the edges no real fixture
+# holds, shaped per the same class table, so they are synthetic.
+# --------------------------------------------------------------------------
+
+
+def _texts(body: str) -> dict[str, str]:
+    html = f"""<html><body>
+<p class="ActHead5"><span class="CharSectno">6</span><span> Interpretation</span></p>
+{body}
+</body></html>"""
+    result = parse_compilation(html, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
+    return {c.clause_path: c.text for c in result.clauses}
+
+
+def test_a_connector_leads_a_subparagraph_and_closing_words_close_the_subsection() -> None:
+    """A connector between two sub-paragraphs leads the second, and the words
+    after the last close the subsection, ahead of its paragraphs (as s8(2)'s do)."""
+    assert _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> one:</span></p>
+<p class="paragraphsub"><span>(i)</span><span> red; or</span></p>
+<p class="subsection2"><span>but not:</span></p>
+<p class="paragraphsub"><span>(ii)</span><span> blue;</span></p>
+<p class="subsection2"><span>then it applies.</span></p>"""
+    ) == {
+        "s6/1": "If: then it applies.",
+        "s6/1/a": "one:",
+        "s6/1/a/i": "red; or",
+        "s6/1/a/ii": "but not: blue;",
+    }
+
+
+def test_words_waiting_for_a_paragraph_never_reach_the_next_subsection() -> None:
+    """Closing words wait to see whether a paragraph follows. The next
+    subsection's first paragraph is not that paragraph."""
+    assert _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> one;</span></p>
+<p class="subsection2"><span>then X applies.</span></p>
+<p class="subsection"><span>(2)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> two;</span></p>"""
+    ) == {
+        "s6/1": "If: then X applies.",
+        "s6/1/a": "one;",
+        "s6/2": "If:",
+        "s6/2/a": "two;",
+    }
+
+
+def test_closing_words_stay_ahead_of_a_definition_that_follows_them() -> None:
+    """Outside a Definition nothing changes (ADR-0039): words that closed a list
+    before a singleton Definition still come before it, in the subsection's text."""
+    assert _texts(
+        """<p class="subsection"><span>(2)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> x;</span></p>
+<p class="subsection2"><span>then:</span></p>
+<p class="Definition"><span style="font-weight:bold">gamma</span><span> means a thing.</span></p>"""
+    ) == {"s6/2": "If: then: gamma means a thing.", "s6/2/a": "x;"}
+
+
+def test_a_connector_held_across_a_tokenless_paragraph_is_not_lost() -> None:
+    """Not modelled (ADR-0039): a tokenless paragraph continues the one above,
+    and the connector waiting before it leads the next paragraph that opens. No
+    real fixture has the shape; what must hold is that the words are stored once."""
+    texts = _texts(
+        """<p class="subsection"><span>(1)</span><span> If:</span></p>
+<p class="paragraph"><span>(a)</span><span> one;</span></p>
+<p class="subsection2"><span>then:</span></p>
+<p class="paragraph"><span>continues one;</span></p>
+<p class="paragraph"><span>(b)</span><span> two.</span></p>"""
+    )
+    assert sorted(" ".join(texts.values()).split()) == sorted(
+        ["If:", "one;", "then:", "continues", "one;", "two."]
+    )
+
+
+# --------------------------------------------------------------------------
 # Container tracking: the spike's central finding. Synthetic snippet, since
 # the real fixture (deliberately byte-verbatim) never includes a second
 # Schedule — shaped per the spike's documented ActHead1/CharChapNo pattern.
