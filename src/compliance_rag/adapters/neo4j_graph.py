@@ -81,6 +81,7 @@ from compliance_rag.adapters.interfaces import (
     SourceKind,
     SourceVersion,
 )
+from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.corpus.models import NO_END_DATE
 from compliance_rag.settings import Settings
 
@@ -741,6 +742,67 @@ class Neo4jGraph(GraphAdmin):
             ),
             {**parameters, "props": props, "entry": entry},
         )
+
+    # ---- parse corrections of library law (ADR-0042) ------------------------
+
+    async def revise_clauses(self, authorization: RevisionAuthorization) -> int:
+        """Every clause of the authorised correction in one transaction, each
+        lock, read, check, set, as `correct` does: `canonical_sha256` from the
+        recorded previous hash to the new one, and an entry on the node's
+        `corrections` trail (the revision's when, who, why, id and source, and
+        the previous hash). A node already at the new hash is left alone; a
+        missing node, or one at any other hash, refuses the whole revision."""
+        record = authorization.record
+        if not record.corrected:
+            raise GraphWriteRefused(
+                "only a correction rewrites a Clause node in place; an amendment is a new "
+                "version node with SUPERSEDES (D-05)"
+            )
+
+        async def work(tx: AsyncManagedTransaction) -> int:
+            changed = 0
+            for entry in record.corrected:
+                clause_id = record.clause_id(entry.clause_path)
+                locked = await tx.run(
+                    "MATCH (n:Clause {stable_id: $stable_id}) SET n._lock = true "
+                    "RETURN n.canonical_sha256 AS sha",
+                    stable_id=clause_id,
+                )
+                row = await locked.single()
+                if row is None:
+                    raise GraphWriteRefused(f"no Clause {clause_id!r} to correct")
+                have = row["sha"]
+                if have == entry.sha256:
+                    await tx.run(
+                        "MATCH (n:Clause {stable_id: $stable_id}) REMOVE n._lock",
+                        stable_id=clause_id,
+                    )
+                    continue  # already corrected: a re-run
+                if have != entry.previous_sha256 or entry.previous_sha256 is None:
+                    raise GraphWriteRefused(
+                        f"Clause {clause_id!r} has canonical_sha256 {have}, neither the previous "
+                        f"({entry.previous_sha256}) nor the new ({entry.sha256}) hash revision "
+                        f"{record.revision_id} records"
+                    )
+                await tx.run(
+                    "MATCH (n:Clause {stable_id: $stable_id}) "
+                    "SET n.canonical_sha256 = $sha, "
+                    "n.corrections = coalesce(n.corrections, []) + $entry REMOVE n._lock",
+                    stable_id=clause_id,
+                    sha=entry.sha256,
+                    entry=record.trail_entry(entry.previous_sha256),
+                )
+                changed += 1
+            return changed
+
+        attributes: dict[str, str | int] = {
+            "graph.revision_id": record.revision_id,
+            "graph.revised": ",".join(
+                sorted(record.clause_id(c.clause_path) for c in record.corrected)
+            ),
+            "graph.revised_by": record.by,
+        }
+        return await self._write("neo4j_graph.revise_clauses", attributes, work)
 
     # ---- migration (ADR-0029) ---------------------------------------------
 

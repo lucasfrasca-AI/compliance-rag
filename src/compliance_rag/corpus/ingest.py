@@ -13,7 +13,9 @@ literal clause-path enumeration: `manifest.yaml` declares scope as prefixes,
 and a re-ingest whose prefixes now expand to a different set — or whose
 already-stored clause content no longer matches a fresh parse of the same
 pinned compilation — stops before writing anything and waits for a human
-(`CLAUDE.md` corpus rules: "canonical text never edited after write").
+(`CLAUDE.md` corpus rules: "canonical text never edited after write"). The
+human's path for a changed text is a corpus revision (`corpus/revision.py`,
+`scripts/revise_compilation.py`, ADR-0042), never a re-ingest.
 """
 
 from __future__ import annotations
@@ -148,7 +150,12 @@ async def ingest_compilation(
                 first_ingest=False,
             )
         if diff is not None:
-            hint = f"; to add them, acknowledge exactly {sorted(added)!r}" if additions_only else ""
+            hint = (
+                f"; to add them, acknowledge exactly {sorted(added)!r}"
+                if additions_only
+                else "; a changed or removed clause is a corpus revision "
+                "(scripts/revise_compilation.py, ADR-0042), never a re-ingest"
+            )
             raise IngestDriftError(
                 f"{instrument_id}:{version_id} re-ingest does not match the stored "
                 f"manifest — canonical text must never be edited after write "
