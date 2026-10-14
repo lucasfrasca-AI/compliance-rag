@@ -102,6 +102,14 @@ async def store(ledger: FakeLedgerStore) -> QdrantRetrievalStore:
     return retrieval_store
 
 
+async def test_qdrant_satisfies_the_revise_chunks_contract(store: QdrantRetrievalStore) -> None:
+    """A parse correction rewrites a stored point's text and vectors under its
+    own id, and nothing else (ADR-0042)."""
+    from tests.test_corpus_revision import assert_revise_chunks_contract
+
+    await assert_revise_chunks_contract(store)
+
+
 async def test_qdrant_retrieval_store_satisfies_the_shared_contract(
     store: QdrantRetrievalStore, ledger: FakeLedgerStore
 ) -> None:
