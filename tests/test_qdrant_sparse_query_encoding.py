@@ -31,14 +31,16 @@ import pytest
 from qdrant_client import AsyncQdrantClient, models
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
-from compliance_rag.adapters.interfaces import Channel
+from compliance_rag.adapters.interfaces import Channel, RetrievalResult
 from compliance_rag.adapters.qdrant_retrieval_store import (
     SPARSE_VECTOR_NAME,
     QdrantRetrievalStore,
     _encode_documents,  # pyright: ignore[reportPrivateUsage]
     _encode_query,  # pyright: ignore[reportPrivateUsage]
+    _sparse_encoder,  # pyright: ignore[reportPrivateUsage]
 )
 from compliance_rag.corpus.models import Chunk, Scope
+from compliance_rag.eval.golden import load_golden_set
 from tests.conftest import ALL_LAW, qdrant_reachable
 
 _QDRANT_URL = os.environ.get("QDRANT_URL", "")
@@ -153,6 +155,38 @@ def test_encoding_documents_gives_one_vector_per_text_in_order() -> None:
     assert vectors[1].indices == _encode_query("xylophone").indices
 
 
+def test_fastembed_itself_gives_a_question_one_entry_per_distinct_term_weighing_one() -> None:
+    """The library's own contract for `Qdrant/bm25`, read from it directly
+    rather than through the adapter: if a `fastembed` upgrade changes what
+    `query_embed` returns, this names it before the ranking test does."""
+    (raw,) = _sparse_encoder().query_embed("entity entity entity information xylophone")
+
+    assert sorted(raw.indices.tolist()) == sorted(set(raw.indices.tolist()))
+    assert len(raw.indices) == 3
+    assert set(raw.values.tolist()) == {1}
+
+
+def test_a_question_of_stop_words_alone_has_no_terms_under_either_encoder() -> None:
+    """Nothing to match on the sparse side, as before the split: the dense
+    channel is what answers such a question (`..._still_searches`, below)."""
+    (as_document,) = _encode_documents(["the of and"])
+
+    assert _encode_query("the of and") == as_document
+    assert _encode_query("the of and").indices == []
+
+
+def test_every_golden_question_is_encoded_as_a_question_onto_its_chunks_dimensions() -> None:
+    """Every real question in the golden set, not a representative few: one
+    weight of 1 per distinct term, on the terms the document encoder finds."""
+    for golden in load_golden_set().queries:
+        question = _encode_query(golden.query)
+        (as_document,) = _encode_documents([golden.query])
+
+        assert set(question.values) <= {1.0}, golden.id
+        assert len(set(question.indices)) == len(question.indices), golden.id
+        assert set(question.indices) == set(as_document.indices), golden.id
+
+
 # ---- on a real server -------------------------------------------------------
 
 
@@ -179,9 +213,8 @@ def _name(store: QdrantRetrievalStore) -> str:
     return store._collection_name  # pyright: ignore[reportPrivateUsage]
 
 
-async def _sparse_ranking(store: QdrantRetrievalStore, question: str) -> list[str]:
-    """The sparse channel's own list for `question`, best first, every match."""
-    result = await store.search(
+async def _search(store: QdrantRetrievalStore, question: str) -> RetrievalResult:
+    return await store.search(
         question,
         law=ALL_LAW,
         tenant_id="_public",
@@ -189,6 +222,11 @@ async def _sparse_ranking(store: QdrantRetrievalStore, question: str) -> list[st
         as_of=dt.date(2026, 1, 1),
         limit=50,
     )
+
+
+async def _sparse_ranking(store: QdrantRetrievalStore, question: str) -> list[str]:
+    """The sparse channel's own list for `question`, best first, every match."""
+    result = await _search(store, question)
     return [c.chunk_id for c in result.per_channel[Channel.SPARSE]]
 
 
@@ -209,6 +247,16 @@ async def test_a_question_repeating_a_common_word_does_not_outrank_the_rare_term
 
     assert ranking[0] == "rare", ranking
     assert set(ranking) == {"rare", "common-1", "common-2"}  # nothing else matches
+
+
+@needs_qdrant
+async def test_a_question_of_stop_words_alone_still_searches(
+    store: QdrantRetrievalStore,
+) -> None:
+    result = await _search(store, "the of and")
+
+    assert result.per_channel[Channel.SPARSE] == ()
+    assert result.fused  # the dense channel carries it, as before
 
 
 @needs_qdrant
