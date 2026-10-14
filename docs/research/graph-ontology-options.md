@@ -243,7 +243,7 @@ A policy-to-law mapping is tenant content, so it never enters Aura (D-09; CONTEX
 | (c) Qdrant payload | Co-located with chunks | Mixes a human judgement into a probabilistic store and breaks D-03's separation |
 
 - **Touches:** D-01 (the LLM may propose, a human approves), D-09, D-14, ADR-0021, CONTEXT **Tenant subgraph**.
-- **Example:** D2 §2's retention rule mapped to APP 11.2 (`sch1/app11/2`, destroy or de-identify) is proposed, shown in the queue, approved, and only then projected.
+- **Example:** D2 §3's retention rule mapped to APP 11.2 (`sch1/app11/2`, destroy or de-identify) is proposed, shown in the queue, approved, and only then projected.
 - **Recommendation: (a).**
 
 ## Q6: Obligation → Clause, property or edge
