@@ -9,7 +9,14 @@ fails loudly: a silent fallback would let an edited query or a re-parsed clause
 be measured against something other than its real embedding.
 
 Stored as JSON, one base64 float32 row per text, keyed by the sha256 of the
-text: standard library only, diffable metadata, about a megabyte.
+text: standard library only, diffable metadata, one line per text. Exact
+float32, because that is what Qdrant stores, so the gate measures the vectors
+production searches. About 8.3 KB a text: some 6.8 MB for the gate's ~824
+texts (#180), where the whole compilation replaced a 75-clause excerpt. A raw
+float32 file would be a quarter smaller on disk but only ~8% smaller in git,
+whose zlib packing recovers most of base64's overhead (the 137-text snapshot:
+848 KB packed as JSON, 782 KB as raw floats), and it would lose the per-text
+diff; float16 would halve it but would not be what Qdrant stores.
 
 The file is a snapshot: it records the exact model string, task type, SDK
 version and the date it was generated. If Google updates the model behind the
@@ -23,6 +30,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +48,12 @@ GOLDEN_EMBEDDINGS_PATH = (
 
 def text_key(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def cosine(a: tuple[float, ...], b: tuple[float, ...]) -> float:
+    """How far a fresh vector is from a stored one: 1.0 is the same direction."""
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    return dot / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
 
 
 class EmbeddingCacheMiss(LookupError):

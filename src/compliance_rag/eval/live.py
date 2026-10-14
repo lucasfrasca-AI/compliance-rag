@@ -16,6 +16,7 @@ from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerato
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+from compliance_rag.eval.golden_corpus import golden_chunks
 from compliance_rag.eval.harness import (
     golden_clause_store,
     golden_ledger,
@@ -46,7 +47,11 @@ async def live_answer_pipeline(
         await clauses.put_clause(clause)
     ledger = await golden_ledger()
     async with (
-        golden_store(settings.qdrant_url or "http://localhost:6333", prefix="answer") as store,
+        # The excerpt, not the gate's whole compilation: the verifier holds the
+        # excerpt's canonical text, so it can verify whatever this retrieves.
+        golden_store(
+            settings.qdrant_url or "http://localhost:6333", prefix="answer", chunks=golden_chunks()
+        ) as store,
         in_process_reranker(RerankerModel()) as reranker,
     ):
         if extra_chunks:

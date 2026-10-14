@@ -1,6 +1,7 @@
-"""The exit bars on what `retrieve()` actually delivers (issue #32): recall@10
+"""The bars on what `retrieve()` actually delivers (issues #32, #180): recall@10
 of the cross-encoder's ranking over the top `RERANK_CANDIDATES` fused
-candidates, per golden-set category.
+candidates, on the gate corpus (the whole compilation and the Acme policies),
+per category and document class.
 
 The fused gate (`test_recall_gate.py`) runs on every build with no model; this
 one needs the int8 cross-encoder, so it runs in CI's `reranker-fidelity` job
@@ -8,22 +9,39 @@ one needs the int8 cross-encoder, so it runs in CI's `reranker-fidelity` job
 reranker sits behind its own FastAPI app and the real `RerankerClient`, over
 in-process ASGI — the production code path, no network.
 
-Gated on category means only, with no per-query baseline: CI's x86 int8
-numerics needn't reproduce a locally recorded per-query ranking exactly, and
-the bars carry the margin (cross-clause 0.896 against 0.8). Per-query drops
-are held on the fused gate, which is platform-exact.
+Two kinds of bar (ADR-0043):
+
+- **Floors**, enforced: every cell at what it achieves today, so any drop fails.
+  No per-query baseline here: the int8 model scores in batches with dynamic
+  activation quantisation, so a query's ranking can depend on the platform and
+  on the other candidates. Per-query drops are held on the fused gate, which is
+  platform-exact.
+- **Targets**, what Phase 1 needs (PHASES.md). A cell under its target is
+  expected to fail, strictly: the day it meets the target the build fails
+  (XPASS) until its floor is raised to the new value, which closes the target.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
-from collections.abc import AsyncIterator
 
 import pytest
 
-from compliance_rag.eval.golden import Category, load_golden_set
+from compliance_rag.eval.golden import load_golden_set
+from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
-from compliance_rag.eval.recall import EXIT_BARS, RERANKED, QueryRecall, by_category, measure
+from compliance_rag.eval.recall import (
+    OPEN_TARGETS,
+    RERANKED,
+    Cell,
+    QueryRecall,
+    below_floor,
+    by_cell,
+    describe_cell,
+    measure,
+    short_of_target,
+)
 from compliance_rag.reranker_service.model import DEFAULT_ONNX_MODEL_PATH, RerankerModel
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from tests.conftest import qdrant_reachable
@@ -37,21 +55,49 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture
-async def results() -> AsyncIterator[tuple[QueryRecall, ...]]:
+async def _measure() -> tuple[QueryRecall, ...]:
     async with (
-        golden_store(_QDRANT_URL, prefix="recall-reranked") as store,
+        golden_store(_QDRANT_URL, prefix="recall-reranked", chunks=gate_chunks()) as store,
         in_process_reranker(RerankerModel()) as reranker,
     ):
-        yield await measure(RetrievalPipeline(store, reranker), load_golden_set())
+        return await measure(RetrievalPipeline(store, reranker), load_golden_set())
 
 
-async def test_reranked_recall_at_10_meets_every_phase_1_exit_bar(
+@pytest.fixture(scope="module")
+def results() -> tuple[QueryRecall, ...]:
+    """Measured once for the module: reranking is the slow part."""
+    measured = asyncio.run(_measure())
+    print("\nreranked recall@10 by category and document class")
+    for cell, now in sorted(by_cell(measured, RERANKED).items()):
+        print(f"  {describe_cell(cell, now)}")
+    for r in measured:
+        if r.by_list[RERANKED] < 1.0:
+            print(f"  reranked miss {r.query_id} ({r.category.value}): {r.by_list}")
+    return measured
+
+
+def test_reranked_recall_holds_its_floor_in_every_cell(
     results: tuple[QueryRecall, ...],
 ) -> None:
-    summary = by_category(results)
-    print("\nreranked recall@10 by category")
-    for category, lists in sorted(summary.items()):
-        print(f"  {category.value:<13} bar={EXIT_BARS[category]:.1f}  {lists[RERANKED]:.3f}")
-    below = {c: summary[c][RERANKED] for c in Category if summary[c][RERANKED] < EXIT_BARS[c]}
-    assert below == {}
+    assert below_floor(results, RERANKED) == {}
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [
+        pytest.param(
+            cell,
+            id=f"{cell.category.value}-{cell.document_class.value}",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="an open target (ADR-0043): when this passes, raise the cell's floor",
+            ),
+        )
+        for cell in OPEN_TARGETS
+    ],
+)
+def test_an_open_target_is_met(results: tuple[QueryRecall, ...], cell: Cell) -> None:
+    """Expected to fail until the work is done; `raises=AssertionError`, so a
+    broken measurement errors instead of passing as an expected failure."""
+    assert short_of_target(results, cell) is None, f"{cell}: {by_cell(results, RERANKED)[cell]:.3f}"

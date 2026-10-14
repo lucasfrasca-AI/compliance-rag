@@ -20,22 +20,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import math
 
 from compliance_rag.adapters.vertex_embedder import VertexEmbedder
-from compliance_rag.eval.embedding_cache import EmbeddingCache, text_key
-from compliance_rag.eval.golden_corpus import golden_texts
+from compliance_rag.eval.embedding_cache import EmbeddingCache, cosine, text_key
+from compliance_rag.eval.golden_corpus import embedded_texts
 from compliance_rag.settings import Settings
-
-
-def cosine(a: tuple[float, ...], b: tuple[float, ...]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    return dot / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
 
 
 async def main(sample: int) -> None:
     cache = EmbeddingCache.load()
-    texts = golden_texts()
+    texts = embedded_texts()
     step = max(1, len(texts) // sample)
     chosen = texts[::step][:sample]
     fresh = await VertexEmbedder.from_settings(Settings()).embed(chosen)

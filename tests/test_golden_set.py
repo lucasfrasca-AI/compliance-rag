@@ -1,17 +1,20 @@
 """`corpus/golden/queries.yaml` (issue #27): it parses against the schema, and
 every label is a stable ID that resolves against the parsed fixtures — the law
-excerpt and the six synthetic policies — not merely one that is well-formed.
+excerpt and the six synthetic policies — and against the gate's corpus, the
+whole compilation (#180), not merely one that is well-formed.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import yaml
 
+from compliance_rag.corpus.models import ClauseRecord
 from compliance_rag.eval.golden import Category, GoldenSet, load_golden_set
-from compliance_rag.eval.golden_corpus import golden_clauses
+from compliance_rag.eval.golden_corpus import gate_clauses, golden_clauses
 
 
 @pytest.fixture(scope="module")
@@ -19,19 +22,16 @@ def golden() -> GoldenSet:
     return load_golden_set()
 
 
-@pytest.fixture(scope="module")
-def corpus_clause_ids() -> frozenset[str]:
-    return frozenset(c.clause_id for c in golden_clauses())
-
-
-def test_every_label_resolves_against_the_parsed_fixtures(
-    golden: GoldenSet, corpus_clause_ids: frozenset[str]
+@pytest.mark.parametrize("corpus", [golden_clauses, gate_clauses], ids=["excerpt", "gate"])
+def test_every_label_resolves_against_the_parsed_corpus(
+    golden: GoldenSet, corpus: Callable[[], tuple[ClauseRecord, ...]]
 ) -> None:
+    clause_ids = frozenset(c.clause_id for c in corpus())
     unresolved = [
         (q.id, clause_id)
         for q in golden.queries
         for clause_id in q.expected_clause_ids
-        if clause_id not in corpus_clause_ids
+        if clause_id not in clause_ids
     ]
     assert unresolved == []
 

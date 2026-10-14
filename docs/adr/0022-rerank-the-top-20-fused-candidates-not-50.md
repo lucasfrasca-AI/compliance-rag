@@ -1,6 +1,9 @@
 # ADR-0022 — Rerank the top 20 fused candidates, not ~50
 
-- Status: accepted
+- Status: accepted; its bars amended by ADR-0043 (#180): measured over the
+  whole compilation rather than the excerpt, per category and document class,
+  with floors enforced and targets on the delivered list. The numbers below
+  are the excerpt's
 - Date: 2026-10-08
 - Decision ID: revises `D-04` (`DECISIONS.md`)
 - Evidence: `docs/research/reranker-benchmark.md` (issue #32)

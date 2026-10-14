@@ -1,5 +1,6 @@
 {
-  "note": "Per-query recall@10 for every list. Written only by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally \u2014 a deliberate, reviewed change, never to make a drop pass.",
+  "corpus_sha256": "ff464aed90e3fce271758386f6521829b719bcaf12c833f0702d0b7b46d2077f",
+  "note": "Per-query recall@10 for every list, on the gate corpus (the whole compilation's selected clauses and the Acme policies, ADR-0043). Written only by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally \u2014 a deliberate, reviewed change, never to make a drop pass.",
   "recall_at_10": {
     "GQ-01": {
       "fused": 1.0,
@@ -40,7 +41,7 @@
     },
     "GQ-10": {
       "dense": 1.0,
-      "fused": 1.0,
+      "fused": 0.0,
       "sparse": 0.0
     },
     "GQ-11": {
@@ -79,19 +80,19 @@
       "sparse": 1.0
     },
     "GQ-18": {
-      "dense": 0.6666666666666666,
-      "fused": 0.6666666666666666,
+      "dense": 0.3333333333333333,
+      "fused": 0.3333333333333333,
       "sparse": 0.3333333333333333
     },
     "GQ-19": {
-      "dense": 1.0,
-      "fused": 1.0,
-      "sparse": 1.0
+      "dense": 0.0,
+      "fused": 0.5,
+      "sparse": 0.5
     },
     "GQ-20": {
       "dense": 0.5,
       "fused": 0.5,
-      "sparse": 1.0
+      "sparse": 0.5
     },
     "GQ-21": {
       "dense": 1.0,

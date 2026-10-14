@@ -2,7 +2,8 @@
 category with no rerank, and with the deployed int8 cross-encoder over the top
 50 and the top 20 fused candidates.
 
-Same harness as the recall gate (#28) — the golden corpus on a real Qdrant,
+Same harness as the recall gate (#28) — the gate corpus (the whole
+compilation since #180; ADR-0022's numbers were on the excerpt) on a real Qdrant,
 real cached `gemini-embedding-001` vectors, local BM25 — with the reranker
 service's own FastAPI app behind the real `RerankerClient` (in-process ASGI,
 no network), so the cross-encoder arm is the production code path. Also
@@ -28,6 +29,7 @@ from pathlib import Path
 from compliance_rag.adapters.interfaces import Reranker, ScoredDocument
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.eval.golden import Category, load_golden_set
+from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
     FUSED,
@@ -109,7 +111,9 @@ async def main() -> None:
     )
     print(json.dumps({"model": candidate or "production bge-reranker-v2-m3 int8"}), flush=True)
     async with (
-        golden_store(os.environ["QDRANT_URL"], prefix="reranker-bench") as store,
+        golden_store(
+            os.environ["QDRANT_URL"], prefix="reranker-bench", chunks=gate_chunks()
+        ) as store,
         in_process_reranker(model) as cross_encoder,
     ):
         arms = [
