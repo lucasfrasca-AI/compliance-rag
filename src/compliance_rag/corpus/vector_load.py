@@ -86,10 +86,15 @@ async def load_version_vectors(
     tenant_id: str,
     effective_from: dt.date,
     document_class: DocumentClass,
+    supersedes: str | None = None,
 ) -> VectorLoad:
     """Bring the store and the ledger up to the clause store's version (module
     docstring). Every write goes through `lifecycle`; `retrieval` and `ledger`
-    are only read here, and must be the ones `lifecycle` writes to."""
+    are only read here, and must be the ones `lifecycle` writes to.
+
+    `supersedes` names the version this one retires from `effective_from`
+    (an amendment, ADR-0021, ADR-0042): the lifecycle retires its chunks and
+    ends it in the ledger when it records this one."""
     chunks = chunk_clauses(clauses, count_tokens=count_tokens)
     with telemetry.span(
         "vector_load.load_version",
@@ -113,7 +118,7 @@ async def load_version_vectors(
                 tenant_id=tenant_id,
                 version_id=version_id,
                 effective_from=effective_from,
-                supersedes=None,
+                supersedes=supersedes,
                 document_class=document_class,
             )
             span.set_attribute("load.written", len(chunks))
@@ -138,7 +143,7 @@ async def load_version_vectors(
                 tenant_id=tenant_id,
                 version_id=version_id,
                 effective_from=effective_from,
-                supersedes=None,
+                supersedes=supersedes,
                 document_class=document_class,
             )
             return VectorLoad(len(chunks), len(stored), written=written, recorded_in_ledger=True)

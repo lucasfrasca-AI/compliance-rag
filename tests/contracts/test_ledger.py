@@ -426,6 +426,17 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     assert await ledger.count_findings_citing("acme", f"{POLICY}:v1:") == 1
     assert await ledger.count_findings_citing("acme", f"{POLICY}:") == 2
     assert await ledger.count_findings_citing("acme", "iso-27001:") == 0
+    # Across tenants, by exact clause id: what a corpus revision acknowledges
+    # (ADR-0042). A prefix of a cited id is not a citation of it.
+    assert await ledger.count_findings_citing_clauses(frozenset({f"{POLICY}:v1:3/1"})) == 2
+    assert (
+        await ledger.count_findings_citing_clauses(
+            frozenset({f"{POLICY}:v1:3/1", f"{POLICY}:v2:1/1"})
+        )
+        == 3
+    )
+    assert await ledger.count_findings_citing_clauses(frozenset({f"{POLICY}:v1:3"})) == 0
+    assert await ledger.count_findings_citing_clauses(frozenset()) == 0
 
     # ---- withdraw and purge markers
     await ledger.mark_withdrawn(

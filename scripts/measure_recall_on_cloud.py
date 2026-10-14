@@ -16,11 +16,12 @@ container on the same corpus:
    query with the container baseline, reranked with measurement 1's reranked
    for the same query (same reranker, same machine).
 
-Until #178 part 2 republishes `clauses`, it holds the compilation's *previous*
-parse, where #178's s6(1) definitions and #186's connectors read differently,
-so a small difference in measurement 2 is expected; after it, measurement 2
-should match the container exactly. A difference then is a finding to explain,
-not something to re-baseline away.
+Until the human runs #178 part 2's correction (`scripts/revise_compilation.py`,
+ADR-0042), `clauses` holds the compilation's *previous* parse, in which seven
+selected clauses read differently (#178's s6(1) definitions, #186's APP 7.6
+connector). So a small difference in measurement 2 is expected until then.
+After it, measurement 2 should match the container exactly, and a difference
+is a finding to explain, not something to re-baseline away.
 
 Query vectors come from the checked-in cache, so nothing calls Vertex; the
 reranker is the int8 cross-encoder, in-process. Reads QDRANT_URL /

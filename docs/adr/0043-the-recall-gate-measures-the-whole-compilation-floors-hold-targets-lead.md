@@ -248,8 +248,9 @@ issue and a `PHASES.md` edit, keeping the strict xfail in CI either way.
   its target passes without forcing a ratchet. The next re-baseline is the
   place to raise them.
 - `scripts/measure_recall_on_cloud.py` compares the deployed collection with
-  the container on the same corpus. Until #178 part 2 republishes it,
-  `clauses` holds the previous parse, so a small difference is expected.
+  the container on the same corpus. Until the human runs #178 part 2's
+  correction (ADR-0042), `clauses` holds the previous parse, in which seven
+  selected clauses differ, so a small difference is expected.
 
 ## Appendix: every query, every list (2026-10-15)
 
