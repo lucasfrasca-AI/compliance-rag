@@ -26,6 +26,12 @@ implements are all from issue #9's ePub format spike
   `CONTEXT.md`'s pre-existing `s6c/1/a` example has no `organisation`
   segment, so the singleton case folds the definition's own text into its
   enclosing subsection instead of giving it a path of its own.
+- A `subsection2` block inside a Definition belongs to the definition, never to
+  the subsection's chapeau (issue #178, ADR-0039). Between two paragraphs it is
+  a connector — *record*'s "but does not include:" — and leads the paragraph
+  that follows; after the last one it closes the definition and joins the
+  definition's own text. Outside a Definition every `subsection2` still joins
+  its subsection's text, as it always has.
 """
 
 from __future__ import annotations
@@ -183,6 +189,20 @@ class _DefinitionNode:
     text: str
     block_index: int
     children: list[_ParagraphNode] = field(default_factory=list[_ParagraphNode])
+    # `subsection2` words met inside this definition that no clause has taken
+    # yet (issue #178, ADR-0039). The next paragraph to open takes them as its
+    # lead — *record*'s "but does not include:" between (b) and (d), which
+    # governs (d) onward and so has to be read with them. Whatever is still
+    # here when the definition ends is its closing words, and joins its own
+    # text (`_definition_text`): "that carries on a credit reporting business."
+    # closes the whole of *credit reporting body*, not just its last paragraph.
+    unclaimed: list[str] = field(default_factory=list[str])
+
+    def claim(self) -> str:
+        """The words waiting to lead the clause that is opening now."""
+        words = " ".join(self.unclaimed)
+        self.unclaimed = []
+        return words
 
 
 @dataclass
@@ -212,6 +232,21 @@ def _strip_leading_token(text: str, pattern: re.Pattern[str]) -> tuple[str, str]
     if match is None:
         return "", text
     return match.group(1), text[match.end() :]
+
+
+def _led_by(definition: _DefinitionNode | None, text: str) -> str:
+    """A paragraph's own text, with any unclaimed words of the definition it
+    sits in placed in front of it, as the source reads them. Outside a
+    definition, or with nothing waiting, `text` is unchanged."""
+    lead = definition.claim() if definition is not None else ""
+    return f"{lead} {text}".strip() if lead else text
+
+
+def _definition_text(definition: _DefinitionNode) -> str:
+    """The definition's own clause text: the term and its lead-in, then the
+    words that close it (`_DefinitionNode.unclaimed`), in that order."""
+    head = _join_term(definition.term, definition.text)
+    return " ".join(part for part in (head, *definition.unclaimed) if part)
 
 
 def _section_prefix(title_text: str, sectno: str, current_schedule: str | None) -> str:
@@ -282,8 +317,17 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
 
         if cls == "subsection2":
             # Still part of the currently open subsection, not a new one
-            # (issue #9 spike) — text only, no state change.
-            if current_subsection is not None:
+            # (issue #9 spike) — text only, no state change. Inside a
+            # Definition it belongs to the definition, not to the subsection's
+            # chapeau (issue #178): s6(1) holds hundreds of them, and a
+            # chapeau that collected their closing words read "In this Act,
+            # unless the contrary intention appears: but does not include: ...".
+            # Whether it leads the next paragraph or closes the definition is
+            # known only once the next block is, so it waits (`unclaimed`).
+            if current_definition is not None:
+                if block.inner_text:
+                    current_definition.unclaimed.append(block.inner_text)
+            elif current_subsection is not None:
                 current_subsection.text_parts.append(block.inner_text)
             continue
 
@@ -308,7 +352,6 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             if not token and current_paragraph is not None:
                 current_paragraph.continue_with(rest)
                 continue
-            node = _ParagraphNode(token=token, text=rest, block_index=index)
             parent = (
                 current_definition.children
                 if current_definition is not None
@@ -316,6 +359,9 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             )
             if parent is None:
                 continue
+            node = _ParagraphNode(
+                token=token, text=_led_by(current_definition, rest), block_index=index
+            )
             parent.append(node)
             current_paragraph = node
             current_paragraphsub = None
@@ -325,7 +371,9 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             if current_paragraph is None:
                 continue
             token, rest = _strip_leading_token(block.inner_text, _PARAGRAPHSUB_RE)
-            node = _ParagraphNode(token=token, text=rest, block_index=index)
+            node = _ParagraphNode(
+                token=token, text=_led_by(current_definition, rest), block_index=index
+            )
             current_paragraph.children.append(node)
             current_paragraphsub = node
             continue
@@ -334,7 +382,9 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
             if current_paragraphsub is None:
                 continue
             token, rest = _strip_leading_token(block.inner_text, _PARAGRAPHSUB_SUB_RE)
-            node = _ParagraphNode(token=token.lower(), text=rest, block_index=index)
+            node = _ParagraphNode(
+                token=token.lower(), text=_led_by(current_definition, rest), block_index=index
+            )
             current_paragraphsub.children.append(node)
             continue
 
@@ -407,7 +457,7 @@ def _emit_subsection(
     for part in subsection.text_parts:
         if isinstance(part, _DefinitionNode):
             if singleton:
-                rendered_parts.append(_join_term(part.term, part.text))
+                rendered_parts.append(_definition_text(part))
         else:
             rendered_parts.append(part)
     ctx.clauses.append(ctx.build(subsection_path, " ".join(p for p in rendered_parts if p)))
@@ -418,8 +468,7 @@ def _emit_subsection(
             definition_path = subsection_path
         else:
             definition_path = f"{subsection_path}/{definition_slug(definition.term)}"
-            text = _join_term(definition.term, definition.text)
-            ctx.clauses.append(ctx.build(definition_path, text))
+            ctx.clauses.append(ctx.build(definition_path, _definition_text(definition)))
             ctx.anchors[definition.block_index] = definition_path
         for child in definition.children:
             _emit_paragraph(child, parent_path=definition_path, ctx=ctx)

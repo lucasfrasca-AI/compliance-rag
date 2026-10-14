@@ -7,6 +7,12 @@ unpacked ePub): every section whose markup broke the excerpt-trained parser,
 plus s6D/s6DA/s6E/s6EA — the small business exemption #93 is built on. Each
 test names the construct it pins.
 
+Issue #178 added four s6(1) definitions whose words follow their paragraph
+list (*record*, *credit reporting body*, *Commonwealth officer*,
+*court/tribunal order*) and s8(2), a non-definition list with closing words —
+the shapes the excerpt never held, so the parser had never been asked about
+them.
+
 `test_the_whole_compilation_parses` runs over the full 2.3 MB file when
 `PRIVACY_ACT_COMPILATION_HTML` points at a copy whose sha256 matches; CI
 doesn't download it.
@@ -15,7 +21,9 @@ doesn't download it.
 from __future__ import annotations
 
 import hashlib
+import html
 import os
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -166,6 +174,175 @@ def test_the_small_business_exemption_round_trips_verbatim(
     assert clauses["s6ea/1"].text.startswith("This Act applies in relation to a small")
 
 
+S6_1_CHAPEAU = "In this Act, unless the contrary intention appears:"
+
+
+def test_s6_1_is_the_bare_chapeau(clauses: dict[str, ClauseRecord]) -> None:
+    """The words after a definition's paragraphs used to land on s6(1), whose
+    stored text then read "...appears: but does not include a person ... and
+    includes an order ... that carries on a credit reporting business. but
+    does not include:" (#178). s6(1) holds hundreds of definitions; none of
+    them speaks for the subsection."""
+    assert clauses["s6/1"].text == S6_1_CHAPEAU
+
+
+CLOSED_BY_THEIR_OWN_WORDS = {
+    # The words after the list close the whole definition, so they join its own
+    # clause, as s6C(1)'s and APP 11.2's closing words join theirs.
+    "s6/1/credit-reporting-body": (
+        "credit reporting body means: that carries on a credit reporting business."
+    ),
+    "s6/1/court-tribunal-order": (
+        "court/tribunal order means an order, direction or other instrument made by: "
+        "and includes an order, direction or other instrument that is of an interim or "
+        "interlocutory nature."
+    ),
+    "s6/1/commonwealth-officer": (
+        "Commonwealth officer means a person who holds office under, or is employed by, "
+        "the Commonwealth, and includes: but does not include a person permanently or "
+        "temporarily employed in the Australian Capital Territory Government Service or in "
+        "the Public Service of the Northern Territory."
+    ),
+}
+
+
+@pytest.mark.parametrize("path", sorted(CLOSED_BY_THEIR_OWN_WORDS))
+def test_a_definition_holds_the_words_that_close_it(
+    clauses: dict[str, ClauseRecord], path: str
+) -> None:
+    """Each of the four used to lose these words to s6(1): *credit reporting
+    body* read as "(a) an organisation; or (b) an agency prescribed by the
+    regulations", so every organisation was one (#178)."""
+    assert clauses[path].text == CLOSED_BY_THEIR_OWN_WORDS[path]
+
+
+def test_the_paragraphs_of_a_closed_definition_are_as_they_were(
+    clauses: dict[str, ClauseRecord],
+) -> None:
+    """Closing words go to the definition, not to its last paragraph, and no
+    paragraph borrows them: each is only its own words."""
+    assert clauses["s6/1/credit-reporting-body/a"].text == "an organisation; or"
+    assert (
+        clauses["s6/1/credit-reporting-body/b"].text == "an agency prescribed by the regulations;"
+    )
+    assert clauses["s6/1/court-tribunal-order/e"].text == "a member or an officer of a tribunal;"
+    assert clauses["s6/1/commonwealth-officer/d"].text == (
+        "a member, staff member or special member of the Australian Federal Police;"
+    )
+
+
+def test_a_connector_between_two_paragraph_groups_leads_the_paragraph_after_it(
+    clauses: dict[str, ClauseRecord],
+) -> None:
+    """*record*: "(a) a document; or (b) an electronic or other device; but does
+    not include: (d) a generally available publication; or ...". The words
+    govern (d) onward, so they are read with (d); on the definition they would
+    sit between inclusions and exclusions that nothing tells apart, and
+    "record includes:" would own all of them (#178, ADR-0039)."""
+    assert clauses["s6/1/record"].text == "record includes:"
+    assert clauses["s6/1/record/a"].text == "a document; or"
+    assert clauses["s6/1/record/b"].text == "an electronic or other device;"
+    assert clauses["s6/1/record/d"].text == (
+        "but does not include: a generally available publication; or"
+    )
+    # Said once: (e)-(h) are as they were. A chunk is one clause (corpus/chunker.py),
+    # and repeating the connector on each would write words the Act doesn't.
+    for letter in ("e", "f", "fa", "g", "h"):
+        assert not clauses[f"s6/1/record/{letter}"].text.startswith("but does not include")
+    # What a retrieved chunk of (d) says, on its own: the chunk's text is the
+    # clause's canonical text.
+    assert clauses["s6/1/record/d"].canonical_text.startswith("but does not include:")
+
+
+_P_BLOCK = re.compile(r"<p\b[^>]*>.*?</p>", re.DOTALL)
+_P_CLASS = re.compile(r'<p\b[^>]*\bclass="([^"]*)"')
+_PARAGRAPH_TOKEN = re.compile(r"^\([a-z]+\)\s*")
+
+
+def _plain(block: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", block))
+
+
+def _class_of(block: str) -> str:
+    match = _P_CLASS.match(block)
+    return match.group(1) if match else ""
+
+
+def _source_words(term: str) -> list[str]:
+    """Every word of one s6(1) definition, read straight off the fixture's
+    markup in source order. A paragraph's "(a)" is its clause path, not its
+    text, so it is left out; notes are not operative text."""
+    blocks = _P_BLOCK.findall(CONSTRUCTS.read_text(encoding="utf-8"))
+    start = next(
+        i
+        for i, b in enumerate(blocks)
+        if _class_of(b) == "Definition" and _plain(b).split()[: len(term.split())] == term.split()
+    )
+    words = _plain(blocks[start]).split()
+    for block in blocks[start + 1 :]:
+        kind = _class_of(block)
+        if kind in ("Definition", "subsection") or kind.startswith("ActHead"):
+            break
+        if kind == "notetext":
+            continue
+        text = _plain(block)
+        if kind == "paragraph":
+            text = _PARAGRAPH_TOKEN.sub("", text.strip())
+        words += text.split()
+    return words
+
+
+def _stored_words(clauses: dict[str, ClauseRecord], path: str) -> list[str]:
+    """The same definition as stored: its clause, then the clauses inside it, in
+    the order the parser emits them."""
+    return [
+        word
+        for p, clause in clauses.items()
+        if p == path or p.startswith(f"{path}/")
+        for word in clause.text.split()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("term", "path"),
+    [
+        ("record", "s6/1/record"),
+        ("credit reporting body", "s6/1/credit-reporting-body"),
+        ("Commonwealth officer", "s6/1/commonwealth-officer"),
+        ("court/tribunal order", "s6/1/court-tribunal-order"),
+    ],
+)
+def test_every_word_of_a_definition_is_stored_exactly_once(
+    clauses: dict[str, ClauseRecord], term: str, path: str
+) -> None:
+    """No word of the Act is lost to a neighbouring clause, written by the
+    parser, or stored twice (#178's four definitions lost theirs to s6(1))."""
+    assert sorted(_stored_words(clauses, path)) == sorted(_source_words(term))
+
+
+def test_a_connector_keeps_source_order_across_the_stored_clauses(
+    clauses: dict[str, ClauseRecord],
+) -> None:
+    """Read *record*'s clauses in order — the definition, then (a), (b), (d)
+    ... (h) — and the Act's own sentence comes out, "but does not include:"
+    between (b) and (d). That holds because the connector leads (d); closing
+    words on the definition would put them before (a)."""
+    assert _stored_words(clauses, "s6/1/record") == _source_words("record")
+
+
+def test_closing_words_after_a_non_definition_list_stay_on_their_subsection(
+    clauses: dict[str, ClauseRecord],
+) -> None:
+    """s8(2): "Where: (a) ...; (b) ...; that act or practice shall be treated as
+    ...". Not a definition, so it is as it always was (#178 leaves it alone)."""
+    assert clauses["s8/2"].text == (
+        "Where: that act or practice shall be treated as the act or the practice of the "
+        "agency that holds that record."
+    )
+    assert clauses["s8/2/a"].text.startswith("an act done or a practice engaged in by a person")
+    assert clauses["s8/2/b"].text == "that agency does not hold that record;"
+
+
 def test_two_provisions_on_one_path_are_refused() -> None:
     """A stable ID is what a citation carries (CONTEXT.md: Instrument id): the
     parser refuses to emit one path twice rather than collide silently."""
@@ -202,3 +379,9 @@ def test_the_whole_compilation_parses() -> None:
     assert "s80u" not in clauses and "s80u/1" in clauses
     # Term and body joined as the source reads.
     assert clauses["s6/1/breach"].text.startswith("breach:")
+    # The words after a definition's paragraphs are the definition's (#178).
+    assert clauses["s6/1"].text == S6_1_CHAPEAU
+    for path, text in CLOSED_BY_THEIR_OWN_WORDS.items():
+        assert clauses[path].text == text
+    assert clauses["s6/1/record"].text == "record includes:"
+    assert clauses["s6/1/record/d"].text.startswith("but does not include: ")
