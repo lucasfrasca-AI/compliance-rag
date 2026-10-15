@@ -899,3 +899,58 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         if not records:
             return None
         return self._payload_to_candidate(records[0].payload, score=1.0, channel=Channel.KEYWORD)
+
+    async def lookup_lineage(
+        self,
+        clause_ids: tuple[str, ...],
+        *,
+        law: LawScope,
+        tenant_id: str,
+        scopes: tuple[Scope, ...],
+        as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
+    ) -> tuple[Candidate, ...]:
+        """One filtered scroll (ADR-0045), through the same `_build_filter` as
+        every other read: a clause whose `clause_id` is an ancestor of one of
+        `clause_ids`, or whose `ancestors` hold one of them. A point stored
+        before `ancestors` existed is found inside nothing: narrower, never
+        wider."""
+        given = sorted(set(clause_ids))
+        containing = sorted({a for clause_id in given for a in clause_ancestors(clause_id)})
+        # An empty MatchAny isn't "match nothing" in every Qdrant version, so
+        # an empty side is left out, and with none there is nothing to read.
+        related: list[models.Condition] = []
+        if containing:
+            related.append(
+                models.FieldCondition(key="clause_id", match=models.MatchAny(any=containing))
+            )
+        if given:
+            related.append(models.FieldCondition(key="ancestors", match=models.MatchAny(any=given)))
+        if not related:
+            return ()
+        scroll_filter = await self._build_filter(
+            tenant_id=tenant_id,
+            scopes=scopes,
+            as_of=as_of,
+            law=law,
+            policy_corpus=policy_corpus,
+            user_id=user_id,
+            extra=[models.Filter(should=related)],
+        )
+        found: list[Candidate] = []
+        offset: PointId | None = None
+        while True:
+            records, offset = await self._client.scroll(
+                self._collection_name,
+                scroll_filter=scroll_filter,
+                limit=_SCROLL_PAGE,
+                offset=offset,
+                with_payload=True,
+            )
+            found += [
+                self._payload_to_candidate(r.payload, score=1.0, channel=Channel.KEYWORD)
+                for r in records
+            ]
+            if offset is None:
+                return tuple(sorted(found, key=lambda c: (c.clause_id, c.chunk_id)))

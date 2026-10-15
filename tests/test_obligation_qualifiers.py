@@ -578,9 +578,11 @@ async def test_a_qualifier_the_ranking_returned_is_marked_not_fetched_again() ->
         law=law,
     )
     ranked = {c.clause_id for c in answer.retrieval.ranked_candidates()}
-    assert {QUALIFIER, QUALIFIER_A} <= ranked
-    assert QUALIFIER not in store.looked_up and QUALIFIER_A not in store.looked_up
-    assert QUALIFIER_B in store.looked_up  # what the ranking left out is still fetched
+    assert {QUALIFIER, QUALIFIER_A} <= ranked and QUALIFIER_B not in ranked
+    # What the ranking left out came with its ranked chapeau (ADR-0045), so
+    # nothing was fetched by id, and it is delivered and marked all the same.
+    assert QUALIFIER_B in {c.clause_id for c in answer.retrieval.paragraphs}
+    assert store.looked_up == []
     assert {c.clause_id for c in answer.qualifiers} == {QUALIFIER, QUALIFIER_A, QUALIFIER_B}
     assert f" clause {QUALIFIER_A} qualifies {KEEP} (how it is satisfied)]" in str(
         generator.calls[0]["user"]

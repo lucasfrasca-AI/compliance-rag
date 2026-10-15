@@ -59,6 +59,7 @@ from compliance_rag.corpus.models import (
     canonical_sha256,
     canonicalise,
     check_document_class,
+    clause_ancestors,
     parse_stable_id,
     sha256_hex,
     validate_library_instrument_id,
@@ -331,29 +332,92 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         policy_corpus: PolicyCorpus = NO_PREFIX,
         user_id: str | None = None,
     ) -> Candidate | None:
+        found = await self._lookup(
+            (clause_id,),
+            law=law,
+            tenant_id=tenant_id,
+            scopes=scopes,
+            as_of=as_of,
+            policy_corpus=policy_corpus,
+            user_id=user_id,
+        )
+        return found[0] if found else None
+
+    async def lookup_lineage(
+        self,
+        clause_ids: tuple[str, ...],
+        *,
+        law: LawScope,
+        tenant_id: str,
+        scopes: tuple[Scope, ...],
+        as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
+    ) -> tuple[Candidate, ...]:
+        """Every clause among the ancestors of one of `clause_ids`, or whose
+        ancestors include one of them, as Qdrant matches its `clause_id` and
+        `ancestors` payload (ADR-0045), through the same filters as a lookup."""
+        given = set(clause_ids)
+        containing = {a for clause_id in given for a in clause_ancestors(clause_id)}
+        lineage = sorted(
+            {
+                c.clause_id
+                for c in self._chunks.values()
+                if c.clause_id in containing or not given.isdisjoint(clause_ancestors(c.clause_id))
+            }
+        )
+        return await self._lookup(
+            tuple(lineage),
+            law=law,
+            tenant_id=tenant_id,
+            scopes=scopes,
+            as_of=as_of,
+            policy_corpus=policy_corpus,
+            user_id=user_id,
+        )
+
+    async def _lookup(
+        self,
+        clause_ids: tuple[str, ...],
+        *,
+        law: LawScope,
+        tenant_id: str,
+        scopes: tuple[Scope, ...],
+        as_of: dt.date,
+        policy_corpus: PolicyCorpus,
+        user_id: str | None,
+    ) -> tuple[Candidate, ...]:
+        """Each of `clause_ids` the asker may see on `as_of`, in that order:
+        the keyword channel's filters, once, for an exact lookup and a
+        lineage read alike."""
         subscribed = await self._ledger.subscribed_instruments(tenant_id)
         trace.get_current_span().set_attribute("retrieval.law_scope", law.described)
         trace.get_current_span().set_attribute("retrieval.policy_corpus", policy_corpus.described)
         trace.get_current_span().set_attribute("retrieval.member_present", user_id is not None)
-        for c in self._chunks.values():
-            if c.clause_id != clause_id:
-                continue
-            if not self._visible(c, tenant_id, scopes, subscribed, user_id):
-                continue
-            if not law.admits(c.scope, c.clause_id):
-                continue  # D-03: the keyword channel is a channel too
-            if policy_corpus.excludes(c.scope, c.clause_id):
-                continue  # ADR-0033
-            if not (c.valid_from <= as_of < c.valid_to):
-                continue
-            return Candidate(
-                chunk_id=c.chunk_id,
-                clause_id=c.clause_id,
-                text=c.text,
-                score=1.0,
-                channel=Channel.KEYWORD,
-            )
-        return None
+        found: list[Candidate] = []
+        for clause_id in clause_ids:
+            for c in self._chunks.values():
+                if c.clause_id != clause_id:
+                    continue
+                if not self._visible(c, tenant_id, scopes, subscribed, user_id):
+                    continue
+                if not law.admits(c.scope, c.clause_id):
+                    continue  # D-03: the keyword channel is a channel too
+                if policy_corpus.excludes(c.scope, c.clause_id):
+                    continue  # ADR-0033
+                if not (c.valid_from <= as_of < c.valid_to):
+                    continue
+                found.append(
+                    Candidate(
+                        chunk_id=c.chunk_id,
+                        clause_id=c.clause_id,
+                        text=c.text,
+                        score=1.0,
+                        channel=Channel.KEYWORD,
+                    )
+                )
+                break
+        return tuple(found)
 
 
 class FakeLedgerStore(LedgerStore):
