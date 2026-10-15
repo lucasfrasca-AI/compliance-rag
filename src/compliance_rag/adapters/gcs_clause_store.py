@@ -46,12 +46,14 @@ from google.cloud import storage
 
 from compliance_rag.adapters.interfaces import ClauseStore, ManifestMetadata
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
+from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.corpus.models import (
     ClauseRecord,
     canonical_sha256,
     parse_stable_id,
     sha256_hex,
 )
+from compliance_rag.corpus.revision import RevisionDrift, RevisionRecord, check_revision_write
 
 
 class _BlobLike(Protocol):
@@ -242,6 +244,57 @@ class GCSClauseStore(ClauseStore):
     ) -> str | None:
         blob = self._bucket.blob(self._source_html_key(instrument_id, version_id))
         return await asyncio.to_thread(_download_text_or_none, blob)
+
+    async def record_revision(
+        self, authorization: RevisionAuthorization, clauses: Sequence[ClauseRecord]
+    ) -> None:
+        """The manifest first — the record and the new hashes in one write, the
+        revision's commit point — then the clause objects that don't already
+        hold their new text. The bucket is versioned, so each object written
+        over keeps its previous text as a noncurrent generation, and so does
+        the manifest (ADR-0042)."""
+        record = authorization.record
+        for clause in clauses:
+            authorization.check_text(clause.clause_id, clause.canonical_text)
+        manifest = await self._read_manifest(record.instrument_id, record.version_id)
+        if manifest is None or "source_html_sha256" not in manifest:
+            raise RevisionDrift(
+                f"{record.instrument_id}:{record.version_id} has no completed ingest to revise"
+            )
+        paths: dict[str, str] = manifest.setdefault("clause_paths", {})
+        recorded: list[dict[str, object]] = manifest.setdefault("revisions", [])
+        on_record = any(r.get("revision_id") == record.revision_id for r in recorded)
+        changed = check_revision_write(
+            record,
+            paths,
+            given=frozenset(c.clause_path for c in clauses),
+            on_record=on_record,
+        )
+        if changed or not on_record:
+            for path in changed:
+                paths[path] = record.written[path]
+            if not on_record:
+                recorded.append(record.to_json())
+            await self._write_manifest(record.instrument_id, record.version_id, manifest)
+        for clause in clauses:
+            stored = await self.get_clause(clause.clause_id, tenant_id=clause.tenant_id)
+            if stored is not None and stored.canonical_text == clause.canonical_text:
+                continue  # already written: no noncurrent generation for nothing
+            blob = self._bucket.blob(
+                self._clauses_key(clause.instrument_id, clause.version_id, clause.clause_path)
+            )
+            await asyncio.to_thread(
+                blob.upload_from_string, clause.model_dump_json(), content_type="application/json"
+            )
+
+    async def revisions(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> tuple[RevisionRecord, ...]:
+        manifest = await self._read_manifest(instrument_id, version_id)
+        if manifest is None:
+            return ()
+        recorded: list[dict[str, object]] = manifest.get("revisions", [])
+        return tuple(RevisionRecord.from_json(r) for r in recorded)
 
     async def purge(self, authorization: RemovalAuthorization) -> None:
         """Every generation under the target's prefix, live and noncurrent:

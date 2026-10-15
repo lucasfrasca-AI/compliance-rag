@@ -35,7 +35,14 @@ from compliance_rag.adapters.graph_schema import (
     refuse_duplicates,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
-from compliance_rag.assessment.coverage import Coverage, CoverageRow, ExceptionOf, Outcome
+from compliance_rag.adapters.revision_authorization import RevisionAuthorization
+from compliance_rag.assessment.coverage import (
+    Coverage,
+    CoverageRow,
+    ExceptionOf,
+    Outcome,
+    QualifierOf,
+)
 from compliance_rag.assessment.evidence import Evidence, Facts
 from compliance_rag.corpus.models import (
     Chunk,
@@ -46,6 +53,7 @@ from compliance_rag.corpus.models import (
     parse_stable_id,
     validate_tenant_id,
 )
+from compliance_rag.corpus.revision import RevisionRecord
 
 # --------------------------------------------------------------------------
 # Shared value objects
@@ -97,6 +105,18 @@ UNSCOPED = "unscoped: "
 
 
 @dataclass(frozen=True, slots=True)
+class Owed:
+    """How a clause a context owes bears on the obligation clauses there
+    (ADR-0037, ADR-0044): the ones it is an exception to (says when they do
+    not apply), and the ones it qualifies (says how they are satisfied, or
+    what they require). Usually one kind; both only if it is an exception to
+    one obligation and a qualifier of another."""
+
+    excepts: tuple[str, ...] = ()
+    qualifies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class LawScope:
     """Which library-law clauses Track B may return (D-03, ADR-0030).
 
@@ -106,22 +126,26 @@ class LawScope:
     well it matches. The tenant's own documents aren't law, and Track A
     doesn't scope them.
 
-    It also includes those obligations' exceptions (#164, ADR-0037), and says
-    which clause each excepts (`exceptions`), so that an answer given an
-    obligation's clause is given its exceptions too (`owed`), whatever the
-    ranking did.
+    It also includes those obligations' exceptions (#164, ADR-0037) and
+    qualifiers (#182, ADR-0044), each with the clauses inside it, and says
+    which clause each excepts (`exceptions`) or qualifies (`qualifiers`), so
+    that an answer given an obligation's clause is given them too (`owed`),
+    whatever the ranking did.
 
     `unscoped` is the one way to retrieve library law without Track A. It is
     for a question asked with no tenant profile (the Phase 1 retrieval eval,
     library-wide lookups), and it says why, so an unscoped call is visible in
     code and in traces — never an empty filter that silently means
-    "everything". With no Track A, it knows no exceptions."""
+    "everything". With no Track A, it knows no exceptions or qualifiers."""
 
     clause_ids: frozenset[str] | None
     reason: str
     exceptions: frozenset[ExceptionOf] = frozenset()
     """Each obligation clause with each of its exceptions, from the reviewed
     mapping through Track A (ADR-0037). Both are cited."""
+    qualifiers: frozenset[QualifierOf] = frozenset()
+    """Each obligation clause with each of its qualifiers, likewise
+    (ADR-0044). Both are cited."""
 
     def __post_init__(self) -> None:
         if not self.reason.strip():
@@ -129,7 +153,7 @@ class LawScope:
         if self.clause_ids is None and not self.reason.startswith(UNSCOPED):
             raise ValueError("an unscoped retrieval comes only from LawScope.unscoped(reason)")
         cited = self.clause_ids or frozenset[str]()
-        for pair in self.exceptions:
+        for pair in (*self.exceptions, *self.qualifiers):
             if not cited.issuperset(pair):
                 raise ValueError(f"{pair} names a clause the scope doesn't cite")
 
@@ -139,21 +163,30 @@ class LawScope:
             coverage.track_a_clause_ids,
             f"Track A for {coverage.tenant_id} on {coverage.as_of}",
             coverage.track_a_exceptions,
+            coverage.track_a_qualifiers,
         )
 
-    def owed(self, delivered: Iterable[str]) -> dict[str, tuple[str, ...]]:
-        """The exceptions a context holding `delivered` must also hold: for
-        each, the obligation clauses it excepts. A clause is held if it, or a
-        clause inside it, is delivered — a paragraph is its clause's text
-        (ADR-0035). In clause id order."""
+    def owed(self, delivered: Iterable[str]) -> dict[str, Owed]:
+        """The exceptions and qualifiers a context holding `delivered` must
+        also hold: for each, the obligation clauses it excepts and those it
+        qualifies. A clause is held if it, or a clause inside it, is
+        delivered — a paragraph is its clause's text (ADR-0035). In clause id
+        order."""
         held: set[str] = set()
         for clause_id in delivered:
             held |= {clause_id, *clause_ancestors(clause_id)}
-        owed: dict[str, set[str]] = {}
-        for pair in self.exceptions:
-            if pair.clause in held:
-                owed.setdefault(pair.exception, set()).add(pair.clause)
-        return {e: tuple(sorted(owed[e])) for e in sorted(owed)}
+        excepts: dict[str, set[str]] = {}
+        qualifies: dict[str, set[str]] = {}
+        for exception in self.exceptions:
+            if exception.clause in held:
+                excepts.setdefault(exception.exception, set()).add(exception.clause)
+        for qualifier in self.qualifiers:
+            if qualifier.clause in held:
+                qualifies.setdefault(qualifier.qualifier, set()).add(qualifier.clause)
+        return {
+            c: Owed(tuple(sorted(excepts.get(c, ()))), tuple(sorted(qualifies.get(c, ()))))
+            for c in sorted(excepts.keys() | qualifies.keys())
+        }
 
     @classmethod
     def unscoped(cls, reason: str) -> LawScope:
@@ -749,6 +782,17 @@ class GraphAdmin(GraphReader):
         node's or edge's `corrections` trail. All land, or none does."""
 
     @abstractmethod
+    async def revise_clauses(self, authorization: RevisionAuthorization) -> int:
+        """A parse correction of library law (ADR-0042), in one transaction:
+        for each clause the authorised correction names, its Clause node's
+        `canonical_sha256` goes from the recorded previous hash to the new
+        one, and the node's `corrections` trail gains when, by whom, why, the
+        revision and the previous hash. A node already at the new hash is left
+        as it is (a re-run); one at any other hash, or missing, refuses the
+        whole revision. Nothing else on the node changes. Returns how many
+        nodes changed."""
+
+    @abstractmethod
     async def begin_load(self, version: SourceVersion) -> str:
         """Record that a load of `version.kind` from `version` has started
         (#153); returns its id. Loads of a kind are serialised: this is refused
@@ -903,6 +947,25 @@ class RetrievalAdmin(ABC):
     async def delete_chunks(self, authorization: RemovalAuthorization) -> None:
         """Actually delete the target's chunks."""
 
+    @abstractmethod
+    async def stored_chunk_texts(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> dict[str, str]:
+        """The text every stored chunk of this version holds, by `chunk_id`,
+        visible or not: what a revision compares with the parse (ADR-0042)."""
+
+    @abstractmethod
+    async def revise_chunks(
+        self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
+    ) -> None:
+        """A parse correction of library law (ADR-0042): each chunk, one the
+        authorised revision names with exactly the text it records, is
+        re-embedded and written over the stored chunk of the same id. Its text
+        and vectors change; nothing else does (valid time, withdrawal, scope,
+        owner and the rest are the stored point's). A chunk not already stored
+        is refused: a correction never adds one. Refused before anything is
+        written."""
+
 
 class LedgerStore(ABC):
     """Postgres. The one non-derivable store (D-09)."""
@@ -997,6 +1060,12 @@ class LedgerStore(ABC):
         """Findings of this tenant with at least one citation whose
         `clause_id` starts with `stable_id_prefix` — `instrument:` for every
         version, `instrument:version:` for one (ADR-0021)."""
+
+    @abstractmethod
+    async def count_findings_citing_clauses(self, clause_ids: frozenset[str]) -> int:
+        """Findings of *any* tenant with at least one citation of one of
+        these clauses, by exact `clause_id`: library law is cited by every
+        tenant, so a revision of it counts them all (ADR-0042)."""
 
     @abstractmethod
     async def record_usage(self, usage: UsageRecord) -> None: ...
@@ -1158,6 +1227,28 @@ class ClauseStore(ABC):
     async def purge(self, authorization: RemovalAuthorization) -> None:
         """Delete every stored object under the target — clauses, source,
         manifest, and every noncurrent version of each (ADR-0021)."""
+
+    @abstractmethod
+    async def record_revision(
+        self, authorization: RevisionAuthorization, clauses: Sequence[ClauseRecord]
+    ) -> None:
+        """Apply a revision to the version it names (ADR-0042), the record
+        first: the manifest takes the new hash of every path the record
+        writes, and the record itself, in one write (an intent, as
+        `put_clauses` writes the manifest first). Then each of `clauses`, a
+        clause the record names with the text it records, is written over its
+        object unless the object already holds that text. A path whose
+        manifest hash is neither the record's previous nor its new one, or a
+        removed path still listed, refuses it before anything is written.
+        Idempotent: a record already on the manifest (by `revision_id`) isn't
+        appended again, and a hash already new isn't rewritten — so a run that
+        stopped part-way is finished by calling it again."""
+
+    @abstractmethod
+    async def revisions(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> tuple[RevisionRecord, ...]:
+        """Every revision recorded on this version's manifest, oldest first."""
 
 
 class Reranker(ABC):

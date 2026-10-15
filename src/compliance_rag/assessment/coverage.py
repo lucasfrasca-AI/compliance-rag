@@ -131,9 +131,15 @@ class ObligationCoverage:
     reason: str
     exception_clause_ids: tuple[str, ...] = ()
     """The clauses in force on `as_of` that say when it does not apply, as the
-    reviewed mapping names them (#164, ADR-0037). Not among `citations`: they
-    decide nothing about whether it applies. They are what an answer citing
-    it must not leave out (`Coverage.track_a_exceptions`)."""
+    reviewed mapping names them, and the clauses inside them (#164, #182,
+    ADR-0037, ADR-0044). Not among `citations`: they decide nothing about
+    whether it applies. They are what an answer citing it must not leave out
+    (`Coverage.track_a_exceptions`)."""
+    qualifier_clause_ids: tuple[str, ...] = ()
+    """The clauses in force on `as_of` that say how it is satisfied, or what it
+    requires, as the reviewed mapping names them, and the clauses inside them
+    (#182, ADR-0044). Kept apart from its exceptions, and out of `citations`
+    for the same reason (`Coverage.track_a_qualifiers`)."""
 
     @property
     def citations(self) -> tuple[str, ...]:
@@ -176,6 +182,15 @@ class ExceptionOf(NamedTuple):
     """A clause that says when the obligation does not apply."""
 
 
+class QualifierOf(NamedTuple):
+    """An obligation's clause and one of its qualifiers (#182, ADR-0044)."""
+
+    clause: str
+    """The obligation's own clause."""
+    qualifier: str
+    """A clause that says how the obligation is satisfied, or what it requires."""
+
+
 @dataclass(frozen=True, slots=True)
 class Coverage:
     tenant_id: str
@@ -205,11 +220,13 @@ class Coverage:
     @property
     def track_a_clause_ids(self) -> frozenset[str]:
         """The clauses Track A cites for every obligation that applies or
-        might, and those obligations' exceptions: what Track B may return
-        from library law (D-03, #116, ADR-0037). Not-applicable obligations
-        are reported, never retrieved."""
+        might, and those obligations' exceptions and qualifiers: what Track B
+        may return from library law (D-03, #116, ADR-0037, ADR-0044).
+        Not-applicable obligations are reported, never retrieved."""
         return frozenset(
-            c for o in self.might_apply for c in (*o.citations, *o.exception_clause_ids)
+            c
+            for o in self.might_apply
+            for c in (*o.citations, *o.exception_clause_ids, *o.qualifier_clause_ids)
         )
 
     @property
@@ -222,6 +239,18 @@ class Coverage:
             for o in self.might_apply
             for clause in o.clause_ids
             for exception in o.exception_clause_ids
+        )
+
+    @property
+    def track_a_qualifiers(self) -> frozenset[QualifierOf]:
+        """Each clause of an obligation that applies or might, with each of
+        its qualifiers (#182, ADR-0044): an answer given the clause is given
+        the qualifier."""
+        return frozenset(
+            QualifierOf(clause, qualifier)
+            for o in self.might_apply
+            for clause in o.clause_ids
+            for qualifier in o.qualifier_clause_ids
         )
 
     def obligation(self, obligation_id: str) -> ObligationCoverage:

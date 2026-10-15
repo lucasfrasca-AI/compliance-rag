@@ -75,6 +75,8 @@ jobs:
       # The recall gate (issue #28) fails rather than skips without Qdrant.
       # It runs here, with no GCP identity at all: real gemini-embedding-001
       # vectors come from the checked-in cache, BM25 is local, no reranker.
+      # Its corpus is the whole compilation's selected clauses (#180), ~820
+      # chunks upserted into the service container once per gate module.
       REQUIRE_RECALL_GATE: "1"
       # The graph tests fail rather than skip without the Neo4j container.
       NEO4J_TEST_URI: bolt://localhost:7687
@@ -232,8 +234,11 @@ jobs:
       # #10's standing constraint). REQUIRE_REAL_RETRIEVE turns a missing
       # Qdrant or model into a failure here instead of a silent skip.
       # test_recall_gate_reranked.py is the recall gate on what retrieve()
-      # delivers — the cross-encoder over the top 20 (ADR-0022) — so the
-      # cross-clause exit bar is enforced here, where the model is.
+      # delivers — the cross-encoder over the top 20 (ADR-0022) — on the whole
+      # compilation (ADR-0043): every cell's floor is enforced here, where the
+      # model is, and an open target is a strict xfail. `-rxP` prints the
+      # measured cells and any expected failure, so this platform's numbers
+      # are in the log.
       - name: Re-verify fidelity, reranker service, retrieve() and reranked recall
         run: |
           rm -f "$GOOGLE_GHA_CREDS_PATH"
@@ -241,7 +246,7 @@ jobs:
               -u GOOGLE_GHA_CREDS_PATH \
               -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
               REQUIRE_REAL_RETRIEVE=1 \
-            uv run pytest -v -rs \
+            uv run pytest -v -rsxP \
               tests/test_reranker_onnx_fidelity.py \
               tests/test_reranker_service.py \
               tests/test_retrieve_real_adapters.py \

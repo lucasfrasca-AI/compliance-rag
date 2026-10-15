@@ -1,8 +1,11 @@
-"""The shared setup for measuring retrieval on the golden set (#28, #32): the
-golden corpus loaded into a throwaway Qdrant collection with real cached
-vectors, and the reranker service run in-process behind the real client.
+"""The shared setup for measuring retrieval on the golden set (#28, #32): a
+corpus loaded into a throwaway Qdrant collection with real cached vectors, and
+the reranker service run in-process behind the real client.
 
 One place, so the recall gates and the benchmark scripts can't drift apart.
+They load the gate corpus, the whole compilation (`gate_chunks()`, #180); the
+live answer eval loads the golden excerpt, whose canonical text its verifier
+holds (`golden_clause_store()`).
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from compliance_rag.adapters.reranker_client import RerankerClient
 from compliance_rag.adapters.reranker_http_client import build_reranker_http_client
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
+    Chunk,
     ClauseRecord,
     DocumentClass,
     Scope,
@@ -32,7 +36,6 @@ from compliance_rag.eval.golden_corpus import (
     LAW_FIXTURE,
     LAW_INSTRUMENT_ID,
     LAW_VERSION_ID,
-    golden_chunks,
     golden_clauses,
 )
 from compliance_rag.reranker_service.app import create_app
@@ -41,11 +44,12 @@ from compliance_rag.reranker_service.model import RerankerModel
 
 @asynccontextmanager
 async def golden_store(
-    qdrant_url: str, *, prefix: str, api_key: SecretStr | None = None
+    qdrant_url: str, *, prefix: str, chunks: tuple[Chunk, ...], api_key: SecretStr | None = None
 ) -> AsyncGenerator[QdrantRetrievalStore]:
-    """The golden corpus on a throwaway collection, with the real
-    `gemini-embedding-001` snapshot as its embedder. `api_key` only for the
-    one-off run on the deployed cluster (#144); the gates pass none."""
+    """`chunks` on a throwaway collection, with the real
+    `gemini-embedding-001` snapshot as its embedder: `gate_chunks()` to
+    measure recall, `golden_chunks()` for the answer eval. `api_key` only for
+    the one-off run on the deployed cluster (#144); the gates pass none."""
     async with QdrantRetrievalStore.ephemeral(
         qdrant_url,
         embedder=CachedEmbedder(EmbeddingCache.load()),
@@ -53,7 +57,7 @@ async def golden_store(
         prefix=prefix,
         api_key=api_key,
     ) as store:
-        await store.upsert_chunks(golden_chunks())
+        await store.upsert_chunks(chunks)
         yield store
 
 

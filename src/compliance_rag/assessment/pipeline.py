@@ -10,9 +10,11 @@ on its own — one targeted regeneration of that citation, never the whole
 answer — and anything still failing is blocked.
 
 An obligation's clause never reaches the model without its exceptions (#164,
-ADR-0037): whatever the ranking returned, every exception Track A names for a
-clause in the context is delivered with it, fetched by id if need be, and
-marked as the exception it is.
+ADR-0037) or its qualifiers (#182, ADR-0044), nor without the clauses inside
+each: whatever the ranking returned, every one Track A names for a clause in
+the context is delivered with it, fetched by id if need be, and marked as
+what it is. An exception says when the obligation doesn't apply; a qualifier
+says how it is satisfied. The marker and the system prompt keep them apart.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from compliance_rag.adapters.interfaces import (
     Generator,
     LawScope,
     LedgerStore,
+    Owed,
     PolicyCorpus,
     UsageRecord,
 )
@@ -67,11 +70,17 @@ LIBRARY_QUESTION = LawScope.unscoped(
 )
 
 
-class ObligationExceptionUndelivered(RuntimeError):
-    """An exception Track A names for a clause in the context couldn't be
-    fetched: the graph names a clause the retrieval store doesn't hold on
-    `as_of`. Raised before generation, so no answer states the rule without
-    it (ADR-0037)."""
+def _kind(owed: Owed) -> str:
+    """What an owed clause is, in the words of a refusal."""
+    kinds = [k for k, v in (("an exception", owed.excepts), ("a qualifier", owed.qualifies)) if v]
+    return " and ".join(kinds)
+
+
+class OwedClauseUndelivered(RuntimeError):
+    """An exception or qualifier Track A names for a clause in the context
+    couldn't be fetched: the graph names a clause the retrieval store doesn't
+    hold on `as_of`. Raised before generation, so no answer states the rule
+    without it (ADR-0037, ADR-0044)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +105,11 @@ class Answer:
     """The exceptions the model was given with an obligation's clause, each
     naming the clauses it excepts — retrieved, or fetched by id where the
     ranking left them out (#164, ADR-0037). Citable like what was retrieved."""
+    qualifiers: tuple[SourceClause, ...] = ()
+    """The qualifiers the model was given with an obligation's clause, each
+    naming the clauses it qualifies, delivered the same way (#182,
+    ADR-0044). Kept apart from `exceptions`, so a client can tell "when it
+    doesn't apply" from "how it is satisfied"."""
 
     @property
     def verified(self) -> bool:
@@ -175,9 +189,10 @@ class AssessmentPipeline:
         asking (`Member.uid`): their own private additions are retrievable and
         citable by them, and no one else's are, by retrieval or by the
         verifier's read of canonical text (ADR-0036). Without one, user scope
-        yields nothing. Then every exception `law` names for a clause in it is
-        added, fetched by id if the ranking left it out (#164, ADR-0037): the
-        ids come from Track A, never from retrieved text."""
+        yields nothing. Then every exception and qualifier `law` names for a
+        clause in it, and every clause inside one, is added, fetched by id if
+        the ranking left it out (#164, #182, ADR-0037, ADR-0044): the ids come
+        from Track A, never from retrieved text."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             # Before anything is retrieved or generated: offshore, the prefix
             # must be registered synthetic (ADR-0032).
@@ -205,14 +220,27 @@ class AssessmentPipeline:
                 await on_retrieved(trace)
 
             retrieved = [SourceClause(c.clause_id, c.text) for c in trace.ranked_candidates()]
-            retrieved, fetched = await self._with_exceptions(
+            retrieved, fetched = await self._with_owed(
                 retrieved, tenant_id, as_of, law=law, policy_corpus=sent
             )
+            exceptions = tuple(c for c in retrieved if c.excepts)
+            qualifiers = tuple(c for c in retrieved if c.qualifies)
             current.set_attribute(
                 "answer.exceptions",
-                [f"{c.clause_id} excepts {' '.join(c.excepts)}" for c in retrieved if c.excepts],
+                [f"{c.clause_id} excepts {' '.join(c.excepts)}" for c in exceptions],
             )
-            current.set_attribute("answer.exceptions_fetched", list(fetched))
+            current.set_attribute(
+                "answer.qualifiers",
+                [f"{c.clause_id} qualifies {' '.join(c.qualifies)}" for c in qualifiers],
+            )
+            current.set_attribute(
+                "answer.exceptions_fetched",
+                [c.clause_id for c in exceptions if c.clause_id in fetched],
+            )
+            current.set_attribute(
+                "answer.qualifiers_fetched",
+                [c.clause_id for c in qualifiers if c.clause_id in fetched],
+            )
             generation = await self.generator.generate(
                 system=SYSTEM_PROMPT,
                 cached_prefix=policy_prefix(policies),
@@ -237,8 +265,8 @@ class AssessmentPipeline:
             current.set_attribute("generation.schema_valid", True)
 
             # The context is what this request showed the model: the retrieved
-            # set (with the exceptions delivered beside it) plus the cached
-            # policy set. Nothing else is citable.
+            # set (with the exceptions and qualifiers delivered beside it)
+            # plus the cached policy set. Nothing else is citable.
             context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
             checked = await self.verifier.check_all(
                 draft.citations, context=context, as_of=as_of, user_id=user_id
@@ -262,7 +290,8 @@ class AssessmentPipeline:
                 citations=tuple(c for c in final if c.verified),
                 blocked=tuple(c for c in final if not c.verified),
                 trace_id=current_trace_id(),
-                exceptions=tuple(c for c in retrieved if c.excepts),
+                exceptions=exceptions,
+                qualifiers=qualifiers,
             )
             current.set_attribute("verifier.result", result.verified)
             current.set_attribute(
@@ -272,7 +301,7 @@ class AssessmentPipeline:
             current.set_attribute("generation.cost_usd", result.cost_usd)
             return result
 
-    async def _with_exceptions(
+    async def _with_owed(
         self,
         retrieved: list[SourceClause],
         tenant_id: str,
@@ -280,12 +309,13 @@ class AssessmentPipeline:
         *,
         law: LawScope,
         policy_corpus: PolicyCorpus,
-    ) -> tuple[list[SourceClause], tuple[str, ...]]:
-        """`retrieved` with every exception `law` names for a clause in it
-        (ADR-0037): marked where the ranking returned it, fetched by id where
-        it didn't, and again for anything a fetched clause is owed. Returns
-        what the model is given and the ids that were fetched. An exception
-        that can't be fetched refuses the answer before generation."""
+    ) -> tuple[list[SourceClause], frozenset[str]]:
+        """`retrieved` with every exception and qualifier `law` names for a
+        clause in it, and every clause inside one (ADR-0037, ADR-0044):
+        marked where the ranking returned it, fetched by id where it didn't,
+        and again for anything a fetched clause is owed. Returns what the
+        model is given and the ids that were fetched. One that can't be
+        fetched refuses the answer before generation."""
         delivered = list(retrieved)
         fetched: list[str] = []
         while True:
@@ -302,17 +332,21 @@ class AssessmentPipeline:
             }
             lost = [e for e in missing if e not in found]
             if lost:
-                raise ObligationExceptionUndelivered(
-                    f"{', '.join(lost)}: an exception Track A names for a clause in the context "
-                    f"isn't retrievable on {as_of}, so the answer is refused rather than state "
-                    "the rule without it (ADR-0037)"
+                named = ", ".join(f"{e} ({_kind(owed[e])})" for e in lost)
+                raise OwedClauseUndelivered(
+                    f"{named}: Track A names it for a clause in the context, but it isn't "
+                    f"retrievable on {as_of}, so the answer is refused rather than state the "
+                    "rule without it (ADR-0037, ADR-0044)"
                 )
             delivered += [SourceClause(e, found[e].text) for e in missing]
             fetched += missing
         marked = [
-            replace(c, excepts=owed[c.clause_id]) if c.clause_id in owed else c for c in delivered
+            replace(c, excepts=owed[c.clause_id].excepts, qualifies=owed[c.clause_id].qualifies)
+            if c.clause_id in owed
+            else c
+            for c in delivered
         ]
-        return marked, tuple(fetched)
+        return marked, frozenset(fetched)
 
     async def _repair(
         self,

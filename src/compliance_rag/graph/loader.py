@@ -18,11 +18,14 @@ in the graph — it lives in Cloud Storage; the graph carries its canonical hash
 settled (ADR-0027, ADR-0028) — obligations, actors, condition trees,
 controls, jurisdictions and sectors, with `DERIVED_FROM`, `QUALIFIED_BY`,
 `HAS_OPERAND`, `APPLIES_TO`, `REQUIRES`, `CROSSWALKS_TO` and `SUPERSEDES` —
-and an obligation's exceptions, `EXCEPTED_BY` (#164, ADR-0037). Checked
-against the graph first: every clause an item derives from, and every
-exception, present and in force within the obligation's interval, and every
+and an obligation's exceptions, `EXCEPTED_BY` (#164, ADR-0037), and
+qualifiers, `READ_WITH` (#182, ADR-0044). Each exception and qualifier is
+expanded to itself and every clause inside it in the graph (its paragraphs),
+so what travels with an obligation is a set of exact ids. Checked against the
+graph first: every clause an item derives from, and every exception and
+qualifier, present and in force within the obligation's interval, and every
 item already loaded unchanged — properties and structural edges alike (an
-obligation's exceptions may grow, never shrink). Tenant policy mappings are never
+obligation's exceptions and qualifiers may grow, never shrink). Tenant policy mappings are never
 loaded into the graph (D-09, D-14: tenant content has no persisted node), so a
 `status: proposed` mapping can't be traversed by construction.
 
@@ -43,7 +46,7 @@ after its first write stays open.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import cast
@@ -66,9 +69,16 @@ from compliance_rag.adapters.graph_schema import (
     StoredNode,
 )
 from compliance_rag.adapters.interfaces import GraphAdmin, SourceVersion
-from compliance_rag.corpus.models import NO_END_DATE, ClauseRecord, Scope, canonical_sha256
+from compliance_rag.corpus.models import (
+    NO_END_DATE,
+    ClauseRecord,
+    Scope,
+    canonical_sha256,
+    parse_stable_id,
+)
 from compliance_rag.graph.mappings import (
     Actor,
+    ClausesInside,
     Condition,
     Control,
     Dated,
@@ -78,7 +88,9 @@ from compliance_rag.graph.mappings import (
     MappingSet,
     Obligation,
     Sector,
+    clauses_inside,
     lineage,
+    with_clauses_inside,
     words,
 )
 
@@ -330,7 +342,7 @@ def _outgoing(item: Dated) -> list[tuple[str, NodeRef]]:
     return edges
 
 
-def _edges(mappings: MappingSet) -> list[EdgeWrite]:
+def _edges(mappings: MappingSet, inside: ClausesInside) -> list[EdgeWrite]:
     labels = mappings.labels
     edges: list[EdgeWrite] = []
     for label, items in mappings.by_label.items():
@@ -348,10 +360,11 @@ def _edges(mappings: MappingSet) -> list[EdgeWrite]:
                 {"kind": crosswalk.kind.value, "note": words(crosswalk.note)},
             )
         )
-    for entry in mappings.exceptions:
+    for entry in mappings.travelling:
         obligation = NodeRef("Obligation", entry.obligation_id)
         edges += [
-            EdgeWrite("EXCEPTED_BY", obligation, NodeRef("Clause", c)) for c in entry.clause_ids
+            EdgeWrite(entry.EDGE, obligation, NodeRef("Clause", c))
+            for c in with_clauses_inside(entry.clause_ids, inside)
         ]
     return edges
 
@@ -360,10 +373,17 @@ MEANING = frozenset({"HAS_OPERAND", "QUALIFIED_BY", "APPLIES_TO", "REQUIRES", "S
 """Edges that carry an item's meaning: once loaded, the set a node has is as
 immutable as its properties (D-05) — a different set is a new id.
 `DERIVED_FROM` may grow (a new compilation, ADR-0028) but never shrink;
-`EXCEPTED_BY` likewise (an exception reviewed after its obligation was
-signed, or a new compilation's clause, ADR-0037); `CROSSWALKS_TO` may grow,
-but a stored crosswalk's kind is fixed and its note changes only by an
-acknowledged correction (ADR-0031)."""
+`EXCEPTED_BY` and `READ_WITH` likewise (an exception or qualifier reviewed
+after its obligation was signed, or a new compilation's clause, ADR-0037,
+ADR-0044); `CROSSWALKS_TO` may grow, but a stored crosswalk's kind is fixed
+and its note changes only by an acknowledged correction (ADR-0031)."""
+
+GROW_ONLY = {
+    "DERIVED_FROM": "a clause was removed",
+    "EXCEPTED_BY": "an exception was removed",
+    "READ_WITH": "a qualifier was removed",
+}
+"""Edges a loaded item may gain and never lose, with what losing one means."""
 
 
 def _last_visible(item: Dated, today: dt.date) -> dt.date:
@@ -378,14 +398,17 @@ def _interval(stored: StoredNode) -> tuple[dt.date, dt.date]:
     )
 
 
-async def _check_grounding(graph: GraphAdmin, mappings: MappingSet, today: dt.date) -> None:
+async def _check_grounding(
+    graph: GraphAdmin, mappings: MappingSet, today: dt.date
+) -> dict[NodeRef, StoredNode]:
     """Every clause an item derives from is in the graph and in force at some
     time within the item's interval, and on the item's last visible day at
     least one of them is: an item may not outlive the text it was read from
     (ADR-0028). An item grounded in many compilations lists them all; each
-    only has to overlap the item. An obligation's exceptions likewise: each
-    loaded, and in force at some time within the obligation's interval
-    (ADR-0037); an obligation may outlive an exception the law repeals."""
+    only has to overlap the item. An obligation's exceptions and qualifiers
+    likewise: each loaded, and in force at some time within the obligation's
+    interval (ADR-0037, ADR-0044); an obligation may outlive an exception the
+    law repeals. Returns the clauses the mappings name, as stored."""
     clauses = await graph.stored([NodeRef("Clause", c) for c in sorted(mappings.clause_ids)])
 
     def check(item: Dated, label: str, what: str, clause_id: str) -> None:
@@ -402,9 +425,9 @@ async def _check_grounding(graph: GraphAdmin, mappings: MappingSet, today: dt.da
             )
 
     obligations = mappings.obligations_by_id
-    for entry in mappings.exceptions:
+    for entry in mappings.travelling:
         for clause_id in entry.clause_ids:
-            check(obligations[entry.obligation_id], "Obligation", "exception", clause_id)
+            check(obligations[entry.obligation_id], "Obligation", entry.NOUN, clause_id)
     for label, item in mappings.grounded:
         last = _last_visible(item, today)
         for clause_id in item.clause_ids:
@@ -419,6 +442,36 @@ async def _check_grounding(graph: GraphAdmin, mappings: MappingSet, today: dt.da
                 f"{item.id}: none of its clauses is in force on {last} — end the "
                 f"{label.lower()} with its clause, or derive it from the compilation now in force"
             )
+    return clauses
+
+
+async def _read_inside(
+    graph: GraphAdmin, mappings: MappingSet, clauses: Mapping[NodeRef, StoredNode]
+) -> dict[str, tuple[str, ...]]:
+    """The clauses inside each exception and qualifier the mappings name, from
+    the graph's clause nodes (#182, ADR-0044): its paragraphs, so that they
+    travel with the obligation by exact id, never by a ranking's chance.
+
+    A clause's paragraphs are clauses of its own instrument version, loaded
+    with it and retired with it (`load_instrument_version`), so they are the
+    version's clauses in force on the named clause's first day whose path runs
+    through it. One builder-built read per version and day, through the query
+    builder like every read (D-05). `clauses` is what `_check_grounding`
+    already read, so every named clause is there."""
+    named = sorted(mappings.travelling_clause_ids)
+    by_version: dict[tuple[NodeRef, dt.date], list[str]] = {}
+    for clause_id in named:
+        instrument_id, version_id, _ = parse_stable_id(clause_id)
+        first_day = _interval(clauses[NodeRef("Clause", clause_id)])[0]
+        by_version.setdefault((version_ref(instrument_id, version_id), first_day), []).append(
+            clause_id
+        )
+    inside: dict[str, tuple[str, ...]] = {}
+    for (version, first_day), clause_ids in by_version.items():
+        in_force = [c.stable_id for c in await _clauses_in_force(graph, version, first_day)]
+        for clause_id in clause_ids:
+            inside[clause_id] = clauses_inside(clause_id, in_force)
+    return inside
 
 
 def _refuse(item: Dated, label: str, what: str) -> MappingError:
@@ -428,17 +481,19 @@ def _refuse(item: Dated, label: str, what: str) -> MappingError:
     )
 
 
-async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[CorrectionWrite, ...]:
+async def _check_unchanged(
+    graph: GraphAdmin, mappings: MappingSet, inside: ClausesInside
+) -> tuple[CorrectionWrite, ...]:
     """An item already loaded is unchanged in meaning — its non-cosmetic
     properties, its valid time (retiring an open node is the one change
     allowed), and the edges that carry its meaning (`MEANING`); its
-    `DERIVED_FROM` may only grow, and a stored crosswalk's kind is fixed. A
+    `GROW_ONLY` edges may only grow, and a stored crosswalk's kind is fixed. A
     change of meaning is refused here, before any write, not halfway through.
     A change of wording only (`COSMETIC`) is returned as a `Correction`,
     applied only if acknowledged (ADR-0031). One read for every item, at no
     date (`stored`)."""
     corrections: list[CorrectionWrite] = []
-    edges = _edges(mappings)
+    edges = _edges(mappings, inside)
     refs = [NodeRef(label, item.id) for label, items in mappings.by_label.items() for item in items]
     loaded = await graph.stored(refs)
     for label, items in mappings.by_label.items():
@@ -469,12 +524,10 @@ async def _check_unchanged(graph: GraphAdmin, mappings: MappingSet) -> tuple[Cor
                 wanted_targets = frozenset(e.target for e in mine if e.edge_type == edge_type)
                 if stored.targets(edge_type) != wanted_targets:
                     raise _refuse(item, label, f"{edge_type} edges")
-            derived = {e.target for e in mine if e.edge_type == "DERIVED_FROM"}
-            if not stored.targets("DERIVED_FROM") <= derived:
-                raise _refuse(item, label, "DERIVED_FROM edges (a clause was removed)")
-            excepted = {e.target for e in mine if e.edge_type == "EXCEPTED_BY"}
-            if not stored.targets("EXCEPTED_BY") <= excepted:
-                raise _refuse(item, label, "EXCEPTED_BY edges (an exception was removed)")
+            for edge_type, removed in GROW_ONLY.items():
+                kept = {e.target for e in mine if e.edge_type == edge_type}
+                if not stored.targets(edge_type) <= kept:
+                    raise _refuse(item, label, f"{edge_type} edges ({removed})")
             crosswalks = {e.target: e.properties for e in mine if e.edge_type == "CROSSWALKS_TO"}
             for edge in stored.edges:
                 if edge.edge_type != "CROSSWALKS_TO" or edge.target not in crosswalks:
@@ -516,22 +569,36 @@ class CorrectionAcknowledgement:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class CheckedMappings:
+    """What `check_mappings` found, and what the writes need from it."""
+
+    corrections: tuple[CorrectionWrite, ...]
+    """Wording changes to loaded items, acknowledged (ADR-0031)."""
+    inside: ClausesInside
+    """Each exception and qualifier, with the clauses inside it in the graph:
+    the further `EXCEPTED_BY` / `READ_WITH` targets (ADR-0044)."""
+
+
 async def check_mappings(
     graph: GraphAdmin,
     mappings: MappingSet,
     *,
     today: dt.date | None = None,
     corrections: CorrectionAcknowledgement | None = None,
-) -> tuple[CorrectionWrite, ...]:
+) -> CheckedMappings:
     """Everything that can refuse `load_mappings`, before its first write:
     clauses present and in force, loaded items unchanged in meaning. A change
     of wording to a loaded item is returned, to be applied in place only if
-    `corrections` acknowledges exactly the items it touches (ADR-0031). A load
-    a caller records (`recorded_load`) is begun after this, so a refusal
-    leaves no record."""
+    `corrections` acknowledges exactly the items it touches (ADR-0031). So are
+    the clauses inside each exception and qualifier, read from the graph here
+    so the writes rest on the same read as the checks (ADR-0044). A load a
+    caller records (`recorded_load`) is begun after this, so a refusal leaves
+    no record."""
     with telemetry.span("graph_loader.check_mappings") as span:
-        await _check_grounding(graph, mappings, today or dt.date.today())
-        found = await _check_unchanged(graph, mappings)
+        clauses = await _check_grounding(graph, mappings, today or dt.date.today())
+        inside = await _read_inside(graph, mappings, clauses)
+        found = await _check_unchanged(graph, mappings, inside)
         touched = frozenset(c.node.stable_id for c in found)
         acknowledged = corrections.item_ids if corrections else frozenset[str]()
         if touched != acknowledged:
@@ -541,7 +608,10 @@ async def check_mappings(
                 f"acknowledged {sorted(acknowledged)}"
             )
         span.set_attribute("graph.corrected", sorted(touched))
-        return found
+        span.set_attribute(
+            "graph.inside", [f"{c} contains {' '.join(i)}" for c, i in inside.items() if i]
+        )
+        return CheckedMappings(found, inside)
 
 
 async def load_mappings(
@@ -563,7 +633,7 @@ async def load_mappings(
 async def write_mappings(
     graph: GraphAdmin,
     mappings: MappingSet,
-    found: tuple[CorrectionWrite, ...],
+    found: CheckedMappings,
     corrections: CorrectionAcknowledgement | None,
 ) -> LoadReport:
     """The writes of `load_mappings`, once `check_mappings` has passed and
@@ -571,11 +641,14 @@ async def write_mappings(
     transaction; then the nodes; then the edges."""
     attributes = {
         f"graph.{label.lower()}s": len(items) for label, items in mappings.by_label.items()
-    } | {"graph.exceptions": sum(len(e.clause_ids) for e in mappings.exceptions)}
+    } | {
+        "graph.exceptions": sum(len(e.clause_ids) for e in mappings.exceptions),
+        "graph.qualifiers": sum(len(q.clause_ids) for q in mappings.qualifiers),
+    }
     with telemetry.span("graph_loader.load_mappings", **attributes) as span:
         if corrections is not None:
-            await graph.correct(found, by=corrections.by, reason=corrections.reason)
-        span.set_attribute("graph.corrected", sorted(c.node.stable_id for c in found))
+            await graph.correct(found.corrections, by=corrections.by, reason=corrections.reason)
+        span.set_attribute("graph.corrected", sorted(c.node.stable_id for c in found.corrections))
         created_nodes = await graph.put_nodes(
             [
                 NodeWrite(
@@ -585,7 +658,7 @@ async def write_mappings(
                 for item in items
             ]
         )
-        created_edges = await graph.put_edges(_edges(mappings))
+        created_edges = await graph.put_edges(_edges(mappings, found.inside))
         report = LoadReport(
             created_nodes,
             created_edges,

@@ -31,14 +31,18 @@ from urllib.parse import urlparse
 import httpx
 
 from compliance_rag.eval.golden import Category, load_golden_set
+from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store
 from compliance_rag.eval.recall import WHOLE_LIBRARY, NoRerank
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 
 
 async def batches() -> list[tuple[str, tuple[str, ...]]]:
-    """Every paraphrase and cross-clause query's fused top 50."""
-    async with golden_store(os.environ["QDRANT_URL"], prefix="latency-bench") as store:
+    """Every paraphrase and cross-clause query's fused top 50, on the gate
+    corpus (the whole compilation, #180)."""
+    async with golden_store(
+        os.environ["QDRANT_URL"], prefix="latency-bench", chunks=gate_chunks()
+    ) as store:
         pipeline = RetrievalPipeline(store, NoRerank())
         out: list[tuple[str, tuple[str, ...]]] = []
         for q in load_golden_set().queries:

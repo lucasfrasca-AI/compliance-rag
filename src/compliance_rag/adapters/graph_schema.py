@@ -54,6 +54,7 @@ EDGE_TYPES = frozenset(
         "QUALIFIED_BY",
         "HAS_OPERAND",
         "EXCEPTED_BY",
+        "READ_WITH",
     }
 )
 """PHASES.md Phase 2's edges, plus the #93 design session's (ADR-0027,
@@ -61,7 +62,10 @@ ADR-0028): `DERIVED_FROM` (Obligation, Condition, Actor, Control -> Clause),
 `QUALIFIED_BY` (Actor -> its condition tree's root) and `HAS_OPERAND`
 (Condition -> Condition; the operator is on the parent node). And #164's
 (ADR-0037): `EXCEPTED_BY` (Obligation -> a Clause that says when it does not
-apply)."""
+apply). And #182's (ADR-0044): `READ_WITH` (Obligation -> a Clause that says
+how it is satisfied, or what it requires: a qualifier). `READ_WITH` is not
+`QUALIFIED_BY`: that one decides who holds an actor's role; this one is part
+of what an obligation says."""
 
 
 Scalar = str | int | float | bool | dt.date | tuple[str, ...] | tuple[int | float, ...]

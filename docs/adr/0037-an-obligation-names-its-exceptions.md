@@ -1,6 +1,7 @@
 # ADR-0037 — An obligation names its exceptions, and they travel with it
 
-- Status: accepted
+- Status: accepted; amended by ADR-0044 (an obligation's qualifiers travel
+  with it too, and so do the clauses inside an exception or a qualifier)
 - Date: 2026-10-14
 - Issue: #164
 - Amends: ADR-0030 (Track B filters library law to the clauses Track A cites)

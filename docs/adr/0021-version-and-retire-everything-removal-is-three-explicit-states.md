@@ -1,6 +1,6 @@
 # ADR-0021 — Version and retire everything; removal is three explicit states
 
-- Status: accepted
+- Status: accepted; amended by ADR-0042 (a parse correction of library law is applied in place)
 - Date: 2026-10-08
 - Decision ID: `D-18` (`DECISIONS.md`)
 - Extends: D-05 (bitemporal law), D-17 (library and subscriptions)

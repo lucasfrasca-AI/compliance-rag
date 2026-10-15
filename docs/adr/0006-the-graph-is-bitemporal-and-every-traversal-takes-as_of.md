@@ -1,6 +1,6 @@
 # ADR-0006 — The graph is bitemporal and every traversal takes as_of
 
-- Status: accepted; status wording amended by ADR-0029
+- Status: accepted; status wording amended by ADR-0029; immutability amended by ADR-0031 (wording) and ADR-0042 (a Clause node's hash, by a parse correction)
 - Date: 2026-09-20
 - Decision ID: `D-05` (`DECISIONS.md`)
 
