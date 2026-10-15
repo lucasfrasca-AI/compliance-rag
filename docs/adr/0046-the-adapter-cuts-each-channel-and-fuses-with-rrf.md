@@ -88,7 +88,7 @@ inside Qdrant. So the fix can't keep it.
   scores it is taken from can still differ by one unit in the last place. In
   four fresh collections that happened in the sparse lists of 7 queries and
   moved no channel order and no fused list. Rounding scores before comparing
-  would only move the boundary, so it isn't done; filed as a follow-up.
+  would only move the boundary, so it isn't done; #223 tracks it.
 - **Exact search assumed.** "Every member of the tie is in hand" holds while
   Qdrant searches the channel exactly, as it does for collections under its
   indexing threshold (the gate's and production's, at ~800 points). Under HNSW

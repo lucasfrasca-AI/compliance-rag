@@ -27,7 +27,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import uuid
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -232,6 +232,55 @@ async def test_fusion_scores_as_qdrants_native_rrf_does() -> None:
     assert {c.chunk_id: c.score for c in ours.fused} == pytest.approx(native_scores, rel=1e-6)
     native_order = sorted(native_scores, key=lambda chunk_id: (-native_scores[chunk_id], chunk_id))
     assert [c.chunk_id for c in ours.fused] == native_order
+
+
+async def test_the_adapter_reuses_its_connections_to_a_local_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#205: `qdrant-client` opens a TCP connection per request to `localhost`
+    unless told otherwise, and the ordering contract's searches opened 186 of
+    them; under a concurrent suite one connect through Docker Desktop's port
+    proxy could outlast httpx's 5 s and fail the test (`_CONNECTIONS`). Counted
+    here as httpcore opens them: two channels run at once, so two at a time."""
+    from httpcore._backends.auto import (  # pyright: ignore[reportPrivateUsage] — counts connects
+        AutoBackend,
+    )
+
+    from tests.contracts.test_interfaces import (
+        ORDER_QUERY,
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        order_chunks,
+    )
+
+    opened: list[str] = []
+    connect = AutoBackend.connect_tcp
+
+    async def counted(
+        self: AutoBackend, host: str, port: int, **kwargs: Any
+    ) -> object:  # Any: httpcore's own options, passed through
+        opened.append(f"{host}:{port}")
+        return await connect(self, host, port, **kwargs)
+
+    monkeypatch.setattr(AutoBackend, "connect_tcp", counted)
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="connections",
+    ) as store:
+        await store.upsert_chunks(order_chunks())
+        for limit in (10, 2, 1) * 7:
+            await store.search(
+                ORDER_QUERY,
+                law=ALL_LAW,
+                tenant_id="_public",
+                scopes=(Scope.PUBLIC,),
+                as_of=TODAY,
+                limit=limit,
+            )
+    # 21 searches and a collection's setup: 60 requests, a connection each before.
+    assert 1 <= len(opened) <= 4, opened
 
 
 async def test_the_search_span_logs_each_channel_and_how_deep_it_was_read(
