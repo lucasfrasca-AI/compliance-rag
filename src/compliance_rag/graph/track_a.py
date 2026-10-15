@@ -36,7 +36,15 @@ from compliance_rag.graph.applicability import (
     Snapshot,
     evaluate,
 )
-from compliance_rag.graph.mappings import Leaf, MappingSet, Operator, lineage, words
+from compliance_rag.graph.mappings import (
+    Leaf,
+    MappingSet,
+    Operator,
+    clauses_inside,
+    lineage,
+    with_clauses_inside,
+    words,
+)
 
 _HOPS = (
     ("Obligation", "DERIVED_FROM", "Clause"),
@@ -45,6 +53,7 @@ _HOPS = (
     ("Obligation", "APPLIES_TO", "Sector"),
     ("Obligation", "REQUIRES", "Condition"),
     ("Obligation", "EXCEPTED_BY", "Clause"),
+    ("Obligation", "READ_WITH", "Clause"),
     ("Actor", "DERIVED_FROM", "Clause"),
     ("Actor", "QUALIFIED_BY", "Condition"),
     ("Condition", "DERIVED_FROM", "Clause"),
@@ -129,6 +138,7 @@ async def read_snapshot(reader: GraphReader, as_of: dt.date) -> Snapshot:
             sectors=edges("Obligation", "APPLIES_TO", "Sector").get(oid, ()),
             conditions=edges("Obligation", "REQUIRES", "Condition").get(oid, ()),
             exception_clause_ids=edges("Obligation", "EXCEPTED_BY", "Clause").get(oid, ()),
+            qualifier_clause_ids=edges("Obligation", "READ_WITH", "Clause").get(oid, ()),
         )
         for oid, node in nodes["Obligation"].items()
     }
@@ -142,13 +152,31 @@ def snapshot_of_mappings(
     clause_validity: Mapping[str, tuple[dt.date, dt.date]],
 ) -> Snapshot:
     """The snapshot `read_snapshot` would return had `mappings` been loaded
-    into a graph whose clauses have `clause_validity`."""
+    into a graph whose clauses have `clause_validity`. As the loader does,
+    an exception or qualifier brings the clauses inside it among those
+    (ADR-0044)."""
 
     def live(start: dt.date, end: dt.date) -> bool:
         return start <= as_of < end
 
     def clauses(ids: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(sorted(c for c in ids if c in clause_validity and live(*clause_validity[c])))
+
+    def inside_on_its_first_day(named: str) -> tuple[str, ...]:
+        """As the loader reads the graph: the clauses inside an exception or
+        qualifier, among those in force on its own first day (ADR-0044)."""
+        first = clause_validity[named][0]
+        in_force = (c for c, (start, end) in clause_validity.items() if start <= first < end)
+        return clauses_inside(named, in_force)
+
+    inside = {
+        named: inside_on_its_first_day(named)
+        for named in mappings.travelling_clause_ids
+        if named in clause_validity
+    }
+
+    def with_inside(ids: tuple[str, ...]) -> tuple[str, ...]:
+        return clauses(with_clauses_inside(ids, inside))
 
     conditions = {
         c.id: ConditionSpec(
@@ -175,6 +203,7 @@ def snapshot_of_mappings(
         for label, items in mappings.by_label.items()
     }
     exceptions = mappings.exceptions_by_obligation
+    qualifiers = mappings.qualifiers_by_obligation
     obligations = {
         o.id: ObligationSpec(
             id=o.id,
@@ -187,7 +216,8 @@ def snapshot_of_mappings(
             ),
             sectors=tuple(sorted(x for x in o.applies_to.sectors if x in in_force["Sector"])),
             conditions=tuple(sorted(c for c in o.requires.conditions if c in conditions)),
-            exception_clause_ids=clauses(exceptions.get(o.id, ())),
+            exception_clause_ids=with_inside(exceptions.get(o.id, ())),
+            qualifier_clause_ids=with_inside(qualifiers.get(o.id, ())),
         )
         for o in mappings.obligations
         if live(o.valid_from, o.valid_until)
@@ -205,6 +235,10 @@ def _record(span: Span, coverage: Coverage) -> None:
     span.set_attribute(
         "track_a.exceptions",
         [f"{p.clause} excepted by {p.exception}" for p in sorted(coverage.track_a_exceptions)],
+    )
+    span.set_attribute(
+        "track_a.qualifiers",
+        [f"{p.clause} read with {p.qualifier}" for p in sorted(coverage.track_a_qualifiers)],
     )
 
 

@@ -110,7 +110,8 @@ Settled in the #93 design session (ADR-0027, ADR-0028, ADR-0029):
 - Every item except a jurisdiction or sector is `DERIVED_FROM` the clauses it
   was read from, one edge per compilation. Those clauses are its citations.
 - An obligation may be `EXCEPTED_BY` the clauses that say when it does not
-  apply (#164, ADR-0037). See Exceptions.
+  apply (#164, ADR-0037), and `READ_WITH` the clauses that say how it is
+  satisfied (#182, ADR-0044). See Exceptions and Qualifiers.
 - Every item is dated:
   - `valid_from`;
   - `valid_to` with `end_reason` once it ends (`superseded`, `repealed` or
@@ -133,6 +134,7 @@ reviewed_by: sam.smith@example.com
 date: 2026-09-20
 source_clause_ids:
   - privacy-act-1988:C2026C00227:sch1/app11/1
+  - privacy-act-1988:C2026C00227:sch1/app11/3
   - privacy-act-1988:C2026C00227:sch1/app8/1
   - privacy-act-1988:C2026C00227:sch1/app8/2
   - privacy-act-1988:C2026C00227:s15
@@ -170,8 +172,8 @@ obligations:
 ```
 
 Not every clause is an obligation. Recitals and definitions are clauses without
-an obligation node (`CONTEXT.md`), and so are exceptions: they are named by
-the obligation they except (below).
+an obligation node (`CONTEXT.md`), and so are exceptions and qualifiers: they
+are named by the obligation they except or qualify (below).
 
 ## Exceptions
 
@@ -180,7 +182,7 @@ is displaced: APP 8.2, which sets out when APP 8.1 does not apply to a
 disclosure to an overseas recipient. Which clause excepts which is a legal judgement, so it
 is mapping content, reviewed like the rest (D-01). A clause that only permits
 something ("may"), defines a term, or says what an obligation's steps include
-is not an exception.
+is not an exception. The last may be a qualifier (below).
 
 ```yaml
 exceptions:
@@ -200,15 +202,47 @@ exceptions:
   - the obligation's own clause, or a clause containing it (`sch1/app8` for
     APP 8.1 would admit the whole APP);
   - any file still pending review, as for every mapping file.
-- **What it does** (ADR-0037). The law scope Track A gives Track B includes
-  the exceptions of every obligation that applies or might, and the clauses inside them
-  (ADR-0035). And an answer given an obligation's clause, or a paragraph of
-  it, is given its exceptions too: fetched by id if the ranking left them out,
-  marked in the prompt as the exception to that clause. An exception decides
+- **What it does** (ADR-0037, ADR-0044). The loader expands each exception to
+  itself and every clause inside it in the graph (APP 8.2 to 8.2(a)–(f) and
+  their subparagraphs), each an `EXCEPTED_BY` edge, so nobody lists
+  paragraphs by hand. The law scope Track A gives Track B includes all of
+  them, for every obligation that applies or might. And an answer given an
+  obligation's clause, or a paragraph of it, is given every one of them too:
+  fetched by exact id if the ranking left it out, marked in the prompt as an
+  exception to that clause ("when it does not apply"). An exception decides
   nothing about whether the obligation applies.
 - **Exceptions only grow.** Once loaded, an obligation's `EXCEPTED_BY` edges
   may gain a clause (a new compilation's, or one reviewed later), never lose
   one. A wrong exception is fixed by superseding the obligation.
+
+## Qualifiers
+
+A **qualifier** is a clause that says how an obligation is satisfied, or what
+it requires: APP 11.3, "For the purposes of subclauses 11.1 and 11.2, … such
+steps include technical and organisational measures", for APP 11.1 and 11.2;
+APP 5.2, the matters 5.1 requires notice of. An exception says when the
+obligation doesn't apply; a qualifier says how it is met. Those are different
+things to a reader, so they are different things here (#182, ADR-0044). Not
+to be confused with an actor's `qualified_by` condition, which decides who
+holds a role.
+
+```yaml
+qualifiers:
+  - obligation_id: OB-APP11-1            # an obligation in this or another file
+    clause_ids:                          # READ_WITH edges, one per compilation
+      - privacy-act-1988:C2026C00227:sch1/app11/3
+```
+
+- **Everything an exception is, kept apart.** Keyed by the obligation, in a
+  file of its own or beside `exceptions:` in one file; the same refusals; the
+  same expansion to the clauses inside it, as `READ_WITH` edges; the same
+  scope; the same delivery, marked in the prompt as qualifying that clause
+  ("how it is satisfied"). It only grows.
+- **Never both.** The loader also refuses a clause that is an exception to
+  an obligation and a qualifier of the same one, or an exception and a
+  qualifier of one obligation where one contains the other (the clauses
+  inside both would be both). A clause may be an exception to one obligation
+  and a qualifier of another.
 
 ## Actors
 
@@ -349,7 +383,8 @@ anything.
 - **A new compilation of unchanged law adds a clause id.** Append the new
   compilation's clause to `clause_ids`. That adds a `DERIVED_FROM` edge, and
   the old clause retires with its version (ADR-0028). An obligation's
-  exceptions likewise: append the new compilation's clause to its entry.
+  exceptions and qualifiers likewise: append the new compilation's clause to
+  its entry, and the loader adds the clauses inside it.
 - **A correction of wording is made in place** (ADR-0031). This covers a
   `summary`, `description`, `question`, `unassessable_reason`, `name`,
   `descriptor` or crosswalk `note`. Edit the YAML, then load with an

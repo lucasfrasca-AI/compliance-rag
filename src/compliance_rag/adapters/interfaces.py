@@ -36,7 +36,13 @@ from compliance_rag.adapters.graph_schema import (
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
-from compliance_rag.assessment.coverage import Coverage, CoverageRow, ExceptionOf, Outcome
+from compliance_rag.assessment.coverage import (
+    Coverage,
+    CoverageRow,
+    ExceptionOf,
+    Outcome,
+    QualifierOf,
+)
 from compliance_rag.assessment.evidence import Evidence, Facts
 from compliance_rag.corpus.models import (
     Chunk,
@@ -99,6 +105,18 @@ UNSCOPED = "unscoped: "
 
 
 @dataclass(frozen=True, slots=True)
+class Owed:
+    """How a clause a context owes bears on the obligation clauses there
+    (ADR-0037, ADR-0044): the ones it is an exception to (says when they do
+    not apply), and the ones it qualifies (says how they are satisfied, or
+    what they require). Usually one kind; both only if it is an exception to
+    one obligation and a qualifier of another."""
+
+    excepts: tuple[str, ...] = ()
+    qualifies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class LawScope:
     """Which library-law clauses Track B may return (D-03, ADR-0030).
 
@@ -108,22 +126,26 @@ class LawScope:
     well it matches. The tenant's own documents aren't law, and Track A
     doesn't scope them.
 
-    It also includes those obligations' exceptions (#164, ADR-0037), and says
-    which clause each excepts (`exceptions`), so that an answer given an
-    obligation's clause is given its exceptions too (`owed`), whatever the
-    ranking did.
+    It also includes those obligations' exceptions (#164, ADR-0037) and
+    qualifiers (#182, ADR-0044), each with the clauses inside it, and says
+    which clause each excepts (`exceptions`) or qualifies (`qualifiers`), so
+    that an answer given an obligation's clause is given them too (`owed`),
+    whatever the ranking did.
 
     `unscoped` is the one way to retrieve library law without Track A. It is
     for a question asked with no tenant profile (the Phase 1 retrieval eval,
     library-wide lookups), and it says why, so an unscoped call is visible in
     code and in traces — never an empty filter that silently means
-    "everything". With no Track A, it knows no exceptions."""
+    "everything". With no Track A, it knows no exceptions or qualifiers."""
 
     clause_ids: frozenset[str] | None
     reason: str
     exceptions: frozenset[ExceptionOf] = frozenset()
     """Each obligation clause with each of its exceptions, from the reviewed
     mapping through Track A (ADR-0037). Both are cited."""
+    qualifiers: frozenset[QualifierOf] = frozenset()
+    """Each obligation clause with each of its qualifiers, likewise
+    (ADR-0044). Both are cited."""
 
     def __post_init__(self) -> None:
         if not self.reason.strip():
@@ -131,7 +153,7 @@ class LawScope:
         if self.clause_ids is None and not self.reason.startswith(UNSCOPED):
             raise ValueError("an unscoped retrieval comes only from LawScope.unscoped(reason)")
         cited = self.clause_ids or frozenset[str]()
-        for pair in self.exceptions:
+        for pair in (*self.exceptions, *self.qualifiers):
             if not cited.issuperset(pair):
                 raise ValueError(f"{pair} names a clause the scope doesn't cite")
 
@@ -141,21 +163,30 @@ class LawScope:
             coverage.track_a_clause_ids,
             f"Track A for {coverage.tenant_id} on {coverage.as_of}",
             coverage.track_a_exceptions,
+            coverage.track_a_qualifiers,
         )
 
-    def owed(self, delivered: Iterable[str]) -> dict[str, tuple[str, ...]]:
-        """The exceptions a context holding `delivered` must also hold: for
-        each, the obligation clauses it excepts. A clause is held if it, or a
-        clause inside it, is delivered — a paragraph is its clause's text
-        (ADR-0035). In clause id order."""
+    def owed(self, delivered: Iterable[str]) -> dict[str, Owed]:
+        """The exceptions and qualifiers a context holding `delivered` must
+        also hold: for each, the obligation clauses it excepts and those it
+        qualifies. A clause is held if it, or a clause inside it, is
+        delivered — a paragraph is its clause's text (ADR-0035). In clause id
+        order."""
         held: set[str] = set()
         for clause_id in delivered:
             held |= {clause_id, *clause_ancestors(clause_id)}
-        owed: dict[str, set[str]] = {}
-        for pair in self.exceptions:
-            if pair.clause in held:
-                owed.setdefault(pair.exception, set()).add(pair.clause)
-        return {e: tuple(sorted(owed[e])) for e in sorted(owed)}
+        excepts: dict[str, set[str]] = {}
+        qualifies: dict[str, set[str]] = {}
+        for exception in self.exceptions:
+            if exception.clause in held:
+                excepts.setdefault(exception.exception, set()).add(exception.clause)
+        for qualifier in self.qualifiers:
+            if qualifier.clause in held:
+                qualifies.setdefault(qualifier.qualifier, set()).add(qualifier.clause)
+        return {
+            c: Owed(tuple(sorted(excepts.get(c, ()))), tuple(sorted(qualifies.get(c, ()))))
+            for c in sorted(excepts.keys() | qualifies.keys())
+        }
 
     @classmethod
     def unscoped(cls, reason: str) -> LawScope:

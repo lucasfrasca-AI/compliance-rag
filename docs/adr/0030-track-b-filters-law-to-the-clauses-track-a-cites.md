@@ -1,7 +1,8 @@
 # ADR-0030 — Track B filters library law to the clauses Track A cites
 
-- Status: accepted; amended by ADR-0035 (a cited clause admits the clauses inside it)
-  and ADR-0037 (an obligation names its exceptions, and they travel with it)
+- Status: accepted; amended by ADR-0035 (a cited clause admits the clauses inside it),
+  ADR-0037 (an obligation names its exceptions, and they travel with it)
+  and ADR-0044 (and its qualifiers, and the clauses inside both)
 - Date: 2026-10-12
 - Issue: #116
 - Refines: ADR-0004 / `D-03` ("Track B returns supporting text, filtered to Track A's IDs")
