@@ -261,27 +261,22 @@ def _check_shape(name: str, params: models.CollectionParams, *, dense_dims: int)
         )
 
 
-_CONNECTIONS = httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=5.0)
-"""How the client holds its HTTP connections: open ones are reused, which is
-what `qdrant-client` gives any host but `localhost` and `127.0.0.1` (httpx's
-defaults, these numbers). For those two it turns keep-alive off, so every
-request opens a TCP connection: the 63 searches of the ordering contract
-opened 186, three at a time. Through Docker Desktop's port proxy on a laptop
-running a full suite beside it, one connect in several thousand took longer
-than httpx's 5 s, and the search failed with `ConnectTimeout` (#205). With
-connections reused, a test talks to the local server the way production talks
-to Qdrant Cloud."""
+_HTTP_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=5.0)
+"""Open connections are reused: httpx's defaults, which `qdrant-client` gives
+every host but `localhost` and `127.0.0.1`. For those two it turns keep-alive
+off, so every request opens a TCP connection, and through Docker Desktop's
+port proxy a connect could outlast httpx's 5 s while a suite ran beside it
+(#205). With these limits a local server is reached the way Qdrant Cloud is."""
 
 
-def _async_client(url: str | None, api_key: str | None) -> AsyncQdrantClient:
-    """Every client this adapter makes, with one connection policy (`_CONNECTIONS`)."""
-    return AsyncQdrantClient(url=url, api_key=api_key, limits=_CONNECTIONS)
+def _qdrant_client(url: str, api_key: str) -> AsyncQdrantClient:
+    """Every client this adapter makes: one connection policy (`_HTTP_LIMITS`).
+    An empty `url` or `api_key` is none."""
+    return AsyncQdrantClient(url=url or None, api_key=api_key or None, limits=_HTTP_LIMITS)
 
 
 def _client(settings: Settings) -> AsyncQdrantClient:
-    return _async_client(
-        settings.qdrant_url or None, settings.qdrant_api_key.get_secret_value() or None
-    )
+    return _qdrant_client(settings.qdrant_url, settings.qdrant_api_key.get_secret_value())
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,7 +394,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         collection, not a cloud resource: the cluster and `clauses` are
         untouched."""
         key = api_key.get_secret_value() if api_key is not None else ""
-        client = _async_client(url, key or None)
+        client = _qdrant_client(url, key)
         store = cls(
             client,
             collection_name=f"{prefix}-{uuid.uuid4().hex[:8]}",

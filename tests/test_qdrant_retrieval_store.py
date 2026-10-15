@@ -243,8 +243,8 @@ async def test_the_adapter_reuses_its_connections_to_a_local_server(
     """#205: `qdrant-client` opens a TCP connection per request to `localhost`
     unless told otherwise, and the ordering contract's searches opened 186 of
     them; under a concurrent suite one connect through Docker Desktop's port
-    proxy could outlast httpx's 5 s and fail the test (`_CONNECTIONS`). Counted
-    here as httpcore opens them: two channels run at once, so two at a time."""
+    proxy could outlast httpx's 5 s and fail the test (`_HTTP_LIMITS`). Counted
+    here as httpcore opens them."""
     from httpcore._backends.auto import (  # pyright: ignore[reportPrivateUsage] — counts connects
         AutoBackend,
     )
@@ -282,8 +282,12 @@ async def test_the_adapter_reuses_its_connections_to_a_local_server(
                 as_of=TODAY,
                 limit=limit,
             )
-    # 21 searches and a collection's setup: 60 requests, a connection each before.
-    assert 1 <= len(opened) <= 4, opened
+    # The collection's setup (13 connections, measured), the upsert and 21
+    # searches of two requests each: about 56 without reuse. With it,
+    # the two channels' requests run at once, so two connections; four leaves
+    # room for one to expire if the run stalls past keep-alive's 5 s.
+    assert opened, "the count never ran: httpcore connects some other way"
+    assert len(opened) <= 4, opened
 
 
 async def test_the_search_span_logs_each_channel_and_how_deep_it_was_read(
