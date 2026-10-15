@@ -9,9 +9,11 @@ real `gemini-embedding-001` output served from the checked-in cache
 so the gate needs no cloud identity, no network and no model artefact, and
 nothing in it can call an LLM. Fusion is held to its floor in every cell
 (`FLOORS`), and every list of every query to its checked-in baseline, which
-fails the build by query id. Targets are on the reranked list, in
-`test_recall_gate_reranked.py`; delivered-recall (ADR-0045) is a separate
-metric with floors and no target, held per query here and per cell there.
+fails the build by query id. Fused paraphrase has a target of its own, 0.95
+(ADR-0043): law's is open, a strict xfail here. PHASES.md's targets are on the
+reranked list, in `test_recall_gate_reranked.py`; delivered-recall (ADR-0045)
+is a separate metric with floors and no target, held per query here and per
+cell there.
 
 CI's `ci` job sets `REQUIRE_RECALL_GATE`, so a missing Qdrant fails there
 instead of skipping.
@@ -36,6 +38,7 @@ from compliance_rag.eval.recall import (
     DELIVERED,
     FLOORS,
     FUSED,
+    FUSED_TARGETS,
     LAW,
     OPEN_TARGETS,
     POLICY,
@@ -54,6 +57,7 @@ from compliance_rag.eval.recall import (
     load_baseline_corpus,
     measure,
     measure_trace,
+    open_targets_on,
     recall_at_k,
     regressions,
     short_of_target,
@@ -216,14 +220,17 @@ def test_every_cell_has_a_floor_and_a_floor_never_exceeds_one() -> None:
     assert all(0.0 < floor <= 1.0 for floor in FLOORS.values())
 
 
-def test_targets_are_on_the_reranked_list_only() -> None:
+def test_targets_are_on_the_reranked_list_and_fused_paraphrase() -> None:
     """Retrieval's job is to rank, so PHASES.md's bars are on the reranked top
-    10. Nothing delivers fusion's order, so a fused cell has a floor and no
-    target. Delivered-recall measures delivery, not ranking: a separate metric
-    with floors and no target (ADR-0045), so it can neither meet nor close one."""
+    10. Fusion has one target of its own, 0.95 on paraphrase (the human's
+    decision on ADR-0043): a floor stops regressions, a target names where
+    you're going. Delivered-recall measures delivery, not ranking: a separate
+    metric with floors and no target (ADR-0045), so it can neither meet nor
+    close one."""
     for category in Category:
         for document_class in (LAW, POLICY):
-            assert target_of(Cell(FUSED, category, document_class)) is None
+            fused = target_of(Cell(FUSED, category, document_class))
+            assert fused == (0.95 if category is Category.PARAPHRASE else None)
             assert target_of(Cell(DELIVERED, category, document_class)) is None
             assert target_of(Cell(RERANKED, category, document_class)) == TARGETS[category]
     assert dict(TARGETS) == {
@@ -231,14 +238,35 @@ def test_targets_are_on_the_reranked_list_only() -> None:
         Category.PARAPHRASE: 0.9,
         Category.CROSS_CLAUSE: 0.8,
     }
+    assert dict(FUSED_TARGETS) == {Category.PARAPHRASE: 0.95}
 
 
-def test_the_open_target_is_law_cross_clause() -> None:
-    """ADR-0043: today's one cell under its target, on the reranked list. When
-    it is met, its xfail in test_recall_gate_reranked.py passes, strict xfail
-    fails the build, and raising its floor to the new value closes it here
-    too. Delivered-recall's 0.833 in the same cell doesn't close it (ADR-0045)."""
-    assert list(OPEN_TARGETS) == [Cell(RERANKED, Category.CROSS_CLAUSE, LAW)]
+def test_the_open_targets_are_law_cross_clause_ranked_and_law_paraphrase_fused() -> None:
+    """ADR-0043: law cross-clause is under its 0.8 on the reranked list, and
+    law paraphrase under its 0.95 on the fused list (GQ-10). Each is a strict
+    xfail in the gate that measures its list. When one is met, its xfail
+    passes, strict xfail fails the build, and raising its floor to the new
+    value closes it here too. Delivered-recall's 0.833 doesn't close the first
+    (ADR-0045)."""
+    assert list(OPEN_TARGETS) == [
+        Cell(FUSED, Category.PARAPHRASE, LAW),
+        Cell(RERANKED, Category.CROSS_CLAUSE, LAW),
+    ]
+    assert open_targets_on(FUSED) == (Cell(FUSED, Category.PARAPHRASE, LAW),)
+    assert open_targets_on(RERANKED) == (Cell(RERANKED, Category.CROSS_CLAUSE, LAW),)
+    assert open_targets_on(DELIVERED) == ()
+
+
+def test_policy_fused_paraphrase_is_held_at_its_target_by_its_floor() -> None:
+    """Policy fused paraphrase is 1.0, above 0.95, so it isn't open: its floor
+    already holds the value, and any drop fails the floor before it could fall
+    under the target. Policy has three paraphrase queries, so one miss is
+    0.667, under both."""
+    cell = Cell(FUSED, Category.PARAPHRASE, POLICY)
+    target = target_of(cell)
+    assert target is not None
+    assert FLOORS[cell] >= target
+    assert cell not in OPEN_TARGETS
 
 
 def test_a_cell_short_of_its_target_reports_its_value() -> None:
@@ -257,8 +285,10 @@ def test_a_report_line_shows_a_cells_floor_and_target() -> None:
     line = describe_cell(Cell(RERANKED, Category.CROSS_CLAUSE, LAW), 4 / 9)
     assert line.split() == [
         *("reranked", "cross_clause", "library_law", "0.444"),
-        *("floor", "0.444,", "target", "0.8"),
+        *("floor", "0.444,", "target", "0.80"),
     ]
+    fused = describe_cell(Cell(FUSED, Category.PARAPHRASE, LAW), 5 / 6)
+    assert fused.endswith("floor 0.833, target 0.95")
     assert describe_cell(Cell(FUSED, Category.CROSS_CLAUSE, LAW), 4 / 9).endswith("target none")
     delivered = describe_cell(Cell(DELIVERED, Category.CROSS_CLAUSE, LAW), 5 / 6)
     assert delivered.split() == [
@@ -344,6 +374,30 @@ def test_fusion_holds_its_floor_in_every_cell(results: tuple[QueryRecall, ...]) 
     hide a loss in the other."""
     _report(results)
     assert below_floor(results, FUSED) == {}
+
+
+@_needs_qdrant
+@pytest.mark.parametrize(
+    "cell",
+    [
+        pytest.param(
+            cell,
+            id=f"{cell.category.value}-{cell.document_class.value}",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="an open target (ADR-0043): when this passes, raise the cell's floor",
+            ),
+        )
+        for cell in open_targets_on(FUSED)
+    ],
+)
+def test_an_open_fused_target_is_met(results: tuple[QueryRecall, ...], cell: Cell) -> None:
+    """Expected to fail until the work is done; `raises=AssertionError`, so a
+    broken measurement errors instead of passing as an expected failure. Law
+    fused paraphrase: 5/6 against 0.95, until GQ-10's APP 11.2 is fused in the
+    top 10."""
+    assert short_of_target(results, cell) is None, f"{cell}: {by_cell(results, FUSED)[cell]:.3f}"
 
 
 @_needs_qdrant

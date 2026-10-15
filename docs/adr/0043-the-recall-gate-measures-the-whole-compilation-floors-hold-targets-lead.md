@@ -3,8 +3,10 @@
 - Status: accepted, merged under the merge protocol (PR #201, 2026-10-15). The
   gate corpus is the human's decision on #180; the bars are the model's
   proposal, implemented so they are concrete, and the human can change them.
-  Two questions are put to the human: whether Phase 1 may exit with #200's
-  target open, and whether fused paraphrase should carry a target
+  Two questions were put to the human: whether Phase 1 may exit with #200's
+  target open, and whether fused paraphrase should carry a target. Both were
+  answered on 2026-10-15 (#220): Phase 1 may exit with targets open, and fused
+  paraphrase carries a 0.95 target (*The human's decisions*, at the end)
 - Date: 2026-10-15
 - Issue: #180
 - Amends: ADR-0022 (which corpus the bars are measured on, on which list, and
@@ -175,7 +177,9 @@ count; none was lowered to fit today's results:
   (GQ-10). The target is retired on fusion, not lowered, because nothing
   delivers fusion's order: `retrieve()` always reranks, and an exact-ID query
   skips fusion. ADR-0022 already moved cross-clause to the delivered list for
-  this reason; this moves paraphrase with it. The fused gate's job is to catch a
+  this reason; this moves paraphrase with it. (Superseded in part by the
+  human's decision, at the end: fused paraphrase carries a target of 0.95,
+  as a direction, not a Phase 1 bar.) The fused gate's job is to catch a
   regression on every build, platform-exact and with no model, and the floor
   and the per-query baseline do that. GQ-10's clause is fused 11th, inside
   the 20 the reranker sees. If it fell past 20, the reranked floor (1.0)
@@ -229,6 +233,8 @@ This ADR keeps it as a Phase 1 exit criterion, because the human asked for a
 real target, and a target that a phase gate doesn't wait for is easy to
 forget. The alternative is to move the open target to a later phase, by
 issue and a `PHASES.md` edit, keeping the strict xfail in CI either way.
+**The human decided that Phase 1 may exit with it open** (at the end). The
+criterion stays unmet while a target is open; it just doesn't hold the exit.
 
 ## Consequences
 
@@ -253,6 +259,54 @@ issue and a `PHASES.md` edit, keeping the strict xfail in CI either way.
   the container on the same corpus. Until the human runs #178 part 2's
   correction (ADR-0042), `clauses` holds the previous parse, in which seven
   selected clauses differ, so a small difference is expected.
+
+## The human's decisions (2026-10-15, #220)
+
+> "ADR-0043: yes, Phase 1 can exit with the cross-clause target open — it's a
+> target, not a floor, and holding a phase for an improvement with no deadline
+> is how phases never close. Record it as a known gap in the handoff. And yes,
+> give fused paraphrase a target: 0.95. A floor stops regressions, a target
+> names where you're going."
+
+**1. A target is not a floor, so an open target doesn't hold a phase's exit.**
+Floors are the exit's guarantee: every cell at what it achieves, enforced on
+every build. A target says where a cell is going. It stays a strict xfail in
+CI, so the build still fails the day it is met, until the floor is raised to
+meet it. Phase 1 may exit with law cross-clause open, at 4/9 against 0.8 on
+the reranked list. That is recorded as a known gap in
+`docs/handoffs/0002-phase1-close.md`, and #200, #206 and #212 are working on
+it.
+Law fused paraphrase's open target (below) is the second known gap, #221.
+`PHASES.md` says the same beside the criterion.
+
+**2. Fused paraphrase has a target of 0.95, for law and for policy each**
+(`FUSED_TARGETS` in `eval/recall.py`). It isn't a Phase 1 bar: nothing delivers
+fusion's order. It keeps GQ-10's sparse weakness on the board, as this ADR's
+alternative above put it.
+
+| cell | floor | target | state |
+|---|---|---|---|
+| paraphrase, law: fused | 5/6 (GQ-10's APP 11.2 fused 11th) | 0.95 | **open**: a strict xfail in the fused gate (`test_recall_gate.py`, CI's `ci` job) |
+| paraphrase, policy: fused | 1.000 | 0.95 | not open: its floor already holds the value |
+
+- **Policy.** Policy's floor, 1.0, is above the target, so the cell is not
+  open and needs no xfail. Policy has three paraphrase queries, so one miss
+  gives 0.667. That breaks the floor, and the target, at once. The floor holds
+  the target.
+- **Law.** Law has six paraphrase queries, so 0.95 means none missing. The
+  target is met only when GQ-10's clause is fused in the top 10.
+- **Each gate checks its own list.** The open targets on the fused list are
+  strict xfails in the fused gate, and those on the reranked list in the
+  reranked gate (`open_targets_on`).
+- **The mechanism was checked again.** With law fused paraphrase's floor
+  lowered to 0.5 and its target to 0.8, under today's 5/6, the xfail passed
+  and strict xfail failed the build (`XPASS(strict)`).
+
+**A word that changed meaning.** This ADR calls the reranked top 10 "the
+delivered list", or "what `retrieve()` delivers". Since ADR-0045, that name
+means the ten each delivered whole, and its recall, delivered-recall, has
+floors and no target. Read here, "delivered list" means the reranked list,
+where the targets are.
 
 ## Appendix: every query, every list (2026-10-15)
 

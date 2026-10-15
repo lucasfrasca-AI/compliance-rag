@@ -25,10 +25,12 @@ Two kinds of bar (ADR-0043):
   batches with dynamic activation quantisation, so a query's ranking can
   depend on the platform and on the other candidates. Per-query drops are held
   on the fused gate, which is platform-exact.
-- **Targets**, what Phase 1 needs (PHASES.md), on the reranked list only. A
-  cell under its target is expected to fail, strictly: the day it meets the
-  target the build fails (XPASS) until its floor is raised to the new value,
-  which closes the target.
+- **Targets**, what Phase 1 needs (PHASES.md), on the reranked list only
+  here (fused paraphrase's is in `test_recall_gate.py`). A cell under its
+  target is expected to fail, strictly: the day it meets the target the build
+  fails (XPASS) until its floor is raised to the new value, which closes the
+  target. A target is not a floor, so an open one doesn't hold the phase's
+  exit (ADR-0043).
 """
 
 from __future__ import annotations
@@ -43,7 +45,6 @@ from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
     DELIVERED,
-    OPEN_TARGETS,
     RERANKED,
     Cell,
     QueryRecall,
@@ -51,6 +52,7 @@ from compliance_rag.eval.recall import (
     by_cell,
     describe_cell,
     measure,
+    open_targets_on,
     short_of_target,
 )
 from compliance_rag.reranker_service.model import DEFAULT_ONNX_MODEL_PATH, RerankerModel
@@ -123,7 +125,7 @@ def test_delivered_recall_holds_its_floor_in_every_cell(
                 reason="an open target (ADR-0043): when this passes, raise the cell's floor",
             ),
         )
-        for cell in OPEN_TARGETS
+        for cell in open_targets_on(RERANKED)
     ],
 )
 def test_an_open_target_is_met(results: tuple[QueryRecall, ...], cell: Cell) -> None:

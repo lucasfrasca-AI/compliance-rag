@@ -27,11 +27,13 @@ queries of one document class — library law (the `_public` queries, over the
 whole compilation) or internal policy (Acme's, over its own six policies). The
 two halves are kept apart because they differ by half a point on cross-clause
 and only the law half can be measured on the deployed collection. Each cell
-has an enforced **floor**, what the gate achieves today. The reranked list
-also has a **target**, what Phase 1 needs. A cell whose floor is under its
-target is an open target: CI expects it to fail, strictly, so the day it is
-met CI fails until its floor is raised to meet it. Delivered-recall has floors
-and no target (ADR-0045), so it can neither meet nor close one.
+has an enforced **floor**, what the gate achieves today: it stops
+regressions. A **target** names where a cell is going: PHASES.md's bars on the
+reranked list, and 0.95 on fused paraphrase (ADR-0043). A cell whose floor is
+under its target is an open target: CI expects it to fail, strictly, so the
+day it is met CI fails until its floor is raised to meet it. A target is not a
+floor, so an open one doesn't hold a phase's exit (ADR-0043). Delivered-recall
+has floors and no target (ADR-0045), so it can neither meet nor close one.
 """
 
 from __future__ import annotations
@@ -86,11 +88,18 @@ re-argued in clauses on the whole compilation in ADR-0043. Never on the
 delivered list: delivered-recall is a separate metric with no target
 (ADR-0045)."""
 
+FUSED_TARGETS: Mapping[Category, float] = {Category.PARAPHRASE: 0.95}
+"""Where fusion is going (the human's decision on ADR-0043): paraphrase
+recall@10 on the fused list, for law and for policy queries each. No answer
+is built from fusion's order, so this isn't a Phase 1 bar. It keeps GQ-10's sparse
+weakness on the board: law is 5/6 (GQ-10's APP 11.2 is fused 11th), so the
+target is open. Policy is 1.0, and its floor already holds the value."""
+
 FLOORS: Mapping[Cell, float] = {
     # The fused gate (CI's `ci` job, no model): platform-exact.
     Cell(FUSED, Category.EXACT_ID, LAW): 1.0,
     Cell(FUSED, Category.EXACT_ID, POLICY): 1.0,
-    Cell(FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # GQ-10: APP 11.2 fused 11th
+    Cell(FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # target 0.95: open (GQ-10, #221)
     Cell(FUSED, Category.PARAPHRASE, POLICY): 1.0,
     Cell(FUSED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # GQ-18 1/3, GQ-19 1/2, GQ-20 1/2
     Cell(FUSED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-23 1/2
@@ -121,12 +130,16 @@ let a drop pass."""
 
 
 def target_of(cell: Cell) -> float | None:
-    """A cell's target: on the reranked list only, where retrieval ranks. A
-    fused cell has none, since nothing delivers fusion's order, and a delivered
-    cell has none, since delivered-recall measures delivery, not ranking
-    (ADR-0045). Each is held to its floor (and fusion to the per-query
-    baseline), and nothing more."""
-    return TARGETS[cell.category] if cell.list_name == RERANKED else None
+    """A cell's target: PHASES.md's bar on the reranked list, where retrieval
+    ranks, or fusion's own on fused paraphrase (`FUSED_TARGETS`). Any other
+    fused cell has none, and a delivered cell has none, since delivered-recall
+    measures delivery, not ranking (ADR-0045). Such a cell is held to its floor
+    (and fusion to the per-query baseline), and nothing more."""
+    if cell.list_name == RERANKED:
+        return TARGETS[cell.category]
+    if cell.list_name == FUSED:
+        return FUSED_TARGETS.get(cell.category)
+    return None
 
 
 OPEN_TARGETS: tuple[Cell, ...] = tuple(
@@ -134,8 +147,16 @@ OPEN_TARGETS: tuple[Cell, ...] = tuple(
     for cell, floor in FLOORS.items()
     if (target := target_of(cell)) is not None and _under(floor, target)
 )
-"""Cells whose target is above what the gate achieves: what Phase 1 still
-needs (ADR-0043)."""
+"""Cells whose target is above what the gate achieves (ADR-0043): each is a
+strict xfail in the gate that measures its list, the fused one in
+`test_recall_gate.py` and the reranked one in `test_recall_gate_reranked.py`.
+Not a floor, so none holds a phase's exit."""
+
+
+def open_targets_on(list_name: str) -> tuple[Cell, ...]:
+    """The open targets one gate measures."""
+    return tuple(cell for cell in OPEN_TARGETS if cell.list_name == list_name)
+
 
 RECALL_BASELINE_PATH = (
     Path(__file__).resolve().parents[3] / "corpus" / "golden" / "recall_baseline.json"
@@ -288,7 +309,7 @@ def describe_cell(cell: Cell, now: float) -> str:
     return (
         f"{cell.list_name:<8} {cell.category.value:<13} {cell.document_class.value:<16} "
         f"{now:.3f}  floor {'none' if floor is None else f'{floor:.3f}'}, "
-        f"target {'none' if target is None else f'{target:.1f}'}"
+        f"target {'none' if target is None else f'{target:.2f}'}"
     )
 
 
