@@ -2,7 +2,7 @@
 
 - Status: accepted, merged under the merge protocol
 - Date: 2026-10-15
-- Issue: #177 (and #205, below)
+- Issue: #177
 - Amends: D-07's "hybrid, native RRF" (`DECISIONS.md`, ADR-0008) and
   ADR-0005's "RRF inside Qdrant". Qdrant still scores both channels; fusion
   moves into the adapter. D-04 (fuse first, rerank the top 20) is unchanged

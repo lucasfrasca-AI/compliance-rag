@@ -25,6 +25,7 @@ Self-skips when `QDRANT_URL` isn't set or isn't reachable, same pattern
 from __future__ import annotations
 
 import datetime as dt
+import math
 import os
 import uuid
 from typing import Any, cast
@@ -229,7 +230,9 @@ async def test_fusion_scores_as_qdrants_native_rrf_does() -> None:
         await client.delete_collection(name)
         await client.close()
     native_scores = {str((p.payload or {})["chunk_id"]): p.score for p in native.points}
-    assert {c.chunk_id: c.score for c in ours.fused} == pytest.approx(native_scores, rel=1e-6)
+    assert {c.chunk_id for c in ours.fused} == set(native_scores)
+    for candidate in ours.fused:
+        assert math.isclose(candidate.score, native_scores[candidate.chunk_id], rel_tol=1e-6)
     native_order = sorted(native_scores, key=lambda chunk_id: (-native_scores[chunk_id], chunk_id))
     assert [c.chunk_id for c in ours.fused] == native_order
 
