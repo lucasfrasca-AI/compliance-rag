@@ -1,9 +1,9 @@
 # Privacy Act 1988 (Cth): the qualifiers of the obligations privacy-act-1988.yaml
 # signs (issue #182, ADR-0044).
 #
-# DRAFT, AWAITING REVIEW (D-01). Drafted by the model at the human's request.
-# scripts/load_mappings.py refuses this file, and CI fails, until Piero Frasca
-# signs it: reviewed_by becomes his name and `date` the sign-off. The signed
+# Corpus content under D-01: drafted by the model at the human's request,
+# reviewed and signed by Lucas Frasca on 2026-10-15. scripts/load_mappings.py
+# refuses any file whose reviewer is still pending. The signed
 # privacy-act-1988.yaml is not edited, nor is the exceptions file beside it:
 # these entries name the obligations by id.
 #
@@ -20,30 +20,26 @@
 # qualifier's opening words. The comments below are the model's paraphrase,
 # never quotes.
 #
-# Of privacy-act-1988.yaml's listed non-obligation subclauses, drafted here:
-# 4.2, 5.2, 7.6, 11.3, 12.6, 12.10. Left out (the PR gives the reason for
-# each): 1.1 (an object clause), 3.7 (a scope limit, closer to an exception),
-# 4.4 (says which other principles apply), 6.6 (a deeming rule; borderline,
-# the reviewer's call). The rest of that list is in the exceptions file.
+# Of privacy-act-1988.yaml's listed non-obligation subclauses, here: 5.2,
+# 7.6, 11.3, 12.6. The draft also had 4.2 and 12.10; the reviewer removed them
+# at sign-off as permissions, not qualifiers: "you may do X" doesn't change
+# how an obligation is satisfied, it creates a separate allowance, and
+# including them would dilute a category that has to mean something precise
+# to a reader. Neither an exception nor a qualifier: 1.1 (an object clause),
+# 4.2 and 12.10 (permissions), 4.4 (says which other principles apply), 6.6 (a
+# deeming rule: a possible third category, issue #210, not forced into one of
+# these two). The rest of that list is in the exceptions file, 3.7 included.
 
 author: "model:claude-opus-5-5"
-reviewed_by: "PENDING — Piero Frasca"
-date: 2026-10-14
+reviewed_by: "Lucas Frasca"
+date: 2026-10-15
 source_clause_ids:
-  - privacy-act-1988:C2026C00227:sch1/app4/2
   - privacy-act-1988:C2026C00227:sch1/app5/2
   - privacy-act-1988:C2026C00227:sch1/app7/6
   - privacy-act-1988:C2026C00227:sch1/app11/3
   - privacy-act-1988:C2026C00227:sch1/app12/6
-  - privacy-act-1988:C2026C00227:sch1/app12/10
 
 qualifiers:
-  # APP 4.2: the entity may use or disclose unsolicited information to make
-  # 4.1's determination; the means by which 4.1 may be met.
-  - obligation_id: OB-PA-APP4-1
-    clause_ids:
-      - privacy-act-1988:C2026C00227:sch1/app4/2
-
   # APP 5.2: the matters 5.1 requires the individual to be notified of, or
   # made aware of; (a)-(j) travel with it.
   - obligation_id: OB-PA-APP5-1
@@ -71,9 +67,3 @@ qualifiers:
   - obligation_id: OB-PA-APP12-5
     clause_ids:
       - privacy-act-1988:C2026C00227:sch1/app12/6
-
-  # APP 12.10: for a refusal under 12.3(j), the reasons 12.9 requires may
-  # include an explanation for the commercially sensitive decision.
-  - obligation_id: OB-PA-APP12-9
-    clause_ids:
-      - privacy-act-1988:C2026C00227:sch1/app12/10
