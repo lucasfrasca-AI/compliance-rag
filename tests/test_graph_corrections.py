@@ -25,7 +25,7 @@ FIXED = "Keep the invented records secure."
 
 
 def ack(*ids: str) -> CorrectionAcknowledgement:
-    return CorrectionAcknowledgement(frozenset(ids), by="Piero Frasca", reason="typo")
+    return CorrectionAcknowledgement(frozenset(ids), by="Lucas Frasca", reason="typo")
 
 
 async def _loaded(graph: Neo4jGraph) -> None:
@@ -68,7 +68,7 @@ async def test_an_acknowledged_correction_is_applied_and_audited(
     )
     assert row["s"] == FIXED
     (entry,) = [json.loads(e) for e in row["c"]]
-    assert entry["by"] == "Piero Frasca" and entry["reason"] == "typo"
+    assert entry["by"] == "Lucas Frasca" and entry["reason"] == "typo"
     assert entry["previous"] == {"summary": "Destroy the invented records when no longer needed."}
     assert await graph.counts() == before  # nothing new: the same node, reworded
     # Done: the same YAML again needs no acknowledgement, and changes nothing.

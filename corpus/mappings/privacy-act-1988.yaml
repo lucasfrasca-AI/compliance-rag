@@ -2,7 +2,7 @@
 # obligations they impose (issue #118).
 #
 # Corpus content under D-01: drafted by the model at the human's request,
-# reviewed and signed by Piero Frasca on 2026-10-13. scripts/load_mappings.py
+# reviewed and signed by Lucas Frasca on 2026-10-13. scripts/load_mappings.py
 # refuses any file whose reviewer is still pending.
 #
 # Read from compilation C2026C00227 (in force from 4 June 2026). Every clause id
@@ -45,7 +45,7 @@
 # opt-in. Each is a condition below and each unknown leaf is a question.
 
 author: "model: Claude Opus 5.5 — drafted for #118 from C2026C00227 at the human's request"
-reviewed_by: "Piero Frasca"
+reviewed_by: "Lucas Frasca"
 date: 2026-10-13
 source_clause_ids:
   - privacy-act-1988:C2026C00227:s15
