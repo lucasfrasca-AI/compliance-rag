@@ -16,6 +16,10 @@ container on the same corpus:
    query with the container baseline, reranked with measurement 1's reranked
    for the same query (same reranker, same machine).
 
+Each reports recall@10, fused and reranked, and then, apart and never
+combined with it, delivered-recall: the reranked ten each delivered whole
+(ADR-0045), with how many clauses that is.
+
 Until the human runs #178 part 2's correction (`scripts/revise_compilation.py`,
 ADR-0042), `clauses` holds the compilation's *previous* parse, in which seven
 selected clauses read differently (#178's s6(1) definitions, #186's APP 7.6
@@ -44,6 +48,7 @@ from compliance_rag.eval.golden import load_golden_set
 from compliance_rag.eval.golden_corpus import gate_chunks
 from compliance_rag.eval.harness import golden_store, in_process_reranker
 from compliance_rag.eval.recall import (
+    DELIVERED,
     FUSED,
     RERANKED,
     QueryRecall,
@@ -81,6 +86,15 @@ def _report(
         print(f"  {describe_cell(cell, now)}; container {container[cell]:.3f}")
     for cell, now in sorted(by_cell(results, RERANKED).items()):
         print(f"  {describe_cell(cell, now)}")
+    # A separate metric, never combined with recall@10 (ADR-0045): the
+    # reranked ten each delivered whole, more than ten clauses.
+    sizes = [r.delivered_clauses for r in results]
+    print(
+        f"{title}: delivered-recall, a separate metric (the reranked ten delivered "
+        f"whole: {sum(sizes) / len(sizes):.1f} clauses a query on average, {max(sizes)} at most)"
+    )
+    for cell, now in sorted(by_cell(results, DELIVERED).items()):
+        print(f"  {describe_cell(cell, now)}")
     for r in results:
         if r.by_list[FUSED] != fused_reference[r.query_id]:
             print(
@@ -95,7 +109,9 @@ def _report(
                 f"{reranked_reference[r.query_id]:.3f} -> {r.by_list[RERANKED]:.3f}"
             )
         if r.by_list[RERANKED] < 1.0:
-            print(f"  reranked miss {r.query_id} ({r.category.value}): {r.by_list}")
+            print(f"  reranked miss {r.query_id} ({r.category.value}): {r.by_list[RERANKED]:.3f}")
+        if r.by_list[DELIVERED] < 1.0:
+            print(f"  delivered miss {r.query_id} ({r.category.value}): {r.by_list[DELIVERED]:.3f}")
 
 
 async def main() -> None:

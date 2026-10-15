@@ -1,6 +1,6 @@
 {
   "corpus_sha256": "ff464aed90e3fce271758386f6521829b719bcaf12c833f0702d0b7b46d2077f",
-  "note": "Per-query recall@10 for every list, on the gate corpus (the whole compilation's selected clauses and the Acme policies, ADR-0043). Written only by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally \u2014 a deliberate, reviewed change, never to make a drop pass.",
+  "note": "Per-query recall@10 for every list, and delivered-recall under `delivered`, a separate metric that is not a recall@10 (ADR-0045), on the gate corpus (the whole compilation's selected clauses and the Acme policies, ADR-0043). Written only by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally \u2014 a deliberate, reviewed change, never to make a drop pass.",
   "recall_at_10": {
     "GQ-01": {
       "delivered": 1.0,

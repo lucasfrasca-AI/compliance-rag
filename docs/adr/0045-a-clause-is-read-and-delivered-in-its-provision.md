@@ -1,20 +1,22 @@
 # ADR-0045 — A clause is read and delivered in its provision
 
-- Status: proposed in #200's PR, which is left unmerged for the human: this
-  changes what the law cross-clause bar counts (decision 6), and the human
-  asked for that bar to be a real target. Accepted when merged
+- Status: accepted, the mechanism only. The human's decision on #207
+  (2026-10-15), "merge the mechanism, not the metric", is quoted under
+  Decision 6. The PR first proposed moving ADR-0043's targets to the delivered
+  list. The human declined that, so the targets stay on the reranked list
 - Date: 2026-10-15
 - Issue: #200
 - Amends: D-04 and ADR-0022 (what the cross-encoder reads, and what
-  `retrieve()` delivers beyond its top 10); ADR-0043 (the targets move to the
-  delivered list, and its one open target is closed)
-- Relates to: ADR-0035 (the same containment, by path segment), ADR-0044
+  `retrieve()` delivers beyond its top 10)
+- Relates to: ADR-0043 (the gate gains a separate metric, delivered-recall,
+  with floors and no target; ADR-0043's targets, and its one open target, are
+  unchanged), ADR-0035 (the same containment, by path segment), ADR-0044
   (what travels with an obligation, which this leaves as it was)
 
 ## Context
 
 ADR-0043 measured the recall gate on the whole compilation and left one open
-target: law cross-clause, 0.444 on what `retrieve()` delivers, against 0.8.
+target: law cross-clause recall@10, 0.444 on the reranked top 10, against 0.8.
 The human:
 
 > "0.444 cross-clause needs work, but I want the bar to be a real target, not
@@ -41,32 +43,37 @@ scope. Retrieval and the cross-encoder never applied it.
 2026-10-15. The gate corpus (779 clauses and the six Acme policies), local
 Qdrant v1.19.1, the cached `gemini-embedding-001` vectors, local BM25 with IDF,
 and the int8 cross-encoder over the top 20 fused candidates. No cloud call.
-recall@10 per cell, law cross-clause in full:
 
-| option | GQ-18 | GQ-19 | GQ-20 | law cross-clause | other cells | delivered clauses per question (mean / max) |
-|---|---|---|---|---|---|---|
-| today: the reranked top 10 | 0.333 | 0.5 | 0.5 | 0.444 | as ADR-0043 | 10 / 10 |
-| (A) within k: a ranked clause's paragraphs after it, list cut at 10 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
-| (A) within k, its chapeaux before it too | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
-| (A) beyond k: its paragraphs added | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 14.7 / 32 |
-| (A) beyond k: its chapeaux added, no paragraphs | 0.333 | 0.5 | 0.5 | 0.444 | unchanged | 11.8 / 17 |
-| (A) beyond k: chapeaux and paragraphs | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 16.5 / 36 |
-| (B), the half that needs no re-embed: chunk text carries its chapeaux, for BM25 and the cross-encoder (dense vectors kept). The ranked list | 1.0 | 0.5 | **0.0** | 0.500 | paraphrase law **0.833** (GQ-10 lost); policy cross-clause 1.0 | 10 / 10 |
-| that (B), delivered with chapeaux and paragraphs | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | — |
-| the cross-encoder reads each candidate in its provision; within k | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
-| the cross-encoder reads each candidate in its provision; paragraphs delivered beyond k, no chapeaux | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 13.9 / 30 |
-| **the cross-encoder reads each candidate in its provision; chapeaux and paragraphs delivered beyond k (this decision)** | **1.0** | 0.5 | **1.0** | **0.833** | **unchanged** | **15.7 / 34** |
-| that, delivering a ranked paragraph's whole provision (its siblings too) | 1.0 | 0.5 | 1.0 | 0.833 | unchanged | 23.5 / 73 |
+Two metrics per option, never one number. **Ranked recall@10** is recall@10
+on the reranked top 10, the retrieval metric. **Delivered-recall** is the
+share of the expected clauses in what the option delivers, which may be more
+than ten clauses (a separate metric, decision 6). The GQ columns are
+delivered-recall:
+
+| option | ranked recall@10, law cross-clause | GQ-18 | GQ-19 | GQ-20 | delivered-recall, law cross-clause | other cells | delivered clauses per question (mean / max) |
+|---|---|---|---|---|---|---|---|
+| today: the reranked top 10, delivered as ranked | 0.444 | 0.333 | 0.5 | 0.5 | 0.444 | as ADR-0043 | 10 / 10 |
+| (A) within k: a ranked clause's paragraphs after it, list cut at 10 | 0.444 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
+| (A) within k, its chapeaux before it too | 0.444 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
+| (A) beyond k: its paragraphs added | 0.444 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 14.7 / 32 |
+| (A) beyond k: its chapeaux added, no paragraphs | 0.444 | 0.333 | 0.5 | 0.5 | 0.444 | unchanged | 11.8 / 17 |
+| (A) beyond k: chapeaux and paragraphs | 0.444 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 16.5 / 36 |
+| (B), the half that needs no re-embed: chunk text carries its chapeaux, for BM25 and the cross-encoder (dense vectors kept), delivered as ranked | 0.500 | 1.0 | 0.5 | **0.0** | 0.500 | ranked paraphrase law **0.833** (GQ-10 lost); policy cross-clause 1.0 | 10 / 10 |
+| that (B), delivered with chapeaux and paragraphs | 0.500 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | — |
+| the cross-encoder reads each candidate in its provision; within k | 0.444 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
+| the cross-encoder reads each candidate in its provision; paragraphs delivered beyond k, no chapeaux | 0.444 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 13.9 / 30 |
+| **the cross-encoder reads each candidate in its provision; chapeaux and paragraphs delivered beyond k (this decision)** | **0.444** | **1.0** | 0.5 | **1.0** | **0.833** | **unchanged** | **15.7 / 34** |
+| that, delivering a ranked paragraph's whole provision (its siblings too) | 0.444 | 1.0 | 0.5 | 1.0 | 0.833 | unchanged | 23.5 / 73 |
 
 "Other cells" are exact-ID 1.0 and paraphrase 1.0 for law and policy, and
-policy cross-clause 0.9, on the delivered list. Locally the reranked list's
-cells are ADR-0043's in every row but (B)'s; on CI's platform reading in
-provision costs the reranked list one paraphrase clause (below). Delivered
-sizes are over the 17 questions that aren't exact ids.
+policy cross-clause 0.9, in both metrics. Locally the reranked list's cells
+are ADR-0043's in every row but (B)'s. **No option raises ranked recall@10
+for law cross-clause above 0.444 except (B)'s half, which costs GQ-10 and
+GQ-20.** Delivered sizes are over the 17 questions that aren't exact ids.
 
 What decided it:
 
-- **Delivery alone recovers GQ-18 and nothing else.** No clause of the
+- **Delivery alone recovers GQ-18, in delivered-recall, and nothing else.** No clause of the
   definition of "agency" is in GQ-20's top 10, so there is nothing to deliver
   it with.
 - **But two of its paragraphs are in the top 20 the cross-encoder sees:**
