@@ -27,8 +27,10 @@ from __future__ import annotations
 import datetime as dt
 import os
 import uuid
+from typing import cast
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import (
@@ -204,7 +206,9 @@ async def test_the_search_span_logs_each_channel_and_how_deep_it_was_read(
                 limit=limit,
             )
     straddled, clear = (
-        dict(s.attributes or {}) for s in span_exporter.get_finished_spans() if s.name == "qdrant.search"
+        dict(s.attributes or {})
+        for s in span_exporter.get_finished_spans()
+        if s.name == "qdrant.search"
     )
     for channel in ("dense", "sparse"):
         logged = cast("tuple[str, ...]", straddled[f"retrieval.channel.{channel}"])
