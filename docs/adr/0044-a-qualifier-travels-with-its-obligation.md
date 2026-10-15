@@ -184,3 +184,31 @@ edges. APP 8.2 brings 8.2(a)–(f) and their subparagraphs; 5.2 brings
   consumes unsigned content.
 - **The mapping version moves** (ADR-0034): the loader, Track A and the
   mapping model changed under `src/compliance_rag/graph/`.
+
+## Sign-off, 2026-10-15
+
+The human signed both mapping files, with three decisions that sharpen where
+each category ends.
+
+- **A scope limit is an exception.** The reviewer added APP 3.7 ("This
+  principle applies to the collection of personal information that is
+  solicited by an APP entity") to the exceptions file: "a scope limit
+  disapplies the obligation for material outside the scope, which is what an
+  exception does". As with 6.7 and 7.8, it is listed for every obligation of
+  its principle: OB-PA-APP3-1, 3-2, 3-3, 3-5 and 3-6. The model's draft had
+  called 3.7 definitional, which was wrong.
+- **A permission is neither.** The reviewer removed APP 4.2 and 12.10 from the
+  qualifiers: "They're permissions, not qualifiers; 'you may do X' doesn't
+  change how an obligation is satisfied, it creates a separate allowance, and
+  including them dilutes a category that has to mean something precise to a
+  reader." APP 12.6 stays, as signed. It also says "may", but (the model's
+  reading) it names a way of giving the access 12.5 requires, so it says how
+  12.5 is satisfied rather than granting a separate allowance.
+- **A deeming rule is a possible third category.** APP 6.6 stays out of both:
+  "note deeming rules as a possible third category rather than forcing them
+  into one of two". A deeming rule says what counts as what. Whether it
+  travels with its obligation, labelled as such, is #210 (later).
+
+As signed: **24 exception pairs over 15 obligations**, and **5 qualifier
+pairs** (5.2→5.1, 7.6→7.7, 11.3→11.1, 11.3→11.2, 12.6→12.5). The edge counts
+as loaded into Aura are in `BUILD_LOG.md`.

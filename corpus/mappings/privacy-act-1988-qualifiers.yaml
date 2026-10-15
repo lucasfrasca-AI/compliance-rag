@@ -1,0 +1,69 @@
+# Privacy Act 1988 (Cth): the qualifiers of the obligations privacy-act-1988.yaml
+# signs (issue #182, ADR-0044).
+#
+# Corpus content under D-01: drafted by the model at the human's request,
+# reviewed and signed by Lucas Frasca on 2026-10-15. scripts/load_mappings.py
+# refuses any file whose reviewer is still pending. The signed
+# privacy-act-1988.yaml is not edited, nor is the exceptions file beside it:
+# these entries name the obligations by id.
+#
+# A qualifier is a clause that says how an obligation is satisfied, or what it
+# requires. An exception says when it doesn't apply; the two are kept apart in
+# the graph (READ_WITH, not EXCEPTED_BY) and in every answer. A qualifier
+# decides nothing about whether the obligation applies. It is what an answer
+# citing the obligation must not leave out: Track B's scope includes it and
+# the clauses inside it, and answer() delivers them with the obligation's
+# clause, marked "how it is satisfied".
+#
+# Read against the parsed text of the pinned C2026C00227 source (sha256
+# 6d0a43e5...), selected by its manifest. The PR's review table quotes each
+# qualifier's opening words. The comments below are the model's paraphrase,
+# never quotes.
+#
+# Of privacy-act-1988.yaml's listed non-obligation subclauses, here: 5.2,
+# 7.6, 11.3, 12.6. The draft also had 4.2 and 12.10; the reviewer removed them
+# at sign-off as permissions, not qualifiers: "you may do X" doesn't change
+# how an obligation is satisfied, it creates a separate allowance, and
+# including them would dilute a category that has to mean something precise
+# to a reader. Neither an exception nor a qualifier: 1.1 (an object clause),
+# 4.2 and 12.10 (permissions), 4.4 (says which other principles apply), 6.6 (a
+# deeming rule: a possible third category, issue #210, not forced into one of
+# these two). The rest of that list is in the exceptions file, 3.7 included.
+
+author: "model:claude-opus-5-5"
+reviewed_by: "Lucas Frasca"
+date: 2026-10-15
+source_clause_ids:
+  - privacy-act-1988:C2026C00227:sch1/app5/2
+  - privacy-act-1988:C2026C00227:sch1/app7/6
+  - privacy-act-1988:C2026C00227:sch1/app11/3
+  - privacy-act-1988:C2026C00227:sch1/app12/6
+
+qualifiers:
+  # APP 5.2: the matters 5.1 requires the individual to be notified of, or
+  # made aware of; (a)-(j) travel with it.
+  - obligation_id: OB-PA-APP5-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app5/2
+
+  # APP 7.6: the requests an individual may make about direct marketing,
+  # which 7.7 obliges the organisation to give effect to, free of charge;
+  # 7.7 refers to 7.6(c), (d) and (e) by letter.
+  - obligation_id: OB-PA-APP7-7
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app7/6
+
+  # APP 11.3: the reasonable steps 11.1 and 11.2 require include technical
+  # and organisational measures.
+  - obligation_id: OB-PA-APP11-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app11/3
+  - obligation_id: OB-PA-APP11-2
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app11/3
+
+  # APP 12.6: without limiting 12.5, access may be given through a mutually
+  # agreed intermediary; one way 12.5 may be met.
+  - obligation_id: OB-PA-APP12-5
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app12/6

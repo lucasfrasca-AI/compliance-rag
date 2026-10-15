@@ -52,7 +52,7 @@ def _schedule_1_chunks():
     html = FIXTURE.read_text(encoding="utf-8")
     parsed = parse_compilation(html, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
     selection = SelectionManifest(
-        author="Piero Frasca", reviewed_by="Piero Frasca", date="2026-09-25", prefixes=("sch1/",)
+        author="Lucas Frasca", reviewed_by="Lucas Frasca", date="2026-09-25", prefixes=("sch1/",)
     )
     in_scope = selection.select(parsed.clauses)
     return chunk_clauses(in_scope, count_tokens=count_reranker_tokens)

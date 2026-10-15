@@ -1,0 +1,139 @@
+# Privacy Act 1988 (Cth): the exceptions to the obligations privacy-act-1988.yaml
+# signs (issue #164, ADR-0037).
+#
+# Corpus content under D-01: drafted by the model at the human's request,
+# reviewed and signed by Lucas Frasca on 2026-10-15, who added APP 3.7 at
+# sign-off: a scope limit disapplies the obligation for material outside the scope,
+# which is what an exception does. scripts/load_mappings.py refuses any file
+# whose reviewer is still pending. The signed privacy-act-1988.yaml is not
+# edited: these entries name its obligations by id.
+#
+# An exception is a clause that says when an obligation does not apply, or is
+# displaced. It decides nothing about whether the obligation applies. It is
+# what an answer citing the obligation must not leave out: Track B's scope
+# includes it, and answer() delivers it with the obligation's clause.
+#
+# privacy-act-1988.yaml lists the APP subclauses that are clauses, not
+# obligations: 1.1, 2.2, 3.4, 3.7, 4.2, 4.4, 5.2, 6.2, 6.3, 6.6, 6.7, 7.2-7.6,
+# 7.8, 8.2, 8.3, 9.3, 11.3, 12.2, 12.3, 12.6, 12.10. Exceptions, here: 2.2, 3.4,
+# 3.7, 6.2, 6.3, 6.7, 7.2, 7.3, 7.4, 7.5, 7.8, 8.2, 8.3, 9.3, 12.2, 12.3.
+# Qualifiers, which say how an obligation is satisfied rather than when it
+# doesn't apply (privacy-act-1988-qualifiers.yaml, ADR-0044): 5.2, 7.6, 11.3,
+# 12.6. Neither: 1.1 (an object clause); 4.2 and 12.10 (permissions: "may"
+# creates a separate allowance and changes neither whether nor how an
+# obligation applies); 6.6 (a deeming rule, a possible third category); 4.4
+# (what applies when 4.3 doesn't).
+#
+# The first draft had the parsed text of APP 10 and 11 only (the checked-in
+# fixtures). Every pairing has since been read against the parsed text of the
+# pinned C2026C00227 source, and the PR's review table quotes each exception's
+# opening words. 8.3 was added then: 8.2(aa) disapplies 8.1 where "subclause
+# 8.3 applies", the prescribed-countries scheme.
+#
+# The comments below are the model's paraphrase, never quotes. Each
+# obligation's entry lists its exceptions; an exception that displaces a whole
+# principle (3.7, 6.7, 7.8) is listed for every obligation of that principle.
+
+author: "model:claude-opus-5-5"
+reviewed_by: "Lucas Frasca"
+date: 2026-10-15
+source_clause_ids:
+  - privacy-act-1988:C2026C00227:sch1/app2/2
+  - privacy-act-1988:C2026C00227:sch1/app3/4
+  - privacy-act-1988:C2026C00227:sch1/app3/7
+  - privacy-act-1988:C2026C00227:sch1/app6/2
+  - privacy-act-1988:C2026C00227:sch1/app6/3
+  - privacy-act-1988:C2026C00227:sch1/app6/7
+  - privacy-act-1988:C2026C00227:sch1/app7/2
+  - privacy-act-1988:C2026C00227:sch1/app7/3
+  - privacy-act-1988:C2026C00227:sch1/app7/4
+  - privacy-act-1988:C2026C00227:sch1/app7/5
+  - privacy-act-1988:C2026C00227:sch1/app7/8
+  - privacy-act-1988:C2026C00227:sch1/app8/2
+  - privacy-act-1988:C2026C00227:sch1/app8/3
+  - privacy-act-1988:C2026C00227:sch1/app9/3
+  - privacy-act-1988:C2026C00227:sch1/app12/2
+  - privacy-act-1988:C2026C00227:sch1/app12/3
+
+exceptions:
+  # APP 2.2: when the option of anonymity or a pseudonym (2.1) need not be given.
+  - obligation_id: OB-PA-APP2-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app2/2
+
+  # APP 3.4: the cases, besides consent, in which sensitive information may be
+  # collected; 3.3 forbids collecting it unless consent is given or 3.4 applies.
+  # APP 3.7: APP 3 applies only to personal information the entity solicits,
+  # so none of its obligations applies to unsolicited information (APP 4
+  # governs that).
+  - obligation_id: OB-PA-APP3-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+  - obligation_id: OB-PA-APP3-2
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+  - obligation_id: OB-PA-APP3-3
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/4
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+  - obligation_id: OB-PA-APP3-5
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+  - obligation_id: OB-PA-APP3-6
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+
+  # APP 6.2 and 6.3: when a secondary use or disclosure is allowed; 6.1 forbids
+  # one unless there is consent or either applies. APP 6.7: APP 6 does not apply to an
+  # organisation's use or disclosure for direct marketing, or of government
+  # related identifiers (APP 7 and 9 govern those).
+  - obligation_id: OB-PA-APP6-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app6/2
+      - privacy-act-1988:C2026C00227:sch1/app6/3
+      - privacy-act-1988:C2026C00227:sch1/app6/7
+  - obligation_id: OB-PA-APP6-4
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app6/7
+  - obligation_id: OB-PA-APP6-5
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app6/7
+
+  # APP 7.2-7.5: when an organisation may use or disclose personal information
+  # for direct marketing despite 7.1. APP 7.8: APP 7 does not apply to the
+  # extent the Do Not Call Register Act, the Spam Act or a prescribed Act does.
+  - obligation_id: OB-PA-APP7-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app7/2
+      - privacy-act-1988:C2026C00227:sch1/app7/3
+      - privacy-act-1988:C2026C00227:sch1/app7/4
+      - privacy-act-1988:C2026C00227:sch1/app7/5
+      - privacy-act-1988:C2026C00227:sch1/app7/8
+  - obligation_id: OB-PA-APP7-7
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app7/8
+
+  # APP 8.2: when 8.1 does not apply to a disclosure to an overseas recipient.
+  # APP 8.3: the prescribed countries and binding schemes; 8.2(aa) disapplies
+  # 8.1 where 8.3 applies.
+  - obligation_id: OB-PA-APP8-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app8/2
+      - privacy-act-1988:C2026C00227:sch1/app8/3
+
+  # APP 9.3: the prescribed organisations, identifiers and circumstances in
+  # which 9.1 and 9.2 allow adopting, using or disclosing a government related
+  # identifier.
+  - obligation_id: OB-PA-APP9-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app9/3
+  - obligation_id: OB-PA-APP9-2
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app9/3
+
+  # APP 12.2 (an agency) and 12.3 (an organisation): the extent to which access
+  # need not be given despite 12.1.
+  - obligation_id: OB-PA-APP12-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app12/2
+      - privacy-act-1988:C2026C00227:sch1/app12/3
