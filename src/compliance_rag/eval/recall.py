@@ -175,7 +175,11 @@ class QueryRecall:
     `delivered` (those k, each delivered whole, ADR-0045)."""
     delivered_clauses: int = 0
     """How many clauses the delivered list holds: k, plus the chapeaux and
-    paragraphs that make them whole. The size of what generation reads."""
+    paragraphs that make them whole. The size of what generation reads,
+    reported beside its recall. 0 only for a result built by hand, with no
+    trace measured. What a ranked clause can bring is pinned on the whole
+    compilation instead (`test_delivered_whole.py`), since fusion's tenth
+    candidate, and with it this size, can move at a tie (#177)."""
 
 
 def document_class_of(query: GoldenQuery) -> DocumentClass:

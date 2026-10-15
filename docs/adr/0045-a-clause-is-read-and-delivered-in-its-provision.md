@@ -1,6 +1,8 @@
 # ADR-0045 — A clause is read and delivered in its provision
 
-- Status: proposed in the PR for #200; accepted when the human merges it
+- Status: proposed in #200's PR, which is left unmerged for the human: this
+  changes what the law cross-clause bar counts (decision 6), and the human
+  asked for that bar to be a real target. Accepted when merged
 - Date: 2026-10-15
 - Issue: #200
 - Amends: D-04 and ADR-0022 (what the cross-encoder reads, and what
@@ -23,7 +25,7 @@ Four of the seven expected clauses were missed:
 | query | missed | why (ADR-0043) |
 |---|---|---|
 | GQ-18 | APP 11.1(a), (b) | **Fragments.** (a) is "from misuse, interference and loss; and". Its meaning is in 11.1's chapeau, which is ranked 1st |
-| GQ-19 | APP 10.1 | Ranking: 18th by dense, 56th by sparse, 33rd fused |
+| GQ-19 | APP 10.1 | Ranking: 18th by dense, absent from sparse's top 50, 36th fused |
 | GQ-20 | `s6/1/agency` | **Fragment.** "agency means:", whose content is its 15 paragraphs |
 
 The parser stores one provision of the law as several clauses, split at its
@@ -52,6 +54,7 @@ recall@10 per cell, law cross-clause in full:
 | (B), the half that needs no re-embed: chunk text carries its chapeaux, for BM25 and the cross-encoder (dense vectors kept). The ranked list | 1.0 | 0.5 | **0.0** | 0.500 | paraphrase law **0.833** (GQ-10 lost); policy cross-clause 1.0 | 10 / 10 |
 | that (B), delivered with chapeaux and paragraphs | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | — |
 | the cross-encoder reads each candidate in its provision; within k | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
+| the cross-encoder reads each candidate in its provision; paragraphs delivered beyond k, no chapeaux | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 13.9 / 30 |
 | **the cross-encoder reads each candidate in its provision; chapeaux and paragraphs delivered beyond k (this decision)** | **1.0** | 0.5 | **1.0** | **0.833** | **unchanged** | **15.7 / 34** |
 | that, delivering a ranked paragraph's whole provision (its siblings too) | 1.0 | 0.5 | 1.0 | 0.833 | unchanged | 23.5 / 73 |
 
@@ -73,10 +76,14 @@ What decided it:
   cross-encoder ranked it 16th of the 20. Read after its chapeau, "agency
   means: a body …", it ranks 7th, 0.91 logit inside the cut, and its chapeau
   is the clause GQ-20 expects.
+- **Neither half is enough alone.** Read in provision, GQ-20's (ca) is
+  ranked, but without the chapeaux it is delivered as the bare limb and the
+  clause GQ-20 expects, "agency means:", isn't delivered: 0.667. Delivered
+  whole but read bare, (ca) isn't ranked: 0.667.
 - **Within k drops what the ranker ranked.** Cutting the list back to ten
-  after delivery pushes ranked clauses out to make room for paragraphs: with
-  reading in provision, GQ-20's (ca) is ranked 7th and lands 11th behind the
-  paragraphs of `s6c/1` and `s6c/3`, ranked above it.
+  after delivery pushes ranked clauses out to make room for paragraphs: read
+  in provision, GQ-20's (ca) is ranked 7th and lands past the tenth, behind
+  the paragraphs and chapeaux of `s6c/1` and `s6c/3`, ranked above it.
 - **(B) isn't needed, and its half that needs no re-embed hurts.** Changing
   the chunk text moves BM25 for every clause. GQ-10's APP 11.2 leaves the
   ranked list, and the paragraphs of `s6c/1` and `s6c/3`, now carrying their
@@ -123,7 +130,9 @@ skips the reranker as before (D-04).
   not its sibling paragraphs (below).
 
 **4. One read, through every filter.** `RetrievalStore.lookup_lineage(ids)`
-returns the clauses that contain one of `ids` or are inside one. For the fused
+returns each clause's **lineage**: the clauses that contain one of `ids` or are
+inside one, whatever lies between. Which of them share its provision is
+decided by the pipeline, not the store. For the fused
 candidates it is one Qdrant scroll on `clause_id` and the `ancestors` payload
 (ADR-0035), through the same `_build_filter` as every read. So the law scope,
 subscriptions and validity bind what comes with a clause exactly as they bind
@@ -151,6 +160,22 @@ beside the reranked one:
 - **The per-query baseline gains `delivered`** for every query: fusion's top 10
   delivered whole, so a change to delivery fails the `ci` job by query id with
   no model. No existing value in it changed, and the corpus is the same.
+- **What a ranked clause can bring is pinned.** Delivered recall counts every
+  clause delivered, so a rule that widened unseen, say a looser
+  `in_same_provision`, could raise recall with no better ranking. On the
+  whole compilation, 497 clauses have a chapeau (two at most), 152 have
+  paragraphs (22 at most, "enforcement body"), 593 pairs in all, and a test
+  holds those numbers, so a change is made deliberately. The pipeline's
+  shape is pinned on fixtures: a ranked paragraph brings its chapeaux and not
+  its siblings. The size of each query's delivered list isn't pinned:
+  fusion's tenth candidate can move at a tie straddling a channel's cut
+  (#177), and GQ-18's list under fusion was 31 clauses in three of four runs
+  on fresh collections and 32 in the fourth, its recall unchanged.
+- **This changes what the bar counts.** "recall@10" on the delivered list is
+  the top 10 ranked, each with its provision: up to 34 clauses for one
+  question here. The number is honest only with that said beside it, which
+  the gate's report and this ADR do. Whether the human accepts the target
+  being met on that list is the human's call (Status).
 
 ## Floors and targets after this decision
 
@@ -197,8 +222,8 @@ found.
   ranked, and the clause that names the term came with it. But an answer to
   "who counts as an agency" from this context is incomplete. Delivering a
   ranked paragraph's whole provision would give all fifteen. It was measured
-  at the same recall, with 22.0 delivered clauses a question against 15.6 and
-  73 for GQ-20. It wasn't taken: it also brings all 22 limbs of "enforcement
+  at the same recall, with 23.5 delivered clauses a question against 15.7, and
+  73 for GQ-20 against 34. It wasn't taken: it also brings all 22 limbs of "enforcement
   body" for GQ-20, because one of them was ranked, and a scope decision of
   this size is the human's.
 

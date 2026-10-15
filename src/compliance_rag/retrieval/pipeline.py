@@ -94,11 +94,7 @@ class RetrievalTrace:
         pool = (*ranked, *self.chapeaux, *self.paragraphs)
         delivered: dict[str, Candidate] = {}
         for candidate in ranked:
-            ancestors = clause_ancestors(candidate.clause_id)
-            before = sorted(
-                (c for c in pool if in_same_provision(c.clause_id, candidate.clause_id)),
-                key=lambda c: ancestors.index(c.clause_id),
-            )
+            before = chapeaux_of(candidate, pool)
             after = sorted(
                 (c for c in pool if in_same_provision(candidate.clause_id, c.clause_id)),
                 key=lambda c: c.clause_id,
@@ -122,6 +118,18 @@ def _is_library_law(candidate: Candidate) -> bool:
     return instrument_owner(parse_stable_id(candidate.clause_id)[0]) == PUBLIC_TENANT_ID
 
 
+def chapeaux_of(candidate: Candidate, among: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+    """The clauses in `among` that are `candidate`'s chapeaux: the clauses
+    of its provision that contain it, outermost first (ADR-0045)."""
+    ancestors = clause_ancestors(candidate.clause_id)
+    return tuple(
+        sorted(
+            (c for c in among if in_same_provision(c.clause_id, candidate.clause_id)),
+            key=lambda c: ancestors.index(c.clause_id),
+        )
+    )
+
+
 def read_in_provision(candidate: Candidate, lineage: tuple[Candidate, ...]) -> str:
     """What the cross-encoder reads for a candidate (ADR-0045): the text of
     its chapeaux in `lineage`, outermost first, then its own. APP 11.1(a) is
@@ -129,15 +137,10 @@ def read_in_provision(candidate: Candidate, lineage: tuple[Candidate, ...]) -> s
     loss; and", and a definition's paragraph with the words that name the
     term. A candidate with no chapeau, its own text. Never what is cited or
     delivered: each clause keeps its own canonical text there."""
-    ancestors = clause_ancestors(candidate.clause_id)
-    chapeaux = sorted(
-        (c for c in lineage if in_same_provision(c.clause_id, candidate.clause_id)),
-        key=lambda c: ancestors.index(c.clause_id),
-    )
-    return " ".join((*(c.text for c in chapeaux), candidate.text))
+    return " ".join((*(c.text for c in chapeaux_of(candidate, lineage)), candidate.text))
 
 
-def _completion(
+def _chapeaux_and_paragraphs(
     ranked: tuple[Candidate, ...], lineage: tuple[Candidate, ...], current: Span
 ) -> tuple[tuple[Candidate, ...], tuple[Candidate, ...]]:
     """The chapeaux and paragraphs that make each ranked library-law clause
@@ -249,7 +252,7 @@ class RetrievalPipeline:
                 "retrieval.rerank_scores", [f"{doc.index}:{doc.score:.4f}" for doc in reranked]
             )
             ranked = tuple(result.fused[doc.index] for doc in reranked)
-            chapeaux, paragraphs = _completion(ranked, lineage, current)
+            chapeaux, paragraphs = _chapeaux_and_paragraphs(ranked, lineage, current)
 
             return RetrievalTrace(
                 per_channel=result.per_channel,
@@ -315,7 +318,7 @@ class RetrievalPipeline:
             lineage = await self._lineage(
                 fused, tenant_id, as_of, law=law, policy_corpus=policy_corpus
             )
-            chapeaux, paragraphs = _completion(fused, lineage, current)
+            chapeaux, paragraphs = _chapeaux_and_paragraphs(fused, lineage, current)
             return RetrievalTrace(
                 per_channel={Channel.KEYWORD: fused},
                 fused=fused,

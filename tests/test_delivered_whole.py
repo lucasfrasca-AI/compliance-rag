@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections import Counter
 
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -148,6 +149,26 @@ def test_on_the_whole_compilation_only_s6_1_holds_clauses_outside_its_provision(
         a for c in ids for a in clause_ancestors(c) if a in ids and not in_same_provision(a, c)
     }
     assert crossing == {f"{LAW_INSTRUMENT_ID}:C2026C00227:s6/1"}
+
+
+def test_what_a_ranked_clause_can_bring_on_the_whole_compilation_is_pinned() -> None:
+    """Delivered recall counts every clause a ranked one brings, so what it
+    can bring may not widen unseen (ADR-0045): a looser provision rule would
+    raise recall with no better ranking. On C2026C00227, 497 clauses have a
+    chapeau (two at most) and 152 have paragraphs (22 at most, "enforcement
+    body"): 593 pairs. A change here is a decision, re-recorded deliberately."""
+    ids = {c.clause_id for c in gate_law_clauses()}
+    pairs = [
+        (a, c) for c in ids for a in clause_ancestors(c) if a in ids and in_same_provision(a, c)
+    ]
+    chapeaux = Counter(c for _, c in pairs)
+    paragraphs = Counter(a for a, _ in pairs)
+    assert len(pairs) == 593
+    assert (len(chapeaux), max(chapeaux.values())) == (497, 2)
+    assert (len(paragraphs), max(paragraphs.values())) == (152, 22)
+    assert paragraphs.most_common(1) == [
+        (f"{LAW_INSTRUMENT_ID}:C2026C00227:s6/1/enforcement-body", 22)
+    ]
 
 
 # ---- the cross-encoder reads a candidate in its provision ----------------------
