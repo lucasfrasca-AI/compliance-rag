@@ -2,9 +2,9 @@
 
 - Status: accepted; its bars amended by ADR-0043 (#180): measured over the
   whole compilation rather than the excerpt, per category and document class,
-  with floors enforced and targets on the delivered list. The numbers below
+  with floors enforced and targets on the reranked list. The numbers below
   are the excerpt's. Amended by ADR-0045 (#200): the cross-encoder reads each
-  library-law candidate in its provision, and the ten it keeps are delivered
+  library-law candidate whole in its provision, and the ten it keeps are delivered
   whole, with their chapeaux and paragraphs
 - Date: 2026-10-08
 - Decision ID: revises `D-04` (`DECISIONS.md`)
