@@ -176,9 +176,10 @@ count; none was lowered to fit today's results:
   excerpt gated paraphrase on fusion at 0.9, and fusion is now 0.833 for law
   (GQ-10). The target is retired on fusion, not lowered, because nothing
   delivers fusion's order: `retrieve()` always reranks, and an exact-ID query
-  skips fusion. (Superseded in part by the human's decision, at the end:
-  fused paraphrase carries a target of 0.95, as a direction, not a bar.) ADR-0022 already moved cross-clause to the delivered list for
-  this reason; this moves paraphrase with it. The fused gate's job is to catch a
+  skips fusion. ADR-0022 already moved cross-clause to the delivered list for
+  this reason; this moves paraphrase with it. (Superseded in part by the
+  human's decision, at the end: fused paraphrase carries a target of 0.95,
+  as a direction, not a Phase 1 bar.) The fused gate's job is to catch a
   regression on every build, platform-exact and with no model, and the floor
   and the per-query baseline do that. GQ-10's clause is fused 11th, inside
   the 20 the reranker sees. If it fell past 20, the reranked floor (1.0)
@@ -232,7 +233,8 @@ This ADR keeps it as a Phase 1 exit criterion, because the human asked for a
 real target, and a target that a phase gate doesn't wait for is easy to
 forget. The alternative is to move the open target to a later phase, by
 issue and a `PHASES.md` edit, keeping the strict xfail in CI either way.
-**The human decided that Phase 1 may exit with it open** (at the end).
+**The human decided that Phase 1 may exit with it open** (at the end). The
+criterion stays unmet while a target is open; it just doesn't hold the exit.
 
 ## Consequences
 
@@ -272,7 +274,8 @@ every build. A target says where a cell is going. It stays a strict xfail in
 CI, so the build still fails the day it is met, until the floor is raised to
 meet it. Phase 1 may exit with law cross-clause open, at 4/9 against 0.8 on
 the reranked list. That is recorded as a known gap in
-`docs/handoffs/0002-phase1-close.md`, and #200 and #206 are working on it.
+`docs/handoffs/0002-phase1-close.md`, and #200, #206 and #212 are working on
+it.
 Law fused paraphrase's open target (below) is the second known gap, #221.
 `PHASES.md` says the same beside the criterion.
 

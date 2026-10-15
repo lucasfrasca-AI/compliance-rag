@@ -90,8 +90,8 @@ delivered list: delivered-recall is a separate metric with no target
 
 FUSED_TARGETS: Mapping[Category, float] = {Category.PARAPHRASE: 0.95}
 """Where fusion is going (the human's decision on ADR-0043): paraphrase
-recall@10 on the fused list, for law and for policy queries each. Nothing
-delivers fusion's order, so this isn't a Phase 1 bar. It keeps GQ-10's sparse
+recall@10 on the fused list, for law and for policy queries each. No answer
+is built from fusion's order, so this isn't a Phase 1 bar. It keeps GQ-10's sparse
 weakness on the board: law is 5/6 (GQ-10's APP 11.2 is fused 11th), so the
 target is open. Policy is 1.0, and its floor already holds the value."""
 
