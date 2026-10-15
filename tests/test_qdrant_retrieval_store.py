@@ -149,6 +149,73 @@ async def test_qdrant_orders_equal_scores_by_chunk_id() -> None:
         await assert_retrieval_order_contract(store)
 
 
+async def test_qdrant_breaks_a_tie_at_a_channels_cut_by_chunk_id() -> None:
+    """#177 on the real adapter: five chunks that every channel scores alike,
+    cut inside the tie. Qdrant keeps tied points in an order of its own; the
+    adapter reads past the cut and keeps the lowest `chunk_id`s. Each chunk is
+    upserted on its own, so they needn't share a segment."""
+    from tests.contracts.test_interfaces import (
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        assert_channel_cut_contract,
+        tie_chunks,
+    )
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="channel-cut",
+    ) as store:
+        for chunk in tie_chunks():
+            await store.upsert_chunks((chunk,))
+        await assert_channel_cut_contract(store)
+
+
+async def test_the_search_span_logs_each_channel_and_how_deep_it_was_read(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """Both channels are logged before fusion (CLAUDE.md), on the adapter's
+    own span now that fusion runs there (ADR-0046), with how deep each was
+    read: past the cut when a tie straddles it, one past it when none does."""
+    from tests.contracts.test_interfaces import (
+        BEST_IN_BOTH,
+        ORDER_QUERY,
+        ORDER_VECTORS,
+        TIED,
+        ScriptedEmbedder,
+        tie_chunks,
+    )
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="search-span",
+    ) as store:
+        await store.upsert_chunks(tie_chunks())
+        for limit in (3, 1):
+            await store.search(
+                ORDER_QUERY,
+                law=ALL_LAW,
+                tenant_id="_public",
+                scopes=(Scope.PUBLIC,),
+                as_of=TODAY,
+                limit=limit,
+            )
+    straddled, clear = (
+        dict(s.attributes or {}) for s in span_exporter.get_finished_spans() if s.name == "qdrant.search"
+    )
+    for channel in ("dense", "sparse"):
+        logged = cast("tuple[str, ...]", straddled[f"retrieval.channel.{channel}"])
+        assert [entry.rsplit(":", 1)[0] for entry in logged] == [BEST_IN_BOTH, *TIED[:2]]
+        # The five-way tie straddles a cut of 3: read until it was all in hand.
+        assert cast("int", straddled[f"retrieval.channel_depth.{channel}"]) > 3 + 1
+        # Nothing ties at a cut of 1: one candidate past it was enough.
+        assert clear[f"retrieval.channel_depth.{channel}"] == 1 + 1
+    assert straddled["retrieval.fused"]
+
+
 async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedgerStore) -> None:
     """ADR-0021 against the real adapter. "Stored" is read straight off the
     collection through the raw client, ignoring every filter — so "withdrawn

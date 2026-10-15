@@ -873,15 +873,14 @@ class RetrievalStore(ABC):
     ) -> RetrievalResult:
         """Dense + sparse channels fused with RRF inside the store (D-04).
 
-        `fused` is ordered by score, highest first, and by `chunk_id`, lowest
-        first, among equal scores, and is cut to `limit` only after that
-        order is applied: a tie at the cut keeps the lowest `chunk_id`, and
-        the same fused candidates come back in the same order every time,
-        whichever store answers (#160). Not defined: which candidates a
-        channel hands to fusion when equal scores straddle that channel's
-        own `limit` cut, and the order of equal scores within a `per_channel`
-        list, which is ordered by score, highest first, and no further
-        (#177)."""
+        Each `per_channel` list, and `fused`, is ordered by score, highest
+        first, and by `chunk_id`, lowest first, among equal scores, and is cut
+        to `limit` only after that order is applied: a tie at the cut keeps
+        the lowest `chunk_id`s (#160, #177). `fused` is RRF over the
+        `per_channel` lists exactly as returned (`adapters.fusion`). So which
+        tied candidates a channel hands to fusion, at which places, and the
+        fused scores that follow come from the channel scores alone, never
+        from the order a store found them in (ADR-0046)."""
 
     @abstractmethod
     async def lookup_clause(

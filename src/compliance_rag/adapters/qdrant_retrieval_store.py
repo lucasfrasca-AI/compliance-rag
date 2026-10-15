@@ -1,9 +1,11 @@
 """`RetrievalStore` over Qdrant (issue #22, D-07, D-08).
 
 Collection `clauses` (`Settings.qdrant_collection`): a named dense vector
-(1536, cosine — `gemini-embedding-001`) plus a named sparse vector (BM25),
-fused with Qdrant's own native RRF (D-07: "hybrid, native RRF") rather than
-a hand-rolled client-side fusion. Payload indexes on `clause_id`,
+(1536, cosine — `gemini-embedding-001`) plus a named sparse vector (BM25).
+Qdrant scores each channel; `search` cuts each channel's list and fuses the
+two with RRF itself (`adapters.fusion`, ADR-0046, amending D-07's "native
+RRF"), because Qdrant's own order among equal scores decided which tied
+candidates entered fusion and the fused scores they got (#177). Payload indexes on `clause_id`,
 `tenant_id`, `scope`, `user_id` (keyword) and `valid_from`/`valid_to`
 (integer epoch days — `corpus.models.epoch_days`; `valid_to` is never null,
 `CONTEXT.md`: Bitemporal, so the range side of every filter below is one
@@ -75,6 +77,7 @@ from qdrant_client.conversions.common_types import PointId
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from compliance_rag import telemetry
+from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
     Candidate,
@@ -100,6 +103,8 @@ from compliance_rag.settings import Settings
 
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
+_VECTOR_NAMES = {Channel.DENSE: DENSE_VECTOR_NAME, Channel.SPARSE: SPARSE_VECTOR_NAME}
+"""The named vector each ranked channel searches."""
 _SPARSE_MODEL_NAME = "Qdrant/bm25"
 _SPARSE_CACHE_DIR = ".fastembed_cache"
 
@@ -114,21 +119,6 @@ _PAYLOAD_KEYWORD_FIELDS = (
 )
 _PAYLOAD_BOOL_FIELDS = ("withdrawn", "synthetic")
 _PAYLOAD_INTEGER_FIELDS = ("valid_from", "valid_to")
-
-_FUSED_LIMIT_FACTOR = 2
-"""How many times the caller's `limit` the fused query asks Qdrant for (#160).
-
-`search` prefetches `limit` candidates from each of two channels, so the list
-Qdrant fuses holds at most 2 x `limit`; the 2 is that number of channels, and a
-third prefetch needs this changed with it. Asked for exactly `limit`, Qdrant
-cuts that list itself, and when the candidates either side of the cut have
-equal RRF scores it keeps whichever it likes, differently from one call to the
-next (so the clause that reaches the model, and the recall@10 measured for it,
-changed between runs). Asked for the whole fused list there is nothing left
-for it to cut: the cut is made in `search`, after the list is put in the
-`RetrievalStore` order, and a tie at the cut keeps the lowest `chunk_id`. The
-price is the payload (clause text) of up to `limit` extra points, fetched and
-dropped."""
 
 _SCROLL_PAGE = 256
 """Points per scroll page when listing a version's chunk ids."""
@@ -343,7 +333,8 @@ def _chunk_point_id(chunk_id: str) -> str:
 
 class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
     """Track B: hybrid retrieval over chunks, filtered to Track A's IDs
-    (D-03), fused with Qdrant's native RRF (D-04, D-07)."""
+    (D-03), fused with RRF (D-04) over channel lists Qdrant scores and the
+    adapter cuts (ADR-0046)."""
 
     def __init__(
         self,
@@ -804,72 +795,74 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         (dense_vector,) = await self._embedder.embed((query,))
         sparse_vector = _encode_query(query)
 
-        # Both channels run and are returned before fusion (CLAUDE.md code
-        # standards), so each is its own real query against the collection,
-        # not reconstructed from the fused call's own (unexposed) internals.
-        dense_hits, sparse_hits, fused_hits = await asyncio.gather(
-            self._client.query_points(
-                self._collection_name,
-                query=list(dense_vector),
-                using=DENSE_VECTOR_NAME,
-                query_filter=query_filter,
-                limit=limit,
-                with_payload=True,
-            ),
-            self._client.query_points(
-                self._collection_name,
-                query=sparse_vector,
-                using=SPARSE_VECTOR_NAME,
-                query_filter=query_filter,
-                limit=limit,
-                with_payload=True,
-            ),
-            self._client.query_points(
-                self._collection_name,
-                prefetch=[
-                    models.Prefetch(
-                        query=list(dense_vector),
-                        using=DENSE_VECTOR_NAME,
-                        filter=query_filter,
-                        limit=limit,
-                    ),
-                    models.Prefetch(
-                        query=sparse_vector,
-                        using=SPARSE_VECTOR_NAME,
-                        filter=query_filter,
-                        limit=limit,
-                    ),
-                ],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=limit * _FUSED_LIMIT_FACTOR,
-                with_payload=True,
-            ),
-        )
-
-        # The order is ours, not Qdrant's (`_FUSED_LIMIT_FACTOR`): score
-        # descending, `chunk_id` ascending on a tie, as the contract says and
-        # `FakeRetrievalStore` does, and only then the cut to `limit`.
-        fused = sorted(
-            (
-                self._payload_to_candidate(p.payload, score=p.score, channel=None)
-                for p in fused_hits.points
-            ),
-            key=lambda c: (-c.score, c.chunk_id),
-        )[:limit]
-
-        return RetrievalResult(
-            fused=tuple(fused),
-            per_channel={
-                Channel.DENSE: tuple(
-                    self._payload_to_candidate(p.payload, score=p.score, channel=Channel.DENSE)
-                    for p in dense_hits.points
+        # Qdrant scores each channel; the order among equal scores, which
+        # decides who enters a channel's list and at which place, and so the
+        # fused scores, is ours (`fusion`, #177, ADR-0046).
+        with telemetry.span(
+            "qdrant.search",
+            **{"retrieval.collection": self._collection_name, "retrieval.limit": limit},
+        ) as current:
+            (dense, dense_depth), (sparse, sparse_depth) = await asyncio.gather(
+                self._channel(
+                    Channel.DENSE, list(dense_vector), query_filter=query_filter, limit=limit
                 ),
-                Channel.SPARSE: tuple(
-                    self._payload_to_candidate(p.payload, score=p.score, channel=Channel.SPARSE)
-                    for p in sparse_hits.points
+                self._channel(
+                    Channel.SPARSE, sparse_vector, query_filter=query_filter, limit=limit
                 ),
-            },
+            )
+            per_channel = {Channel.DENSE: dense, Channel.SPARSE: sparse}
+            # Both channels are logged before fusion (CLAUDE.md), with how
+            # deep each was read to settle a tie at its cut.
+            for channel, candidates in per_channel.items():
+                current.set_attribute(
+                    f"retrieval.channel.{channel.value}",
+                    [f"{c.chunk_id}:{c.score:.4f}" for c in candidates],
+                )
+            current.set_attribute("retrieval.channel_depth.dense", dense_depth)
+            current.set_attribute("retrieval.channel_depth.sparse", sparse_depth)
+            fused = reciprocal_rank_fusion(per_channel, limit)
+            current.set_attribute("retrieval.fused", [f"{c.chunk_id}:{c.score:.4f}" for c in fused])
+        return RetrievalResult(fused=fused, per_channel=per_channel)
+
+    async def _channel(
+        self,
+        channel: Channel,
+        query: list[float] | models.SparseVector,
+        *,
+        query_filter: models.Filter,
+        limit: int,
+    ) -> tuple[tuple[Candidate, ...], int]:
+        """One channel's first `limit` candidates in `(-score, chunk_id)` order
+        (`fusion.cut`), and how many Qdrant was asked for to get them.
+
+        Qdrant returns equal scores in an order of its own, and at a cut keeps
+        whichever of them it likes. So the channel is read past the cut, one
+        more than `limit` and then twice as deep each time, until the last
+        candidate read scores below the one at the cut, or the channel runs
+        out. Every candidate tied with the one at the cut is then in hand, and
+        the cut keeps the lowest `chunk_id`s. One extra point's payload when
+        nothing ties at the cut, which is nearly always."""
+        if limit < 1:
+            return (), 0
+        depth = limit + 1
+        while True:
+            hits = (
+                await self._client.query_points(
+                    self._collection_name,
+                    query=query,
+                    using=_VECTOR_NAMES[channel],
+                    query_filter=query_filter,
+                    limit=depth,
+                    with_payload=True,
+                )
+            ).points
+            if len(hits) < depth or hits[-1].score < hits[limit - 1].score:
+                break
+            depth *= 2
+        candidates = (
+            self._payload_to_candidate(p.payload, score=p.score, channel=channel) for p in hits
         )
+        return cut(candidates, limit), depth
 
     async def lookup_clause(
         self,
