@@ -233,10 +233,11 @@ jobs:
       # code that doesn't need that access shouldn't run holding it (issue
       # #10's standing constraint). REQUIRE_REAL_RETRIEVE turns a missing
       # Qdrant or model into a failure here instead of a silent skip.
-      # test_recall_gate_reranked.py is the recall gate on what retrieve()
-      # delivers — the cross-encoder over the top 20 (ADR-0022) — on the whole
-      # compilation (ADR-0043): every cell's floor is enforced here, where the
-      # model is, and an open target is a strict xfail. `-rxP` prints the
+      # test_recall_gate_reranked.py is the recall gate on the reranked top 10
+      # — the cross-encoder over the top 20 (ADR-0022) — on the whole
+      # compilation (ADR-0043), with delivered-recall, a separate metric with
+      # floors and no target, beside it (ADR-0045): every cell's floor is
+      # enforced here, where the model is, and an open target is a strict xfail. `-rxP` prints the
       # measured cells and any expected failure, so this platform's numbers
       # are in the log.
       - name: Re-verify fidelity, reranker service, retrieve() and reranked recall

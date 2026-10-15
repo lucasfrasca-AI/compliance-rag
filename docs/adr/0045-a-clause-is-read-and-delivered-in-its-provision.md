@@ -201,6 +201,10 @@ closed law cross-clause at 0.833. The human's decision on #207:
   delivered-recall is not a recall@10, and the gate prints the list's size
   beside it. The gate tests and `scripts/measure_recall_on_cloud.py` report
   the two metrics apart.
+- **A word that changed meaning.** ADR-0043 and ADR-0022 call the reranked
+  top 10 "the delivered list", "what `retrieve()` delivers". Since this ADR
+  that name means the ten delivered whole. Read in those ADRs, it means the
+  reranked list, which is where their targets are.
 - **The per-query baseline gains `delivered`** for every query: fusion's top 10
   delivered whole, so a change to delivery fails the `ci` job by query id with
   no model. No existing value in it changed, and the corpus is the same.
@@ -314,7 +318,7 @@ x86, and 0.14 outside it on arm64, as ADR-0043 found.
     That changes chunks (CONTEXT.md: Chunk) and needs a re-embed.
 - **GQ-20's delivered context holds one limb of the definition of "agency".**
   It is "agency means:" with paragraph (ca), not (a) to (l). The label, which
-  is the definition's own clause, is met honestly: part of the definition was
+  is the definition's own clause, is counted honestly in delivered-recall: part of the definition was
   ranked, and the clause that names the term came with it. But an answer to
   "who counts as an agency" from this context is incomplete. Delivering a
   ranked paragraph's whole provision would give all fifteen. It was measured
