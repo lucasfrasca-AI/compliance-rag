@@ -175,13 +175,13 @@ def test_a_model_may_draft_a_manifest_but_never_review_one() -> None:
     """`corpus/mappings/README.md`: Review — the same rule as the golden set."""
     SelectionManifest(
         author="model: Claude Opus 5.5",
-        reviewed_by="Piero Frasca",
+        reviewed_by="Lucas Frasca",
         date="2026-10-08",
         prefixes=("s6/",),
     )
     with pytest.raises(ValueError, match="never a model"):
         SelectionManifest(
-            author="Piero Frasca",
+            author="Lucas Frasca",
             reviewed_by="model: Claude Opus 5.5",
             date="2026-10-08",
             prefixes=("s6/",),

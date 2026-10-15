@@ -17,11 +17,11 @@
 # clause path is `s15` itself, and a bare entry selects exactly that clause
 # (and never s150 or s15A).
 #
-# 2026-10-12: s6da/, s6ea/ and s15 reviewed and approved by Piero Frasca (who
+# 2026-10-12: s6da/, s6ea/ and s15 reviewed and approved by Lucas Frasca (who
 # merges as GitHub `lucasfrasca-AI` — CONTEXT.md, "Human reviewer"). The
-# original 2026-09-24 selection was single-author reviewed by Piero Frasca.
-author: "model: Claude Opus 5.5 — added s6da/, s6ea/ and s15 to Piero Frasca's 2026-09-24 selection"
-reviewed_by: "Piero Frasca"
+# original 2026-09-24 selection was single-author reviewed by Lucas Frasca.
+author: "model: Claude Opus 5.5 — added s6da/, s6ea/ and s15 to Lucas Frasca's 2026-09-24 selection"
+reviewed_by: "Lucas Frasca"
 date: 2026-10-12
 
 # Phase 1 scope (issue #19 acceptance criteria): Schedule 1 (the Australian

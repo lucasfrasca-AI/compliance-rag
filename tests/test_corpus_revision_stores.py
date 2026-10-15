@@ -530,7 +530,7 @@ async def test_a_correction_whose_graph_step_died_is_detected_and_finished(
         "MATCH (l:Load) WHERE l.finished_at IS NULL AND l.abandoned_at IS NULL "
         "RETURN l.load_id AS id",
     )
-    await stores.graph.abandon_load(str(open_load["id"]), "Piero Frasca", "graph step died")
+    await stores.graph.abandon_load(str(open_load["id"]), "Lucas Frasca", "graph step died")
     report = await finish(stores)
     assert report.record == status.record  # the same revision, not a new one
     assert (report.graph_nodes_corrected, report.graph_loaded, report.chunks_revised) == (
@@ -583,7 +583,7 @@ async def test_a_graph_step_that_died_after_moving_the_hashes_is_still_unfinishe
         "MATCH (l:Load) WHERE l.finished_at IS NULL AND l.abandoned_at IS NULL "
         "RETURN l.load_id AS id",
     )
-    await stores.graph.abandon_load(str(open_load["id"]), "Piero Frasca", "died mid-load")
+    await stores.graph.abandon_load(str(open_load["id"]), "Lucas Frasca", "died mid-load")
     assert (await stores.graph.loaded_sources()).corpus.blocked_by_abandoned
     report = await finish(stores)
     assert (report.graph_nodes_corrected, report.graph_loaded, report.chunks_revised) == (

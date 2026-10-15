@@ -3,7 +3,7 @@
 # through the fake and through Track A over Neo4j.
 #
 # Drafted by the model from C2026C00227 at the human's request; reviewed and
-# signed by Piero Frasca on 2026-10-13. A label is a label only once
+# signed by Lucas Frasca on 2026-10-13. A label is a label only once
 # `reviewed_by` signs it (D-01; CONTEXT.md: Golden set), and CI refuses
 # unsigned labels.
 #
@@ -18,7 +18,7 @@
 # 2 March 2015.
 
 author: "model: Claude Opus 5.5 — labels drafted for #117/#118 from C2026C00227"
-reviewed_by: "Piero Frasca"
+reviewed_by: "Lucas Frasca"
 date: "2026-10-13"
 compilations:
   "privacy-act-1988:C2026C00227": 2026-06-04
