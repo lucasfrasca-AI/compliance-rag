@@ -25,15 +25,21 @@ Self-skips when `QDRANT_URL` isn't set or isn't reachable, same pattern
 from __future__ import annotations
 
 import datetime as dt
+import math
 import os
 import uuid
+from typing import Any, cast
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import (
+    DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
     QdrantRetrievalStore,
     _chunk_point_id,  # pyright: ignore[reportPrivateUsage] — addresses one point directly
+    _encode_query,  # pyright: ignore[reportPrivateUsage] — the question's sparse vector, for native RRF
 )
 from compliance_rag.corpus.models import Chunk, Scope
 from tests.conftest import ALL_LAW, qdrant_reachable
@@ -128,10 +134,10 @@ async def test_qdrant_satisfies_the_lookup_lineage_contract(store: QdrantRetriev
 
 async def test_qdrant_orders_equal_scores_by_chunk_id() -> None:
     """#160 on the real adapter. Two chunks the channels rank in mirror image
-    get exactly equal RRF scores, and Qdrant returns them in either order from
-    one call to the next, and keeps either at a cut that falls between them:
-    before the fix this failed. The expected order is asserted, not just that
-    two calls agree."""
+    get exactly equal RRF scores. Qdrant's native RRF returned them in either
+    order from one call to the next, and kept either at a cut that fell
+    between them: before #160 this failed. The expected order is asserted,
+    not just that two calls agree."""
     from tests.contracts.test_interfaces import (
         ORDER_VECTORS,
         ScriptedEmbedder,
@@ -147,6 +153,187 @@ async def test_qdrant_orders_equal_scores_by_chunk_id() -> None:
     ) as store:
         await store.upsert_chunks(order_chunks())
         await assert_retrieval_order_contract(store)
+
+
+async def test_qdrant_breaks_a_tie_at_a_channels_cut_by_chunk_id() -> None:
+    """#177 on the real adapter: five chunks that every channel scores alike,
+    cut inside the tie. Qdrant keeps tied points in an order of its own; the
+    adapter reads past the cut and keeps the lowest `chunk_id`s. Each chunk is
+    upserted on its own, so they needn't share a segment."""
+    from tests.contracts.test_interfaces import (
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        assert_channel_cut_contract,
+        tie_chunks,
+    )
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="channel-cut",
+    ) as store:
+        for chunk in tie_chunks():
+            await store.upsert_chunks((chunk,))
+        await assert_channel_cut_contract(store)
+
+
+async def test_fusion_scores_as_qdrants_native_rrf_does() -> None:
+    """ADR-0046 keeps Qdrant's own k (`RRF_K`) and rank origin, so where no
+    channel has a tie the adapter's fused list is the one native RRF gives:
+    the same candidates at the same scores (native RRF is float32), in the
+    same order once a fused tie is broken by `chunk_id`. The contract can't
+    check this: it shares `RRF_K` with both stores."""
+    from qdrant_client import AsyncQdrantClient, models
+
+    from tests.contracts.test_interfaces import (
+        ORDER_QUERY,
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        order_chunks,
+    )
+
+    client = AsyncQdrantClient(url=_QDRANT_URL)
+    name = f"native-rrf-{uuid.uuid4().hex[:8]}"
+    store = QdrantRetrievalStore(
+        client,
+        collection_name=name,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+    )
+    try:
+        await store.ensure_ready()
+        await store.upsert_chunks(order_chunks())
+        ours = await store.search(
+            ORDER_QUERY,
+            law=ALL_LAW,
+            tenant_id="_public",
+            scopes=(Scope.PUBLIC,),
+            as_of=TODAY,
+            limit=10,
+        )
+        native = await client.query_points(
+            name,
+            prefetch=[
+                models.Prefetch(
+                    query=list(ORDER_VECTORS[ORDER_QUERY]), using=DENSE_VECTOR_NAME, limit=10
+                ),
+                models.Prefetch(
+                    query=_encode_query(ORDER_QUERY), using=SPARSE_VECTOR_NAME, limit=10
+                ),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=10,
+            with_payload=["chunk_id"],
+        )
+    finally:
+        await client.delete_collection(name)
+        await client.close()
+    native_scores = {str((p.payload or {})["chunk_id"]): p.score for p in native.points}
+    assert {c.chunk_id for c in ours.fused} == set(native_scores)
+    for candidate in ours.fused:
+        assert math.isclose(candidate.score, native_scores[candidate.chunk_id], rel_tol=1e-6)
+    native_order = sorted(native_scores, key=lambda chunk_id: (-native_scores[chunk_id], chunk_id))
+    assert [c.chunk_id for c in ours.fused] == native_order
+
+
+async def test_the_adapter_reuses_its_connections_to_a_local_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#205: `qdrant-client` opens a TCP connection per request to `localhost`
+    unless told otherwise, and the ordering contract's searches opened 186 of
+    them; under a concurrent suite one connect through Docker Desktop's port
+    proxy could outlast httpx's 5 s and fail the test (`_HTTP_LIMITS`). Counted
+    here as httpcore opens them."""
+    from httpcore._backends.auto import (  # pyright: ignore[reportPrivateUsage] — counts connects
+        AutoBackend,
+    )
+
+    from tests.contracts.test_interfaces import (
+        ORDER_QUERY,
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        order_chunks,
+    )
+
+    opened: list[str] = []
+    connect = AutoBackend.connect_tcp
+
+    async def counted(
+        self: AutoBackend, host: str, port: int, **kwargs: Any
+    ) -> object:  # Any: httpcore's own options, passed through
+        opened.append(f"{host}:{port}")
+        return await connect(self, host, port, **kwargs)
+
+    monkeypatch.setattr(AutoBackend, "connect_tcp", counted)
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="connections",
+    ) as store:
+        await store.upsert_chunks(order_chunks())
+        for limit in (10, 2, 1) * 7:
+            await store.search(
+                ORDER_QUERY,
+                law=ALL_LAW,
+                tenant_id="_public",
+                scopes=(Scope.PUBLIC,),
+                as_of=TODAY,
+                limit=limit,
+            )
+    # The collection's setup (13 connections, measured), the upsert and 21
+    # searches of two requests each: about 56 without reuse. With it,
+    # the two channels' requests run at once, so two connections; four leaves
+    # room for one to expire if the run stalls past keep-alive's 5 s.
+    assert opened, "the count never ran: httpcore connects some other way"
+    assert len(opened) <= 4, opened
+
+
+async def test_the_search_span_logs_each_channel_and_how_deep_it_was_read(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """Both channels are logged before fusion (CLAUDE.md), on the adapter's
+    own span now that fusion runs there (ADR-0046), with how deep each was
+    read: past the cut when a tie straddles it, one past it when none does."""
+    from tests.contracts.test_interfaces import (
+        BEST_IN_BOTH,
+        ORDER_QUERY,
+        ORDER_VECTORS,
+        TIED,
+        ScriptedEmbedder,
+        tie_chunks,
+    )
+
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+        prefix="search-span",
+    ) as store:
+        await store.upsert_chunks(tie_chunks())
+        for limit in (3, 1):
+            await store.search(
+                ORDER_QUERY,
+                law=ALL_LAW,
+                tenant_id="_public",
+                scopes=(Scope.PUBLIC,),
+                as_of=TODAY,
+                limit=limit,
+            )
+    straddled, clear = (
+        dict(s.attributes or {})
+        for s in span_exporter.get_finished_spans()
+        if s.name == "qdrant.search"
+    )
+    for channel in ("dense", "sparse"):
+        logged = cast("tuple[str, ...]", straddled[f"retrieval.channel.{channel}"])
+        assert [entry.rsplit(":", 1)[0] for entry in logged] == [BEST_IN_BOTH, *TIED[:2]]
+        # The five-way tie straddles a cut of 3: read until it was all in hand.
+        assert cast("int", straddled[f"retrieval.channel_depth.{channel}"]) > 3 + 1
+        # Nothing ties at a cut of 1: one candidate past it was enough.
+        assert clear[f"retrieval.channel_depth.{channel}"] == 1 + 1
+    assert straddled["retrieval.fused"]
 
 
 async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedgerStore) -> None:

@@ -15,6 +15,7 @@ from dataclasses import replace
 
 from opentelemetry import trace
 
+from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
@@ -280,7 +281,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         ]
 
         def rank(channel: Channel) -> tuple[Candidate, ...]:
-            scored = [
+            scored = (
                 Candidate(
                     chunk_id=c.chunk_id,
                     clause_id=c.clause_id,
@@ -289,37 +290,14 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                     channel=channel,
                 )
                 for c in pool
-            ]
-            scored = [s for s in scored if s.score > 0]
-            scored.sort(key=lambda s: (-s.score, s.chunk_id))
-            return tuple(scored[:limit])
+            )
+            return cut((s for s in scored if s.score > 0), limit)
 
         per_channel = {Channel.DENSE: rank(Channel.DENSE), Channel.SPARSE: rank(Channel.SPARSE)}
-
-        # Reciprocal rank fusion, the same shape Qdrant applies natively (D-04).
-        k = 60
-        rrf: dict[str, float] = {}
-        holder: dict[str, Candidate] = {}
-        for candidates in per_channel.values():
-            for position, candidate in enumerate(candidates, start=1):
-                rrf[candidate.chunk_id] = rrf.get(candidate.chunk_id, 0.0) + 1.0 / (k + position)
-                holder.setdefault(candidate.chunk_id, candidate)
-        fused = tuple(
-            sorted(
-                (
-                    Candidate(
-                        chunk_id=cid,
-                        clause_id=holder[cid].clause_id,
-                        text=holder[cid].text,
-                        score=score,
-                        channel=None,
-                    )
-                    for cid, score in rrf.items()
-                ),
-                key=lambda c: (-c.score, c.chunk_id),
-            )[:limit]
+        # The same cut and fusion `QdrantRetrievalStore` applies (ADR-0046).
+        return RetrievalResult(
+            fused=reciprocal_rank_fusion(per_channel, limit), per_channel=per_channel
         )
-        return RetrievalResult(fused=fused, per_channel=per_channel)
 
     async def lookup_clause(
         self,

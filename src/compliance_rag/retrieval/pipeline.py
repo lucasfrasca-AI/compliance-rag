@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from opentelemetry.trace import Span
 
+from compliance_rag.adapters.fusion import scored
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
     Candidate,
@@ -108,10 +109,6 @@ class RetrievalTrace:
         was retrieved."""
         ranked = self.ranked_candidates()
         return ranked[0] if ranked else None
-
-
-def _scored(candidates: tuple[Candidate, ...]) -> list[str]:
-    return [f"{c.chunk_id}:{c.score:.4f}" for c in candidates]
 
 
 def _is_library_law(candidate: Candidate) -> bool:
@@ -260,8 +257,8 @@ class RetrievalPipeline:
             )
             # Both retrieval channels are logged before fusion (CLAUDE.md).
             for channel, candidates in result.per_channel.items():
-                current.set_attribute(f"retrieval.channel.{channel.value}", _scored(candidates))
-            current.set_attribute("retrieval.fused", _scored(result.fused))
+                current.set_attribute(f"retrieval.channel.{channel.value}", scored(candidates))
+            current.set_attribute("retrieval.fused", scored(result.fused))
 
             # One read of the fused candidates' provisions (ADR-0045): what
             # the cross-encoder reads each library-law candidate in, and what
@@ -341,8 +338,8 @@ class RetrievalPipeline:
                 user_id=user_id,
             )
             fused = (hit,) if hit is not None else ()
-            current.set_attribute("retrieval.channel.keyword", _scored(fused))
-            current.set_attribute("retrieval.fused", _scored(fused))
+            current.set_attribute("retrieval.channel.keyword", scored(fused))
+            current.set_attribute("retrieval.fused", scored(fused))
             reranked = tuple(ScoredDocument(index=i, score=c.score) for i, c in enumerate(fused))
             # Delivered whole, like a ranked clause: the lookup is exact, but
             # the clause it finds is still part of a provision (ADR-0045).
@@ -418,5 +415,5 @@ class RetrievalPipeline:
                 )
             )
             hits = tuple(hit for hit in found if hit is not None)
-            current.set_attribute("retrieval.channel.keyword", _scored(hits))
+            current.set_attribute("retrieval.channel.keyword", scored(hits))
             return hits

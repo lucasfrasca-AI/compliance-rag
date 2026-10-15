@@ -21,6 +21,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.fusion import RRF_K
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
     Candidate,
@@ -498,6 +499,91 @@ async def test_fake_retrieval_store_orders_equal_scores_by_chunk_id() -> None:
     await assert_retrieval_order_contract(
         SplitChannelFake(order_chunks(), ledger=FakeLedgerStore())
     )
+
+
+# --------------------------------------------------------------------------
+# RetrievalStore: a tie at a channel's own cut (#177)
+# --------------------------------------------------------------------------
+
+TIED = tuple(f"t-tied-{n}" for n in range(1, 6))
+"""Five chunks with one text, so every channel scores them exactly alike, below
+`BEST_IN_BOTH`: in `chunk_id` order here."""
+TIED_TEXT = "zeta eta beta"  # in `ORDER_VECTORS`: cosine 0.8 to the query
+
+
+def tie_chunks() -> tuple[Chunk, ...]:
+    """`BEST_IN_BOTH` and the five `TIED`, stored in the opposite order to
+    `chunk_id`, so insertion order can't stand in for the order under test."""
+    tied = tuple(
+        Chunk(
+            chunk_id=chunk_id,
+            clause_id=f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app{n}/1",
+            text=TIED_TEXT,
+        )
+        for n, chunk_id in enumerate(TIED, start=1)
+    )
+    best = Chunk(
+        chunk_id=BEST_IN_BOTH,
+        clause_id=f"{LIBRARY_INSTRUMENT}:TEST-FIXTURE-001:sch1/app13/1",
+        text=ORDER_QUERY,
+    )
+    return (*reversed(tied), best)
+
+
+async def assert_channel_cut_contract(store: RetrievalStore) -> None:
+    """Which of a channel's tied candidates it hands to fusion, and at which
+    ranks, is `chunk_id` order, whichever store answers (#177, ADR-0046). So
+    the fused set and the fused scores are too.
+
+    Against a store seeded with `tie_chunks()` and, for dense vectors,
+    `ORDER_VECTORS`. With `limit` 3 a channel's cut falls inside the five-way
+    tie, after its second member: the two it keeps are the two lowest
+    `chunk_id`s, and they take the 2nd and 3rd ranks in that order."""
+
+    async def search(limit: int) -> RetrievalResult:
+        return await store.search(
+            ORDER_QUERY,
+            law=ALL_LAW,
+            tenant_id="_public",
+            scopes=(Scope.PUBLIC,),
+            as_of=TODAY,
+            limit=limit,
+        )
+
+    def ids(candidates: tuple[Candidate, ...]) -> list[str]:
+        return [c.chunk_id for c in candidates]
+
+    full = await search(10)
+    for channel in (Channel.DENSE, Channel.SPARSE):
+        candidates = full.per_channel[channel]
+        # The scenario is what it claims to be, or this test proves nothing:
+        # in each channel the five tie exactly, below the best.
+        best, *tied = (c.score for c in candidates)
+        assert len(tied) == len(TIED) and set(tied) == {tied[0]} and best > tied[0], channel
+        # Tied candidates take their ranks in `chunk_id` order.
+        assert ids(candidates) == [BEST_IN_BOTH, *TIED], channel
+
+    # A fused score comes from ranks alone, so the five tied chunks' ranks,
+    # `chunk_id` order in both channels, give them five different fused scores.
+    assert ids(full.fused) == [BEST_IN_BOTH, *TIED]
+    assert [c.score for c in full.fused] == [2 / (RRF_K + rank) for rank in range(6)]
+
+    # The cut inside the tie: each channel keeps the two lowest `chunk_id`s,
+    # and fusion has those two only, at the scores those ranks give.
+    straddled = await search(3)
+    for channel in (Channel.DENSE, Channel.SPARSE):
+        assert ids(straddled.per_channel[channel]) == [BEST_IN_BOTH, *TIED[:2]], channel
+    assert ids(straddled.fused) == [BEST_IN_BOTH, *TIED[:2]]
+    assert [c.score for c in straddled.fused] == [2 / (RRF_K + rank) for rank in range(3)]
+
+    # And every time, so a store that keeps a tie at random can't match by luck.
+    for _ in range(10):
+        assert await search(3) == straddled
+        assert await search(10) == full
+
+
+async def test_fake_retrieval_store_breaks_a_tie_at_a_channels_cut_by_chunk_id() -> None:
+    await assert_channel_cut_contract(SplitChannelFake(tie_chunks(), ledger=FakeLedgerStore()))
 
 
 # --------------------------------------------------------------------------
