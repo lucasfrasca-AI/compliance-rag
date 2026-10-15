@@ -1,10 +1,12 @@
 # Privacy Act 1988 (Cth): the exceptions to the obligations privacy-act-1988.yaml
 # signs (issue #164, ADR-0037).
 #
-# DRAFT, AWAITING REVIEW (D-01). Drafted by the model at the human's request.
-# scripts/load_mappings.py refuses this file, and CI fails, until Piero Frasca
-# signs it: reviewed_by becomes his name and `date` the sign-off. The signed
-# privacy-act-1988.yaml is not edited: these entries name its obligations by id.
+# Corpus content under D-01: drafted by the model at the human's request,
+# reviewed and signed by Lucas Frasca on 2026-10-15, who added APP 3.7 at
+# sign-off: a scope limit disapplies the obligation for material outside the scope,
+# which is what an exception does. scripts/load_mappings.py refuses any file
+# whose reviewer is still pending. The signed privacy-act-1988.yaml is not
+# edited: these entries name its obligations by id.
 #
 # An exception is a clause that says when an obligation does not apply, or is
 # displaced. It decides nothing about whether the obligation applies. It is
@@ -13,10 +15,13 @@
 #
 # privacy-act-1988.yaml lists the APP subclauses that are clauses, not
 # obligations: 1.1, 2.2, 3.4, 3.7, 4.2, 4.4, 5.2, 6.2, 6.3, 6.6, 6.7, 7.2-7.6,
-# 7.8, 8.2, 8.3, 9.3, 11.3, 12.2, 12.3, 12.6, 12.10. Drafted as exceptions: 2.2,
-# 3.4, 6.2, 6.3, 6.7, 7.2, 7.3, 7.4, 7.5, 7.8, 8.2, 8.3, 9.3, 12.2, 12.3. Not
-# exceptions (the PR's review table gives the reason for each): 1.1 (object),
-# 3.7, 5.2, 6.6, 11.3 (definitional), 4.2, 7.6, 12.6, 12.10 (permissions), 4.4
+# 7.8, 8.2, 8.3, 9.3, 11.3, 12.2, 12.3, 12.6, 12.10. Exceptions, here: 2.2, 3.4,
+# 3.7, 6.2, 6.3, 6.7, 7.2, 7.3, 7.4, 7.5, 7.8, 8.2, 8.3, 9.3, 12.2, 12.3.
+# Qualifiers, which say how an obligation is satisfied rather than when it
+# doesn't apply (privacy-act-1988-qualifiers.yaml, ADR-0044): 5.2, 7.6, 11.3,
+# 12.6. Neither: 1.1 (an object clause); 4.2 and 12.10 (permissions: "may"
+# creates a separate allowance and changes neither whether nor how an
+# obligation applies); 6.6 (a deeming rule, a possible third category); 4.4
 # (what applies when 4.3 doesn't).
 #
 # The first draft had the parsed text of APP 10 and 11 only (the checked-in
@@ -27,14 +32,15 @@
 #
 # The comments below are the model's paraphrase, never quotes. Each
 # obligation's entry lists its exceptions; an exception that displaces a whole
-# principle (6.7, 7.8) is listed for every obligation of that principle.
+# principle (3.7, 6.7, 7.8) is listed for every obligation of that principle.
 
 author: "model:claude-opus-5-5"
-reviewed_by: "PENDING — Piero Frasca"
-date: 2026-10-14
+reviewed_by: "Lucas Frasca"
+date: 2026-10-15
 source_clause_ids:
   - privacy-act-1988:C2026C00227:sch1/app2/2
   - privacy-act-1988:C2026C00227:sch1/app3/4
+  - privacy-act-1988:C2026C00227:sch1/app3/7
   - privacy-act-1988:C2026C00227:sch1/app6/2
   - privacy-act-1988:C2026C00227:sch1/app6/3
   - privacy-act-1988:C2026C00227:sch1/app6/7
@@ -57,9 +63,25 @@ exceptions:
 
   # APP 3.4: the cases, besides consent, in which sensitive information may be
   # collected; 3.3 forbids collecting it unless consent is given or 3.4 applies.
+  # APP 3.7: APP 3 applies only to personal information the entity solicits,
+  # so none of its obligations applies to unsolicited information (APP 4
+  # governs that).
+  - obligation_id: OB-PA-APP3-1
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+  - obligation_id: OB-PA-APP3-2
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
   - obligation_id: OB-PA-APP3-3
     clause_ids:
       - privacy-act-1988:C2026C00227:sch1/app3/4
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+  - obligation_id: OB-PA-APP3-5
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
+  - obligation_id: OB-PA-APP3-6
+    clause_ids:
+      - privacy-act-1988:C2026C00227:sch1/app3/7
 
   # APP 6.2 and 6.3: when a secondary use or disclosure is allowed; 6.1 forbids
   # one unless there is consent or either applies. APP 6.7: APP 6 does not apply to an
