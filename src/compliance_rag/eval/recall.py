@@ -209,8 +209,8 @@ class QueryRecall:
     paragraphs that make them whole. The size of what generation reads,
     reported beside delivered-recall. 0 only for a result built by hand, with no
     trace measured. What a ranked clause can bring is pinned on the whole
-    compilation instead (`test_delivered_whole.py`), since fusion's tenth
-    candidate, and with it this size, can move at a tie (#177)."""
+    compilation (`test_delivered_whole.py`). Before ADR-0046 fusion's tenth
+    candidate, and with it this size, could move at a tie (#177)."""
 
 
 def document_class_of(query: GoldenQuery) -> DocumentClass:
