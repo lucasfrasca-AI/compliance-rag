@@ -4,21 +4,34 @@ through the same `route()` production uses — and with no LLM anywhere in it.
 A query's recall@k is the share of its expected clauses found among the first
 k distinct clause ids a list returns. Exact-ID queries go to the router's
 keyword lookup, so their only channel is `keyword`; every other query runs
-`retrieve()` and is measured on the dense list, the sparse list, and fusion.
+`retrieve()` and is measured on the dense list, the sparse list, fusion and
+the reranked top k. **recall@10 on the reranked list is the retrieval metric**:
+retrieval's job is to rank.
+
+**Delivered-recall** is a separate metric (ADR-0045), never combined with
+recall@k into one number. It is the share of the expected clauses in the
+**delivered list**: the reranked top k, each library-law clause delivered
+whole with the chapeaux and paragraphs of its provision, which is what
+generation is given. That list holds more than k clauses, so delivered-recall
+is not a recall@k, and its size is reported beside it
+(`QueryRecall.delivered_clauses`). An expected clause counts there only if it
+was ranked in the top k or is in the provision of one that was, never because
+anything was ranked deeper. It measures a delivery mechanism, not the ranking.
 
 `NoRerank` keeps fusion's order. It is the gate's reranker so the gate
 measures retrieval rather than the cross-encoder, needs no model artefact, and
 is the "no-rerank" arm of the reranker benchmark (#32).
 
-The bars (ADR-0043) are per *cell*: one list's mean recall@10 over one
-category's queries of one document class — library law (the `_public`
-queries, over the whole compilation) or internal policy (Acme's, over its own
-six policies). The two halves are kept apart because they differ by half a
-point on cross-clause and only the law half can be measured on the deployed
-collection. Each cell has an enforced **floor**, what the gate achieves today,
-and the delivered list has a **target**, what Phase 1 needs. A cell whose floor
-is under its target is an open target: CI expects it to fail, strictly, so the
-day it is met CI fails until its floor is raised to meet it.
+The bars (ADR-0043) are per *cell*: one list's mean over one category's
+queries of one document class — library law (the `_public` queries, over the
+whole compilation) or internal policy (Acme's, over its own six policies). The
+two halves are kept apart because they differ by half a point on cross-clause
+and only the law half can be measured on the deployed collection. Each cell
+has an enforced **floor**, what the gate achieves today. The reranked list
+also has a **target**, what Phase 1 needs. A cell whose floor is under its
+target is an open target: CI expects it to fail, strictly, so the day it is
+met CI fails until its floor is raised to meet it. Delivered-recall has floors
+and no target (ADR-0045), so it can neither meet nor close one.
 """
 
 from __future__ import annotations
@@ -39,6 +52,7 @@ from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 K = 10
 FUSED = "fused"
 RERANKED = "reranked"
+DELIVERED = "delivered"
 
 LAW = DocumentClass.LIBRARY_LAW
 POLICY = DocumentClass.INTERNAL_POLICY
@@ -66,9 +80,11 @@ TARGETS: Mapping[Category, float] = {
     Category.CROSS_CLAUSE: 0.8,
 }
 """What Phase 1 needs (PHASES.md exit criteria, ADR-0043): recall@10 per
-category on the list `retrieve()` delivers (`reranked`; for an exact-ID query,
-the router's lookup), for law and for policy queries each. PHASES.md's
-numbers, each re-argued in clauses on the whole compilation in ADR-0043."""
+category on the reranked list (`reranked`; for an exact-ID query, the router's
+lookup), for law and for policy queries each. PHASES.md's numbers, each
+re-argued in clauses on the whole compilation in ADR-0043. Never on the
+delivered list: delivered-recall is a separate metric with no target
+(ADR-0045)."""
 
 FLOORS: Mapping[Cell, float] = {
     # The fused gate (CI's `ci` job, no model): platform-exact.
@@ -78,23 +94,38 @@ FLOORS: Mapping[Cell, float] = {
     Cell(FUSED, Category.PARAPHRASE, POLICY): 1.0,
     Cell(FUSED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # GQ-18 1/3, GQ-19 1/2, GQ-20 1/2
     Cell(FUSED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-23 1/2
-    # The reranked gate (CI's `reranker-fidelity` job): what `retrieve()` delivers.
+    # The reranked gate (CI's `reranker-fidelity` job): the cross-encoder's
+    # top 10, recall@10, the retrieval metric. The targets are here.
     Cell(RERANKED, Category.EXACT_ID, LAW): 1.0,
     Cell(RERANKED, Category.EXACT_ID, POLICY): 1.0,
     Cell(RERANKED, Category.PARAPHRASE, LAW): 1.0,
     Cell(RERANKED, Category.PARAPHRASE, POLICY): 1.0,
-    Cell(RERANKED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # target 0.8: open (#200)
+    Cell(RERANKED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # target 0.8: open (#200, #206)
     Cell(RERANKED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
+    # The same job: delivered-recall, a separate metric with floors and no
+    # target (ADR-0045). The reranked top 10, each delivered whole: more than
+    # ten clauses, so never a recall@10 and never combined with one.
+    Cell(DELIVERED, Category.EXACT_ID, LAW): 1.0,
+    Cell(DELIVERED, Category.EXACT_ID, POLICY): 1.0,
+    Cell(DELIVERED, Category.PARAPHRASE, LAW): 1.0,
+    Cell(DELIVERED, Category.PARAPHRASE, POLICY): 1.0,
+    # GQ-18's (a) and (b) come with APP 11.1, and GQ-20's "agency means:" with
+    # its paragraph (ca). Still missed: GQ-19's APP 10.1 (#206).
+    Cell(DELIVERED, Category.CROSS_CLAUSE, LAW): 5 / 6,
+    Cell(DELIVERED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
 }
 """What the gate achieves on the whole compilation (ADR-0043, measured
-2026-10-15): enforced, so any drop in any cell fails. Raised deliberately when
-recall improves, never lowered to let a drop pass."""
+2026-10-15; the delivered cells ADR-0045, the same day): enforced, so any drop
+in any cell fails. Raised deliberately when recall improves, never lowered to
+let a drop pass."""
 
 
 def target_of(cell: Cell) -> float | None:
-    """A cell's target: on the delivered list only. A fused cell has none —
-    nothing delivers fusion's order, so it is held to its floor and to the
-    per-query baseline, and nothing more."""
+    """A cell's target: on the reranked list only, where retrieval ranks. A
+    fused cell has none, since nothing delivers fusion's order, and a delivered
+    cell has none, since delivered-recall measures delivery, not ranking
+    (ADR-0045). Each is held to its floor (and fusion to the per-query
+    baseline), and nothing more."""
     return TARGETS[cell.category] if cell.list_name == RERANKED else None
 
 
@@ -149,13 +180,32 @@ class QueryRecall:
     tenant's own internal policies (the golden set's Acme queries)."""
     by_list: dict[str, float]
     """recall@k keyed by channel value (`dense`, `sparse`, `keyword`),
-    `fused`, and `reranked` (fusion reordered by the pipeline's reranker)."""
+    `fused` and `reranked` (fusion reordered by the pipeline's reranker);
+    and, under `delivered`, delivered-recall, the separate metric of those k
+    each delivered whole (ADR-0045), which is not a recall@k."""
+    delivered_clauses: int = 0
+    """How many clauses the delivered list holds: k, plus the chapeaux and
+    paragraphs that make them whole. The size of what generation reads,
+    reported beside delivered-recall. 0 only for a result built by hand, with no
+    trace measured. What a ranked clause can bring is pinned on the whole
+    compilation instead (`test_delivered_whole.py`), since fusion's tenth
+    candidate, and with it this size, can move at a tie (#177)."""
 
 
 def document_class_of(query: GoldenQuery) -> DocumentClass:
     """A golden query asked as `_public` searches the library; one asked as
     Acme searches Acme's own policies, since Acme subscribes to nothing there."""
     return LAW if query.tenant_id == PUBLIC_TENANT_ID else POLICY
+
+
+def recall_delivered(expected: tuple[str, ...], trace: RetrievalTrace) -> float:
+    """Delivered-recall: the share of `expected` in what `retrieve()`
+    delivers, the reranked top k (already cut to k by the reranker), each with
+    the chapeaux and paragraphs of its provision (ADR-0045). Every delivered
+    clause counts, however many the k bring; none comes from ranking deeper
+    than k. A separate metric from recall@k, never combined with it."""
+    delivered = {c.clause_id for c in trace.delivered()}
+    return sum(1 for clause_id in expected if clause_id in delivered) / len(expected)
 
 
 def measure_trace(query: GoldenQuery, trace: RetrievalTrace, k: int = K) -> QueryRecall:
@@ -166,7 +216,14 @@ def measure_trace(query: GoldenQuery, trace: RetrievalTrace, k: int = K) -> Quer
     }
     by_list[FUSED] = recall_at_k(expected, trace.fused, k)
     by_list[RERANKED] = recall_at_k(expected, trace.ranked_candidates(), k)
-    return QueryRecall(query.id, query.category, document_class_of(query), by_list)
+    by_list[DELIVERED] = recall_delivered(expected, trace)
+    return QueryRecall(
+        query.id,
+        query.category,
+        document_class_of(query),
+        by_list,
+        delivered_clauses=len(trace.delivered()),
+    )
 
 
 async def measure(
@@ -244,7 +301,10 @@ def short_of_target(results: Iterable[QueryRecall], cell: Cell) -> float | None:
 
 Baseline = Mapping[str, Mapping[str, float]]
 """query id -> list name -> recall@k, for every list but `reranked` (which,
-under `NoRerank`, is fusion again)."""
+under `NoRerank`, is fusion again), and delivered-recall under `delivered`:
+under `NoRerank` that is fusion's top k delivered whole, so a change to
+delivery fails the fused gate by query id on every build, with no model
+(ADR-0045)."""
 
 
 def regressions(
@@ -294,8 +354,10 @@ def write_baseline(
     if os.environ.get("CI"):
         raise RuntimeError("the recall baseline is never rewritten in CI")
     document = {
-        "note": "Per-query recall@10 for every list, on the gate corpus (the whole "
-        "compilation's selected clauses and the Acme policies, ADR-0043). Written only "
+        "note": "Per-query recall@10 for every list, and delivered-recall under "
+        "`delivered`, a separate metric that is not a recall@10 (ADR-0045), on the gate "
+        "corpus (the whole compilation's selected clauses and the Acme policies, "
+        "ADR-0043). Written only "
         "by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally — "
         "a deliberate, reviewed change, never to make a drop pass.",
         "corpus_sha256": corpus,

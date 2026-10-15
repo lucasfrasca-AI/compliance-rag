@@ -369,6 +369,28 @@ def clause_ancestors(clause_id: str) -> tuple[str, ...]:
     )
 
 
+PARAGRAPH_SEGMENT_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+[a-z]?)$")
+"""A subsection, paragraph or subparagraph segment of a clause path: `1`,
+`1a`, `a`, `ca`, `iii`, `iia`. Anything else under a section is a defined
+term's slug (`CONTEXT.md`: Definition) — every one in C2026C00227 has three or
+more letters, and the one three-letter slug (`acc`, the ACC) is no paragraph
+shape (`test_display_form.py` checks every slug in the constructs fixture)."""
+
+
+def in_same_provision(outer: str, inner: str) -> bool:
+    """Whether clause `inner` is inside clause `outer` with only subsections,
+    paragraphs and subparagraphs between them: one provision of the law,
+    stored as several clauses at its chapeau (ADR-0045). APP 11.1(a) is in
+    APP 11.1's provision, and s 6(1) "agency" (c)(i) in "agency"'s. A
+    Definition is a provision of its own, so none of them is in s 6(1)'s,
+    the subsection that holds all 176. By path segment, as `clause_ancestors`."""
+    if outer not in clause_ancestors(inner):
+        return False
+    depth = len(parse_stable_id(outer)[2].split("/"))
+    between = parse_stable_id(inner)[2].split("/")[depth:]
+    return all(PARAGRAPH_SEGMENT_RE.match(segment) for segment in between)
+
+
 def clause_anchor_id(clause_path: str) -> str:
     """The synthesized click-to-clause anchor for a clause (`CONTEXT.md`:
     Position map, issue #9's ePub format spike).

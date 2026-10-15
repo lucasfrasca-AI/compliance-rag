@@ -25,13 +25,9 @@ from __future__ import annotations
 
 import re
 
+from compliance_rag.corpus.models import PARAGRAPH_SEGMENT_RE as _PARAGRAPH_RE
+
 _SECTION_RE = re.compile(r"^s(\d+)([a-z]{0,2})$")
-_PARAGRAPH_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+[a-z]?)$")
-"""A subsection, paragraph or subparagraph segment: `1`, `1a`, `a`, `ca`, `iii`,
-`iia`. Anything else under a section is a defined term's slug (CONTEXT.md:
-Definition) — every one in C2026C00227 has three or more letters, and the one
-three-letter slug (`acc`, the ACC) is no paragraph shape
-(`test_display_form.py` checks every slug in the constructs fixture)."""
 _ARTICLE_RE = re.compile(r"^art(\d+)$")
 _SCHEDULE_APP_RE = re.compile(r"^app(\d+)$")
 

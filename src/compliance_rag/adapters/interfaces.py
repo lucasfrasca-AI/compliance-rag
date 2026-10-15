@@ -899,6 +899,25 @@ class RetrievalStore(ABC):
         `scopes` narrows it exactly as it narrows `search`: a lookup is a
         channel too (ADR-0036)."""
 
+    @abstractmethod
+    async def lookup_lineage(
+        self,
+        clause_ids: tuple[str, ...],
+        *,
+        law: LawScope,
+        tenant_id: str,
+        scopes: tuple[Scope, ...],
+        as_of: dt.date,
+        policy_corpus: PolicyCorpus = NO_PREFIX,
+        user_id: str | None = None,
+    ) -> tuple[Candidate, ...]:
+        """Every clause that contains one of `clause_ids` or is inside one,
+        by path segment as `clause_ancestors` defines it (`s1/10` is neither
+        inside `s1/1` nor containing it), through every filter `lookup_clause`
+        applies; in `clause_id` order, unranked, on the keyword channel. A
+        given id comes back only as the lineage of another. What delivers a
+        ranked clause whole: its chapeaux and its paragraphs (ADR-0045)."""
+
 
 class RetrievalAdmin(ABC):
     """The write side of a retrieval store (ADR-0021): never replace in

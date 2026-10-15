@@ -118,6 +118,14 @@ async def test_qdrant_retrieval_store_satisfies_the_shared_contract(
     await assert_retrieval_store_contract(store, ledger)
 
 
+async def test_qdrant_satisfies_the_lookup_lineage_contract(store: QdrantRetrievalStore) -> None:
+    """ADR-0045: the clauses containing or inside a ranked clause, read in
+    one scroll on `clause_id` and the `ancestors` payload."""
+    from tests.contracts.test_interfaces import assert_lookup_lineage_contract
+
+    await assert_lookup_lineage_contract(store, store)
+
+
 async def test_qdrant_orders_equal_scores_by_chunk_id() -> None:
     """#160 on the real adapter. Two chunks the channels rank in mirror image
     get exactly equal RRF scores, and Qdrant returns them in either order from

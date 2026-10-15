@@ -8,13 +8,23 @@ question asked with no tenant profile — named, never an empty filter.
 `RetrievalPipeline.from_settings` is the real composition (issue #25): the
 Qdrant store, the Vertex embedder and the reranker client, with no LLM
 anywhere in the path.
+
+A library-law clause is read and delivered in its provision (ADR-0045): the
+cross-encoder reads each fused candidate whole, after the clauses that
+introduce it (its chapeaux) and before the clauses it introduces (its
+paragraphs), and the reranker's top k are delivered whole the same way,
+fetched by containment and never ranked. `RetrievalTrace.delivered()` is what
+generation is given.
 """
 
 from __future__ import annotations
 
 import asyncio
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
+
+from opentelemetry.trace import Span
 
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
@@ -27,7 +37,16 @@ from compliance_rag.adapters.interfaces import (
     RetrievalStore,
     ScoredDocument,
 )
-from compliance_rag.corpus.models import Scope
+from compliance_rag.corpus.chunker import CHUNK_MAX_TOKENS
+from compliance_rag.corpus.models import (
+    PUBLIC_TENANT_ID,
+    Scope,
+    clause_ancestors,
+    in_same_provision,
+    instrument_owner,
+    parse_stable_id,
+)
+from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.retrieval.router import is_clause_id_query
 from compliance_rag.settings import Settings
 from compliance_rag.telemetry import span
@@ -52,11 +71,37 @@ class RetrievalTrace:
     reranked: tuple[ScoredDocument, ...]
     """The reranker's own output — `ScoredDocument.index` indexes into
     `fused`, exactly as `Reranker.rerank()` promises."""
+    chapeaux: tuple[Candidate, ...] = ()
+    """Library-law clauses containing a ranked one in its provision: the words
+    that introduce it (APP 11.1 for a ranked APP 11.1(b); "agency means:" for
+    a ranked paragraph of that definition). Fetched by id, never ranked
+    (ADR-0045)."""
+    paragraphs: tuple[Candidate, ...] = ()
+    """Library-law clauses inside a ranked one in its provision: the rest of
+    its text (APP 11.1(a) and (b) for a ranked APP 11.1). Fetched by
+    containment, never ranked (ADR-0045)."""
 
     def ranked_candidates(self) -> tuple[Candidate, ...]:
-        """`fused`, reordered (and trimmed) by rerank score — what generation
-        should actually see, rather than the pre-rerank fused order."""
+        """`fused`, reordered (and trimmed) by rerank score: the reranker's
+        top k, before each is delivered whole (`delivered`)."""
         return tuple(self.fused[doc.index] for doc in self.reranked)
+
+    def delivered(self) -> tuple[Candidate, ...]:
+        """What generation is given: the ranked candidates in rank order, each
+        with the rest of its provision around it, its chapeaux before it
+        (outermost first) and its paragraphs after it (in clause order, a
+        ranked one among them), each clause once (ADR-0045). Never a fragment
+        of the law: a paragraph without the words that introduce it, or a
+        chapeau without its list. Adds to the ranked top k, never cuts it."""
+        ranked = self.ranked_candidates()
+        pool = (*ranked, *self.chapeaux, *self.paragraphs)
+        delivered: dict[str, Candidate] = {}
+        for candidate in ranked:
+            before = chapeaux_of(candidate, pool)
+            after = paragraphs_of(candidate, pool)
+            for clause in (*before, candidate, *after):
+                delivered.setdefault(clause.clause_id, clause)
+        return tuple(delivered.values())
 
     def top_candidate(self) -> Candidate | None:
         """The single best candidate after reranking, or `None` if nothing
@@ -67,6 +112,88 @@ class RetrievalTrace:
 
 def _scored(candidates: tuple[Candidate, ...]) -> list[str]:
     return [f"{c.chunk_id}:{c.score:.4f}" for c in candidates]
+
+
+def _is_library_law(candidate: Candidate) -> bool:
+    return instrument_owner(parse_stable_id(candidate.clause_id)[0]) == PUBLIC_TENANT_ID
+
+
+def chapeaux_of(candidate: Candidate, among: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+    """The clauses in `among` that are `candidate`'s chapeaux: the clauses
+    of its provision that contain it, outermost first (ADR-0045)."""
+    ancestors = clause_ancestors(candidate.clause_id)
+    return tuple(
+        sorted(
+            (c for c in among if in_same_provision(c.clause_id, candidate.clause_id)),
+            key=lambda c: ancestors.index(c.clause_id),
+        )
+    )
+
+
+def paragraphs_of(candidate: Candidate, among: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+    """The clauses in `among` that are `candidate`'s paragraphs: the clauses
+    of its provision inside it, in clause order (ADR-0045)."""
+    return tuple(
+        sorted(
+            (c for c in among if in_same_provision(candidate.clause_id, c.clause_id)),
+            key=lambda c: c.clause_id,
+        )
+    )
+
+
+def read_in_provision(
+    candidate: Candidate,
+    lineage: tuple[Candidate, ...],
+    *,
+    budget: int = CHUNK_MAX_TOKENS,
+    count_tokens: Callable[[str], int] = count_reranker_tokens,
+) -> str:
+    """What the cross-encoder reads for a candidate (ADR-0045): the text of
+    its provision in `lineage`, in the order delivering it would give it. Its
+    chapeaux, outermost first, then its own text, then its paragraphs in
+    clause order, as many whole paragraphs as keep the reading within
+    `budget` (the chunk budget, counted by the reranker's own tokenizer), so
+    the service never refuses a candidate for its length.
+
+    APP 11.1(a) is read as "… to protect the information: from misuse,
+    interference and loss; and", a definition's paragraph with the words that
+    name the term, and APP 11.2 as the whole of its sentence, its conditions
+    (a) to (d) after the words that oblige. Never a fragment: read bare, a
+    chapeau loses to its own paragraphs, each of which is read with its text.
+    A candidate with no chapeau and no paragraph is read as it is. Never what
+    is cited or delivered: each clause keeps its own canonical text there."""
+    text = " ".join((*(c.text for c in chapeaux_of(candidate, lineage)), candidate.text))
+    for paragraph in paragraphs_of(candidate, lineage):
+        longer = f"{text} {paragraph.text}"
+        if count_tokens(longer) > budget:
+            break
+        text = longer
+    return text
+
+
+def _chapeaux_and_paragraphs(
+    ranked: tuple[Candidate, ...], lineage: tuple[Candidate, ...], current: Span
+) -> tuple[tuple[Candidate, ...], tuple[Candidate, ...]]:
+    """The chapeaux and paragraphs that make each ranked library-law clause
+    whole (ADR-0045), from `lineage`: the clauses of its provision that
+    contain it or are inside it, and that weren't ranked themselves. Never
+    ranked, so the reranker's order and its top k are what they were. Both
+    are recorded on `current`, the span of the retrieval they complete."""
+    ranked_ids = {c.clause_id for c in ranked}
+    law_ids = [c.clause_id for c in ranked if _is_library_law(c)]
+    unranked = [c for c in lineage if c.clause_id not in ranked_ids]
+    paragraphs = tuple(
+        c for c in unranked if any(in_same_provision(r, c.clause_id) for r in law_ids)
+    )
+    held = {c.clause_id for c in paragraphs}
+    chapeaux = tuple(
+        c
+        for c in unranked
+        if c.clause_id not in held and any(in_same_provision(c.clause_id, r) for r in law_ids)
+    )
+    current.set_attribute("retrieval.chapeaux", [c.clause_id for c in chapeaux])
+    current.set_attribute("retrieval.paragraphs", [c.clause_id for c in paragraphs])
+    return chapeaux, paragraphs
 
 
 class RetrievalPipeline:
@@ -136,19 +263,34 @@ class RetrievalPipeline:
                 current.set_attribute(f"retrieval.channel.{channel.value}", _scored(candidates))
             current.set_attribute("retrieval.fused", _scored(result.fused))
 
-            reranked = await self.reranker.rerank(
-                query,
-                tuple(c.text for c in result.fused),
-                top_k=top_k,
+            # One read of the fused candidates' provisions (ADR-0045): what
+            # the cross-encoder reads each library-law candidate in, and what
+            # the ranked ones are delivered with: the same clauses.
+            lineage = await self._lineage(
+                result.fused, tenant_id, as_of, law=law, policy_corpus=policy_corpus
             )
+            texts = tuple(read_in_provision(c, lineage) for c in result.fused)
+            current.set_attribute(
+                "retrieval.read_in_provision",
+                [
+                    c.clause_id
+                    for c, text in zip(result.fused, texts, strict=True)
+                    if text != c.text
+                ],
+            )
+            reranked = await self.reranker.rerank(query, texts, top_k=top_k)
             current.set_attribute(
                 "retrieval.rerank_scores", [f"{doc.index}:{doc.score:.4f}" for doc in reranked]
             )
+            ranked = tuple(result.fused[doc.index] for doc in reranked)
+            chapeaux, paragraphs = _chapeaux_and_paragraphs(ranked, lineage, current)
 
             return RetrievalTrace(
                 per_channel=result.per_channel,
                 fused=result.fused,
                 reranked=reranked,
+                chapeaux=chapeaux,
+                paragraphs=paragraphs,
             )
 
     async def route(
@@ -202,11 +344,47 @@ class RetrievalPipeline:
             current.set_attribute("retrieval.channel.keyword", _scored(fused))
             current.set_attribute("retrieval.fused", _scored(fused))
             reranked = tuple(ScoredDocument(index=i, score=c.score) for i, c in enumerate(fused))
+            # Delivered whole, like a ranked clause: the lookup is exact, but
+            # the clause it finds is still part of a provision (ADR-0045).
+            lineage = await self._lineage(
+                fused, tenant_id, as_of, law=law, policy_corpus=policy_corpus
+            )
+            chapeaux, paragraphs = _chapeaux_and_paragraphs(fused, lineage, current)
             return RetrievalTrace(
                 per_channel={Channel.KEYWORD: fused},
                 fused=fused,
                 reranked=reranked,
+                chapeaux=chapeaux,
+                paragraphs=paragraphs,
             )
+
+    async def _lineage(
+        self,
+        candidates: tuple[Candidate, ...],
+        tenant_id: str,
+        as_of: dt.date,
+        *,
+        law: LawScope,
+        policy_corpus: PolicyCorpus,
+    ) -> tuple[Candidate, ...]:
+        """The library-law clauses containing or inside any library-law
+        candidate (ADR-0045), in one read, through every filter a lookup
+        applies (the law scope, subscriptions, validity): nothing comes back
+        that the candidate's own channel couldn't have returned. Library law
+        only: a tenant's documents are parsed flat. Which of them share a
+        candidate's provision is decided here, by `in_same_provision`, not by
+        the store."""
+        law_ids = tuple(dict.fromkeys(c.clause_id for c in candidates if _is_library_law(c)))
+        if not law_ids:
+            return ()
+        return await self.retrieval_store.lookup_lineage(
+            law_ids,
+            law=law,
+            tenant_id=tenant_id,
+            scopes=(Scope.PUBLIC,),
+            as_of=as_of,
+            policy_corpus=policy_corpus,
+        )
 
     async def fetch(
         self,

@@ -33,6 +33,7 @@ from compliance_rag.adapters.interfaces import (
     LedgerStore,
     Profile,
     Reranker,
+    RetrievalAdmin,
     RetrievalResult,
     RetrievalStore,
     SourceKind,
@@ -262,6 +263,104 @@ async def _library_reach(store: RetrievalStore, *, tenant_id: str) -> dict[str, 
 async def assert_library_unreachable(store: RetrievalStore, *, tenant_id: str) -> None:
     reached = await _library_reach(store, tenant_id=tenant_id)
     assert all(not found for found in reached.values()), reached
+
+
+LINEAGE_VERSION = f"{LIBRARY_INSTRUMENT}:LINEAGE-V1"
+LINEAGE_IN_FORCE = dt.date(2025, 7, 1)
+LINEAGE = {
+    "sch1/app11/1": "the entity must take such steps to protect the information:",
+    "sch1/app11/1/a": "from misuse, interference and loss; and",
+    "sch1/app11/1/a/i": "a subparagraph, for depth",
+    "sch1/app11/1/b": "from unauthorised access, modification or disclosure.",
+    "sch1/app11/10": "a tenth subclause: shares a prefix, not a path",
+}
+
+
+def lineage_chunks() -> tuple[Chunk, ...]:
+    """Seed for `assert_lookup_lineage_contract`: a chapeau, its paragraphs and
+    a subparagraph; a clause whose path shares a prefix with the chapeau's and
+    is not inside it; the chapeau's own path in another version; and a
+    tenant's nested clauses."""
+    library = tuple(
+        Chunk(
+            chunk_id=f"{LINEAGE_VERSION}:{p}",
+            clause_id=f"{LINEAGE_VERSION}:{p}",
+            text=t,
+            valid_from=LINEAGE_IN_FORCE,
+        )
+        for p, t in LINEAGE.items()
+    )
+    other_version = Chunk(
+        chunk_id=f"{LIBRARY_INSTRUMENT}:LINEAGE-V2:sch1/app11/1/a",
+        clause_id=f"{LIBRARY_INSTRUMENT}:LINEAGE-V2:sch1/app11/1/a",
+        text="the same paragraph in a later compilation",
+    )
+    tenant = tuple(
+        Chunk(
+            chunk_id=f"acme-policy:v3:{p}",
+            clause_id=f"acme-policy:v3:{p}",
+            text=f"Acme's own clause {p}",
+            scope=Scope.TENANT,
+            tenant_id="acme",
+        )
+        for p in ("sec5", "sec5/1")
+    )
+    return (*library, other_version, *tenant)
+
+
+async def assert_lookup_lineage_contract(store: RetrievalStore, admin: RetrievalAdmin) -> None:
+    """`RetrievalStore.lookup_lineage` (ADR-0045): the clauses containing one
+    of the given clauses or inside one, by path segment, within its own
+    instrument version, through every filter a lookup applies. Shared by the
+    fake here and `QdrantRetrievalStore` (`tests/test_qdrant_retrieval_store.py`)."""
+    await admin.upsert_chunks(lineage_chunks())
+
+    def at(path: str) -> str:
+        return f"{LINEAGE_VERSION}:{path}"
+
+    async def lineage(*clause_ids: str, law: LawScope = ALL_LAW, **kw: object) -> list[str]:
+        options: dict[str, object] = {
+            "tenant_id": "_public",
+            "scopes": (Scope.PUBLIC,),
+            "as_of": TODAY,
+        } | kw
+        found = await store.lookup_lineage(clause_ids, law=law, **options)  # pyright: ignore[reportArgumentType]
+        assert all(c.channel is Channel.KEYWORD for c in found)
+        return [c.clause_id for c in found]
+
+    # Inside: every depth, in clause_id order; never a prefix that isn't a path.
+    assert await lineage(at("sch1/app11/1")) == [
+        at("sch1/app11/1/a"),
+        at("sch1/app11/1/a/i"),
+        at("sch1/app11/1/b"),
+    ]
+    # Containing and inside at once; a sibling is neither.
+    assert await lineage(at("sch1/app11/1/a")) == [at("sch1/app11/1"), at("sch1/app11/1/a/i")]
+    # A given id comes back only as the lineage of another.
+    assert await lineage(at("sch1/app11/1"), at("sch1/app11/1/b")) == [
+        at("sch1/app11/1"),
+        at("sch1/app11/1/a"),
+        at("sch1/app11/1/a/i"),
+        at("sch1/app11/1/b"),
+    ]
+    assert await lineage() == []
+    # Every filter a lookup applies: the law scope (D-03), the asker's scopes
+    # and tenant (D-14, ADR-0020), and validity.
+    cited_b = LawScope(frozenset({at("sch1/app11/1/b")}), "contract: Track A cites (b) only")
+    assert await lineage(at("sch1/app11/1"), law=cited_b) == [at("sch1/app11/1/b")]
+    assert await lineage(at("sch1/app11/1"), tenant_id="other-corp") == []
+    assert await lineage(at("sch1/app11/1"), as_of=LINEAGE_IN_FORCE - dt.timedelta(days=1)) == []
+    assert (
+        await lineage("acme-policy:v3:sec5", tenant_id="other-corp", scopes=PUBLIC_AND_TENANT) == []
+    )
+    assert await lineage("acme-policy:v3:sec5", tenant_id="acme", scopes=PUBLIC_AND_TENANT) == [
+        "acme-policy:v3:sec5/1"
+    ]
+
+
+async def test_fake_retrieval_store_satisfies_the_lookup_lineage_contract() -> None:
+    store = FakeRetrievalStore(ledger=FakeLedgerStore())
+    await assert_lookup_lineage_contract(store, store)
 
 
 async def test_retrieval_store_is_a_retrieval_store(chunks: tuple[Chunk, ...]) -> None:

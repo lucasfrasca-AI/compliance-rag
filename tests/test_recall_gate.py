@@ -9,8 +9,9 @@ real `gemini-embedding-001` output served from the checked-in cache
 so the gate needs no cloud identity, no network and no model artefact, and
 nothing in it can call an LLM. Fusion is held to its floor in every cell
 (`FLOORS`), and every list of every query to its checked-in baseline, which
-fails the build by query id. Targets are on the delivered list, in
-`test_recall_gate_reranked.py`.
+fails the build by query id. Targets are on the reranked list, in
+`test_recall_gate_reranked.py`; delivered-recall (ADR-0045) is a separate
+metric with floors and no target, held per query here and per cell there.
 
 CI's `ci` job sets `REQUIRE_RECALL_GATE`, so a missing Qdrant fails there
 instead of skipping.
@@ -26,12 +27,13 @@ import sys
 
 import pytest
 
-from compliance_rag.adapters.interfaces import Candidate, Channel
+from compliance_rag.adapters.interfaces import Candidate, Channel, ScoredDocument
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingCacheMiss
 from compliance_rag.eval.golden import Category, GoldenQuery, GoldenSet, load_golden_set
 from compliance_rag.eval.golden_corpus import embedded_texts, gate_chunks
 from compliance_rag.eval.harness import golden_store
 from compliance_rag.eval.recall import (
+    DELIVERED,
     FLOORS,
     FUSED,
     LAW,
@@ -94,8 +96,34 @@ def test_an_exact_id_query_is_measured_on_the_router_lookup() -> None:
     hit = _candidate("privacy-act-1988:C1:s6/1")
     trace = RetrievalTrace(per_channel={Channel.KEYWORD: (hit,)}, fused=(hit,), reranked=())
     measured = measure_trace(query, trace)
-    assert measured.by_list == {"keyword": 1.0, FUSED: 1.0, "reranked": 0.0}
+    assert measured.by_list == {"keyword": 1.0, FUSED: 1.0, RERANKED: 0.0, DELIVERED: 0.0}
     assert measured.document_class is LAW
+
+
+def test_delivered_counts_what_a_ranked_clause_brings_and_reports_the_lists_size() -> None:
+    """ADR-0045: a ranked chapeau's paragraph is delivered, so it counts; one
+    whose chapeau wasn't ranked isn't, however the list grows."""
+    chapeau, a, b = (f"privacy-act-1988:C1:sch1/app11/1{p}" for p in ("", "/a", "/b"))
+    query = GoldenQuery(
+        id="GQ-18",
+        category=Category.CROSS_CLAUSE,
+        query="the ways personal information must be protected",
+        tenant_id="_public",
+        as_of=dt.date(2026, 1, 1),
+        expected_clause_ids=(chapeau, a, b, "privacy-act-1988:C1:sch1/app10/1"),
+    )
+    ranked = tuple(_candidate(f"privacy-act-1988:C1:s{n}") for n in range(9))
+    fused = (_candidate(chapeau), *ranked)
+    trace = RetrievalTrace(
+        per_channel={},
+        fused=fused,
+        reranked=tuple(ScoredDocument(index=i, score=-i) for i in range(len(fused))),
+        paragraphs=(_candidate(a), _candidate(b)),
+    )
+    measured = measure_trace(query, trace)
+    assert measured.by_list[RERANKED] == 1 / 4
+    assert measured.by_list[DELIVERED] == 3 / 4
+    assert measured.delivered_clauses == 12
 
 
 def test_a_drop_names_the_query_that_regressed() -> None:
@@ -182,16 +210,22 @@ def test_a_cell_with_no_floor_fails_rather_than_going_unguarded() -> None:
 
 
 def test_every_cell_has_a_floor_and_a_floor_never_exceeds_one() -> None:
-    cells = {Cell(n, c, d) for n in (FUSED, RERANKED) for c in Category for d in (LAW, POLICY)}
+    lists = (FUSED, RERANKED, DELIVERED)
+    cells = {Cell(n, c, d) for n in lists for c in Category for d in (LAW, POLICY)}
     assert set(FLOORS) == cells
     assert all(0.0 < floor <= 1.0 for floor in FLOORS.values())
 
 
-def test_targets_are_on_the_delivered_list_only() -> None:
-    """Nothing delivers fusion's order, so a fused cell has a floor and no
-    target; the reranked list carries PHASES.md's bars."""
-    assert target_of(Cell(FUSED, Category.CROSS_CLAUSE, LAW)) is None
-    assert target_of(Cell(RERANKED, Category.CROSS_CLAUSE, LAW)) == TARGETS[Category.CROSS_CLAUSE]
+def test_targets_are_on_the_reranked_list_only() -> None:
+    """Retrieval's job is to rank, so PHASES.md's bars are on the reranked top
+    10. Nothing delivers fusion's order, so a fused cell has a floor and no
+    target. Delivered-recall measures delivery, not ranking: a separate metric
+    with floors and no target (ADR-0045), so it can neither meet nor close one."""
+    for category in Category:
+        for document_class in (LAW, POLICY):
+            assert target_of(Cell(FUSED, category, document_class)) is None
+            assert target_of(Cell(DELIVERED, category, document_class)) is None
+            assert target_of(Cell(RERANKED, category, document_class)) == TARGETS[category]
     assert dict(TARGETS) == {
         Category.EXACT_ID: 1.0,
         Category.PARAPHRASE: 0.9,
@@ -200,21 +234,23 @@ def test_targets_are_on_the_delivered_list_only() -> None:
 
 
 def test_the_open_target_is_law_cross_clause() -> None:
-    """ADR-0043: today's one cell under its target. When it is met, its xfail
-    in test_recall_gate_reranked.py passes, strict xfail fails the build, and
-    raising its floor to the new value closes it here too."""
+    """ADR-0043: today's one cell under its target, on the reranked list. When
+    it is met, its xfail in test_recall_gate_reranked.py passes, strict xfail
+    fails the build, and raising its floor to the new value closes it here
+    too. Delivered-recall's 0.833 in the same cell doesn't close it (ADR-0045)."""
     assert list(OPEN_TARGETS) == [Cell(RERANKED, Category.CROSS_CLAUSE, LAW)]
 
 
 def test_a_cell_short_of_its_target_reports_its_value() -> None:
     cell = Cell(RERANKED, Category.CROSS_CLAUSE, LAW)
     now = (
-        QueryRecall("GQ-18", Category.CROSS_CLAUSE, LAW, {RERANKED: 1 / 3}),
-        QueryRecall("GQ-19", Category.CROSS_CLAUSE, LAW, {RERANKED: 1.0}),
+        QueryRecall("GQ-18", Category.CROSS_CLAUSE, LAW, {RERANKED: 1 / 3, DELIVERED: 1.0}),
+        QueryRecall("GQ-19", Category.CROSS_CLAUSE, LAW, {RERANKED: 1.0, DELIVERED: 1.0}),
     )
     assert short_of_target(now, cell) == 2 / 3
     met = (QueryRecall("GQ-19", Category.CROSS_CLAUSE, LAW, {RERANKED: 1.0}),)
     assert short_of_target(met, cell) is None
+    assert short_of_target(now, Cell(DELIVERED, Category.CROSS_CLAUSE, LAW)) is None
 
 
 def test_a_report_line_shows_a_cells_floor_and_target() -> None:
@@ -224,6 +260,11 @@ def test_a_report_line_shows_a_cells_floor_and_target() -> None:
         *("floor", "0.444,", "target", "0.8"),
     ]
     assert describe_cell(Cell(FUSED, Category.CROSS_CLAUSE, LAW), 4 / 9).endswith("target none")
+    delivered = describe_cell(Cell(DELIVERED, Category.CROSS_CLAUSE, LAW), 5 / 6)
+    assert delivered.split() == [
+        *("delivered", "cross_clause", "library_law", "0.833"),
+        *("floor", "0.833,", "target", "none"),
+    ]
 
 
 async def test_an_unsigned_golden_set_is_refused() -> None:
@@ -279,12 +320,18 @@ def results() -> tuple[QueryRecall, ...]:
 
 
 def _report(results: tuple[QueryRecall, ...]) -> None:
-    print("\nrecall@10 by category, fused gate (all lists)")
-    for category, lists in sorted(by_category(results).items()):
-        cells = "  ".join(f"{name}={value:.3f}" for name, value in sorted(lists.items()))
+    print("\nrecall@10 by category, fused gate (every ranked list)")
+    summary = by_category(results)
+    for category, lists in sorted(summary.items()):
+        cells = "  ".join(
+            f"{name}={value:.3f}" for name, value in sorted(lists.items()) if name != DELIVERED
+        )
         print(f"  {category.value:<13} {cells}")
     for cell, now in sorted(by_cell(results, FUSED).items()):
         print(f"  {describe_cell(cell, now)}")
+    print("delivered-recall by category: fusion's top 10 delivered whole, a separate metric")
+    for category, lists in sorted(summary.items()):
+        print(f"  {category.value:<13} {lists[DELIVERED]:.3f}")
     for r in results:
         if r.by_list[FUSED] < 1.0:
             print(f"  miss {r.query_id} ({r.category.value}): {r.by_list}")

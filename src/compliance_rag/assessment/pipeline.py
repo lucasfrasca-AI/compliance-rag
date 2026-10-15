@@ -219,7 +219,9 @@ class AssessmentPipeline:
             if on_retrieved is not None:
                 await on_retrieved(trace)
 
-            retrieved = [SourceClause(c.clause_id, c.text) for c in trace.ranked_candidates()]
+            # The ranked clauses, each whole: with its chapeaux and its
+            # paragraphs, never a fragment of the law (ADR-0045).
+            retrieved = [SourceClause(c.clause_id, c.text) for c in trace.delivered()]
             retrieved, fetched = await self._with_owed(
                 retrieved, tenant_id, as_of, law=law, policy_corpus=sent
             )
