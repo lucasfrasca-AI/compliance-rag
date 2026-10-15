@@ -91,7 +91,10 @@ FLOORS: Mapping[Cell, float] = {
     # The reranked gate (CI's `reranker-fidelity` job): the cross-encoder's top 10.
     Cell(RERANKED, Category.EXACT_ID, LAW): 1.0,
     Cell(RERANKED, Category.EXACT_ID, POLICY): 1.0,
-    Cell(RERANKED, Category.PARAPHRASE, LAW): 1.0,
+    # GQ-10, on CI's platform: APP 11.2 ranks below its own paragraphs, which
+    # the cross-encoder reads with 11.2's text (ADR-0045); it is delivered as
+    # their chapeau, so the delivered cell stays 1.0. Locally it ranks in.
+    Cell(RERANKED, Category.PARAPHRASE, LAW): 5 / 6,
     Cell(RERANKED, Category.PARAPHRASE, POLICY): 1.0,
     Cell(RERANKED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # GQ-18 1/3, GQ-19 1/2, GQ-20 1/2
     Cell(RERANKED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2

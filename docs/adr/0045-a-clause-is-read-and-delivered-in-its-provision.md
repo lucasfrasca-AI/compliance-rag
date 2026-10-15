@@ -59,9 +59,10 @@ recall@10 per cell, law cross-clause in full:
 | that, delivering a ranked paragraph's whole provision (its siblings too) | 1.0 | 0.5 | 1.0 | 0.833 | unchanged | 23.5 / 73 |
 
 "Other cells" are exact-ID 1.0 and paraphrase 1.0 for law and policy, and
-policy cross-clause 0.9, on the delivered list; the reranked list's cells are
-ADR-0043's in every row but (B)'s. Delivered sizes are over the 17 questions
-that aren't exact ids.
+policy cross-clause 0.9, on the delivered list. Locally the reranked list's
+cells are ADR-0043's in every row but (B)'s; on CI's platform reading in
+provision costs the reranked list one paraphrase clause (below). Delivered
+sizes are over the 17 questions that aren't exact ids.
 
 What decided it:
 
@@ -152,7 +153,17 @@ beside the reranked one:
   given. ADR-0043 already put them on "what `retrieve()` delivers"; this makes
   that literal.
 - **The reranked list keeps its floors.** A ranking regression fails there even
-  where delivery would mask it.
+  where delivery would mask it. One is lowered, by this decision and for a
+  reason it causes: law paraphrase, 1.0 to 5/6. On CI's platform (the first
+  run of this change's PR) GQ-10's APP 11.2 left the reranked ten, below its
+  own paragraphs, which the cross-encoder now reads with 11.2's text. One of
+  them, (b) "no longer needs the information", answers the question ("If we
+  no longer need someone's personal details") more exactly, and locally it
+  ranks first. 11.2 is delivered as their chapeau, so the delivered
+  cell, which carries the target, stays 1.0. Locally (int8 numerics on
+  arm64) 11.2 stays in the ten. A floor holds on both platforms, so it is the
+  lower. It is the only reranked floor this decision changes, and nothing
+  else of the reranked list may drop.
 - **An expected clause counts on the delivered list** if it was ranked in the
   top 10 or is in the provision of one that was, never because anything was
   ranked deeper. The delivered list is longer than ten, and the gate prints how
@@ -182,13 +193,16 @@ beside the reranked one:
 | cell | reranked floor | delivered floor | target (delivered) | state |
 |---|---|---|---|---|
 | exact-ID, law / policy | 1.000 / 1.000 | 1.000 / 1.000 | 1.0 | met |
-| paraphrase, law / policy | 1.000 / 1.000 | 1.000 / 1.000 | 0.9 | met |
+| paraphrase, law / policy | **0.833** (was 1.000) / 1.000 | 1.000 / 1.000 | 0.9 | met |
 | cross-clause, policy | 0.900 | 0.900 | 0.8 | met |
 | **cross-clause, law** | 0.444 | **0.833** (5/6) | 0.8 | **met** (was open at 0.444) |
 
 The fused floors are unchanged. Every delivered floor is at or above its
 target, so `OPEN_TARGETS` is empty, and the strict xfail has nothing left to
-expect. Two reranked runs on fresh collections gave the same cells.
+expect. Two local reranked runs on fresh collections gave the same cells.
+CI's platform gave the same delivered cells. In the reranked list it gave law
+paraphrase 0.833 (above) and policy cross-clause 1.0, since GQ-21's 1/1 ranks
+in there. Each floor is the lower of the two platforms.
 
 Met in clauses: one of the seven law cross-clause clauses is missing, the
 most the target allows (ADR-0043). Every expected clause delivered is brought
