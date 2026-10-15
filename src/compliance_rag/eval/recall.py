@@ -99,7 +99,7 @@ FLOORS: Mapping[Cell, float] = {
     # The fused gate (CI's `ci` job, no model): platform-exact.
     Cell(FUSED, Category.EXACT_ID, LAW): 1.0,
     Cell(FUSED, Category.EXACT_ID, POLICY): 1.0,
-    Cell(FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # target 0.95: open (GQ-10's 11.2 fused 11th)
+    Cell(FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # target 0.95: open (GQ-10's 11.2 fused 11th, #221)
     Cell(FUSED, Category.PARAPHRASE, POLICY): 1.0,
     Cell(FUSED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # GQ-18 1/3, GQ-19 1/2, GQ-20 1/2
     Cell(FUSED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-23 1/2

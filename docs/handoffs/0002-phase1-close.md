@@ -42,10 +42,23 @@ Commit that file, and `tests/test_recorded_answers.py` re-verifies every recorde
 
 | Criterion | Status | Evidence |
 |---|---|---|
-| recall@10 exact-ID = 1.0, paraphrase ≥ 0.9, cross-clause ≥ 0.8 | **Met** | On what `retrieve()` delivers (cross-encoder over the top 20): **1.000 / 1.000 / 0.896**. Enforced in CI's `reranker-fidelity` job (`tests/test_recall_gate_reranked.py`). The fused gate holds exact-ID and paraphrase plus per-query baselines on every build. Fusion alone scores 0.792 on cross-clause; dense alone 0.896 |
+| recall@10 exact-ID = 1.0, paraphrase ≥ 0.9, cross-clause ≥ 0.8 | **Met on the excerpt; on the whole compilation, one target open, a known gap (below)** | Superseded by ADR-0043: see *Known gaps at exit*. On the excerpt, on what `retrieve()` delivers (cross-encoder over the top 20): **1.000 / 1.000 / 0.896**. Enforced in CI's `reranker-fidelity` job (`tests/test_recall_gate_reranked.py`). The fused gate holds exact-ID and paraphrase plus per-query baselines on every build. Fusion alone scores 0.792 on cross-clause; dense alone 0.896 |
 | Verifier pass rate 100% on the golden set, with a deliberately bad citation proven to block | **Bad citation: met. Pass rate: blocked** | `test_a_deliberately_bad_citation_blocks`. A retired or withdrawn version blocks even when retrieval leaks it (ADR-0021 mechanism 3); a verifier blind to the ledger fails those tests. The golden-set rate needs the live run |
 | Cost per query logged; projected < $60/month at 2,000 | **Logging met. Number blocked** | One ledger `usage` row per generation call, with real tokens, cost and `trace_id`, on Postgres and the fake. The projection code is pinned by a test. Estimate until measured (below) |
 | Reranker benchmark checked in; winner is the default | **Met** | `docs/research/reranker-benchmark.md`, ADR-0022 |
+
+## Known gaps at exit
+
+*Added 2026-10-15.* These are the human's decisions on ADR-0043 (#220): "Phase 1 can exit with the cross-clause target open — it's a target, not a floor, and holding a phase for an improvement with no deadline is how phases never close. Record it as a known gap in the handoff."
+
+A target is not a floor. Every cell's floor is enforced on every build, so nothing can regress. The targets below are open, each a strict xfail that fails CI the day it is met, until its floor is raised to meet it. Neither holds Phase 1's exit.
+
+| Gap | Today | Target | Why it is open | Working on it |
+|---|---|---|---|---|
+| **Law cross-clause, ranked recall@10** (reranked top 10, the retrieval metric) | **4/9** (0.444): GQ-18 1/3, GQ-19 1/2, GQ-20 1/2 | 0.8: at most one of the seven expected clauses missing | GQ-18's APP 11.1(a) and (b), and GQ-20's "agency means:", are fragments, and none is in the fused top 20. GQ-19's APP 10.1 is missed because no chunk carries "APP 10" | ADR-0043; #200 (the cell); #206 (GQ-19: a reference in the question); #212 (headings never captured) |
+| **Law paraphrase, fused recall@10** | **5/6** (0.833): GQ-10 | 0.95 (given 2026-10-15, #220) | GQ-10's APP 11.2 is 6th by dense, absent from sparse's top 50, and fused 11th. The reranker recovers it, so ranked paraphrase is 1.0 | ADR-0043; #221 |
+
+**Delivered-recall.** For law cross-clause it is 0.833 (ADR-0045): the ranked ten each delivered whole, 17 clauses a question on average. It is a separate metric with floors and no target, and it doesn't close the first gap.
 
 ## Every number from the phase
 
