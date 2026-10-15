@@ -367,11 +367,12 @@ async def test_for_acme_the_app_11_2_paragraphs_are_in_scope() -> None:
 
 async def test_every_expected_law_clause_the_golden_set_names_is_in_acmes_scope() -> None:
     """Every law clause a golden label expects, checked against Track A's
-    scope for Acme on GA-01's facts. The one left out is APP 11.3, which no
-    obligation cites (it is one of the mapping's listed non-obligations).
-    Before #163 the scope also left out APP 11.1(a) and (b), which GQ-09, 13
-    and 18 expect: their recall under Acme's scope on real Qdrant was 0, 0
-    and 0.333."""
+    scope for Acme on GA-01's facts: none is left out. Before #182's
+    qualifiers APP 11.3 was, as no obligation cited it (GQ-14's recall under
+    Acme's scope was 0.0); it now travels with APP 11.1 and 11.2 as their
+    qualifier (ADR-0044). Before #163 the scope also left out APP 11.1(a) and
+    (b), which GQ-09, 13 and 18 expect: their recall under Acme's scope on
+    real Qdrant was 0, 0 and 0.333."""
     from compliance_rag.eval.applicability import load_applicability_set
     from compliance_rag.eval.golden import load_golden_set
     from compliance_rag.graph.mappings import load_mapping_set
@@ -390,7 +391,7 @@ async def test_every_expected_law_clause_the_golden_set_names_is_in_acmes_scope(
         if c.startswith("privacy-act-1988:")
     }
     left_out = {c.split(":")[2] for c in expected if not law.admits(Scope.PUBLIC, c)}
-    assert left_out == {"sch1/app11/3"}
+    assert left_out == set()
 
 
 async def test_a_quote_from_an_admitted_paragraph_verifies() -> None:
