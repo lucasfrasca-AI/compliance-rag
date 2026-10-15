@@ -3,118 +3,143 @@
   "note": "Per-query recall@10 for every list, on the gate corpus (the whole compilation's selected clauses and the Acme policies, ADR-0043). Written only by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally \u2014 a deliberate, reviewed change, never to make a drop pass.",
   "recall_at_10": {
     "GQ-01": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-02": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-03": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-04": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-05": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-06": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-07": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-08": {
+      "delivered": 1.0,
       "fused": 1.0,
       "keyword": 1.0
     },
     "GQ-09": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-10": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 0.0,
       "sparse": 0.0
     },
     "GQ-11": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-12": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-13": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-14": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-15": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-16": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 0.0
     },
     "GQ-17": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-18": {
+      "delivered": 1.0,
       "dense": 0.3333333333333333,
       "fused": 0.3333333333333333,
       "sparse": 0.3333333333333333
     },
     "GQ-19": {
+      "delivered": 0.5,
       "dense": 0.0,
       "fused": 0.5,
       "sparse": 0.5
     },
     "GQ-20": {
+      "delivered": 0.5,
       "dense": 0.5,
       "fused": 0.5,
       "sparse": 0.5
     },
     "GQ-21": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-22": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-23": {
+      "delivered": 0.5,
       "dense": 1.0,
       "fused": 0.5,
       "sparse": 0.5
     },
     "GQ-24": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0
     },
     "GQ-25": {
+      "delivered": 1.0,
       "dense": 1.0,
       "fused": 1.0,
       "sparse": 1.0

@@ -229,12 +229,15 @@ def test_targets_are_on_the_delivered_list_only() -> None:
     }
 
 
-def test_the_open_target_is_law_cross_clause() -> None:
-    """ADR-0043: today's one cell under its target, on the delivered list
-    since ADR-0045 (2/3 against 0.8, #200). When it is met, its xfail in
-    test_recall_gate_reranked.py passes, strict xfail fails the build, and
-    raising its floor to the new value closes it here too."""
-    assert list(OPEN_TARGETS) == [Cell(DELIVERED, Category.CROSS_CLAUSE, LAW)]
+def test_no_target_is_open() -> None:
+    """ADR-0043 opened one target, law cross-clause on the delivered list.
+    ADR-0045 met it (5/6 against 0.8, #200) and its floor was raised to the
+    new value, which closes it: every delivered cell's floor is at or above
+    its target, so a cell under its target fails its floor."""
+    assert OPEN_TARGETS == ()
+    for cell, floor in FLOORS.items():
+        target = target_of(cell)
+        assert target is None or floor >= target, cell
 
 
 def test_a_cell_short_of_its_target_reports_its_value() -> None:
@@ -249,10 +252,10 @@ def test_a_cell_short_of_its_target_reports_its_value() -> None:
 
 
 def test_a_report_line_shows_a_cells_floor_and_target() -> None:
-    line = describe_cell(Cell(DELIVERED, Category.CROSS_CLAUSE, LAW), 2 / 3)
+    line = describe_cell(Cell(DELIVERED, Category.CROSS_CLAUSE, LAW), 5 / 6)
     assert line.split() == [
-        *("delivered", "cross_clause", "library_law", "0.667"),
-        *("floor", "0.667,", "target", "0.8"),
+        *("delivered", "cross_clause", "library_law", "0.833"),
+        *("floor", "0.833,", "target", "0.8"),
     ]
     assert describe_cell(Cell(RERANKED, Category.CROSS_CLAUSE, LAW), 4 / 9).endswith("target none")
     assert describe_cell(Cell(FUSED, Category.CROSS_CLAUSE, LAW), 4 / 9).endswith("target none")

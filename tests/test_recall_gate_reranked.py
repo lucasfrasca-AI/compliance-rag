@@ -115,7 +115,9 @@ def test_delivered_recall_holds_its_floor_in_every_cell(
 )
 def test_an_open_target_is_met(results: tuple[QueryRecall, ...], cell: Cell) -> None:
     """Expected to fail until the work is done; `raises=AssertionError`, so a
-    broken measurement errors instead of passing as an expected failure."""
+    broken measurement errors instead of passing as an expected failure.
+    With no target open (ADR-0045 closed the last, #200) the set is empty and
+    pytest skips it; the mechanism stays for the next target opened."""
     assert short_of_target(results, cell) is None, (
         f"{cell}: {by_cell(results, cell.list_name)[cell]:.3f}"
     )

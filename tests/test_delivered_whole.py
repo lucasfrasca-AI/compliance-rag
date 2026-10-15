@@ -1,7 +1,9 @@
-"""A ranked library-law clause is delivered whole (#200, ADR-0045): with the
-clauses of its provision that introduce it (its chapeaux) and that it
-introduces (its paragraphs), fetched by containment and never ranked. The
-reranker's top k is what it was; what generation is given is `delivered()`.
+"""A library-law clause is read and delivered in its provision (#200,
+ADR-0045). The cross-encoder reads each fused candidate after the clauses that
+introduce it (its chapeaux); the ranked top k are delivered whole, each with
+its chapeaux and the clauses it introduces (its paragraphs), fetched by
+containment and never ranked. What generation is given is `delivered()`, each
+clause in its own canonical text.
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import Candidate, LawScope
+from compliance_rag.adapters.interfaces import Candidate, LawScope, ScoredDocument
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
+from compliance_rag.corpus.chunker import CHUNK_MAX_TOKENS
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     Chunk,
@@ -31,10 +34,11 @@ from compliance_rag.corpus.models import (
     clause_ancestors,
     in_same_provision,
 )
+from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.golden_corpus import LAW_INSTRUMENT_ID, gate_law_clauses
 from compliance_rag.eval.recall import NoRerank
-from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace, read_in_provision
 from compliance_rag.settings import REGION
 from compliance_rag.verifier.citations import Verifier
 from tests.conftest import ALL_LAW
@@ -144,6 +148,79 @@ def test_on_the_whole_compilation_only_s6_1_holds_clauses_outside_its_provision(
         a for c in ids for a in clause_ancestors(c) if a in ids and not in_same_provision(a, c)
     }
     assert crossing == {f"{LAW_INSTRUMENT_ID}:C2026C00227:s6/1"}
+
+
+# ---- the cross-encoder reads a candidate in its provision ----------------------
+
+
+class Reading(NoRerank):
+    """Fusion's order, recording what the cross-encoder would read."""
+
+    def __init__(self) -> None:
+        self.read: list[tuple[str, ...]] = []
+
+    async def rerank(
+        self, query: str, documents: tuple[str, ...], *, top_k: int
+    ) -> tuple[ScoredDocument, ...]:
+        self.read.append(documents)
+        return await super().rerank(query, documents, top_k=top_k)
+
+
+async def _read(query: str, tenant_id: str = PUBLIC_TENANT_ID) -> tuple[str, ...]:
+    reading = Reading()
+    store = FakeRetrievalStore(_chunks(), ledger=FakeLedgerStore())
+    await RetrievalPipeline(store, reading).retrieve(query, tenant_id, AS_OF, law=ALL_LAW)
+    (documents,) = reading.read
+    return documents
+
+
+async def test_the_cross_encoder_reads_a_paragraph_after_its_chapeau() -> None:
+    """GQ-18's (a) and GQ-20's agency paragraphs are fragments read alone:
+    their meaning is in the words that introduce them."""
+    assert await _read("misuse") == (f"{TEXTS['sch1/app11/1']} {TEXTS['sch1/app11/1/a']}",)
+    assert await _read("incorporated") == (
+        " ".join(TEXTS[p] for p in ("s6/1/agency", "s6/1/agency/c", "s6/1/agency/c/i")),
+    )
+
+
+async def test_the_cross_encoder_reads_a_clause_with_no_chapeau_as_it_is() -> None:
+    """Nothing introduces APP 11.1 here, and a Definition's own clause isn't
+    read after s 6(1); a tenant's clause is read as it is."""
+    assert await _read("protect") == (TEXTS["sch1/app11/1"],)
+    assert await _read("agency") == (TEXTS["s6/1/agency"],)
+    assert await _read("seven", tenant_id="acme") == ("account details are kept seven years.",)
+
+
+async def test_what_is_delivered_is_each_clauses_own_text_not_what_was_read() -> None:
+    trace = await _retrieve("misuse")
+    assert [(c.clause_id, c.text) for c in trace.delivered()] == [
+        (CHAPEAU, TEXTS["sch1/app11/1"]),
+        (PARA_A, TEXTS["sch1/app11/1/a"]),
+    ]
+
+
+def test_read_in_provision_takes_only_the_chapeaux_it_is_given() -> None:
+    """Out of the law scope or not in force, a chapeau isn't in the lineage
+    the store returns, and the candidate is read as it is."""
+    candidate = Candidate(chunk_id=PARA_A, clause_id=PARA_A, text="from misuse", score=0.0)
+    assert read_in_provision(candidate, ()) == "from misuse"
+    chapeau = Candidate(chunk_id=CHAPEAU, clause_id=CHAPEAU, text="to protect it:", score=1.0)
+    tenth = Candidate(chunk_id=TENTH, clause_id=TENTH, text="not a chapeau", score=1.0)
+    assert read_in_provision(candidate, (tenth, chapeau)) == "to protect it: from misuse"
+
+
+def test_every_clause_of_the_compilation_read_in_its_provision_fits_the_reranker_window() -> None:
+    """The chunk budget (`CHUNK_MAX_TOKENS`, by the reranker's own tokenizer)
+    holds for what the cross-encoder reads, a clause after its chapeaux, so the
+    service never refuses a candidate for its length (ADR-0045). 115 at most
+    on C2026C00227, against 420."""
+    clauses = gate_law_clauses()
+    as_candidates = tuple(
+        Candidate(chunk_id=c.clause_id, clause_id=c.clause_id, text=c.canonical_text, score=0.0)
+        for c in clauses
+    )
+    longest = max(count_reranker_tokens(read_in_provision(c, as_candidates)) for c in as_candidates)
+    assert longest <= CHUNK_MAX_TOKENS
 
 
 # ---- retrieve(): what a ranked clause brings with it ---------------------------

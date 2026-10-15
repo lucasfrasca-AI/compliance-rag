@@ -100,14 +100,16 @@ FLOORS: Mapping[Cell, float] = {
     Cell(DELIVERED, Category.EXACT_ID, POLICY): 1.0,
     Cell(DELIVERED, Category.PARAPHRASE, LAW): 1.0,
     Cell(DELIVERED, Category.PARAPHRASE, POLICY): 1.0,
-    Cell(DELIVERED, Category.CROSS_CLAUSE, LAW): 2
-    / 3,  # GQ-19 1/2, GQ-20 1/2; target 0.8 open (#200)
+    # Target 0.8, met (#200): GQ-18's (a) and (b) come with APP 11.1, and GQ-20's
+    # "agency means:" with its paragraph (ca), which the cross-encoder now reads
+    # in its provision. Still missed: GQ-19's APP 10.1 (#200's diagnosis, ADR-0045).
+    Cell(DELIVERED, Category.CROSS_CLAUSE, LAW): 5 / 6,
     Cell(DELIVERED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
 }
 """What the gate achieves on the whole compilation (ADR-0043, measured
 2026-10-15; the delivered cells ADR-0045, the same day): enforced, so any drop
 in any cell fails. Raised deliberately when recall improves, never lowered to
-let a drop pass."""
+let a drop pass. Every delivered cell now meets its target, so none is open."""
 
 
 def target_of(cell: Cell) -> float | None:
@@ -123,7 +125,8 @@ OPEN_TARGETS: tuple[Cell, ...] = tuple(
     if (target := target_of(cell)) is not None and _under(floor, target)
 )
 """Cells whose target is above what the gate achieves: what Phase 1 still
-needs (ADR-0043)."""
+needs (ADR-0043). Empty since ADR-0045 closed law cross-clause (#200); a cell
+that falls under its target again fails its floor first."""
 
 RECALL_BASELINE_PATH = (
     Path(__file__).resolve().parents[3] / "corpus" / "golden" / "recall_baseline.json"
