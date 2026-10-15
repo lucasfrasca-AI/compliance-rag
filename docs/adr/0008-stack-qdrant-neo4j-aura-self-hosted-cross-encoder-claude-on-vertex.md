@@ -1,6 +1,7 @@
 # ADR-0008 — Stack: Qdrant, Neo4j Aura, self-hosted cross-encoder, Claude on Vertex
 
-- Status: accepted
+- Status: accepted. Amended by ADR-0046 (#177): Qdrant scores dense and
+  sparse, and the adapter fuses them with RRF, not Qdrant's native RRF
 - Date: 2026-09-20
 - Decision ID: `D-07` (`DECISIONS.md`)
 

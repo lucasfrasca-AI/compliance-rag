@@ -5,17 +5,20 @@ Two steps, both pure, shared by `FakeRetrievalStore` and
 
 1. **The channel cut** (`cut`): a channel's candidates in `(-score, chunk_id)`
    order, then its first `limit`. A tie straddling the cut keeps its lowest
-   `chunk_id`s, and tied candidates take their places in `chunk_id` order,
+   `chunk_id`s, and tied candidates take their ranks in `chunk_id` order,
    whichever order the store found them in.
 2. **Reciprocal rank fusion** (`reciprocal_rank_fusion`) over those cut lists,
    in the same order and cut the same way. A candidate's fused score comes
-   from its places in the cut lists, so it depends on the order of step 1 and
+   from its ranks in the cut lists, so it depends on the order of step 1 and
    on nothing else.
 
 Fusion used to run inside Qdrant (D-07's "native RRF"). Qdrant's own order
 among equal channel scores decided which tied candidate entered a channel's
-list and at which place, so it decided fused scores too (#177). Qdrant still
+list and at which rank, so it decided fused scores too (#177). Qdrant still
 scores each channel; the order among equal scores is now ours.
+
+Not a service adapter: it lives here, beside `interfaces.py`, because it is
+part of what the `RetrievalStore` contract promises, and both stores apply it.
 """
 
 from __future__ import annotations
@@ -25,23 +28,24 @@ from collections.abc import Iterable, Mapping
 from compliance_rag.adapters.interfaces import Candidate, Channel
 
 RRF_K = 2
-"""A candidate scores 1 / (`RRF_K` + its place) from each list it is in,
-counting places from 0: 1/2 for a list's first. This is Qdrant's own default
-for its native RRF, measured on v1.19.1, kept when fusion moved out of Qdrant
+"""A candidate scores 1 / (`RRF_K` + its rank) from each list it is in, with
+ranks counted from 0: 1/2 for a list's first. This is Qdrant's own default for
+its native RRF, measured on v1.19.1 and checked against it on every build
+(`test_qdrant_retrieval_store.py`), kept when fusion moved out of Qdrant
 (ADR-0046). A fused list with no tie in either channel therefore keeps the
 order native RRF gave it."""
 
 
-def in_order(candidate: Candidate) -> tuple[float, str]:
+def _in_order(candidate: Candidate) -> tuple[float, str]:
     """The `RetrievalStore` order: score descending, then `chunk_id` ascending."""
     return (-candidate.score, candidate.chunk_id)
 
 
 def cut(candidates: Iterable[Candidate], limit: int) -> tuple[Candidate, ...]:
-    """The first `limit` of `candidates` in `in_order`. Given every candidate
-    that ties with the one at the cut, the result doesn't depend on the order
-    `candidates` came in."""
-    return tuple(sorted(candidates, key=in_order)[: max(limit, 0)])
+    """The first `limit` of `candidates` in `(-score, chunk_id)` order. Given
+    every candidate that ties with the one at the cut, the result doesn't
+    depend on the order `candidates` came in."""
+    return tuple(sorted(candidates, key=_in_order)[:limit])
 
 
 def reciprocal_rank_fusion(
@@ -53,8 +57,8 @@ def reciprocal_rank_fusion(
     scores: dict[str, float] = {}
     first_seen: dict[str, Candidate] = {}
     for candidates in per_channel.values():
-        for place, candidate in enumerate(candidates):
-            scores[candidate.chunk_id] = scores.get(candidate.chunk_id, 0.0) + 1.0 / (RRF_K + place)
+        for rank, candidate in enumerate(candidates):
+            scores[candidate.chunk_id] = scores.get(candidate.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
             first_seen.setdefault(candidate.chunk_id, candidate)
     return cut(
         (
@@ -69,3 +73,8 @@ def reciprocal_rank_fusion(
         ),
         limit,
     )
+
+
+def scored(candidates: Iterable[Candidate]) -> list[str]:
+    """A list as a span attribute: `chunk_id:score`, in its order."""
+    return [f"{c.chunk_id}:{c.score:.4f}" for c in candidates]

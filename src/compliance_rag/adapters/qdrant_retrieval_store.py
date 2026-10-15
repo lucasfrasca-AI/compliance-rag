@@ -5,11 +5,12 @@ Collection `clauses` (`Settings.qdrant_collection`): a named dense vector
 Qdrant scores each channel; `search` cuts each channel's list and fuses the
 two with RRF itself (`adapters.fusion`, ADR-0046, amending D-07's "native
 RRF"), because Qdrant's own order among equal scores decided which tied
-candidates entered fusion and the fused scores they got (#177). Payload indexes on `clause_id`,
-`tenant_id`, `scope`, `user_id` (keyword) and `valid_from`/`valid_to`
-(integer epoch days — `corpus.models.epoch_days`; `valid_to` is never null,
-`CONTEXT.md`: Bitemporal, so the range side of every filter below is one
-unconditional `Range`, never a range-or-is-null pair).
+candidates entered fusion and the fused scores they got (#177).
+
+Payload indexes on `clause_id`, `tenant_id`, `scope`, `user_id` (keyword) and
+`valid_from`/`valid_to` (integer epoch days — `corpus.models.epoch_days`;
+`valid_to` is never null, `CONTEXT.md`: Bitemporal, so the range side of every
+filter below is one unconditional `Range`, never a range-or-is-null pair).
 
 Sparse vectors are always produced client-side via `fastembed`'s `Qdrant/bm25`
 model, not Qdrant Cloud's server-side inference: the sparse VECTOR this
@@ -77,7 +78,7 @@ from qdrant_client.conversions.common_types import PointId
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from compliance_rag import telemetry
-from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
+from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion, scored
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
     Candidate,
@@ -793,35 +794,34 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             user_id=user_id,
         )
         (dense_vector,) = await self._embedder.embed((query,))
-        sparse_vector = _encode_query(query)
+        queries: dict[Channel, list[float] | models.SparseVector] = {
+            Channel.DENSE: list(dense_vector),
+            Channel.SPARSE: _encode_query(query),
+        }
 
         # Qdrant scores each channel; the order among equal scores, which
-        # decides who enters a channel's list and at which place, and so the
+        # decides who enters a channel's list and at which rank, and so the
         # fused scores, is ours (`fusion`, #177, ADR-0046).
         with telemetry.span(
             "qdrant.search",
+            query=query,
             **{"retrieval.collection": self._collection_name, "retrieval.limit": limit},
         ) as current:
-            (dense, dense_depth), (sparse, sparse_depth) = await asyncio.gather(
-                self._channel(
-                    Channel.DENSE, list(dense_vector), query_filter=query_filter, limit=limit
-                ),
-                self._channel(
-                    Channel.SPARSE, sparse_vector, query_filter=query_filter, limit=limit
-                ),
+            read = await asyncio.gather(
+                *(
+                    self._channel(channel, vector, query_filter=query_filter, limit=limit)
+                    for channel, vector in queries.items()
+                )
             )
-            per_channel = {Channel.DENSE: dense, Channel.SPARSE: sparse}
+            per_channel: dict[Channel, tuple[Candidate, ...]] = {}
             # Both channels are logged before fusion (CLAUDE.md), with how
             # deep each was read to settle a tie at its cut.
-            for channel, candidates in per_channel.items():
-                current.set_attribute(
-                    f"retrieval.channel.{channel.value}",
-                    [f"{c.chunk_id}:{c.score:.4f}" for c in candidates],
-                )
-            current.set_attribute("retrieval.channel_depth.dense", dense_depth)
-            current.set_attribute("retrieval.channel_depth.sparse", sparse_depth)
+            for channel, (candidates, depth) in zip(queries, read, strict=True):
+                per_channel[channel] = candidates
+                current.set_attribute(f"retrieval.channel.{channel.value}", scored(candidates))
+                current.set_attribute(f"retrieval.channel_depth.{channel.value}", depth)
             fused = reciprocal_rank_fusion(per_channel, limit)
-            current.set_attribute("retrieval.fused", [f"{c.chunk_id}:{c.score:.4f}" for c in fused])
+            current.set_attribute("retrieval.fused", scored(fused))
         return RetrievalResult(fused=fused, per_channel=per_channel)
 
     async def _channel(

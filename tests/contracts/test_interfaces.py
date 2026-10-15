@@ -532,13 +532,13 @@ def tie_chunks() -> tuple[Chunk, ...]:
 
 async def assert_channel_cut_contract(store: RetrievalStore) -> None:
     """Which of a channel's tied candidates it hands to fusion, and at which
-    places, is `chunk_id` order, whichever store answers (#177, ADR-0046). So
+    ranks, is `chunk_id` order, whichever store answers (#177, ADR-0046). So
     the fused set and the fused scores are too.
 
     Against a store seeded with `tie_chunks()` and, for dense vectors,
     `ORDER_VECTORS`. With `limit` 3 a channel's cut falls inside the five-way
     tie, after its second member: the two it keeps are the two lowest
-    `chunk_id`s, and they take the 2nd and 3rd places in that order."""
+    `chunk_id`s, and they take the 2nd and 3rd ranks in that order."""
 
     async def search(limit: int) -> RetrievalResult:
         return await store.search(
@@ -560,21 +560,21 @@ async def assert_channel_cut_contract(store: RetrievalStore) -> None:
         # in each channel the five tie exactly, below the best.
         best, *tied = (c.score for c in candidates)
         assert len(tied) == len(TIED) and set(tied) == {tied[0]} and best > tied[0], channel
-        # Tied candidates take their places in `chunk_id` order.
+        # Tied candidates take their ranks in `chunk_id` order.
         assert ids(candidates) == [BEST_IN_BOTH, *TIED], channel
 
-    # A fused score comes from places alone, so the five tied chunks' places,
+    # A fused score comes from ranks alone, so the five tied chunks' ranks,
     # `chunk_id` order in both channels, give them five different fused scores.
     assert ids(full.fused) == [BEST_IN_BOTH, *TIED]
-    assert [c.score for c in full.fused] == [2 / (RRF_K + place) for place in range(6)]
+    assert [c.score for c in full.fused] == [2 / (RRF_K + rank) for rank in range(6)]
 
     # The cut inside the tie: each channel keeps the two lowest `chunk_id`s,
-    # and fusion has those two only, at the scores those places give.
+    # and fusion has those two only, at the scores those ranks give.
     straddled = await search(3)
     for channel in (Channel.DENSE, Channel.SPARSE):
         assert ids(straddled.per_channel[channel]) == [BEST_IN_BOTH, *TIED[:2]], channel
     assert ids(straddled.fused) == [BEST_IN_BOTH, *TIED[:2]]
-    assert [c.score for c in straddled.fused] == [2 / (RRF_K + place) for place in range(3)]
+    assert [c.score for c in straddled.fused] == [2 / (RRF_K + rank) for rank in range(3)]
 
     # And every time, so a store that keeps a tie at random can't match by luck.
     for _ in range(10):

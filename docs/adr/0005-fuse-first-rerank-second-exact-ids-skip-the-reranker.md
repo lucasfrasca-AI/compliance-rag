@@ -1,6 +1,8 @@
 # ADR-0005 — Fuse first, rerank second; exact IDs skip the reranker
 
-- Status: accepted
+- Status: accepted. Amended by ADR-0046 (#177): Qdrant scores each channel,
+  and the retrieval store cuts each channel's list and fuses them with RRF
+  itself, not inside Qdrant
 - Date: 2026-09-20
 - Decision ID: `D-04` (`DECISIONS.md`)
 

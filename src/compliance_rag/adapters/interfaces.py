@@ -878,7 +878,7 @@ class RetrievalStore(ABC):
         to `limit` only after that order is applied: a tie at the cut keeps
         the lowest `chunk_id`s (#160, #177). `fused` is RRF over the
         `per_channel` lists exactly as returned (`adapters.fusion`). So which
-        tied candidates a channel hands to fusion, at which places, and the
+        tied candidates a channel hands to fusion, at which ranks, and the
         fused scores that follow come from the channel scores alone, never
         from the order a store found them in (ADR-0046)."""
 

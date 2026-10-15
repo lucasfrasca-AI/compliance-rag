@@ -34,8 +34,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import (
+    DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
     QdrantRetrievalStore,
     _chunk_point_id,  # pyright: ignore[reportPrivateUsage] — addresses one point directly
+    _encode_query,  # pyright: ignore[reportPrivateUsage] — the question's sparse vector, for native RRF
 )
 from compliance_rag.corpus.models import Chunk, Scope
 from tests.conftest import ALL_LAW, qdrant_reachable
@@ -130,10 +133,10 @@ async def test_qdrant_satisfies_the_lookup_lineage_contract(store: QdrantRetriev
 
 async def test_qdrant_orders_equal_scores_by_chunk_id() -> None:
     """#160 on the real adapter. Two chunks the channels rank in mirror image
-    get exactly equal RRF scores, and Qdrant returns them in either order from
-    one call to the next, and keeps either at a cut that falls between them:
-    before the fix this failed. The expected order is asserted, not just that
-    two calls agree."""
+    get exactly equal RRF scores. Qdrant's native RRF returned them in either
+    order from one call to the next, and kept either at a cut that fell
+    between them: before #160 this failed. The expected order is asserted,
+    not just that two calls agree."""
     from tests.contracts.test_interfaces import (
         ORDER_VECTORS,
         ScriptedEmbedder,
@@ -172,6 +175,63 @@ async def test_qdrant_breaks_a_tie_at_a_channels_cut_by_chunk_id() -> None:
         for chunk in tie_chunks():
             await store.upsert_chunks((chunk,))
         await assert_channel_cut_contract(store)
+
+
+async def test_fusion_scores_as_qdrants_native_rrf_does() -> None:
+    """ADR-0046 keeps Qdrant's own k (`RRF_K`) and rank origin, so where no
+    channel has a tie the adapter's fused list is the one native RRF gives:
+    the same candidates at the same scores (native RRF is float32), in the
+    same order once a fused tie is broken by `chunk_id`. The contract can't
+    check this: it shares `RRF_K` with both stores."""
+    from qdrant_client import AsyncQdrantClient, models
+
+    from tests.contracts.test_interfaces import (
+        ORDER_QUERY,
+        ORDER_VECTORS,
+        ScriptedEmbedder,
+        order_chunks,
+    )
+
+    client = AsyncQdrantClient(url=_QDRANT_URL)
+    name = f"native-rrf-{uuid.uuid4().hex[:8]}"
+    store = QdrantRetrievalStore(
+        client,
+        collection_name=name,
+        embedder=ScriptedEmbedder(ORDER_VECTORS),
+        ledger=FakeLedgerStore(),
+    )
+    try:
+        await store.ensure_ready()
+        await store.upsert_chunks(order_chunks())
+        ours = await store.search(
+            ORDER_QUERY,
+            law=ALL_LAW,
+            tenant_id="_public",
+            scopes=(Scope.PUBLIC,),
+            as_of=TODAY,
+            limit=10,
+        )
+        native = await client.query_points(
+            name,
+            prefetch=[
+                models.Prefetch(
+                    query=list(ORDER_VECTORS[ORDER_QUERY]), using=DENSE_VECTOR_NAME, limit=10
+                ),
+                models.Prefetch(
+                    query=_encode_query(ORDER_QUERY), using=SPARSE_VECTOR_NAME, limit=10
+                ),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=10,
+            with_payload=["chunk_id"],
+        )
+    finally:
+        await client.delete_collection(name)
+        await client.close()
+    native_scores = {str((p.payload or {})["chunk_id"]): p.score for p in native.points}
+    assert {c.chunk_id: c.score for c in ours.fused} == pytest.approx(native_scores, rel=1e-6)
+    native_order = sorted(native_scores, key=lambda chunk_id: (-native_scores[chunk_id], chunk_id))
+    assert [c.chunk_id for c in ours.fused] == native_order
 
 
 async def test_the_search_span_logs_each_channel_and_how_deep_it_was_read(

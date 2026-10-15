@@ -231,8 +231,8 @@ async def test_on_real_qdrant_the_prefix_slots_go_to_law() -> None:
       recall gate measures), since all of Acme's own documents are in the
       prefix: the same fused scores, and the same clauses above the tenth. So
       the answer path's law recall is now the gate's own, which CI pins per
-      question. Qdrant orders candidates with equal RRF scores differently
-      from call to call, so tied places are compared by score, not by clause.
+      question. Tied places are compared by score, not by clause: their
+      order was Qdrant's own until #160 and #177 (ADR-0046).
 
     Printed, not pinned: before. Its tenth place sits on such ties between law
     and policy candidates, so a question's before moves by a clause between

@@ -446,8 +446,8 @@ async def test_on_real_qdrant_acmes_scope_now_retrieves_the_paragraphs_its_label
     Mean recall@10 of the expected law was 0.593 before #163 and 0.796 after.
     Pinned: GQ-09 and GQ-13, which expect APP 11.1(a) and (b), now find them
     (both were 0), and the mean stays above 0.75. Per question, a clause on
-    an RRF tie at the tenth place can move between runs (#160), so the rest
-    is printed, not pinned."""
+    an RRF tie at the tenth place could move between runs until #160 and
+    #177 (ADR-0046), so the rest is printed, not pinned."""
     from compliance_rag.adapters.interfaces import PolicyCorpus
     from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
     from compliance_rag.assessment.policies import tenant_policies
