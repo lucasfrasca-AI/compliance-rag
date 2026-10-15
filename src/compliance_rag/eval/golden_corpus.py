@@ -1,14 +1,23 @@
-"""The corpus the golden set is labelled against (issue #27/#28): the Privacy
-Act excerpt as library law under `_public`, and the six synthetic policies as
-`acme`'s own documents — parsed and chunked exactly as ingest does it.
+"""The corpora the golden set is labelled against (issue #27/#28, #180), parsed
+and chunked exactly as ingest does it. Two of them, one law corpus each, both
+with the six synthetic policies as `acme`'s own documents:
 
-`tests/test_golden_set.py` proves every label resolves here; the recall gate
-(`tests/test_recall_gate.py`) loads these chunks into a real Qdrant server and
-measures retrieval against the labels.
+- **The gate corpus** (`gate_chunks()`): the whole compilation's 779 selected
+  clauses as library law under `_public` — what production retrieves over. The
+  recall gates (`tests/test_recall_gate.py`, `tests/test_recall_gate_reranked.py`)
+  load it into a real Qdrant server and measure retrieval against the labels.
+- **The golden excerpt** (`golden_chunks()`): the 75-clause Privacy Act excerpt
+  instead. A subset of the gate's, same ids and same text
+  (`tests/test_compilation_clauses.py`); small, and parsed from a checked-in
+  fixture, so unit and contract tests, and numbers pinned on it (ADR-0035's),
+  stay on it.
+
+`tests/test_golden_set.py` proves every label resolves in both.
 """
 
 from __future__ import annotations
 
+from functools import cache
 from pathlib import Path
 
 from compliance_rag.corpus.chunker import chunk_clauses
@@ -17,6 +26,7 @@ from compliance_rag.corpus.parser import parse_compilation
 from compliance_rag.corpus.policy_parser import parse_policy
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.eval.golden import load_golden_set
 
 FIXTURES = Path(__file__).resolve().parents[3] / "docs" / "research" / "fixtures"
@@ -37,15 +47,8 @@ POLICY_INSTRUMENT_IDS = {
 """The instrument ids the golden set's policy labels use (agreed for #27)."""
 
 
-def golden_clauses() -> tuple[ClauseRecord, ...]:
-    law = parse_compilation(
-        LAW_FIXTURE.read_text(encoding="utf-8"),
-        instrument_id=LAW_INSTRUMENT_ID,
-        version_id=LAW_VERSION_ID,
-        tenant_id=PUBLIC_TENANT_ID,
-        scope=Scope.PUBLIC,
-    ).clauses
-    policies = tuple(
+def _policy_clauses() -> tuple[ClauseRecord, ...]:
+    return tuple(
         clause
         for filename, instrument_id in POLICY_INSTRUMENT_IDS.items()
         for clause in parse_policy(
@@ -55,7 +58,17 @@ def golden_clauses() -> tuple[ClauseRecord, ...]:
             tenant_id=POLICY_TENANT_ID,
         )
     )
-    return (*law, *policies)
+
+
+def golden_clauses() -> tuple[ClauseRecord, ...]:
+    law = parse_compilation(
+        LAW_FIXTURE.read_text(encoding="utf-8"),
+        instrument_id=LAW_INSTRUMENT_ID,
+        version_id=LAW_VERSION_ID,
+        tenant_id=PUBLIC_TENANT_ID,
+        scope=Scope.PUBLIC,
+    ).clauses
+    return (*law, *_policy_clauses())
 
 
 def _all_chunks() -> tuple[Chunk, ...]:
@@ -82,6 +95,41 @@ def golden_chunks() -> tuple[Chunk, ...]:
 
 
 def golden_texts() -> tuple[str, ...]:
-    """Every text the recall gate embeds: each chunk, then each query, once."""
+    """Every text a test on the golden corpus embeds: each chunk, then each
+    query, once."""
     texts = [c.text for c in golden_chunks()] + [q.query for q in load_golden_set().queries]
     return tuple(dict.fromkeys(texts))
+
+
+@cache
+def gate_law_clauses() -> tuple[ClauseRecord, ...]:
+    """The whole compilation's selected clauses, from the committed parser
+    output (`eval/compilation_clauses.py`). Read once per process: 779 records."""
+    return load_compilation_clauses().clauses
+
+
+def gate_clauses() -> tuple[ClauseRecord, ...]:
+    return (*gate_law_clauses(), *_policy_clauses())
+
+
+@cache
+def _gate_chunks_unmarked() -> tuple[Chunk, ...]:
+    return chunk_clauses(gate_clauses(), count_tokens=count_reranker_tokens)
+
+
+def gate_chunks() -> tuple[Chunk, ...]:
+    """The recall gate's corpus: the whole compilation's law and the six Acme
+    policies, marked synthetic from the registry as `golden_chunks()` is."""
+    return SyntheticRegistry.load().mark(_gate_chunks_unmarked())
+
+
+def gate_texts() -> tuple[str, ...]:
+    """Every text the recall gates embed: each chunk, then each query, once."""
+    texts = [c.text for c in gate_chunks()] + [q.query for q in load_golden_set().queries]
+    return tuple(dict.fromkeys(texts))
+
+
+def embedded_texts() -> tuple[str, ...]:
+    """Every text the embedding cache must hold: the gate's and the golden
+    corpus's (in practice the gate's, since the excerpt is a subset), once."""
+    return tuple(dict.fromkeys((*gate_texts(), *golden_texts())))
