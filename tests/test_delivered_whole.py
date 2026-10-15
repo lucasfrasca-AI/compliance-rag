@@ -220,8 +220,7 @@ async def test_the_cross_encoder_reads_a_chapeau_with_its_paragraphs() -> None:
     )
     assert await _read("agency") == (
         " ".join(
-            TEXTS[p]
-            for p in ("s6/1/agency", "s6/1/agency/a", "s6/1/agency/c", "s6/1/agency/c/i")
+            TEXTS[p] for p in ("s6/1/agency", "s6/1/agency/a", "s6/1/agency/c", "s6/1/agency/c/i")
         ),
     )
 
