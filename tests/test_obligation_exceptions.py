@@ -155,7 +155,7 @@ async def test_a_pending_exceptions_file_is_refused_before_the_graph_is_opened(
     from scripts import load_mappings
 
     shutil.copy(FIXTURE, tmp_path / "test-applicability.yaml")
-    pending = exceptions_document() | {"reviewed_by": "PENDING — Piero Frasca"}
+    pending = exceptions_document() | {"reviewed_by": "PENDING — Lucas Frasca"}
     write_yaml(tmp_path, pending, "test-exceptions.yaml")
 
     def opened(*_: object, **__: object) -> None:

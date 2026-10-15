@@ -59,8 +59,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "docs" / "research" / "fixtures" / "privacy-act-1988-C2026C00227.constructs.html"
 INSTRUMENT, VERSION = "privacy-act-1988", "C2026C00227"
 SELECTION = SelectionManifest(
-    author="Piero Frasca",
-    reviewed_by="Piero Frasca",
+    author="Lucas Frasca",
+    reviewed_by="Lucas Frasca",
     date="2026-10-15",
     prefixes=("s6/", "sch1/app7/"),
 )
@@ -83,7 +83,7 @@ DEPLOYED = {
 }
 """What the parser before #187 stored for the seven clauses it parsed wrongly."""
 CHANGED = frozenset(f"{INSTRUMENT}:{VERSION}:{path}" for path in DEPLOYED)
-BY, WHY = "Piero Frasca", "#178 part 2: republish the corrected parse"
+BY, WHY = "Lucas Frasca", "#178 part 2: republish the corrected parse"
 
 
 def source() -> str:

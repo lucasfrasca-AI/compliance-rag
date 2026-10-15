@@ -61,7 +61,7 @@ def test_an_unfinished_revision_is_reported_with_what_is_behind_and_how_to_finis
         version_id="C2026C00227",
         supersedes=None,
         at="2026-10-15T09:00:00+00:00",
-        by="Piero Frasca",
+        by="Lucas Frasca",
         reason="#178",
         source_sha256="s",
         corpus_sha="b" * 40,

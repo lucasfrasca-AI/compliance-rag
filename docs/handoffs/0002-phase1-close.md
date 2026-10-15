@@ -49,7 +49,7 @@ Commit that file, and `tests/test_recorded_answers.py` re-verifies every recorde
 
 ## Every number from the phase
 
-**Retrieval (golden set: 25 queries, signed off by Piero Frasca on 2026-10-08)**
+**Retrieval (golden set: 25 queries, signed off by Lucas Frasca on 2026-10-08)**
 
 recall@10 per configuration:
 
