@@ -1,0 +1,234 @@
+# ADR-0045 — A clause is read and delivered in its provision
+
+- Status: proposed in the PR for #200; accepted when the human merges it
+- Date: 2026-10-15
+- Issue: #200
+- Amends: D-04 and ADR-0022 (what the cross-encoder reads, and what
+  `retrieve()` delivers beyond its top 10); ADR-0043 (the targets move to the
+  delivered list, and its one open target is closed)
+- Relates to: ADR-0035 (the same containment, by path segment), ADR-0044
+  (what travels with an obligation, which this leaves as it was)
+
+## Context
+
+ADR-0043 measured the recall gate on the whole compilation and left one open
+target: law cross-clause, 0.444 on what `retrieve()` delivers, against 0.8.
+The human:
+
+> "0.444 cross-clause needs work, but I want the bar to be a real target, not
+> a rubber stamp."
+
+Four of the seven expected clauses were missed:
+
+| query | missed | why (ADR-0043) |
+|---|---|---|
+| GQ-18 | APP 11.1(a), (b) | **Fragments.** (a) is "from misuse, interference and loss; and". Its meaning is in 11.1's chapeau, which is ranked 1st |
+| GQ-19 | APP 10.1 | Ranking: 18th by dense, 56th by sparse, 33rd fused |
+| GQ-20 | `s6/1/agency` | **Fragment.** "agency means:", whose content is its 15 paragraphs |
+
+The parser stores one provision of the law as several clauses, split at its
+chapeau: APP 11.1's sentence is three clauses, and the definition of
+"agency" is sixteen. Each is its own chunk, ranked alone. So the ranking can
+return a chapeau without its list, or a paragraph without the words that give
+it meaning. ADR-0035 already says that a citation of a clause is a citation of
+its text, which is the clause and every clause inside it, but only for the law
+scope. Retrieval and the cross-encoder never applied it.
+
+## Measured
+
+2026-10-15. The gate corpus (779 clauses and the six Acme policies), local
+Qdrant v1.19.1, the cached `gemini-embedding-001` vectors, local BM25 with IDF,
+and the int8 cross-encoder over the top 20 fused candidates. No cloud call.
+recall@10 per cell, law cross-clause in full:
+
+| option | GQ-18 | GQ-19 | GQ-20 | law cross-clause | other cells | delivered clauses per question (mean / max) |
+|---|---|---|---|---|---|---|
+| today: the reranked top 10 | 0.333 | 0.5 | 0.5 | 0.444 | as ADR-0043 | 10 / 10 |
+| (A) within k: a ranked clause's paragraphs after it, list cut at 10 | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
+| (A) within k, its chapeaux before it too | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
+| (A) beyond k: its paragraphs added | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 14.7 / 32 |
+| (A) beyond k: its chapeaux added, no paragraphs | 0.333 | 0.5 | 0.5 | 0.444 | unchanged | 11.8 / 17 |
+| (A) beyond k: chapeaux and paragraphs | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 16.5 / 36 |
+| (B), the half that needs no re-embed: chunk text carries its chapeaux, for BM25 and the cross-encoder (dense vectors kept). The ranked list | 1.0 | 0.5 | **0.0** | 0.500 | paraphrase law **0.833** (GQ-10 lost); policy cross-clause 1.0 | 10 / 10 |
+| that (B), delivered with chapeaux and paragraphs | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | — |
+| the cross-encoder reads each candidate in its provision; within k | 1.0 | 0.5 | 0.5 | 0.667 | unchanged | 10 / 10 |
+| **the cross-encoder reads each candidate in its provision; chapeaux and paragraphs delivered beyond k (this decision)** | **1.0** | 0.5 | **1.0** | **0.833** | **unchanged** | **15.7 / 34** |
+| that, delivering a ranked paragraph's whole provision (its siblings too) | 1.0 | 0.5 | 1.0 | 0.833 | unchanged | 23.5 / 73 |
+
+"Other cells" are exact-ID 1.0 and paraphrase 1.0 for law and policy, and
+policy cross-clause 0.9, on the delivered list; the reranked list's cells are
+ADR-0043's in every row but (B)'s. Delivered sizes are over the 17 questions
+that aren't exact ids.
+
+What decided it:
+
+- **Delivery alone recovers GQ-18 and nothing else.** No clause of the
+  definition of "agency" is in GQ-20's top 10, so there is nothing to deliver
+  it with.
+- **But two of its paragraphs are in the top 20 the cross-encoder sees:**
+  `s6/1/agency/c` fused 18th and `/ca` 20th. Read alone, (ca) is "a body
+  (whether incorporated or not), or a tribunal, established for a public
+  purpose by or under a law … of a State or Territory as in force in an
+  external Territory …". Nothing in it says it defines "agency", and the
+  cross-encoder ranked it 16th of the 20. Read after its chapeau, "agency
+  means: a body …", it ranks 7th, 0.91 logit inside the cut, and its chapeau
+  is the clause GQ-20 expects.
+- **Within k drops what the ranker ranked.** Cutting the list back to ten
+  after delivery pushes ranked clauses out to make room for paragraphs: with
+  reading in provision, GQ-20's (ca) is ranked 7th and lands 11th behind the
+  paragraphs of `s6c/1` and `s6c/3`, ranked above it.
+- **(B) isn't needed, and its half that needs no re-embed hurts.** Changing
+  the chunk text moves BM25 for every clause. GQ-10's APP 11.2 leaves the
+  ranked list, and the paragraphs of `s6c/1` and `s6c/3`, now carrying their
+  chapeaux, crowd out `s6c/3` itself. The dense half needs a cache refresh on
+  Vertex and wasn't run. Reading in provision gives the cross-encoder what (B)
+  would, and changes no chunk, vector or BM25 weight.
+
+## Decision
+
+**1. A provision is a clause and the clauses inside it with only
+subsections, paragraphs and subparagraphs between them** (`in_same_provision`,
+`corpus/models.py`). Containment is by path segment, as ADR-0035's, and within
+one instrument version. A **Definition is a provision of its own**: `s6/1`,
+"In this Act, unless the contrary intention appears:", contains all 176
+definitions and 246 of their paragraphs, but none is in its provision. The
+path grammar is `display_form`'s: a segment that isn't a subsection, paragraph
+or subparagraph is a defined term's slug. On C2026C00227, `s6/1` is the only
+clause that contains a clause outside its provision (a test checks all 779).
+
+- **Chapeaux** are the clauses of a clause's provision that contain it: APP
+  11.1 for 11.1(a); "agency means:" and (c) for the definition's (c)(i).
+- **Paragraphs** are the clauses of its provision inside it.
+
+**2. The cross-encoder reads each fused library-law candidate in its
+provision:** its chapeaux' text, outermost first, then its own
+(`read_in_provision`). It is the same twenty candidates, and the reranker
+still keeps ten. Nothing it reads is cited or delivered as read, and every
+clause keeps its own canonical text in the chunk, the vector, BM25, the
+context and the verifier. On C2026C00227 the longest text read is 115 reranker
+tokens, inside the 420 a chunk is allowed (`CHUNK_MAX_TOKENS`). A test checks
+every clause of the compilation, so the reranker service never refuses one
+for its length.
+
+**3. The reranked top 10 are delivered whole:** each library-law clause with
+its chapeaux before it and its paragraphs after it, each clause once, in rank
+order (`RetrievalTrace.delivered()`). So does the router's exact hit, which
+skips the reranker as before (D-04).
+
+- **Added beyond the ten, never ranked.** The reranker's top 10 and their order
+  are what they were (`ranked_candidates()`), and nothing ranked is pushed
+  out. `answer()` gives the model the delivered list. The owed exceptions and
+  qualifiers (ADR-0044) are then added to it as before, by exact id.
+- **Never the whole provision of a ranked paragraph.** It brings its chapeaux,
+  not its sibling paragraphs (below).
+
+**4. One read, through every filter.** `RetrievalStore.lookup_lineage(ids)`
+returns the clauses that contain one of `ids` or are inside one. For the fused
+candidates it is one Qdrant scroll on `clause_id` and the `ancestors` payload
+(ADR-0035), through the same `_build_filter` as every read. So the law scope,
+subscriptions and validity bind what comes with a clause exactly as they bind
+the clause: under a scope that cites only APP 11.1(a), no chapeau is read or
+delivered with it. The fake applies the same rule, and a contract holds both
+to it. The deployed `clauses` collection already carries `ancestors` (#144,
+loaded after #163), so it needs no change.
+
+**5. Library law only.** The policy parser emits flat clauses, so nothing would
+change for a tenant's document. A tenant's provision structure, and its
+privacy rules, get their own decision when a parser produces one.
+
+**6. The gate measures the delivered list** (`eval/recall.py`, `DELIVERED`)
+beside the reranked one:
+
+- **The targets move to the delivered list**, which is what generation is
+  given. ADR-0043 already put them on "what `retrieve()` delivers"; this makes
+  that literal.
+- **The reranked list keeps its floors.** A ranking regression fails there even
+  where delivery would mask it.
+- **An expected clause counts on the delivered list** if it was ranked in the
+  top 10 or is in the provision of one that was, never because anything was
+  ranked deeper. The delivered list is longer than ten, and the gate prints how
+  long, query by query.
+- **The per-query baseline gains `delivered`** for every query: fusion's top 10
+  delivered whole, so a change to delivery fails the `ci` job by query id with
+  no model. No existing value in it changed, and the corpus is the same.
+
+## Floors and targets after this decision
+
+| cell | reranked floor | delivered floor | target (delivered) | state |
+|---|---|---|---|---|
+| exact-ID, law / policy | 1.000 / 1.000 | 1.000 / 1.000 | 1.0 | met |
+| paraphrase, law / policy | 1.000 / 1.000 | 1.000 / 1.000 | 0.9 | met |
+| cross-clause, policy | 0.900 | 0.900 | 0.8 | met |
+| **cross-clause, law** | 0.444 | **0.833** (5/6) | 0.8 | **met** (was open at 0.444) |
+
+The fused floors are unchanged. Every delivered floor is at or above its
+target, so `OPEN_TARGETS` is empty, and the strict xfail has nothing left to
+expect. Two reranked runs on fresh collections gave the same cells.
+
+Met in clauses: one of the seven law cross-clause clauses is missing, the
+most the target allows (ADR-0043). Every expected clause delivered is brought
+by a ranked clause at least 0.83 logit above the 11th: GQ-20's (ca) by 0.91,
+and GQ-23's 3/1, unchanged, by 0.83. GQ-21's 1/1 stays 12th, as ADR-0043
+found.
+
+## What remains, and why it isn't tuned around
+
+- **GQ-19's APP 10.1 is still missed, and it is not a ranking problem.** The
+  question names "APP 10". No chunk's text carries a clause's reference: the
+  display form is derived from the path and never stored (CONTEXT.md:
+  Display form), and the parser keeps no heading (every `heading` in
+  `clauses.json` is null), so neither APP 10's number nor its title, "quality
+  of personal information", is anywhere a channel or the cross-encoder can
+  match. Without them the question is about "collection versus use or
+  disclosure", where APPs 3, 5 and 6 are the better match on meaning. The
+  router sends only a whole-query stable id to the keyword channel (issue
+  #5: prose that mentions an id falls through). Two principled fixes, each a
+  decision of its own and neither taken here (#206):
+  - resolve a reference in a question's prose ("APP 10", "s 6C(3)") to its
+    clauses by exact id, beside the full pipeline (D-12's regex router,
+    widened). That needs a display-form parser per citation convention and a
+    payload field for the clause path. With it, GQ-19 would be 1.0 and the
+    cell 1.0;
+  - or carry a clause's reference or heading in what is embedded and indexed.
+    That changes chunks (CONTEXT.md: Chunk) and needs a re-embed.
+- **GQ-20's delivered context holds one limb of the definition of "agency".**
+  It is "agency means:" with paragraph (ca), not (a) to (l). The label, which
+  is the definition's own clause, is met honestly: part of the definition was
+  ranked, and the clause that names the term came with it. But an answer to
+  "who counts as an agency" from this context is incomplete. Delivering a
+  ranked paragraph's whole provision would give all fifteen. It was measured
+  at the same recall, with 22.0 delivered clauses a question against 15.6 and
+  73 for GQ-20. It wasn't taken: it also brings all 22 limbs of "enforcement
+  body" for GQ-20, because one of them was ranked, and a scope decision of
+  this size is the human's.
+
+## Consequences
+
+- **More law reaches the model.** Measured through `answer()` with fake
+  generation, over the 25 golden questions, the retrieved fence grows from
+  733 to 1,113 reranker-tokenizer tokens a question on average (a proxy for
+  Claude's tokens), and at most from 1,173 to 2,889 (GQ-20). Over the nine law
+  questions that aren't exact ids it grows from 965 to 1,799. At
+  `claude-sonnet-5`'s $2.20/M input, that is $0.0008 more a question on
+  average and $0.004 at most, or about $1.70 a month at PHASES.md's 2,000
+  queries. The CAG prefix and the system prompt are unchanged.
+- **Latency.** One more Qdrant scroll per retrieval, before the rerank, and
+  slightly longer texts for the cross-encoder (at most 115 tokens). Locally,
+  over the 17 ranked questions, the rerank took 4.52 s median (5.40 s max)
+  reading in provision against 4.37 s (4.98 s) reading bare, about 3% more.
+- **Fewer fetches by id.** A qualifier's paragraph the ranking left out now
+  usually comes with its ranked chapeau, so `answer()` fetches it less often.
+  The guarantee is unchanged: what is still missing is fetched, or the answer
+  is refused.
+- **The verifier needs no change.** A delivered chapeau or paragraph is in the
+  context, so it is citable, and it is shown as its own canonical text.
+- **What a chunk is doesn't change.** CONTEXT.md's Chunk budget now also bounds
+  what the cross-encoder reads, a clause after its chapeaux, which a test
+  holds on the compilation. A new compilation (Phase 4, #198) must keep it;
+  the test moves with the gate corpus.
+- **Spans:** `retrieval.read_in_provision` lists the fused candidates read with
+  a chapeau, and `retrieval.chapeaux` and `retrieval.paragraphs` list what was
+  delivered with the ranked ten.
+- **Phase 1's retrieval criterion is met** in the sense ADR-0043 defines, with
+  no open target, once CI's `reranker-fidelity` job confirms it on its
+  platform.

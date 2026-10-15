@@ -4,7 +4,10 @@
   gate corpus is the human's decision on #180; the bars are the model's
   proposal, implemented so they are concrete, and the human can change them.
   Two questions are put to the human: whether Phase 1 may exit with #200's
-  target open, and whether fused paraphrase should carry a target
+  target open, and whether fused paraphrase should carry a target. Amended by
+  ADR-0045 (#200): the targets are on the delivered list, the reranked ten
+  delivered whole; the reranked list keeps its floors; law cross-clause is
+  0.833 there, and its target is met and closed
 - Date: 2026-10-15
 - Issue: #180
 - Amends: ADR-0022 (which corpus the bars are measured on, on which list, and

@@ -102,7 +102,7 @@ FLOORS: Mapping[Cell, float] = {
     Cell(DELIVERED, Category.PARAPHRASE, POLICY): 1.0,
     # Target 0.8, met (#200): GQ-18's (a) and (b) come with APP 11.1, and GQ-20's
     # "agency means:" with its paragraph (ca), which the cross-encoder now reads
-    # in its provision. Still missed: GQ-19's APP 10.1 (#200's diagnosis, ADR-0045).
+    # in its provision. Still missed: GQ-19's APP 10.1 (#206).
     Cell(DELIVERED, Category.CROSS_CLAUSE, LAW): 5 / 6,
     Cell(DELIVERED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
 }
