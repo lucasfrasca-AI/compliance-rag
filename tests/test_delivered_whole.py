@@ -39,7 +39,13 @@ from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.golden_corpus import LAW_INSTRUMENT_ID, gate_law_clauses
 from compliance_rag.eval.recall import NoRerank
-from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace, read_in_provision
+from compliance_rag.retrieval.pipeline import (
+    RetrievalPipeline,
+    RetrievalTrace,
+    chapeaux_of,
+    paragraphs_of,
+    read_in_provision,
+)
 from compliance_rag.settings import REGION
 from compliance_rag.verifier.citations import Verifier
 from tests.conftest import ALL_LAW
@@ -204,11 +210,26 @@ async def test_the_cross_encoder_reads_a_paragraph_after_its_chapeau() -> None:
     )
 
 
-async def test_the_cross_encoder_reads_a_clause_with_no_chapeau_as_it_is() -> None:
-    """Nothing introduces APP 11.1 here, and a Definition's own clause isn't
-    read after s 6(1); a tenant's clause is read as it is."""
-    assert await _read("protect") == (TEXTS["sch1/app11/1"],)
-    assert await _read("agency") == (TEXTS["s6/1/agency"],)
+async def test_the_cross_encoder_reads_a_chapeau_with_its_paragraphs() -> None:
+    """GQ-10's shape: read bare, APP 11.2's chapeau is a fragment, and loses
+    to its own paragraphs, each read with its text (ADR-0045). Read whole, a
+    chapeau is its sentence. A Definition's own clause is read with its
+    paragraphs, never after s 6(1)."""
+    assert await _read("protect") == (
+        " ".join(TEXTS[p] for p in ("sch1/app11/1", "sch1/app11/1/a", "sch1/app11/1/b")),
+    )
+    assert await _read("agency") == (
+        " ".join(
+            TEXTS[p]
+            for p in ("s6/1/agency", "s6/1/agency/a", "s6/1/agency/c", "s6/1/agency/c/i")
+        ),
+    )
+
+
+async def test_the_cross_encoder_reads_a_clause_outside_any_provision_as_it_is() -> None:
+    """Nothing introduces APP 11.10 here and nothing is inside it; a tenant's
+    clause is read as it is."""
+    assert await _read("tenth") == (TEXTS["sch1/app11/10"],)
     assert await _read("seven", tenant_id="acme") == ("account details are kept seven years.",)
 
 
@@ -220,28 +241,66 @@ async def test_what_is_delivered_is_each_clauses_own_text_not_what_was_read() ->
     ]
 
 
-def test_read_in_provision_takes_only_the_chapeaux_it_is_given() -> None:
-    """Out of the law scope or not in force, a chapeau isn't in the lineage
-    the store returns, and the candidate is read as it is."""
+def test_read_in_provision_takes_only_the_provision_it_is_given() -> None:
+    """Out of the law scope or not in force, a chapeau or a paragraph isn't in
+    the lineage the store returns, and the candidate is read without it."""
     candidate = Candidate(chunk_id=PARA_A, clause_id=PARA_A, text="from misuse", score=0.0)
     assert read_in_provision(candidate, ()) == "from misuse"
     chapeau = Candidate(chunk_id=CHAPEAU, clause_id=CHAPEAU, text="to protect it:", score=1.0)
     tenth = Candidate(chunk_id=TENTH, clause_id=TENTH, text="not a chapeau", score=1.0)
     assert read_in_provision(candidate, (tenth, chapeau)) == "to protect it: from misuse"
+    para_b = Candidate(chunk_id=PARA_B, clause_id=PARA_B, text="from access.", score=1.0)
+    assert read_in_provision(chapeau, (tenth, para_b, candidate)) == (
+        "to protect it: from misuse from access."
+    )
+    assert read_in_provision(chapeau, (tenth,)) == "to protect it:"
+
+
+def test_a_reading_ends_at_the_last_whole_paragraph_inside_the_budget() -> None:
+    """The service refuses a pair over its window, never truncates (issue
+    #14), so a provision too long to read whole is read as far as its last
+    paragraph that fits, never cut inside one (on C2026C00227, APP 5.2)."""
+
+    def words(text: str) -> int:
+        return len(text.split())
+
+    chapeau = Candidate(chunk_id=CHAPEAU, clause_id=CHAPEAU, text="to protect it:", score=1.0)
+    para_a = Candidate(chunk_id=PARA_A, clause_id=PARA_A, text="from misuse; and", score=0.0)
+    para_b = Candidate(chunk_id=PARA_B, clause_id=PARA_B, text="from access.", score=0.0)
+    lineage = (para_b, para_a)
+    read = read_in_provision(chapeau, lineage, budget=6, count_tokens=words)
+    assert read == "to protect it: from misuse; and"
+    assert read_in_provision(chapeau, lineage, budget=5, count_tokens=words) == "to protect it:"
+    assert read_in_provision(chapeau, lineage, budget=8, count_tokens=words) == (
+        "to protect it: from misuse; and from access."
+    )
 
 
 def test_every_clause_of_the_compilation_read_in_its_provision_fits_the_reranker_window() -> None:
     """The chunk budget (`CHUNK_MAX_TOKENS`, by the reranker's own tokenizer)
-    holds for what the cross-encoder reads, a clause after its chapeaux, so the
-    service never refuses a candidate for its length (ADR-0045). 115 at most
-    on C2026C00227, against 420."""
+    holds for what the cross-encoder reads, so the service never refuses a
+    candidate for its length (ADR-0045). A clause after its chapeaux is 115 at
+    most on C2026C00227, so the budget only ever stops paragraphs. Read whole,
+    APP 8.2 is the longest at 388 of 420, and APP 5.2 is the one provision too
+    long to read whole: it is read to its last paragraph that fits."""
     clauses = gate_law_clauses()
     as_candidates = tuple(
         Candidate(chunk_id=c.clause_id, clause_id=c.clause_id, text=c.canonical_text, score=0.0)
         for c in clauses
     )
-    longest = max(count_reranker_tokens(read_in_provision(c, as_candidates)) for c in as_candidates)
-    assert longest <= CHUNK_MAX_TOKENS
+    heads = [
+        " ".join((*(h.text for h in chapeaux_of(c, as_candidates)), c.text)) for c in as_candidates
+    ]
+    assert max(count_reranker_tokens(head) for head in heads) <= 115
+    readings = {c.clause_id: read_in_provision(c, as_candidates) for c in as_candidates}
+    assert max(count_reranker_tokens(r) for r in readings.values()) <= CHUNK_MAX_TOKENS
+    whole = {
+        c.clause_id: " ".join((head, *(p.text for p in paragraphs_of(c, as_candidates))))
+        for c, head in zip(as_candidates, heads, strict=True)
+    }
+    assert {i for i, r in readings.items() if r != whole[i]} == {
+        f"{LAW_INSTRUMENT_ID}:C2026C00227:sch1/app5/2"
+    }
 
 
 # ---- retrieve(): what a ranked clause brings with it ---------------------------
