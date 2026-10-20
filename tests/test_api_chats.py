@@ -632,6 +632,42 @@ async def test_an_unreadable_citation_names_a_clause_it_could_read_and_nothing_e
     ]
 
 
+# ---- a corrupt blocked element reads back unreadable too (#234) ---------------------
+
+
+async def test_an_unreadable_blocked_element_stays_in_place_marked_and_the_chat_is_a_200() -> None:
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    s6da = "privacy-act-1988:C2026C00227:s6da/2"
+    await ledger.record_chat_exchange(
+        ChatExchange(
+            tenant_id=TENANT,
+            chat_id=chat_id,
+            user_id=UID,
+            question=QUESTION,
+            answer=ChatAnswer(TurnOutcome.BLOCKED, blocked=(s6da,)),
+            as_of=dt.date.fromisoformat(AS_OF),
+            trace_id="7" * 32,
+        )
+    )
+    turns = ledger._chats[(TENANT, chat_id)]  # pyright: ignore[reportPrivateUsage]
+    turns[1] = replace(
+        turns[1], blocked=(s6da, UnreadableCitation(UnreadableReason.NO_CLAUSE), APP11)
+    )
+    async with await answers_client(FakeGenerator(), ledger, FakeClauseStore()) as c:
+        response = await c.get(f"/v1/chats/{chat_id}")
+        listed = await c.get("/v1/chats")
+    assert response.status_code == 200 and listed.status_code == 200
+    question, answer = response.json()["turns"]
+    assert question["text"] == QUESTION
+    assert answer["verified"] is False and answer["withheld"] == answers.BLOCKED
+    assert answer["blocked"] == [
+        {"clause_id": s6da, "cite": "s 6DA(2)"},
+        {"unreadable": True, "reason": "no_clause"},
+        {"clause_id": APP11, "cite": "APP 11.1"},
+    ]
+
+
 # ---- the real ledger -----------------------------------------------------------------
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -785,6 +821,56 @@ async def test_a_corrupt_citation_row_reads_back_unreadable_through_the_api_on_p
             "cite": "APP 11.1",
         }
         assert cited[2] == {"unreadable": True, "reason": "not_an_object"}
+        assert "SECRET" not in response.text
+    finally:
+        await empty_ledger()
+
+
+@pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL not set — needs a migrated ledger")
+async def test_a_corrupt_blocked_row_reads_back_unreadable_through_the_api_on_postgres() -> None:
+    """#234 on the real ledger: a row with a malformed `blocked` element is a
+    200 with that entry marked, not a 500, and everything else intact."""
+    import json
+
+    import psycopg
+
+    from tests.test_postgres_ledger_store import empty_ledger
+
+    postgres = await empty_ledger()
+    try:
+        await postgres.put_profile(Profile(TENANT))
+        chat_id = uuid.uuid4().hex
+        await postgres.record_chat_exchange(
+            ChatExchange(
+                tenant_id=TENANT,
+                chat_id=chat_id,
+                user_id=UID,
+                question=QUESTION,
+                answer=ChatAnswer(TurnOutcome.BLOCKED, blocked=(APP11,)),
+                as_of=dt.date.fromisoformat(AS_OF),
+                trace_id="7" * 32,
+            )
+        )
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute(
+                "UPDATE chat SET blocked = %s WHERE turn_index = 1",
+                (json.dumps([APP11, "SECRET", 7, APP11 + "\n"]),),
+            )
+            await conn.commit()
+        async with await answers_client(FakeGenerator(), postgres, FakeClauseStore()) as c:
+            response = await c.get(f"/v1/chats/{chat_id}")
+            listed = await c.get("/v1/chats")
+        assert response.status_code == 200 and listed.status_code == 200
+        question, answer = response.json()["turns"]
+        assert question["text"] == QUESTION
+        assert answer["withheld"] == answers.BLOCKED and answer["text"] is None
+        unreadable = {"unreadable": True, "reason": "no_clause"}
+        assert answer["blocked"] == [
+            {"clause_id": APP11, "cite": "APP 11.1"},
+            unreadable,
+            unreadable,
+            unreadable,
+        ]
         assert "SECRET" not in response.text
     finally:
         await empty_ledger()
