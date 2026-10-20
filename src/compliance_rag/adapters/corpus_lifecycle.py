@@ -11,16 +11,34 @@ law is refused outright; a purge or replace returns the number of findings
 citing the target before acting and refuses unless the caller acknowledges
 exactly that number; every outcome is audited. This class is the only issuer
 of the `RemovalAuthorization` the store-level deletes require.
+
+Publishing takes a version's clauses, not its chunks (#233, ADR-0048): the
+clauses are what the clause store holds and what the verifier and the cached
+prefix read, and the chunks are derived from them here (`chunk_clauses`, one
+per clause), so a chunk's text is its clause's canonical text by
+construction. The stores are written in one order, each step idempotent, so a
+publish that stopped part-way is finished by `publish_version` (nothing in
+retrieval yet) or `complete_version` (some of it there) and then
+`record_published_version`:
+
+1. the clause store — the clauses it lacks, then the manifest's source and
+   canonicalisation version — the authority the derived stores come from;
+2. retrieval — the chunks;
+3. the ledger — the version's record, the commit point: until it is written
+   the verifier blocks every citation of the version and the cached prefix
+   doesn't list it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+from compliance_rag import telemetry
 from compliance_rag.adapters.generation_residency import (
     assert_upload_allowed,
     validate_generation_region,
@@ -38,6 +56,7 @@ from compliance_rag.adapters.removal_authorization import (
     _issue,  # pyright: ignore[reportPrivateUsage] — the one sanctioned issuer
     stable_id_prefix,
 )
+from compliance_rag.corpus.chunker import chunk_clauses
 from compliance_rag.corpus.models import (
     NO_END_DATE,
     PUBLIC_TENANT_ID,
@@ -45,12 +64,19 @@ from compliance_rag.corpus.models import (
     ClauseRecord,
     DocumentClass,
     Scope,
+    assert_unique_clause_ids,
+    canonical_sha256,
     check_document_class,
     check_user_owner,
     instrument_tenant_prefix,
     parse_stable_id,
+    sha256_hex,
 )
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+
+_CONCURRENT_READS = 16
+"""Clause-store reads in flight at once while a publish compares what is
+stored with what it was given: one object per clause."""
 
 
 class RemovalRefused(PermissionError):
@@ -160,8 +186,10 @@ class CorpusLifecycle:
 
     async def publish_version(
         self,
-        chunks: tuple[Chunk, ...],
+        clauses: tuple[ClauseRecord, ...],
         *,
+        count_tokens: Callable[[str], int],
+        source_html: str,
         instrument_id: str,
         tenant_id: str,
         version_id: str,
@@ -169,22 +197,34 @@ class CorpusLifecycle:
         supersedes: str | None,
         document_class: DocumentClass,
     ) -> None:
-        """Upsert a new version's chunks, in force from `effective_from`, and
-        retire `supersedes` from the same date. The old chunks stay where
-        they are — that is what keeps an issued assessment verifiable.
+        """Publish a new version: its clauses' canonical text and its manifest
+        to the clause store, the chunks derived from them (`count_tokens` is
+        the reranker tokenizer's count, as `chunk_clauses` takes it) to
+        retrieval, in force from `effective_from`, and its record to the
+        ledger, retiring `supersedes` from the same date. The old version
+        stays where it is — that is what keeps an issued assessment
+        verifiable. `source_html` is the document the clauses were parsed
+        from, stored beside them (`ClauseStore.put_manifest`).
+
         `document_class` is the instrument's (#148): it decides whether the
         version joins the tenant's cached policy prefix (D-11). A class that
-        disagrees with the instrument's is refused before anything is written."""
+        disagrees with the instrument's is refused before anything is written.
+
+        Refused once retrieval holds any of the version: that is
+        `complete_version`'s to finish, or a replace in place. Before then a
+        re-run finishes one that stopped in the clause store (module
+        docstring), writing nothing the clause store already holds."""
+        if supersedes == version_id:
+            raise ValueError("a version cannot supersede itself — that is replace-in-place")
         await self._check_class(tenant_id, instrument_id, document_class)
         chunks = self._admitted(
-            chunks,
+            clauses,
+            count_tokens=count_tokens,
             instrument_id=instrument_id,
             tenant_id=tenant_id,
             version_id=version_id,
             document_class=document_class,
         )
-        if supersedes == version_id:
-            raise ValueError("a version cannot supersede itself — that is replace-in-place")
         if await self._retrieval.version_exists(
             instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         ):
@@ -192,6 +232,13 @@ class CorpusLifecycle:
                 f"{instrument_id}:{version_id} is already published; a new upload is a new "
                 "version_id, and changing this one in place is replace_in_place"
             )
+        await self._store_clauses(
+            clauses,
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            source_html=source_html,
+        )
         await self._retrieval.upsert_chunks(_in_force_from(chunks, effective_from))
         await self._record(
             instrument_id=instrument_id,
@@ -204,23 +251,29 @@ class CorpusLifecycle:
 
     async def complete_version(
         self,
-        chunks: tuple[Chunk, ...],
+        clauses: tuple[ClauseRecord, ...],
         *,
+        count_tokens: Callable[[str], int],
+        source_html: str,
         instrument_id: str,
         tenant_id: str,
         version_id: str,
         effective_from: dt.date,
         document_class: DocumentClass,
     ) -> int:
-        """Finish a publish that stopped part-way (#144): upsert those of
-        `chunks` the store doesn't hold yet, and return how many. Refused
-        unless the version is partly stored and every stored chunk is one of
-        `chunks`, so nothing stored is written over: that would be a replace
-        in place. The same guardrails as `publish_version`. The ledger isn't
-        touched; `record_published_version` records the finished version."""
+        """Finish a publish that stopped part-way (#144): bring the clause
+        store up to `clauses` and `source_html` as `publish_version` does,
+        then upsert the chunks of `clauses` retrieval doesn't hold yet, and
+        return how many. Refused unless retrieval holds part of the version
+        and every chunk it holds is one of `clauses`, so nothing stored is
+        written over, in either store: that would be a replace in place. The
+        same guardrails as `publish_version`. The ledger isn't touched;
+        `record_published_version` records the finished version. Idempotent:
+        a second call writes nothing."""
         await self._check_class(tenant_id, instrument_id, document_class)
         chunks = self._admitted(
-            chunks,
+            clauses,
+            count_tokens=count_tokens,
             instrument_id=instrument_id,
             tenant_id=tenant_id,
             version_id=version_id,
@@ -237,6 +290,13 @@ class CorpusLifecycle:
                 f"{instrument_id}:{version_id} stores {len(foreign)} chunks not among those "
                 f"given (e.g. {min(foreign)}): a different clause set, not a partial one"
             )
+        await self._store_clauses(
+            clauses,
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            source_html=source_html,
+        )
         missing = tuple(c for c in chunks if c.chunk_id not in stored)
         await self._retrieval.upsert_chunks(_in_force_from(missing, effective_from))
         return len(missing)
@@ -254,12 +314,25 @@ class CorpusLifecycle:
         """Record in the ledger a version whose chunks are already stored: a
         ledger that came after the vectors (#144, #174), or a publish whose
         ledger write never happened. The same class checks as
-        `publish_version`; refused if retrieval holds none of the version."""
+        `publish_version`; refused if retrieval holds none of the version, or
+        the clause store doesn't hold it complete (its manifest's source not
+        written): the record is what makes a version citable and puts a
+        policy in the cached prefix, and both read the clause store."""
         await self._check_class(tenant_id, instrument_id, document_class)
         if not await self._retrieval.version_exists(
             instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         ):
             raise ValueError(f"{instrument_id}:{version_id} isn't stored, so there is no record")
+        if (
+            await self._clauses.get_manifest_metadata(
+                instrument_id, version_id, tenant_id=tenant_id
+            )
+            is None
+        ):
+            raise ValueError(
+                f"{instrument_id}:{version_id}: the clause store doesn't hold it complete, so its "
+                "citations couldn't verify; finish it with complete_version first"
+            )
         await self._record(
             instrument_id=instrument_id,
             tenant_id=tenant_id,
@@ -281,23 +354,145 @@ class CorpusLifecycle:
 
     def _admitted(
         self,
-        chunks: tuple[Chunk, ...],
+        clauses: tuple[ClauseRecord, ...],
         *,
+        count_tokens: Callable[[str], int],
         instrument_id: str,
         tenant_id: str,
         version_id: str,
         document_class: DocumentClass,
     ) -> tuple[Chunk, ...]:
-        """The payload checked, its scope allowed for its class (ADR-0036),
-        marked synthetic from the registry (never the caller, #78) and allowed
-        by the residency gate (ADR-0023)."""
+        """The version's chunks, derived from its clauses once they are
+        checked: one version of one instrument with one owner, each clause
+        once, under one canonicalisation (the manifest records one), and
+        their scope allowed for the class (ADR-0036). Marked synthetic from
+        the registry (never the caller, #78; a clause carries no such flag)
+        and allowed by the residency gate (ADR-0023), which counts an
+        unregistered clause as real as it does an unregistered chunk."""
+        if not clauses:
+            raise ValueError(
+                f"{instrument_id}:{version_id} has no clauses: a version is published with them"
+            )
         _check_payload(
-            chunks, (), instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+            (), clauses, instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
         )
-        _check_class_scope(document_class, chunks, ())
-        chunks = self._synthetic_registry.mark(chunks)
-        assert_upload_allowed(chunks, generation_region=self._generation_region)
+        assert_unique_clause_ids(c.clause_id for c in clauses)
+        if len({c.canonicalisation_version for c in clauses}) > 1:
+            raise ValueError(
+                f"{instrument_id}:{version_id} mixes canonicalisation versions: one parse, one "
+                "version"
+            )
+        _check_class_scope(document_class, (), clauses)
+        chunks = self._synthetic_registry.mark(chunk_clauses(clauses, count_tokens=count_tokens))
+        assert_upload_allowed(
+            chunks,
+            generation_region=self._generation_region,
+            real_clause_ids=self._synthetic_registry.real_clauses(clauses),
+        )
         return chunks
+
+    async def _store_clauses(
+        self,
+        clauses: tuple[ClauseRecord, ...],
+        *,
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        source_html: str,
+    ) -> int:
+        """Bring the clause store up to this version: write the clauses it
+        lacks (`put_clauses`, which lists them on the manifest first), then
+        the manifest's source and canonicalisation version, which mark the
+        version complete there, as ingest does. Returns how many clauses were
+        written.
+
+        Writes nothing it already holds, and never writes over anything: what
+        the store holds of the version must be part of what was given,
+        identical, with the same source once that is written. Anything else
+        is refused before any write — a different document under a stored
+        version_id is a new version, or a replace in place. So library law
+        that ingest stored (`vector_load`) is checked and left as it is, and
+        a publish that stopped part-way is finished by running it again."""
+        with telemetry.span(
+            "corpus_lifecycle.store_clauses",
+            **{
+                "lifecycle.version": f"{instrument_id}:{version_id}",
+                "lifecycle.clauses": len(clauses),
+            },
+        ) as span:
+            held = await self._clauses.get_manifest(instrument_id, version_id, tenant_id=tenant_id)
+            given = {c.clause_path: c for c in clauses}
+            foreign = sorted(held.keys() - given.keys())
+            if foreign:
+                raise ValueError(
+                    f"{instrument_id}:{version_id}: the clause store holds {len(foreign)} clauses "
+                    f"not among those given (e.g. {foreign[0]}): a different clause set, not a "
+                    "partial one"
+                )
+            # The manifest names a held path's text even where its object isn't
+            # written yet, or is another member's private clause, which reads as
+            # absent (ADR-0036).
+            restated = sorted(
+                p for p, sha in held.items() if sha != canonical_sha256(given[p].canonical_text)
+            )
+            if restated:
+                raise ValueError(
+                    f"{instrument_id}:{version_id}: the clause store holds {restated[0]} with "
+                    "different text: changing a stored clause is replace_in_place"
+                )
+            metadata = await self._clauses.get_manifest_metadata(
+                instrument_id, version_id, tenant_id=tenant_id
+            )
+            canonicalisation_version = clauses[0].canonicalisation_version
+            if metadata is not None and (
+                metadata.source_html_sha256,
+                metadata.canonicalisation_version,
+            ) != (sha256_hex(source_html), canonicalisation_version):
+                raise ValueError(
+                    f"{instrument_id}:{version_id} is stored from a different source, or under "
+                    "another canonicalisation: a different document is a new version_id"
+                )
+            stored = await self._read_clauses(clauses)
+            changed = sorted(c.clause_id for c, s in stored if s is not None and s != c)
+            if changed:
+                raise ValueError(
+                    f"the clause store holds {changed[0]} differently from the clause given: "
+                    "changing a stored clause is replace_in_place"
+                )
+            missing = tuple(c for c, s in stored if s is None)
+            if missing and metadata is not None:
+                raise ValueError(
+                    f"{instrument_id}:{version_id} is complete in the clause store without "
+                    f"{missing[0].clause_id}: a complete version's clause set is fixed"
+                )
+            if missing:
+                await self._clauses.put_clauses(missing)
+            if metadata is None:
+                await self._clauses.put_manifest(
+                    instrument_id,
+                    version_id,
+                    tenant_id=tenant_id,
+                    canonicalisation_version=canonicalisation_version,
+                    source_html=source_html,
+                )
+            span.set_attribute("lifecycle.clauses_written", len(missing))
+            span.set_attribute("lifecycle.manifest_written", metadata is None)
+            return len(missing)
+
+    async def _read_clauses(
+        self, clauses: tuple[ClauseRecord, ...]
+    ) -> list[tuple[ClauseRecord, ClauseRecord | None]]:
+        """Each clause beside what the clause store holds at its id, read as
+        its owner (ADR-0036)."""
+        reads = asyncio.Semaphore(_CONCURRENT_READS)
+
+        async def read(clause: ClauseRecord) -> ClauseRecord | None:
+            async with reads:
+                return await self._clauses.get_clause(
+                    clause.clause_id, tenant_id=clause.tenant_id, user_id=clause.user_id
+                )
+
+        return list(zip(clauses, await asyncio.gather(*map(read, clauses)), strict=True))
 
     async def _record(
         self,

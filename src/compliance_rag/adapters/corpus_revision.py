@@ -89,7 +89,7 @@ from compliance_rag.corpus.revision import (
     record_of,
 )
 from compliance_rag.corpus.selection_manifest import SelectionManifest
-from compliance_rag.corpus.vector_load import load_version_vectors
+from compliance_rag.corpus.vector_load import load_version_vectors, read_version_source
 from compliance_rag.graph.loader import (
     CheckedVersion,
     check_instrument_version,
@@ -627,6 +627,12 @@ class CorpusRevision:
             # 3. Qdrant and the ledger: publish the new version, retire the old.
             load = await load_version_vectors(
                 planned.clauses,
+                source_html=await read_version_source(
+                    self._clauses,
+                    instrument_id=plan.instrument_id,
+                    version_id=plan.version_id,
+                    tenant_id=PUBLIC_TENANT_ID,
+                ),
                 count_tokens=self._count_tokens,
                 lifecycle=lifecycle,
                 retrieval=self._retrieval,

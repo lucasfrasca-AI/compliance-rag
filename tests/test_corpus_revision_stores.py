@@ -70,7 +70,7 @@ from compliance_rag.corpus.revision import (
     RevisionRefused,
 )
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
-from compliance_rag.corpus.vector_load import load_version_vectors
+from compliance_rag.corpus.vector_load import load_version_vectors, read_version_source
 from compliance_rag.graph.loader import (
     check_instrument_version,
     recorded_load,
@@ -202,6 +202,12 @@ async def deploy(
         return
     await load_version_vectors(
         clauses,
+        source_html=await read_version_source(
+            stores.clauses,
+            instrument_id=INSTRUMENT,
+            version_id=clauses[0].version_id,
+            tenant_id=PUBLIC_TENANT_ID,
+        ),
         count_tokens=words,
         lifecycle=stores.lifecycle(),
         retrieval=stores.retrieval,
@@ -1003,6 +1009,12 @@ async def deploy_unmarked(stores: Stores) -> None:
         )
     await load_version_vectors(
         clauses,
+        source_html=await read_version_source(
+            stores.clauses,
+            instrument_id=INSTRUMENT,
+            version_id=clauses[0].version_id,
+            tenant_id=PUBLIC_TENANT_ID,
+        ),
         count_tokens=words,
         lifecycle=stores.lifecycle(),
         retrieval=stores.retrieval,
