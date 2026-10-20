@@ -64,6 +64,8 @@ from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     DocumentClass,
     check_document_class,
+    incomplete_json,
+    incomplete_of_json,
     validate_library_instrument_id,
     validate_tenant_id,
 )
@@ -77,6 +79,26 @@ def _refuse_library(tenant_id: str, what: str) -> None:
     the database's CHECK would refuse it too, as a raw constraint error."""
     if tenant_id == PUBLIC_TENANT_ID:
         raise ValueError(f"library law is never {what} (ADR-0021)")
+
+
+def _citation_row(c: ChatCitation) -> dict[str, object]:
+    """A chat turn's citation as its JSONB element. The incompleteness the
+    member was shown rides in the element, only when there is any, as it does
+    in every other store (ADR-0047): absent is complete. The column is JSONB
+    and its constraints look at the array, not the elements, so this is not a
+    schema change (#228)."""
+    row: dict[str, object] = {"clause_id": c.clause_id, "version_id": c.version_id}
+    if c.incomplete:
+        row["incomplete"] = incomplete_json(c.incomplete)
+    return row
+
+
+def _citation_of_row(raw: dict[str, object]) -> ChatCitation:
+    return ChatCitation(
+        clause_id=str(raw["clause_id"]),
+        version_id=str(raw["version_id"]),
+        incomplete=incomplete_of_json(raw.get("incomplete")),
+    )
 
 
 class LedgerUnreachable(ConnectionError):
@@ -365,12 +387,7 @@ class PostgresLedgerStore(LedgerStore):
                                 turn.role.value,
                                 turn.content,
                                 None if turn.outcome is None else turn.outcome.value,
-                                Jsonb(
-                                    [
-                                        {"clause_id": c.clause_id, "version_id": c.version_id}
-                                        for c in turn.citations
-                                    ]
-                                ),
+                                Jsonb([_citation_row(c) for c in turn.citations]),
                                 Jsonb(list(turn.blocked)),
                                 turn.as_of,
                                 turn.trace_id,
@@ -404,10 +421,7 @@ class PostgresLedgerStore(LedgerStore):
                 role=TurnRole(str(r[1])),
                 content=None if r[2] is None else str(r[2]),
                 outcome=None if r[3] is None else TurnOutcome(str(r[3])),
-                citations=tuple(
-                    ChatCitation(clause_id=str(c["clause_id"]), version_id=str(c["version_id"]))
-                    for c in cast("list[dict[str, object]]", r[4])
-                ),
+                citations=tuple(_citation_of_row(c) for c in cast("list[dict[str, object]]", r[4])),
                 blocked=tuple(str(b) for b in cast("list[object]", r[5])),
                 as_of=r[6],
                 trace_id=str(r[7]),

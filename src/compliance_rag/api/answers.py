@@ -64,7 +64,7 @@ import datetime as dt
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -100,7 +100,7 @@ from compliance_rag.assessment.coverage_report import cite
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
-from compliance_rag.corpus.models import ClauseRecord, incomplete_json
+from compliance_rag.corpus.models import ClauseRecord, Incomplete, incomplete_json
 from compliance_rag.retrieval.pipeline import RetrievalTrace
 from compliance_rag.telemetry import current_trace_id
 
@@ -172,7 +172,11 @@ def _shown(answer: Answer) -> ChatAnswer:
             TurnOutcome.VERIFIED,
             text=answer.unverified_draft.answer,
             citations=tuple(
-                ChatCitation(c.clause_id, c.version_id) for c in _verified_clauses(answer)
+                # With the incompleteness of the clause the verifier checked
+                # the quote against: what the member is shown beside it, kept
+                # so a chat read back shows it too (ADR-0047, #228).
+                ChatCitation(c.clause_id, c.version_id, c.incomplete)
+                for c in _verified_clauses(answer)
             ),
         )
     return ChatAnswer(
@@ -214,15 +218,24 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
         ],
         # Every cited clause that isn't, once each, with why: the field a
         # reader checks first, so the flag can't be missed (ADR-0047).
-        "incomplete": [
-            {
-                "clause_id": i.clause_id,
-                "cite": cite(i.clause_id),
-                "reasons": incomplete_json(i.incomplete),
-            }
-            for i in answer.incomplete
-        ],
+        "incomplete": incomplete_clauses_json(
+            (i.clause_id, i.incomplete) for i in answer.incomplete
+        ),
     }
+
+
+def incomplete_clauses_json(cited: Iterable[tuple[str, Incomplete]]) -> list[dict[str, object]]:
+    """The top-level `incomplete` list: each cited clause that is incomplete,
+    once, with why. One builder for the answer event and for a chat read back
+    (#228), so the two can't word it differently."""
+    found: dict[str, Incomplete] = {}
+    for clause_id, incomplete in cited:
+        if incomplete:
+            found.setdefault(clause_id, incomplete)
+    return [
+        {"clause_id": clause_id, "cite": cite(clause_id), "reasons": incomplete_json(incomplete)}
+        for clause_id, incomplete in found.items()
+    ]
 
 
 def _failure(error: Exception) -> TurnOutcome:

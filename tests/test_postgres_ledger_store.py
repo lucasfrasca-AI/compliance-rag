@@ -12,6 +12,7 @@ local Docker Postgres, never anything shared.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import traceback
 import uuid
@@ -26,6 +27,7 @@ from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
     ChatAnswer,
+    ChatCitation,
     PolicyVersion,
     Profile,
     SourceKind,
@@ -43,8 +45,10 @@ from tests.contracts.test_interfaces import (
 )
 from tests.contracts.test_ledger import (
     APP11,
+    FORMULA_GAP,
     MODEL_PROSE,
     POLICY_CLAUSE,
+    S6DA_2,
     an_exchange,
     assert_chat_contract,
     assert_ledger_contract,
@@ -175,6 +179,48 @@ async def test_a_chat_row_holds_the_uid_and_the_structured_citations(
         dt.date(2026, 1, 1),
         "a" * 32,
     )
+
+
+async def test_a_citations_incompleteness_is_in_its_jsonb_element_and_absent_means_complete(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """#228: no schema change, the state rides in the citation's element, only
+    when there is any (so every row written before it reads back complete)."""
+    await ledger.put_profile(Profile("acme"))
+    flagged = ChatAnswer(
+        TurnOutcome.VERIFIED,
+        text="Annual turnover is worked out by formula.",
+        citations=(
+            ChatCitation(APP11, "C2026C00227"),
+            ChatCitation(S6DA_2, "C2026C00227", (FORMULA_GAP,)),
+        ),
+    )
+    await ledger.record_chat_exchange(an_exchange("c1", answer=flagged))
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        cursor = await conn.execute("SELECT citations FROM chat WHERE turn_index = 1")
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == [
+            {"clause_id": APP11, "version_id": "C2026C00227"},
+            {
+                "clause_id": S6DA_2,
+                "version_id": "C2026C00227",
+                "incomplete": [
+                    {
+                        "reason": "image_not_text",
+                        "detail": "the formula is not available in text form",
+                    }
+                ],
+            },
+        ]
+        # A row recorded before the state existed, with the element as it was.
+        await conn.execute(
+            "UPDATE chat SET citations = %s WHERE turn_index = 1",
+            (json.dumps([{"clause_id": S6DA_2, "version_id": "C2026C00227"}]),),
+        )
+        await conn.commit()
+    (_, answer) = await ledger.chat_turns("acme", "uid-1", "c1")
+    assert answer.citations == (ChatCitation(S6DA_2, "C2026C00227"),)
 
 
 async def test_postgres_satisfies_the_corpus_lifecycle_contract(
