@@ -92,7 +92,7 @@ class Period:
         return f"{self.start.isoformat()} to {end}"
 
 
-FIELD = re.compile(r"^[a-z][a-z0-9_]*$")
+FIELD = re.compile(r"^[a-z][a-z0-9_]*\Z")
 """A profile field's name — the same rule as the ledger's `evidence_field`
 CHECK and a mapping leaf's `field`, so a name valid in one is valid in all."""
 

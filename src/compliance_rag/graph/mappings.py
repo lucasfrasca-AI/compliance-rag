@@ -68,8 +68,8 @@ class MappingError(ValueError):
     """A mapping file that must not reach the graph."""
 
 
-_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
-_FIELD = re.compile(r"^[a-z][a-z0-9_]*$")
+_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*\Z")
+_FIELD = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
 
 class Comparison(StrEnum):
