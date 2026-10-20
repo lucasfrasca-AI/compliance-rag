@@ -508,7 +508,7 @@ def demo_graph() -> FakeGraphStore:
     clauses the stored corpus marks incomplete (ADR-0047), as the graph does.
     A mapping file still awaiting review is refused, as
     `scripts/load_mappings.py` refuses it, and an unsigned `incomplete.yaml`
-    or `part_year.yaml` as `api/main.py` refuses it (D-01, ADR-0051)."""
+    or `part_year.yaml` as `api/main.py` refuses it (D-01, ADR-0052)."""
     committed_incomplete_readings()
     mappings = load_mapping_set(sorted(MAPPINGS.glob("*.yaml")))
     pending = [f.reviewed_by for f in mappings.files if f.reviewed_by.startswith("PENDING")]

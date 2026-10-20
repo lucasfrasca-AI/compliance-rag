@@ -17,7 +17,7 @@ Two things run at startup, before anything is served:
   store holds real tenant chunks.
 
 Before either, the signed `incomplete.yaml` and `part_year.yaml` files are
-read (#211, ADR-0047, ADR-0051):
+read (#211, ADR-0047, ADR-0052):
 one still pending review refuses the build, as the mapping loader refuses an
 unsigned mapping (D-01), rather than failing the first answer that cites it.
 

@@ -1,4 +1,4 @@
-"""The reviewed readings of an incomplete clause (#211, ADR-0047, ADR-0051):
+"""The reviewed readings of an incomplete clause (#211, ADR-0047, ADR-0052):
 what a reader is shown about it, and, where the law says so, which years its
 missing content governs.
 
@@ -9,7 +9,7 @@ can't say what the missing content *is* — that needs the alt text it refuses �
 so a person may say it, in reviewed artefacts beside the instrument version's
 other reviewed files, `corpus/instruments/{instrument}/{version}/`. Two files,
 because a file names its author, and the two readings can have different
-authors (ADR-0051):
+authors (ADR-0052):
 
 - **`incomplete.yaml`, `shown`**: the words a reader is shown in place of the
   parser's detail — in an answer, a chat read back, the prompt's fence and

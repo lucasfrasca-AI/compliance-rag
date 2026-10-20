@@ -1,6 +1,6 @@
 """Track A over an incomplete clause, narrowed to a part year (#211, ADR-0047),
 and the signed readings: the words a reader is shown (`incomplete.yaml`) and
-the part-year reading that narrows it (`part_year.yaml`, ADR-0051).
+the part-year reading that narrows it (`part_year.yaml`, ADR-0052).
 
 s6DA(2)'s formula is an image, so the clause is incomplete. The three signed
 small-business conditions that cite it read a tenant-supplied turnover figure,
@@ -339,7 +339,7 @@ async def test_ga_01_a_full_year_over_the_threshold_still_applies() -> None:
 
 # ---- the reviewed files ------------------------------------------------------------------
 #
-# Two files, because a file names its author (ADR-0051): `incomplete.yaml`
+# Two files, because a file names its author (ADR-0052): `incomplete.yaml`
 # holds Lucas Frasca's words and nothing else; `part_year.yaml` holds the
 # field the model shaped, authored by the model and signed by him.
 
@@ -369,7 +369,7 @@ def test_the_committed_wording_is_signed_by_its_author_and_holds_nothing_else() 
 
 def test_the_part_year_reading_is_the_models_and_signed_by_a_person() -> None:
     """The model shaped `part_year_only`, so it is the author, and the field
-    is used only once a person has signed it (D-01, ADR-0051)."""
+    is used only once a person has signed it (D-01, ADR-0052)."""
     part_year = parse_part_year_file(
         PART_YEAR.read_text(encoding="utf-8"),
         instrument_id="privacy-act-1988",
@@ -386,7 +386,7 @@ def test_the_part_year_reading_is_the_models_and_signed_by_a_person() -> None:
 
 def test_the_human_signed_file_cant_hold_the_part_year_field(tmp_path: Path) -> None:
     """A field the model shaped can't ride in a file that names a person as
-    its author: `incomplete.yaml` refuses `part_year_only` (ADR-0051)."""
+    its author: `incomplete.yaml` refuses `part_year_only` (ADR-0052)."""
     text = REVIEW.read_text(encoding="utf-8") + (
         "    part_year_only:\n      started: business_started_on\n"
     )

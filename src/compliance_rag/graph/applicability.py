@@ -114,7 +114,7 @@ class Snapshot:
     readings: IncompleteReadings = field(default_factory=committed_incomplete_readings)
     """How those clauses were read, signed: the words a reader is shown
     (`incomplete.yaml`), and whether the missing content governs only a part
-    year (`part_year.yaml`, ADR-0051). Joined here, at read time, on the fake
+    year (`part_year.yaml`, ADR-0052). Joined here, at read time, on the fake
     and on the graph alike."""
 
 

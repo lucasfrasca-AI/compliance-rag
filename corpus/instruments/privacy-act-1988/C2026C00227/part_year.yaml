@@ -1,5 +1,5 @@
 # Which financial years the missing content of an incomplete clause of
-# C2026C00227 governs (#211, ADR-0047 Decision 6, ADR-0051).
+# C2026C00227 governs (#211, ADR-0047 Decision 6, ADR-0052).
 #
 # The model shaped this file: `part_year_only: {started: business_started_on}`
 # is its encoding of Lucas Frasca's decision 2 (#211, 2026-10-20):

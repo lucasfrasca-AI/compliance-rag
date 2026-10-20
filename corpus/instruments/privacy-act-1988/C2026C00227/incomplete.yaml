@@ -15,7 +15,7 @@
 #   > and why, which the parser's generic phrasing doesn't.
 #
 # This file holds his words and nothing else, so his name is on it as author
-# (ADR-0051). Which years s6DA(2)'s missing formula governs, a field the model
+# (ADR-0052). Which years s6DA(2)'s missing formula governs, a field the model
 # shaped, is in `part_year.yaml` beside it, authored by the model and signed
 # separately (#254).
 #

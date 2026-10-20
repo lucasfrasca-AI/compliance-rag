@@ -1,4 +1,4 @@
-# ADR-0051 — A file names a person as author only for what they wrote
+# ADR-0052 — A file names a person as author only for what they wrote
 
 - Status: proposed. The human decided the rule on 2026-10-21 (quoted below).
   The split and its shape are the model's. The split takes effect when he
@@ -89,7 +89,7 @@ previous single file meanwhile, unchanged.
   edits `CLAUDE.md`. Suggested wording for him: "A file that records a person
   as author holds only what they wrote; anything the model shaped, even
   encoding their decision, goes in a model-authored file pending their
-  signature (ADR-0051)."
+  signature (ADR-0052)."
 - **The corpus version moves** (ADR-0034): a new file under
   `corpus/instruments` and a changed reader under `src/compliance_rag/corpus`.
   Nothing is written to any store.
