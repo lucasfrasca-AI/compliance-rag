@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, LiteralString, cast
 from urllib.parse import urlparse
 
 import psycopg
+from opentelemetry import trace
 from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
@@ -33,6 +35,7 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    Citation,
     LedgerStore,
     PolicyVersion,
     Profile,
@@ -43,6 +46,8 @@ from compliance_rag.adapters.interfaces import (
     SourceVersion,
     TurnOutcome,
     TurnRole,
+    UnreadableCitation,
+    UnreadableReason,
     UsageRecord,
     check_assessment_write,
     check_chat_exchange,
@@ -66,11 +71,13 @@ from compliance_rag.corpus.models import (
     check_document_class,
     incomplete_json,
     incomplete_of_json,
+    parse_stable_id,
     validate_library_instrument_id,
     validate_tenant_id,
 )
 from compliance_rag.settings import Settings
 
+log = logging.getLogger(__name__)
 _PROFILE_LISTS = ("jurisdictions", "sectors", "actor_roles", "data_categories", "regulators")
 
 
@@ -81,24 +88,73 @@ def _refuse_library(tenant_id: str, what: str) -> None:
         raise ValueError(f"library law is never {what} (ADR-0021)")
 
 
-def _citation_row(c: ChatCitation) -> dict[str, object]:
+def _citation_row(c: Citation) -> dict[str, object]:
     """A chat turn's citation as its JSONB element. The incompleteness the
     member was shown rides in the element, only when there is any, as it does
     in every other store (ADR-0047): absent is complete. The column is JSONB
     and its constraints look at the array, not the elements, so this is not a
     schema change (#228)."""
+    if isinstance(c, UnreadableCitation):  # read back from a corrupt row, never recorded
+        raise ValueError("an unreadable citation isn't written back")
     row: dict[str, object] = {"clause_id": c.clause_id, "version_id": c.version_id}
     if c.incomplete:
         row["incomplete"] = incomplete_json(c.incomplete)
     return row
 
 
-def _citation_of_row(raw: dict[str, object]) -> ChatCitation:
-    return ChatCitation(
-        clause_id=str(raw["clause_id"]),
-        version_id=str(raw["version_id"]),
-        incomplete=incomplete_of_json(raw.get("incomplete")),
-    )
+def _citation_of_row(raw: object) -> Citation:
+    """A stored element back to its citation, or to an `UnreadableCitation` when
+    it can't be: a corrupt row must not make the member's history unreachable
+    (#232). The reason is a fixed word and the only parts of the element kept
+    are a well-formed clause id and the version that agrees with it."""
+    if not isinstance(raw, dict):
+        return UnreadableCitation(UnreadableReason.NOT_AN_OBJECT)
+    element = cast("dict[str, object]", raw)
+    clause_id, version_id = element.get("clause_id"), element.get("version_id")
+    try:
+        if not isinstance(clause_id, str):
+            raise ValueError("no clause id")
+        _, clause_version, _ = parse_stable_id(clause_id)
+    except ValueError:
+        return UnreadableCitation(UnreadableReason.NO_CLAUSE)
+    if version_id != clause_version:
+        return UnreadableCitation(UnreadableReason.WRONG_VERSION, clause_id)
+    try:
+        incomplete = incomplete_of_json(element.get("incomplete"))
+    except ValueError:  # pydantic's ValidationError is one; its message quotes the input
+        return UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, clause_id, clause_version)
+    return ChatCitation(clause_id, clause_version, incomplete)
+
+
+def _flag_unreadable(
+    tenant_id: str, chat_id: str, turn_index: int, citations: tuple[Citation, ...]
+) -> None:
+    """Says on the request's span, and in the log, that a stored citation was
+    unreadable: where it is (ids and position) and the fixed reason, never any
+    of the row. An operator learns of the corruption; the member still gets
+    their chat."""
+    span = trace.get_current_span()
+    for position, c in enumerate(citations):
+        if not isinstance(c, UnreadableCitation):
+            continue
+        attributes: dict[str, str | int] = {
+            "chat.tenant_id": tenant_id,
+            "chat.id": chat_id,
+            "chat.turn_index": turn_index,
+            "chat.citation_index": position,
+            "chat.citation_unreadable_reason": c.reason.value,
+        }
+        if c.clause_id is not None:
+            attributes["chat.citation_clause_id"] = c.clause_id
+        span.add_event("chat.citation_unreadable", attributes)
+        log.warning(
+            "a stored chat citation is unreadable: tenant=%s chat=%s turn=%d citation=%d reason=%s",
+            tenant_id,
+            chat_id,
+            turn_index,
+            position,
+            c.reason.value,
+        )
 
 
 class LedgerUnreachable(ConnectionError):
@@ -412,23 +468,27 @@ class PostgresLedgerStore(LedgerStore):
             "ORDER BY turn_index",
             (tenant_id, user_id, chat_id),
         )
-        return tuple(
-            ChatTurn(
-                tenant_id=tenant_id,
-                chat_id=chat_id,
-                turn_index=int(r[0]),
-                user_id=user_id,
-                role=TurnRole(str(r[1])),
-                content=None if r[2] is None else str(r[2]),
-                outcome=None if r[3] is None else TurnOutcome(str(r[3])),
-                citations=tuple(_citation_of_row(c) for c in cast("list[dict[str, object]]", r[4])),
-                blocked=tuple(str(b) for b in cast("list[object]", r[5])),
-                as_of=r[6],
-                trace_id=str(r[7]),
-                created_at=r[8],
+        turns: list[ChatTurn] = []
+        for r in rows:
+            citations = tuple(_citation_of_row(c) for c in cast("list[object]", r[4]))
+            _flag_unreadable(tenant_id, chat_id, int(r[0]), citations)
+            turns.append(
+                ChatTurn(
+                    tenant_id=tenant_id,
+                    chat_id=chat_id,
+                    turn_index=int(r[0]),
+                    user_id=user_id,
+                    role=TurnRole(str(r[1])),
+                    content=None if r[2] is None else str(r[2]),
+                    outcome=None if r[3] is None else TurnOutcome(str(r[3])),
+                    citations=citations,
+                    blocked=tuple(str(b) for b in cast("list[object]", r[5])),
+                    as_of=r[6],
+                    trace_id=str(r[7]),
+                    created_at=r[8],
+                )
             )
-            for r in rows
-        )
+        return tuple(turns)
 
     async def chats(self, tenant_id: str, user_id: str) -> tuple[ChatSummary, ...]:
         rows = await self._fetchall(

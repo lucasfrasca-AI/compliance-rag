@@ -13,14 +13,18 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import os
 import traceback
 import uuid
 from collections.abc import AsyncIterator
+from typing import cast
 from urllib.parse import urlparse
 
 import psycopg
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan
 
 from compliance_rag.adapters import postgres_ledger_store
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
@@ -33,6 +37,8 @@ from compliance_rag.adapters.interfaces import (
     SourceKind,
     SourceVersion,
     TurnOutcome,
+    UnreadableCitation,
+    UnreadableReason,
 )
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
@@ -348,3 +354,90 @@ async def test_a_coverage_row_the_database_refuses_takes_the_assessment_with_it(
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         cursor = await conn.execute("SELECT count(*) FROM assessment")
         assert await cursor.fetchone() == (0,)
+
+
+CORRUPT = [
+    pytest.param("just a string", UnreadableCitation(UnreadableReason.NOT_AN_OBJECT), id="string"),
+    pytest.param(
+        {"version_id": "C2026C00227"}, UnreadableCitation(UnreadableReason.NO_CLAUSE), id="no-id"
+    ),
+    pytest.param(
+        {"clause_id": 7, "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="id-not-a-string",
+    ),
+    pytest.param(
+        {"clause_id": "SECRET not a clause id", "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="malformed-id",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2, "version_id": "v9"},
+        UnreadableCitation(UnreadableReason.WRONG_VERSION, S6DA_2),
+        id="wrong-version",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2},
+        UnreadableCitation(UnreadableReason.WRONG_VERSION, S6DA_2),
+        id="no-version",
+    ),
+    pytest.param(
+        {
+            "clause_id": S6DA_2,
+            "version_id": "C2026C00227",
+            "incomplete": [{"reason": "SECRET", "detail": "SECRET words"}],
+        },
+        UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, S6DA_2, "C2026C00227"),
+        id="bad-reason",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2, "version_id": "C2026C00227", "incomplete": "SECRET"},
+        UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, S6DA_2, "C2026C00227"),
+        id="incomplete-not-a-list",
+    ),
+]
+
+
+@pytest.mark.parametrize(("element", "unreadable"), CORRUPT)
+async def test_a_corrupt_stored_citation_reads_back_unreadable_in_its_place_and_the_chat_reads(
+    ledger: PostgresLedgerStore,
+    caplog: pytest.LogCaptureFixture,
+    element: object,
+    unreadable: UnreadableCitation,
+) -> None:
+    """#232: a malformed element of the `citations` JSONB must not make the
+    chat unreachable. It reads back as an `UnreadableCitation` where it was,
+    its neighbours intact; nothing is dropped; and the span and the log say
+    where, by ids and a fixed reason, never by the row."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_chat_exchange(an_exchange("c1"))
+    good = {"clause_id": APP11, "version_id": "C2026C00227"}
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute(
+            "UPDATE chat SET citations = %s WHERE turn_index = 1",
+            (json.dumps([good, element, good]),),
+        )
+        await conn.commit()
+    with (
+        caplog.at_level(logging.WARNING, logger=postgres_ledger_store.__name__),
+        trace.get_tracer("test").start_as_current_span("request") as span,
+    ):
+        question, answer = await ledger.chat_turns("acme", "uid-1", "c1")
+    assert question.citations == ()
+    readable = ChatCitation(APP11, "C2026C00227")
+    assert answer.citations == (readable, unreadable, readable)
+    assert answer.content is not None and answer.outcome is TurnOutcome.VERIFIED
+
+    (event,) = [e for e in cast(ReadableSpan, span).events if e.name == "chat.citation_unreadable"]
+    assert dict(event.attributes or {}) == {
+        "chat.tenant_id": "acme",
+        "chat.id": "c1",
+        "chat.turn_index": 1,
+        "chat.citation_index": 1,
+        "chat.citation_unreadable_reason": unreadable.reason.value,
+        **({"chat.citation_clause_id": unreadable.clause_id} if unreadable.clause_id else {}),
+    }
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert f"reason={unreadable.reason.value}" in warning.getMessage()
+    # Ids and a fixed word, nothing the row held.
+    assert "SECRET" not in caplog.text + str(event.attributes)

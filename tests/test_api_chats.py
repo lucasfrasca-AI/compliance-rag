@@ -39,6 +39,8 @@ from compliance_rag.adapters.interfaces import (
     Profile,
     TurnOutcome,
     TurnRole,
+    UnreadableCitation,
+    UnreadableReason,
 )
 from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
@@ -524,6 +526,112 @@ async def test_an_id_that_is_not_a_uuid4_is_a_422_before_anything_is_looked_up(
     assert generator.calls == []
 
 
+# ---- one citation builder, and a corrupt citation that reads back unreadable (#232) --
+
+
+def _without_text(citation: dict[str, Any]) -> dict[str, Any]:  # Any: JSON
+    """The answer event's citation less the clause text, which a chat doesn't repeat."""
+    return {k: v for k, v in citation.items() if k != "canonical_text"}
+
+
+async def test_a_citation_is_the_same_in_the_answer_event_and_the_chat_read_back(
+    quote: str,
+) -> None:
+    """One builder makes both (`answers.citation_json`), so the two can't
+    drift: what a chat shows of a citation is what the answer showed, less the
+    clause text."""
+    ledger = await acme_ledger()
+    generator = FakeGenerator(reply_of((APP11, quote)))
+    async with await answers_client(generator, ledger, await golden_clause_store()) as c:
+        _, events = await _ask(c)
+        read = (await c.get(f"/v1/chats/{_chat_id(events)}")).json()
+    shown = dict(events)["answer"]["citations"]
+    assert shown and "canonical_text" in shown[0]
+    assert [_without_text(c) for c in shown] == read["turns"][1]["citations"]
+
+
+async def _chat_with_stored_citations(
+    ledger: FakeLedgerStore,
+    chat_id: str,
+    citations: tuple[Any, ...],  # Any: citations
+) -> None:
+    """A verified answer's turn with `citations` in the ledger as stored. The
+    fake keeps the turns it is given, so it can hold what a corrupt row reads
+    back as; the real ledger's rows are corrupted in `test_postgres_ledger_store`."""
+    await ledger.record_chat_exchange(
+        ChatExchange(
+            tenant_id=TENANT,
+            chat_id=chat_id,
+            user_id=UID,
+            question=QUESTION,
+            answer=ChatAnswer(TurnOutcome.VERIFIED, ANSWER, (ChatCitation(APP11, LAW_VERSION),)),
+            as_of=dt.date.fromisoformat(AS_OF),
+            trace_id="7" * 32,
+        )
+    )
+    turns = ledger._chats[(TENANT, chat_id)]  # pyright: ignore[reportPrivateUsage]
+    turns[1] = replace(turns[1], citations=citations)
+
+
+async def test_an_unreadable_citation_stays_in_place_marked_and_the_chat_is_a_200() -> None:
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    s6da = "privacy-act-1988:C2026C00227:s6da/2"
+    await _chat_with_stored_citations(
+        ledger,
+        chat_id,
+        (
+            ChatCitation(APP11, LAW_VERSION),
+            UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, s6da, LAW_VERSION),
+            UnreadableCitation(UnreadableReason.NOT_AN_OBJECT),
+            ChatCitation(APP11, LAW_VERSION),
+        ),
+    )
+    async with await answers_client(FakeGenerator(), ledger, FakeClauseStore()) as c:
+        response = await c.get(f"/v1/chats/{chat_id}")
+        listed = await c.get("/v1/chats")
+    assert response.status_code == 200 and listed.status_code == 200
+    question, answer = response.json()["turns"]
+    assert question["text"] == QUESTION
+    assert answer["verified"] is True and answer["text"] == ANSWER
+    readable: dict[str, Any] = {  # Any: JSON
+        "clause_id": APP11,
+        "cite": "APP 11.1",
+        "version_id": LAW_VERSION,
+        "incomplete": [],
+    }
+    assert answer["citations"] == [
+        readable,
+        # Named, since its clause id could be read, and marked; no `incomplete`:
+        # what the member was shown with it is lost.
+        {
+            "unreadable": True,
+            "reason": "bad_incomplete",
+            "clause_id": s6da,
+            "cite": "s 6DA(2)",
+            "version_id": LAW_VERSION,
+        },
+        {"unreadable": True, "reason": "not_an_object"},
+        readable,
+    ]
+    # Nothing is dropped, so the readable ones are all still there and the
+    # turn's own `incomplete` list is built from them alone.
+    assert answer["incomplete"] == []
+
+
+async def test_an_unreadable_citation_names_a_clause_it_could_read_and_nothing_else() -> None:
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    await _chat_with_stored_citations(
+        ledger, chat_id, (UnreadableCitation(UnreadableReason.WRONG_VERSION, APP11),)
+    )
+    async with await answers_client(FakeGenerator(), ledger, FakeClauseStore()) as c:
+        read = (await c.get(f"/v1/chats/{chat_id}")).json()
+    assert read["turns"][1]["citations"] == [
+        {"unreadable": True, "reason": "wrong_version", "clause_id": APP11, "cite": "APP 11.1"}
+    ]
+
+
 # ---- the real ledger -----------------------------------------------------------------
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -627,5 +735,56 @@ async def test_a_chat_is_recorded_and_read_back_through_the_api_on_postgres(quot
             (3, UID, "assistant", True, "blocked", two),
         ]
         assert leaked == (0,)
+    finally:
+        await empty_ledger()
+
+
+@pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL not set — needs a migrated ledger")
+async def test_a_corrupt_citation_row_reads_back_unreadable_through_the_api_on_postgres() -> None:
+    """#232 on the real ledger: a row with a malformed `citations` element is a
+    200 with that citation marked, not a 500."""
+    import json
+
+    import psycopg
+
+    from tests.test_postgres_ledger_store import empty_ledger
+
+    postgres = await empty_ledger()
+    try:
+        await postgres.put_profile(Profile(TENANT))
+        chat_id = uuid.uuid4().hex
+        await postgres.record_chat_exchange(
+            ChatExchange(
+                tenant_id=TENANT,
+                chat_id=chat_id,
+                user_id=UID,
+                question=QUESTION,
+                answer=ChatAnswer(
+                    TurnOutcome.VERIFIED, ANSWER, (ChatCitation(APP11, LAW_VERSION),)
+                ),
+                as_of=dt.date.fromisoformat(AS_OF),
+                trace_id="7" * 32,
+            )
+        )
+        good = {"clause_id": APP11, "version_id": LAW_VERSION}
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute(
+                "UPDATE chat SET citations = %s WHERE turn_index = 1",
+                (json.dumps([good, {"clause_id": APP11}, "SECRET", good]),),
+            )
+            await conn.commit()
+        async with await answers_client(FakeGenerator(), postgres, FakeClauseStore()) as c:
+            response = await c.get(f"/v1/chats/{chat_id}")
+        assert response.status_code == 200
+        cited = response.json()["turns"][1]["citations"]
+        assert [c.get("unreadable", False) for c in cited] == [False, True, True, False]
+        assert cited[1] == {
+            "unreadable": True,
+            "reason": "wrong_version",
+            "clause_id": APP11,
+            "cite": "APP 11.1",
+        }
+        assert cited[2] == {"unreadable": True, "reason": "not_an_object"}
+        assert "SECRET" not in response.text
     finally:
         await empty_ledger()

@@ -695,14 +695,15 @@ async def assert_chat_contract(ledger: LedgerStore) -> None:
     await ledger.record_chat_exchange(an_exchange("flagged", answer=flagged))
     _, shown = await turns("flagged")
     assert shown.citations == flagged.citations
-    assert [c.incomplete for c in shown.citations] == [
+    assert [c.incomplete for c in shown.citations if isinstance(c, ChatCitation)] == [
         (),
         (FORMULA_GAP,),
         (TABLE_GAP, PENALTY_GAP),
     ]
     # An answer recorded without any is read back without any.
     await ledger.record_chat_exchange(an_exchange("unflagged"))
-    assert all(c.incomplete == () for c in (await turns("unflagged"))[1].citations)
+    plain = (await turns("unflagged"))[1].citations
+    assert plain and all(isinstance(c, ChatCitation) and c.incomplete == () for c in plain)
 
 
 async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:

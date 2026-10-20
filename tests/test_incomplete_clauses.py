@@ -754,6 +754,10 @@ async def test_a_chat_read_back_shows_an_incomplete_clauses_flag_as_the_answer_d
     [citation] = answer["citations"]
     assert citation["clause_id"] == S6DA_2 and citation["incomplete"] == reasons
     assert [c["incomplete"] for c in shown["citations"]] == [citation["incomplete"]]
+    # One builder makes the citation for both (#232): a flagged one too.
+    assert [{k: v for k, v in c.items() if k != "canonical_text"} for c in shown["citations"]] == [
+        citation
+    ]
     assert answer["incomplete"] == shown["incomplete"]
     # The question turn has none; it is the member's own words.
     assert "incomplete" not in read["turns"][0]
