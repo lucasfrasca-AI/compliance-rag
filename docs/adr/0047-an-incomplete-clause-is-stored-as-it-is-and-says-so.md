@@ -210,8 +210,10 @@ shows the clause was incomplete and who completed it, when and why.
   table's `citations` JSONB: `incomplete` is the same list of reasons as every
   other store, present only when there is any, so a row written before it
   reads back complete (those answers were shown without a flag). No
-  migration, since the column's constraints test the array and not its
-  elements. Read-back reads the ledger and never the corpus: a clause marked
+  structural migration, since the column's constraints test the array and not
+  its elements; `db/ledger/0016_chat_citation_incomplete.sql` only re-sets the
+  column's comment, which 0014 (applied, so not edited) left describing the
+  old element shape. Read-back reads the ledger and never the corpus: a clause marked
   or completed after the answer doesn't change what the chat shows.
 - **Every clause the parse marks is reported**, in the test that pins the
   whole compilation; a selection that grows to s16A or Part IIIA ingests those
