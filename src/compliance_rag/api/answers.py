@@ -103,7 +103,7 @@ from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
 from compliance_rag.corpus.display_form import Titles, cite
-from compliance_rag.corpus.incomplete_review import committed_incomplete_reviews
+from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import ClauseRecord, Incomplete
 from compliance_rag.retrieval.pipeline import RetrievalTrace
 from compliance_rag.telemetry import current_trace_id
@@ -240,7 +240,7 @@ def citation_json(
         # read back, as recorded with the turn, not the clause's state in
         # today's corpus (#162, #228). Each reason's `detail` is the words a
         # reader is shown: signed, where a person read the clause (#211).
-        "incomplete": committed_incomplete_reviews().shown_json(clause_id, incomplete),
+        "incomplete": committed_incomplete_readings().shown_json(clause_id, incomplete),
     }
 
 
@@ -258,7 +258,7 @@ def incomplete_clauses_json(
         {
             "clause_id": clause_id,
             "cite": cite(clause_id, titles),
-            "reasons": committed_incomplete_reviews().shown_json(clause_id, incomplete),
+            "reasons": committed_incomplete_readings().shown_json(clause_id, incomplete),
         }
         for clause_id, incomplete in found.items()
     ]

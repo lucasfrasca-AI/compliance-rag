@@ -41,12 +41,12 @@ from compliance_rag.assessment.coverage import (
     Truth,
 )
 from compliance_rag.assessment.evidence import Facts, FactValue, Period, Reading
-from compliance_rag.corpus.display_form import display_form
-from compliance_rag.corpus.incomplete_review import (
-    IncompleteReviews,
-    committed_incomplete_reviews,
+from compliance_rag.corpus.display_form import NO_TITLES, cite
+from compliance_rag.corpus.incomplete_reading import (
+    IncompleteReadings,
+    committed_incomplete_readings,
 )
-from compliance_rag.corpus.models import Incomplete, parse_stable_id
+from compliance_rag.corpus.models import Incomplete
 from compliance_rag.graph.mappings import (
     Comparison,
     Leaf,
@@ -111,7 +111,7 @@ class Snapshot:
     incomplete: Mapping[str, Incomplete] = field(default_factory=dict[str, Incomplete])
     """The clauses conditions cite that are incomplete, with why (ADR-0047):
     read off the stored corpus, never from the mapping."""
-    reviews: IncompleteReviews = field(default_factory=committed_incomplete_reviews)
+    readings: IncompleteReadings = field(default_factory=committed_incomplete_readings)
     """How a person read those clauses (`incomplete.yaml`, signed): the words a
     reader is shown, and whether the missing content governs only a part
     year. Joined here, at read time, on the fake and on the graph alike."""
@@ -255,62 +255,77 @@ class _Evaluator:
         if not gaps:
             return decided
         year = self._year(leaf)
-        status, started = self._year_is(year, gaps)
-        if status is _YearIs.FULL:
-            return decided
+        status, started = self._year_is(year, gaps, leaf.field)
         evidence_ids = tuple(dict.fromkeys((*decided.evidence_ids, *started)))
+        if status is _YearIs.FULL:
+            # Decided from the figure, on the evidence that said it was a full year too.
+            return replace(decided, evidence_ids=evidence_ids)
         if status is _YearIs.PART:
             return self._unsettled(spec, gaps, evidence_ids=evidence_ids)
         # Open: when the business started would say whether the year was a
         # part year, so that is asked, beside the figure if it is missing too.
-        needs = tuple(dict.fromkeys(g.started for g in gaps if g.started is not None))
-        question = decided.question or Question(
-            condition_id=spec.id,
-            field=needs[0],
-            period=f"on {self._as_of}",
-            question=f"When did the business start? If it was during {year.label}, that was a "
-            f"part year, which {_cites(gaps)} governs.",
-            unassessable_reason=f"When the business started is not recorded, so whether "
-            f"{year.label} was a part year, which {_cites(gaps)} governs, can't be settled.",
-            clause_ids=spec.clause_ids,
-            evidence_ids=evidence_ids,
-        )
-        also = tuple(f for f in needs if f != question.field and f not in question.also_needs)
+        question = decided.question or self._start_question(spec, (year.label,), gaps, evidence_ids)
         return _node(
             spec,
             Truth.UNKNOWN,
             (),
-            question=replace(question, also_needs=(*question.also_needs, *also)),
+            question=_also_needing(question, _started_fields(gaps)),
             evidence_ids=evidence_ids,
             incomplete=_pairs(gaps),
+        )
+
+    def _start_question(
+        self,
+        spec: ConditionSpec,
+        years: tuple[str, ...],
+        gaps: tuple[_Gap, ...],
+        evidence_ids: tuple[str, ...],
+    ) -> Question:
+        """What settles an open year whose figure is known: when the business
+        started, which says whether the year was a part year."""
+        during, cites = " or ".join(years), _cites(gaps)
+        return Question(
+            condition_id=spec.id,
+            field=_started_fields(gaps)[0],
+            period=f"on {self._as_of}",
+            question=f"When did the business start? If it was during {during}, that was a "
+            f"part year, which {cites} governs.",
+            unassessable_reason=f"When the business started is not recorded, so whether "
+            f"{during} was a part year, which {cites} governs, can't be settled.",
+            clause_ids=spec.clause_ids,
+            evidence_ids=evidence_ids,
         )
 
     def _gaps(self, spec: ConditionSpec) -> tuple[_Gap, ...]:
         """Each incomplete clause the leaf rests on, for each reason, as the
         stored corpus marks it and a person read it."""
-        reviews = self._snapshot.reviews
+        readings = self._snapshot.readings
         gaps: list[_Gap] = []
         for clause_id in spec.clause_ids:
             for incompleteness in self._snapshot.incomplete.get(clause_id, ()):
-                read = reviews.entry(clause_id, incompleteness.reason)
+                read = readings.entry(clause_id, incompleteness.reason)
                 only = read.part_year_only if read is not None else None
                 gaps.append(
                     _Gap(
                         clause_id,
-                        reviews.shown(clause_id, incompleteness),
+                        readings.shown(clause_id, incompleteness),
                         only.started if only is not None else None,
                     )
                 )
         return tuple(gaps)
 
-    def _year_is(self, year: Period, gaps: tuple[_Gap, ...]) -> tuple[_YearIs, tuple[str, ...]]:
+    def _year_is(
+        self, year: Period, gaps: tuple[_Gap, ...], figure: str
+    ) -> tuple[_YearIs, tuple[str, ...]]:
         """Whether `year` was a part year, from when the business started, and
         the evidence that said so. A start on 1 July is a full year; a start
         after the year ended means it wasn't carried on in it at all, which is
-        no part year either."""
+        no part year either. With the start unknown, a `figure` recorded for
+        the year before shows it was carried on then (ADR-0027) and so, as the
+        mapping reads it, without a break all of this one: a full year."""
         found: list[_YearIs] = []
         evidence: list[str] = []
-        for started in dict.fromkeys(g.started for g in gaps if g.started is not None):
+        for started in _started_fields(gaps):
             reading = self._facts.on(started, self._as_of)
             evidence += [e.evidence_id for e in reading.evidence]
             day = reading.value
@@ -320,7 +335,12 @@ class _Evaluator:
                 or not isinstance(day, dt.date)
                 or isinstance(day, dt.datetime)
             ):
-                found.append(_YearIs.OPEN)
+                before = self._facts.for_period(figure, year.previous_financial_year())
+                if before.missing or before.conflict or before.value is None:
+                    found.append(_YearIs.OPEN)
+                else:
+                    evidence += [e.evidence_id for e in before.evidence]
+                    found.append(_YearIs.FULL)
             elif year.start < day < year.end:
                 found.append(_YearIs.PART)
             else:
@@ -392,16 +412,17 @@ class _Evaluator:
         read: list[str] = list(e.evidence_id for e in since.evidence)
         unknown_years: list[str] = []
         unsettled = False
-        open_ = False
+        open_years: list[str] = []
         for year in years:
             reading = self._facts.for_period(leaf.field, year)
             read += [e.evidence_id for e in reading.evidence]
             if gaps:
-                status, started = self._year_is(year, gaps)
+                status, started = self._year_is(year, gaps, leaf.field)
                 read += started
                 if status is not _YearIs.FULL:
                     unsettled = True
-                    open_ = open_ or status is _YearIs.OPEN
+                    if status is _YearIs.OPEN:
+                        open_years.append(year.label)
                     continue
             if reading.missing or reading.conflict or reading.value is None:
                 unknown_years.append(year.label)
@@ -424,13 +445,25 @@ class _Evaluator:
         # business was carried on (ADR-0027).
         if not unknown_years and not unsettled:
             return _node(spec, Truth.FALSE, (), evidence_ids=evidence_ids)
-        if not unknown_years and not open_:
+        if not unknown_years and not open_years:
             # Every other year is known and none passes, but the part year
             # can't be read: no answer settles it (ADR-0047).
             return _node(spec, Truth.UNKNOWN, (), evidence_ids=evidence_ids, incomplete=incomplete)
+        if not unknown_years:
+            # Every figure is in; only when it started would say whether an
+            # open year was the part year.
+            question = self._start_question(spec, tuple(open_years), gaps, evidence_ids)
+            return _node(
+                spec,
+                Truth.UNKNOWN,
+                (),
+                question=question,
+                evidence_ids=evidence_ids,
+                incomplete=incomplete,
+            )
         needs = () if since_known else (leaf.since_field,)
-        if open_:
-            needs += tuple(g.started for g in gaps if g.started is not None)
+        if open_years:
+            needs += _started_fields(gaps)
         question = Question(
             condition_id=spec.id,
             field=leaf.field,
@@ -665,6 +698,16 @@ def _cites(gaps: tuple[_Gap, ...]) -> str:
     return " and ".join(dict.fromkeys(_cite(g.clause_id) for g in gaps))
 
 
+def _started_fields(gaps: tuple[_Gap, ...]) -> tuple[str, ...]:
+    """The facts that say when the business started, for part-year gaps."""
+    return tuple(dict.fromkeys(g.started for g in gaps if g.started is not None))
+
+
+def _also_needing(question: Question, fields: tuple[str, ...]) -> Question:
+    extra = tuple(f for f in fields if f != question.field and f not in question.also_needs)
+    return replace(question, also_needs=(*question.also_needs, *extra))
+
+
 def _within(held: str, code: str) -> bool:
     """`AU-NSW` is within `AU` (ISO 3166-2 subdivision); `anzsic-2006:Q8401`
     is within `anzsic-2006:Q` (an ANZSIC class within its division)."""
@@ -735,8 +778,7 @@ def _compare(fact: FactValue, test: Comparison, value: object, as_of: dt.date) -
 
 
 def _cite(clause_id: str) -> str:
-    instrument_id, _, clause_path = parse_stable_id(clause_id)
-    return display_form(clause_path, instrument_id)
+    return cite(clause_id, NO_TITLES)
 
 
 def _reason(outcome: Outcome, explanation: Explanation) -> str:

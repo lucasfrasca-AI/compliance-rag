@@ -52,13 +52,13 @@ PENDING = "PENDING"
 
 # What a reader is shown goes into the prompt's fence marker, `incomplete (…)`,
 # so it can't hold what would reshape it: no `]` (closes the marker), no `;`
-# (separates two reasons), no quote, no line break (#236). Letters, digits,
+# (separates two reasons), no double quote, no line break (#236). Letters, digits,
 # spaces, parentheses (balanced, checked below) and plain punctuation.
 _SHOWN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 (),.'-]*[A-Za-z0-9)]\Z")
 _FIELD_RE = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
 
-class UnreviewedIncompleteness(ValueError):
+class UnsignedIncompleteReading(ValueError):
     """An `incomplete.yaml` nobody has signed: never used (D-01)."""
 
 
@@ -83,7 +83,7 @@ class PartYearOnly(_Strict):
         return v
 
 
-class ReviewedIncompleteness(_Strict):
+class IncompleteReading(_Strict):
     """One clause's reason, as a person read it."""
 
     clause_id: str
@@ -119,14 +119,14 @@ def _balanced(text: str) -> bool:
     return depth == 0
 
 
-class IncompleteReview(_Strict):
+class IncompleteReadingFile(_Strict):
     """One `incomplete.yaml`."""
 
     author: str
     reviewed_by: str
     date: str
     source_clause_ids: tuple[str, ...] = Field(min_length=1)
-    clauses: tuple[ReviewedIncompleteness, ...] = Field(min_length=1)
+    clauses: tuple[IncompleteReading, ...] = Field(min_length=1)
 
     @field_validator("date", mode="before")
     @classmethod
@@ -155,14 +155,14 @@ class IncompleteReview(_Strict):
 
 
 @dataclass(frozen=True, slots=True)
-class IncompleteReviews:
+class IncompleteReadings:
     """Every signed entry, by clause and reason."""
 
-    entries: Mapping[tuple[str, IncompleteReason], ReviewedIncompleteness] = field(
-        default_factory=dict[tuple[str, IncompleteReason], ReviewedIncompleteness]
+    entries: Mapping[tuple[str, IncompleteReason], IncompleteReading] = field(
+        default_factory=dict[tuple[str, IncompleteReason], IncompleteReading]
     )
 
-    def entry(self, clause_id: str, reason: IncompleteReason) -> ReviewedIncompleteness | None:
+    def entry(self, clause_id: str, reason: IncompleteReason) -> IncompleteReading | None:
         return self.entries.get((clause_id, reason))
 
     def shown(self, clause_id: str, incompleteness: Incompleteness) -> str:
@@ -177,18 +177,18 @@ class IncompleteReviews:
         return [{"reason": i.reason.value, "detail": self.shown(clause_id, i)} for i in incomplete]
 
 
-def parse_incomplete_review(
+def parse_incomplete_reading_file(
     source: str, *, instrument_id: str, version_id: str
-) -> IncompleteReview:
+) -> IncompleteReadingFile:
     """One file, for the instrument version whose folder holds it. Refused
     while it is pending review, and if it names a clause of another version."""
     loaded = yaml.safe_load(source)
     if not isinstance(loaded, dict):
         raise ValueError(f"{FILE_NAME} must be a YAML mapping")
     data = cast("dict[str, Any]", loaded)  # Any: yaml.safe_load is untyped
-    review = IncompleteReview.model_validate(data)
+    review = IncompleteReadingFile.model_validate(data)
     if not review.is_signed_off:
-        raise UnreviewedIncompleteness(
+        raise UnsignedIncompleteReading(
             f"{instrument_id}/{version_id}/{FILE_NAME} is awaiting review, not used (D-01)"
         )
     for clause in review.clauses:
@@ -198,20 +198,20 @@ def parse_incomplete_review(
     return review
 
 
-def load_incomplete_reviews(root: Path = INSTRUMENTS_ROOT) -> IncompleteReviews:
+def load_incomplete_readings(root: Path = INSTRUMENTS_ROOT) -> IncompleteReadings:
     """Every `incomplete.yaml` under `root`, one per instrument version."""
-    entries: dict[tuple[str, IncompleteReason], ReviewedIncompleteness] = {}
+    entries: dict[tuple[str, IncompleteReason], IncompleteReading] = {}
     for path in sorted(root.glob(f"*/*/{FILE_NAME}")):
-        review = parse_incomplete_review(
+        review = parse_incomplete_reading_file(
             path.read_text(encoding="utf-8"),
             instrument_id=path.parent.parent.name,
             version_id=path.parent.name,
         )
         entries |= {(c.clause_id, c.reason): c for c in review.clauses}
-    return IncompleteReviews(entries)
+    return IncompleteReadings(entries)
 
 
 @functools.cache
-def committed_incomplete_reviews() -> IncompleteReviews:
+def committed_incomplete_readings() -> IncompleteReadings:
     """The reviewed files in this checkout, read once: what the app shows."""
-    return load_incomplete_reviews()
+    return load_incomplete_readings()

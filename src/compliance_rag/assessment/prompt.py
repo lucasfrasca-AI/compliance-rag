@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from compliance_rag.corpus.incomplete_review import committed_incomplete_reviews
+from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import Incomplete, parse_stable_id
 
 SYSTEM_PROMPT = """\
@@ -98,7 +98,7 @@ class SourceClause:
     """Why the clause's text is not all of its content (ADR-0047), from the
     parser, never from any text. The marker shows, for each reason, the words
     a person signed for it (`incomplete.yaml`) or else the parser's detail:
-    neither can hold a `]`, a `;`, a quote or a line break, so neither can
+    neither can hold a `]`, a `;`, a double quote or a line break, so neither can
     reshape the marker it goes in."""
     cited_as: str | None = None
     """How a reader cites the clause (`display_form.cite`, ADR-0049): the form
@@ -129,7 +129,7 @@ class SourceClause:
             gloss = "how it is satisfied" if len(self.qualifies) == 1 else "how they are satisfied"
             marker += f" qualifies {' '.join(self.qualifies)} ({gloss})"
         if self.incomplete:
-            shown = committed_incomplete_reviews().shown
+            shown = committed_incomplete_readings().shown
             words = "; ".join(shown(self.clause_id, i) for i in self.incomplete)
             marker += f" incomplete ({words})"
         return marker

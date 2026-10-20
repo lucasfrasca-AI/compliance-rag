@@ -185,8 +185,8 @@ mapping. Which readings that is:
   | The year is | When | The leaf |
   |---|---|---|
   | a **part year** | the business started during it (after its 1 July) | unknown, the clause's reason, **no question** |
-  | **open** | `business_started_on` unknown, conflicting or not a date | unknown, the clause's reason, and **asked** when it started |
-  | a **full year** | it started on or before its 1 July, or after it ended (not carried on in it at all) | decided from the figure, as before |
+  | **open** | `business_started_on` unknown, conflicting or not a date, and no figure recorded for the year before | unknown, the clause's reason, and **asked** when it started (with the figure, if that is missing too) |
+  | a **full year** | it started on or before its 1 July, or after it ended (not carried on in it at all); or, the start unknown, a figure is recorded for the year before | decided from the figure, as before, on that evidence too |
 
   For s6D(4)(a), which reads every year ended since the business started (or
   21 December 2001, if later), the start year is the part year: it is never
@@ -194,8 +194,14 @@ mapping. Which readings that is:
   isn't in the corpus). Any other year over the threshold still decides it
   true; every other year known and under leaves it unknown with no question;
   another year without a figure is asked for, that year alone. With the start
-  unknown, every year might be the start year, so nothing decides it and the
-  start date is asked (`also_needs`).
+  unknown, only a year with no figure recorded for the year before it might
+  be the start year: a year with turnover recorded is a year it was carried
+  on (ADR-0027), and the mapping takes it as carried on since without a
+  break, so the next year was carried on all of it (the model's call, from
+  the review: otherwise an unknown start would have stopped a later year over
+  the threshold deciding, which `main` decided). An open year is asked by its
+  start date; a missing figure is asked for as before, with the start date in
+  `also_needs`.
 
 **How part-year relevance is known** (the model's call, the reading signed):
 not from the mapping, which says nothing of part years in structure (only in
@@ -208,7 +214,10 @@ when the business started (`COND-PA-CARRIED-ON-LAST-YEAR`'s leaf, s6D(4)(a)'s
 break. A test holds each such entry to its clause: the clause's stored text
 says "carried on for only part of a financial year", and the fact is a field
 the mapping reads. Nothing is speculated past that: the part-year test is
-dates only, and a figure in a part year decides nothing either way.
+dates only, and a figure in a part year decides nothing either way. The
+`track_a.coverage` span records each unassessable obligation an incomplete
+clause leaves unsettled (`track_a.incomplete`, "<obligation> rests on <clause
+id>").
 
 **7. Why the alt text is refused.** The verifier's claim is that a quoted span
 matches the authoritative source. The alt text is an accessibility rendering
@@ -257,9 +266,9 @@ The human's decision (#211, 2026-10-20, decision 3):
   `author` and `reviewed_by` are both Lucas Frasca, dated 2026-10-20: the
   wording is his, verbatim, and `part_year_only` records his decision 2; the
   model transcribed both and drafted nothing in it.
-- **Refused while pending** (`compliance_rag.corpus.incomplete_review`): a
+- **Refused while pending** (`compliance_rag.corpus.incomplete_reading`): a
   file whose `reviewed_by` or `date` starts `PENDING` raises
-  `UnreviewedIncompleteness` and is never used, as `load_mappings.py`
+  `UnsignedIncompleteReading` and is never used, as `load_mappings.py`
   refuses an unsigned mapping; the API reads the files when it is built, so an
   unsigned one stops the build rather than the first answer. A model never
   reviews one (`validate_review`), each entry must be a clause of the folder's
@@ -269,7 +278,7 @@ The human's decision (#211, 2026-10-20, decision 3):
   clause's own part-year words.
 - **The words are safe in a fence marker.** `shown` is one line of letters,
   digits, spaces, balanced parentheses and plain punctuation: no `]` (closes
-  the marker), no `;` (separates two reasons), no quote, no line break
+  the marker), no `;` (separates two reasons), no double quote, no line break
   (#236). It is hashed into the fence's boundary with the rest of the marker.
 - **Where readers see it**, for that clause and reason only, the parser's
   detail otherwise (another reason on the same clause, a clause nobody has

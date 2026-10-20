@@ -262,6 +262,18 @@ def _record(span: Span, coverage: Coverage) -> None:
         "track_a.qualifiers",
         [f"{p.clause} read with {p.qualifier}" for p in sorted(coverage.track_a_qualifiers)],
     )
+    # Each unassessable obligation an incomplete clause leaves unsettled, by
+    # clause id only (ADR-0047): the reader-facing words are in the reason.
+    span.set_attribute(
+        "track_a.incomplete",
+        sorted(
+            {
+                f"{o.obligation_id} rests on {clause_id}"
+                for o in coverage.with_outcome(Outcome.UNASSESSABLE)
+                for clause_id, _ in o.explanation.incompleteness()
+            }
+        ),
+    )
 
 
 class GraphTrackA(GraphStore):

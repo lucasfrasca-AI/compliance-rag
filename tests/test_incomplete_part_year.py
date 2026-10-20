@@ -25,18 +25,19 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import ValidationError
 
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.assessment.coverage import Explanation, Outcome, Truth
 from compliance_rag.assessment.evidence import Facts
-from compliance_rag.corpus.incomplete_review import (
+from compliance_rag.corpus.incomplete_reading import (
     INSTRUMENTS_ROOT,
-    IncompleteReviews,
-    UnreviewedIncompleteness,
-    committed_incomplete_reviews,
-    load_incomplete_reviews,
-    parse_incomplete_review,
+    IncompleteReadings,
+    UnsignedIncompleteReading,
+    committed_incomplete_readings,
+    load_incomplete_readings,
+    parse_incomplete_reading_file,
 )
 from compliance_rag.corpus.models import IncompleteReason
 from compliance_rag.corpus.parser import FORMULA_NOT_TEXT, TABLE_NOT_TEXT
@@ -48,6 +49,7 @@ from compliance_rag.graph.track_a import snapshot_of_mappings
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for, graph_for, stored_incomplete
 from tests.test_neo4j_graph import graph as graph
 from tests.test_neo4j_graph import needs_neo4j
+from tests.test_obligation_qualifiers import strings
 
 S6DA_2 = "privacy-act-1988:C2026C00227:s6da/2"
 REVIEW = INSTRUMENTS_ROOT / "privacy-act-1988" / "C2026C00227" / "incomplete.yaml"
@@ -70,7 +72,7 @@ FULL_YEAR_START = dt.date(2015, 3, 2)
 """Acme's start: long before either year the two single-year leaves read."""
 
 
-def _snapshot(reviews: IncompleteReviews | None = None) -> Snapshot:
+def _snapshot(readings: IncompleteReadings | None = None) -> Snapshot:
     labels = load_applicability_set()
     mappings = load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml")))
     snapshot = snapshot_of_mappings(
@@ -79,7 +81,7 @@ def _snapshot(reviews: IncompleteReviews | None = None) -> Snapshot:
         clause_validity=labels.clause_validity(set(mappings.clause_ids)),
         incomplete=stored_incomplete(),
     )
-    return snapshot if reviews is None else replace(snapshot, reviews=reviews)
+    return snapshot if readings is None else replace(snapshot, readings=readings)
 
 
 def _facts(started: dt.date | None, turnover: dict[int, int]) -> Facts:
@@ -128,6 +130,8 @@ def test_previous_year_full_year_is_decided_from_the_figure() -> None:
     over = _explain(PREVIOUS, FULL_YEAR_START, {2025: 4_000_000})
     assert (under.truth, over.truth) == (Truth.TRUE, Truth.FALSE)
     assert under.incomplete == over.incomplete == ()
+    # Decided on the figure and on the start date that made it a full year.
+    assert len(under.evidence_ids) == 2
 
 
 def test_previous_year_a_start_on_1_july_is_a_full_year() -> None:
@@ -148,6 +152,14 @@ def test_previous_year_open_is_unassessable_and_asks_when_it_started() -> None:
     assert found.truth is Truth.UNKNOWN and found.incomplete == GAP
     assert found.question is not None and found.question.field == "business_started_on"
     assert "FY2025-26" in found.question.question
+
+
+def test_previous_year_open_but_a_figure_for_the_year_before_makes_it_a_full_year() -> None:
+    """Turnover recorded for FY2024-25: carried on then (ADR-0027), so all of
+    FY2025-26 without a break, and the figure decides."""
+    found = _explain(PREVIOUS, None, {2024: 2_400_000, 2025: 2_500_000})
+    assert found.truth is Truth.TRUE and found.incomplete == ()
+    assert len(found.evidence_ids) == 2  # the year's figure, and the one before it
 
 
 def test_previous_year_open_with_no_figure_asks_for_both() -> None:
@@ -223,12 +235,30 @@ def test_ever_part_year_established_with_a_full_year_missing_asks_for_that_year_
 
 
 def test_ever_open_is_unassessable_and_asks_when_it_started() -> None:
-    """With no start date every year might be the one it started in."""
+    """With no start date, the earliest year read (FY2001-02, nothing recorded
+    before it) might be the one it started in."""
     found = _explain(EVER, None, EVERY_YEAR_UNDER)
     assert found.truth is Truth.UNKNOWN and found.incomplete == GAP
-    assert found.question is not None
+    assert found.question is not None and found.question.field == "business_started_on"
+    assert "FY2001-02" in found.question.question and "FY2002-03" not in found.question.question
+
+
+def test_ever_open_a_year_after_one_with_a_figure_is_a_full_year_and_decides() -> None:
+    """A year with turnover recorded is a year it was carried on (ADR-0027),
+    so the next one, carried on without a break, was carried on all of it:
+    FY2023-24 over the threshold decides, as it did before #211."""
+    found = _explain(EVER, None, EVERY_YEAR_UNDER | {2023: 3_200_000})
+    assert found.truth is Truth.TRUE and found.incomplete == ()
+
+
+def test_ever_open_with_a_year_missing_asks_for_it_and_when_it_started() -> None:
+    years = {y: v for y, v in EVERY_YEAR_UNDER.items() if y != 2020}
+    found = _explain(EVER, None, years)
+    assert found.truth is Truth.UNKNOWN and found.incomplete == GAP
+    assert found.question is not None and found.question.field == "annual_turnover_aud"
+    # FY2021-22 follows the missing year, so it is open too, not just FY2001-02.
+    assert found.question.missing_periods == ("FY2020-21",)
     assert found.question.also_needs == ("business_started_on",)
-    assert _explain(EVER, None, EVERY_YEAR_UNDER | {2023: 3_200_000}).truth is Truth.UNKNOWN
 
 
 def test_ever_a_start_before_s6d_commenced_reads_only_full_years() -> None:
@@ -248,7 +278,7 @@ def test_without_a_reviewed_reading_each_condition_is_unknown_whatever_the_evide
     """The general state: missing content nobody has read governs every
     reading, and the reason is the parser's words."""
     found = explain(
-        _snapshot(IncompleteReviews()),
+        _snapshot(IncompleteReadings()),
         _facts(dt.date(2015, 7, 1), UNDER_SINCE_2014 | {2026: 1_000_000}),
         condition_id,
     )
@@ -274,7 +304,9 @@ async def test_ga_04s_reason_is_the_signed_wording_and_no_question_is_asked() ->
 
 
 @needs_neo4j
-async def test_on_neo4j_ga_04s_reason_is_the_signed_wording_too(graph: Neo4jGraph) -> None:
+async def test_on_neo4j_ga_04s_reason_is_the_signed_wording_too(
+    graph: Neo4jGraph, span_exporter: InMemorySpanExporter
+) -> None:
     """The graph's Clause node carries the parser's state; the reading is
     joined by the same evaluator."""
     labels = load_applicability_set()
@@ -286,6 +318,9 @@ async def test_on_neo4j_ga_04s_reason_is_the_signed_wording_too(graph: Neo4jGrap
     app11 = coverage.obligation("OB-PA-APP11-1")
     assert app11.reason == f"Unassessable: s 6DA(2) is incomplete: {SIGNED}"
     assert coverage.questions == ()
+    # The span says which obligations it left unsettled, by clause id.
+    (span, *_) = [s for s in span_exporter.get_finished_spans() if s.name == "track_a.coverage"]
+    assert f"OB-PA-APP11-1 rests on {S6DA_2}" in strings(span, "track_a.incomplete")
 
 
 async def test_ga_01_a_full_year_over_the_threshold_still_applies() -> None:
@@ -302,7 +337,7 @@ async def test_ga_01_a_full_year_over_the_threshold_still_applies() -> None:
 
 
 def test_the_committed_reading_is_signed_and_says_what_lucas_frasca_signed() -> None:
-    review = parse_incomplete_review(
+    review = parse_incomplete_reading_file(
         REVIEW.read_text(encoding="utf-8"),
         instrument_id="privacy-act-1988",
         version_id="C2026C00227",
@@ -330,7 +365,7 @@ def test_every_reading_is_of_a_reason_the_parser_marks_and_a_part_year_one_says_
     must be one the signed mapping reads."""
     clauses = {c.clause_id: c for c in load_compilation_clauses().clauses}
     mapping = (CORPUS_MAPPINGS / "privacy-act-1988.yaml").read_text()
-    entries = committed_incomplete_reviews().entries
+    entries = committed_incomplete_readings().entries
     assert entries
     for (clause_id, reason), entry in entries.items():
         assert reason in {i.reason for i in clauses[clause_id].incomplete}
@@ -339,7 +374,7 @@ def test_every_reading_is_of_a_reason_the_parser_marks_and_a_part_year_one_says_
             assert f"field: {entry.part_year_only.started}" in mapping
 
 
-def _copy_review(tmp_path: Path, text: str) -> Path:
+def _copy_reading(tmp_path: Path, text: str) -> Path:
     folder = tmp_path / "privacy-act-1988" / "C2026C00227"
     folder.mkdir(parents=True)
     (folder / "incomplete.yaml").write_text(text, encoding="utf-8")
@@ -358,15 +393,15 @@ def test_a_reading_pending_review_is_refused_not_used(
 ) -> None:
     text = REVIEW.read_text(encoding="utf-8")
     assert signed in text
-    root = _copy_review(tmp_path, text.replace(signed, pending))
-    with pytest.raises(UnreviewedIncompleteness, match="awaiting review"):
-        load_incomplete_reviews(root)
+    root = _copy_reading(tmp_path, text.replace(signed, pending))
+    with pytest.raises(UnsignedIncompleteReading, match="awaiting review"):
+        load_incomplete_readings(root)
 
 
 def test_the_committed_file_loads_from_a_copy(tmp_path: Path) -> None:
     root = tmp_path / "instruments"
     shutil.copytree(INSTRUMENTS_ROOT, root)
-    assert load_incomplete_reviews(root) == committed_incomplete_reviews()
+    assert load_incomplete_readings(root) == committed_incomplete_readings()
 
 
 def test_a_model_never_reviews_a_reading(tmp_path: Path) -> None:
@@ -374,13 +409,13 @@ def test_a_model_never_reviews_a_reading(tmp_path: Path) -> None:
         'reviewed_by: "Lucas Frasca"', 'reviewed_by: "model: Claude"'
     )
     with pytest.raises(ValidationError, match="never a model"):
-        load_incomplete_reviews(_copy_review(tmp_path, text))
+        load_incomplete_readings(_copy_reading(tmp_path, text))
 
 
 def test_a_reading_of_another_versions_clause_is_refused(tmp_path: Path) -> None:
     text = REVIEW.read_text(encoding="utf-8").replace("C2026C00227:s6da/2", "C2099C00001:s6da/2")
     with pytest.raises(ValueError, match="not a clause of"):
-        load_incomplete_reviews(_copy_review(tmp_path, text))
+        load_incomplete_readings(_copy_reading(tmp_path, text))
 
 
 def test_source_clause_ids_must_be_the_clauses_read(tmp_path: Path) -> None:
@@ -389,7 +424,7 @@ def test_source_clause_ids_must_be_the_clauses_read(tmp_path: Path) -> None:
         "source_clause_ids:\n  - privacy-act-1988:C2026C00227:s6da/1",
     )
     with pytest.raises(ValidationError, match="are not the clauses read"):
-        load_incomplete_reviews(_copy_review(tmp_path, text))
+        load_incomplete_readings(_copy_reading(tmp_path, text))
 
 
 @pytest.mark.parametrize(
@@ -406,16 +441,16 @@ def test_source_clause_ids_must_be_the_clauses_read(tmp_path: Path) -> None:
 def test_what_a_reader_is_shown_cant_reshape_the_fence_marker(tmp_path: Path, shown: str) -> None:
     text = REVIEW.read_text(encoding="utf-8").replace(f'"{SIGNED}"', json.dumps(shown))
     with pytest.raises(ValidationError):
-        load_incomplete_reviews(_copy_review(tmp_path, text))
+        load_incomplete_readings(_copy_reading(tmp_path, text))
 
 
 def test_the_signed_words_stand_in_only_for_the_reason_they_were_signed_for() -> None:
-    reviews = committed_incomplete_reviews()
-    assert reviews.shown(S6DA_2, FORMULA_NOT_TEXT) == SIGNED
+    readings = committed_incomplete_readings()
+    assert readings.shown(S6DA_2, FORMULA_NOT_TEXT) == SIGNED
     # Another reason on the same clause, or an unread clause, keeps the parser's.
-    assert reviews.shown(S6DA_2, TABLE_NOT_TEXT) == TABLE_NOT_TEXT.detail
+    assert readings.shown(S6DA_2, TABLE_NOT_TEXT) == TABLE_NOT_TEXT.detail
     s16a = "privacy-act-1988:C2026C00227:s16a/1"
-    assert reviews.shown(s16a, TABLE_NOT_TEXT) == TABLE_NOT_TEXT.detail
-    assert reviews.shown_json(s16a, (TABLE_NOT_TEXT,)) == [
+    assert readings.shown(s16a, TABLE_NOT_TEXT) == TABLE_NOT_TEXT.detail
+    assert readings.shown_json(s16a, (TABLE_NOT_TEXT,)) == [
         {"reason": "table_not_text", "detail": TABLE_NOT_TEXT.detail}
     ]

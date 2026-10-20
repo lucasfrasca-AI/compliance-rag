@@ -40,7 +40,7 @@ from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.pipeline import AssessmentPipeline
-from compliance_rag.corpus.incomplete_review import committed_incomplete_reviews
+from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.graph.track_a import GraphTrackA
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings, get_settings
@@ -80,7 +80,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         keys=GoogleSigningKeys(),
     )
     telemetry.configure(settings)
-    committed_incomplete_reviews()  # refuses an unsigned incomplete.yaml (D-01)
+    committed_incomplete_readings()  # refuses an unsigned incomplete.yaml (D-01)
     graph = Neo4jGraph.open(settings)
     ledger = PostgresLedgerStore.from_settings(settings)
     clauses = GCSClauseStore.for_bucket(settings.corpus_bucket)
