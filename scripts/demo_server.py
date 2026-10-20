@@ -3,12 +3,18 @@ over the production `POST /v1/answers`. Deliberately disposable: it prejudges
 nothing about Phase 3's UI (upload flows, findings, I2's rendering). It is
 never deployed, and nothing in `src/` imports it.
 
-    uv run python -m scripts.demo_server                    # real generation
-    uv run python -m scripts.demo_server --fake-generator   # no model is called
+    docker run -d --name crag-demo-qdrant -p 6333:6333 \
+        -e QDRANT__TELEMETRY_DISABLED=true qdrant/qdrant:v1.19.1
+    uv run python -m scripts.demo_server --fake-generator \
+        --bucket compliance-rag-508904-corpus              # no model is called
+    VERTEX_CLAUDE_MODEL=claude-sonnet-5 VERTEX_CLAUDE_REGION=us \
+        uv run python -m scripts.demo_server --bucket compliance-rag-508904-corpus
 
-Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`), the
-reranker's ONNX model, and Application Default Credentials (the question is
-embedded in Sydney, and law source HTML is read from the corpus bucket).
+Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`, the
+corpus is loaded into it at start), the reranker's ONNX model
+(`models/reranker-onnx/`, or `--reranker-onnx`), and Application Default
+Credentials with `GCP_PROJECT_ID` set (the question is embedded in Sydney, and
+law source HTML is read from the corpus bucket, `--bucket` or `CORPUS_BUCKET`).
 
 **The app is production's.** `api.app.create_app` with its own routers, so the
 answer comes from the same `answer()`, verifier, `answers.citation_json` and
@@ -520,7 +526,13 @@ async def local_services(
 
     refuse_unless_local_qdrant(settings.qdrant_url)
     if not settings.corpus_bucket:
-        raise RefusedToStart("CORPUS_BUCKET isn't set: law source HTML is read from it")
+        raise RefusedToStart(
+            "no corpus bucket (--bucket or CORPUS_BUCKET): law source HTML is read from it"
+        )
+    # Before the corpus is loaded, so missing credentials fail in a second.
+    law_sources = GCSClauseStore.for_bucket(
+        settings.corpus_bucket, project=settings.gcp_project_id or None
+    )
     ledger = await demo_ledger()
     embedder = SnapshotThenSydney(
         EmbeddingCache.load(), VertexEmbedder.from_settings(settings), failures
@@ -548,14 +560,17 @@ async def local_services(
             retrieval=RetrievalPipeline(store, reranker),
             generator=generator,
         )
-        yield services, GCSClauseStore.for_bucket(settings.corpus_bucket)
+        yield services, law_sources
 
 
-def demo_settings(*, qdrant_url: str, fake_generator: bool) -> Settings:
-    """`Settings` as configured, on Acme and the local Qdrant. The fake
-    generator runs in this process, so the gates are told generation is in
-    Sydney: what they ask is where the generator runs."""
+def demo_settings(*, qdrant_url: str, fake_generator: bool, bucket: str | None = None) -> Settings:
+    """`Settings` as configured, on Acme and the local Qdrant, and on
+    `bucket` if one is named (as the other operator scripts take `--bucket`).
+    The fake generator runs in this process, so the gates are told generation
+    is in Sydney: what they ask is where the generator runs."""
     settings = Settings(tenant_id=DEMO_TENANT, qdrant_url=qdrant_url)
+    if bucket:
+        settings = settings.model_copy(update={"corpus_bucket": bucket})
     if fake_generator:
         return settings.model_copy(update={"vertex_claude_region": REGION})
     return settings
@@ -582,6 +597,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT, help="a local Qdrant only")
     parser.add_argument("--reranker-onnx", type=Path, default=None, help="the int8 model.onnx")
     parser.add_argument(
+        "--bucket", default=None, help="the corpus bucket, read only (default: CORPUS_BUCKET)"
+    )
+    parser.add_argument(
         "--fake-generator",
         action="store_true",
         help="answer with an in-process stand-in, never a model; the page says so",
@@ -591,12 +609,14 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
-    settings = demo_settings(qdrant_url=args.qdrant_url, fake_generator=args.fake_generator)
+    settings = demo_settings(
+        qdrant_url=args.qdrant_url, fake_generator=args.fake_generator, bucket=args.bucket
+    )
     refuse_unless_local(args.host, settings)
     refuse_unless_local_qdrant(settings.qdrant_url)
     telemetry.configure(settings)
     if args.fake_generator:
-        print(f"*** {FAKE_BANNER}: answers come from an in-process stand-in ***")
+        print(f"*** {FAKE_BANNER}: answers come from an in-process stand-in ***", flush=True)
     elif (
         is_offshore(settings.vertex_claude_region)
         and DEMO_MEMBER.email not in settings.offshore_testers
@@ -604,10 +624,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(
             f"Generation runs at {settings.vertex_claude_region}, outside Australia, and "
             f"{DEMO_MEMBER.email} isn't in OFFSHORE_GENERATION_TESTERS: every question will "
-            "be refused by the residency gate (ADR-0032) until the operator lists it."
+            "be refused by the residency gate (ADR-0032) until the operator lists it.",
+            flush=True,
         )
     print(
-        f"Loading the gate corpus into {settings.qdrant_url}, then http://{LOCAL_HOST}:{args.port}/"
+        f"Loading the gate corpus into {settings.qdrant_url}, then http://{LOCAL_HOST}:{args.port}/",
+        flush=True,
     )
     asyncio.run(
         serve(

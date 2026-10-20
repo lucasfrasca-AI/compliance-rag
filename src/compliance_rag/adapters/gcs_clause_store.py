@@ -103,13 +103,15 @@ class GCSClauseStore(ClauseStore):
         self._bucket = bucket
 
     @classmethod
-    def for_bucket(cls, bucket_name: str) -> GCSClauseStore:
+    def for_bucket(cls, bucket_name: str, *, project: str | None = None) -> GCSClauseStore:
+        """`project` for a process with no metadata server to infer it from
+        (a laptop, #247); `None` lets the client infer it, as on Cloud Run."""
         # google-cloud-storage ships no inline stubs, so pyright can't verify
         # storage.Bucket's own methods satisfy _BucketLike structurally even
         # though they do at runtime (same shape, extra optional kwargs).
         bucket = cast(
             "_BucketLike",
-            storage.Client().bucket(bucket_name),  # pyright: ignore[reportUnknownMemberType]
+            storage.Client(project=project).bucket(bucket_name),  # pyright: ignore[reportUnknownMemberType]
         )
         return cls(bucket)
 
