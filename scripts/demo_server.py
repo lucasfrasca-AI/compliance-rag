@@ -8,9 +8,12 @@ never deployed, and nothing in `src/` imports it.
     uv run python -m scripts.demo_server --fake-generator \
         --bucket compliance-rag-508904-corpus              # no model is called
     VERTEX_CLAUDE_MODEL=claude-sonnet-5 VERTEX_CLAUDE_REGION=us \
+    OFFSHORE_GENERATION_TESTERS=local-demo@acme.example \
         uv run python -m scripts.demo_server --bucket compliance-rag-508904-corpus
 
-Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`, the
+The real run sends the question offshore only with the demo member listed
+as a tester (ADR-0032); leave the list out and the page shows the gate's
+refusal instead. Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`, the
 corpus is loaded into it at start), the reranker's ONNX model
 (`models/reranker-onnx/`, or `--reranker-onnx`), and Application Default
 Credentials with `GCP_PROJECT_ID` set (the question is embedded in Sydney, and
@@ -28,7 +31,7 @@ a production marker says it is deployed (`refuse_unless_local`).
 **What it runs on:**
 - **Retrieval:** a throwaway collection on a *local* Qdrant (a remote URL is
   refused), loaded at start with the gate corpus and dropped on exit. That is
-  the whole compilation's 779 clauses and Acme's six synthetic policies,
+  the whole compilation's selected clauses and Acme's six synthetic policies,
   marked synthetic from the registry. Chunk vectors come from the checked-in
   `gemini-embedding-001` snapshot. The question, which no snapshot holds, is
   embedded by `VertexEmbedder` in australia-southeast1. The reranker is the
@@ -264,6 +267,9 @@ class SnapshotThenSydney(Embedder):
 
 # --- The fake generator, for exercising the page -----------------------------
 
+# The fence and question format `assessment/prompt.py` writes (`fence`,
+# `user_prompt`). Should it change, the fake cites nothing and
+# tests/test_demo_server.py's end-to-end test fails.
 _BLOCK_RE = re.compile(
     r"\[(?P<boundary>[0-9a-f]{24}) clause (?P<clause_id>\S+)[^\n]*\]\n"
     r"(?P<text>.*?)\n\[(?P=boundary) end\]",
@@ -440,7 +446,7 @@ def create_demo_app(
         )
 
     @app.get("/demo/failures/{trace_id}")
-    async def failed(trace_id: str) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction] — a route
+    async def failures_of(trace_id: str) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction] — a route
         return {"trace_id": trace_id, "failures": failures.of(trace_id)}
 
     return app
@@ -579,6 +585,7 @@ def demo_settings(*, qdrant_url: str, fake_generator: bool, bucket: str | None =
 async def serve(
     settings: Settings, *, host: str, port: int, fake_generator: bool, onnx_path: Path | None
 ) -> None:
+    # Again here, as well as in `main`: whatever calls `serve` is refused too.
     refuse_unless_local(host, settings)
     failures = FailureLog()
     async with local_services(

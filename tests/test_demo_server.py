@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from scripts import demo_server
 from scripts.demo_server import (
     DEMO_MEMBER,
@@ -185,7 +186,7 @@ async def _law_sources() -> FakeClauseStore:
 
 async def _demo_app(
     generator: Generator | None = None, failures: FailureLog | None = None, fake: bool = True
-) -> Any:  # Any: FastAPI, kept out of this module's imports
+) -> FastAPI:
     ledger = await demo_ledger()
     services = assemble(
         _settings(),
@@ -213,10 +214,12 @@ def _events(stream: str) -> Events:
     return events
 
 
-async def _ask(app: Any, question: str = QUESTION) -> tuple[httpx.Response, Events]:  # Any: app
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://demo"
-    ) as c:
+def _client(app: FastAPI) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://demo")
+
+
+async def _ask(app: FastAPI, question: str = QUESTION) -> tuple[httpx.Response, Events]:
+    async with _client(app) as c:
         response = await c.post("/v1/answers", json={"question": question, "as_of": "2026-10-12"})
     return response, _events(response.text)
 
@@ -235,9 +238,7 @@ async def test_a_question_streams_to_citations_that_open_at_their_clause() -> No
     policies = [c for c in answer["citations"] if c["clause_id"].startswith("acme/")]
     assert len(law) == 1 and len(policies) == 1
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://demo"
-    ) as c:
+    async with _client(app) as c:
         # Law: the stored source, at an anchor that exists in it (ADR-0019).
         opened = (await c.get(f"/demo/open/{law[0]['clause_id']}")).json()
         path, anchor = opened["href"].split("#", 1)
@@ -284,9 +285,7 @@ async def test_a_generation_failure_is_shown_plainly_and_without_a_token() -> No
     app = await _demo_app(RecordingGenerator(_QuotaExhausted(), failures), failures, fake=False)
     response, events = await _ask(app)
     assert events[-1] == ("error", {**events[-1][1], "error": "internal"})
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://demo"
-    ) as c:
+    async with _client(app) as c:
         found = (await c.get(f"/demo/failures/{response.headers['X-Trace-Id']}")).json()
         page = (await c.get("/")).text
     [failure] = found["failures"]
@@ -298,9 +297,7 @@ async def test_a_generation_failure_is_shown_plainly_and_without_a_token() -> No
 
 async def test_the_source_route_serves_library_law_only() -> None:
     app = await _demo_app()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://demo"
-    ) as c:
+    async with _client(app) as c:
         assert (await c.get("/demo/source/acme%2Fprivacy-policy/v1")).status_code == 404
         assert (await c.get(f"/demo/source/{LAW_INSTRUMENT_ID}/C1999C00001")).status_code == 404
         assert (await c.get("/demo/open/not-a-clause")).status_code == 404

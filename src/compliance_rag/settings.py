@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     # --- Where this process runs -------------------------------------------
     k_service: str = ""
     """`K_SERVICE`, set by Cloud Run in every deployed service. Read only so a
-    local-only tool (the throwaway demo server, #247) refuses to start there."""
+    local-only tool refuses to start there."""
     cloud_run_job: str = ""
     """`CLOUD_RUN_JOB`, set by Cloud Run in every job, for the same reason."""
 
