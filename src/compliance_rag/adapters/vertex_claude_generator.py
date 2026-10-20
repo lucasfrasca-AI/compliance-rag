@@ -14,6 +14,10 @@ validating the structured output are the caller's job (`assessment/prompt.py`,
 `assessment/draft.py`), so no prompt or completion text goes onto the span —
 only the model, token counts, cache use and cost.
 
+Vertex's quota refusal (HTTP 429 `RESOURCE_EXHAUSTED`, which the SDK raises as
+`anthropic.RateLimitError`) leaves here as `GenerationUnavailable(QUOTA)`, so
+the API can say what happened without passing on the SDK's words (#251).
+
 `_MessagesLike` names the one call this module makes, so tests drive it with
 a fake that returns real `anthropic.types.Message` objects.
 """
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from anthropic import RateLimitError
 from anthropic.types import Message, MessageParam, TextBlock, TextBlockParam
 
 from compliance_rag import telemetry
@@ -30,7 +35,13 @@ from compliance_rag.adapters.generation_residency import (
     is_offshore,
     validate_generation_region,
 )
-from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
+from compliance_rag.adapters.interfaces import (
+    Generation,
+    GenerationUnavailable,
+    Generator,
+    RetrievalAdmin,
+    Unavailability,
+)
 from compliance_rag.settings import Settings
 
 # `claude-sonnet-5` per-token prices, USD, at the US multi-region endpoint —
@@ -131,12 +142,19 @@ class VertexClaudeGenerator(Generator):
                 "generator.cached_prefix_sent": bool(cached_prefix),
             },
         ) as current:
-            message = await self._messages.create(
-                model=self._model,
-                max_tokens=max_tokens,
-                system=blocks,
-                messages=[{"role": "user", "content": user}],
-            )
+            try:
+                message = await self._messages.create(
+                    model=self._model,
+                    max_tokens=max_tokens,
+                    system=blocks,
+                    messages=[{"role": "user", "content": user}],
+                )
+            except RateLimitError as refused:
+                # Vertex's 429 RESOURCE_EXHAUSTED, raised by the SDK after its
+                # own retries: the quota, not this request. Named in our words;
+                # the SDK's text stays on the cause, for the server's log (#251).
+                current.set_attribute("generator.unavailable", Unavailability.QUOTA.value)
+                raise GenerationUnavailable(Unavailability.QUOTA) from refused
             usage = message.usage
             cache_read = usage.cache_read_input_tokens or 0
             cache_write = usage.cache_creation_input_tokens or 0

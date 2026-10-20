@@ -15,6 +15,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
+import anthropic
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -28,7 +29,13 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import GenerationResidencyError, TenantTextGate
-from compliance_rag.adapters.interfaces import LawScope, LedgerStore, Profile
+from compliance_rag.adapters.interfaces import (
+    Generator,
+    LawScope,
+    LedgerStore,
+    Profile,
+    TurnOutcome,
+)
 from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
 from compliance_rag.api.main import GeneratorAtStartup
@@ -44,6 +51,7 @@ from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION, Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
 from tests.api_support import MEMBER, api_settings, bearer, fake_api_services, mint
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
+from tests.vertex_quota import PLACEHOLDER_TOKEN, SDK_WORDS, quota_exhausted_generator
 
 AS_OF = "2026-10-12"
 QUESTION = "What must Acme do to protect the personal information it holds from misuse and loss?"
@@ -75,7 +83,7 @@ async def _ledger() -> FakeLedgerStore:
 
 
 async def _client(
-    generator: FakeGenerator,
+    generator: Generator,
     ledger: LedgerStore,
     clauses: FakeClauseStore,
     store: FakeRetrievalStore | None = None,
@@ -113,7 +121,7 @@ def _events(stream: str) -> list[tuple[str, dict[str, Any]]]:  # Any: JSON
 
 
 async def _ask(
-    generator: FakeGenerator,
+    generator: Generator,
     *,
     ledger: FakeLedgerStore | None = None,
     clauses: FakeClauseStore | None = None,
@@ -390,6 +398,41 @@ async def test_offshore_a_policy_clause_the_registry_doesnt_vouch_for_is_refused
     assert error["error"] == "residency" and "CAG prefix" in error["message"]
     assert edited.clause_id in error["message"]
     assert generator.calls == [] and real not in response.text
+
+
+async def test_a_vertex_quota_refusal_is_generation_unavailable_with_no_sdk_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A listed tester asks while the model's quota is zero (#251): Vertex
+    answers 429 `RESOURCE_EXHAUSTED`, which the SDK raises as `RateLimitError`
+    through the real `VertexClaudeGenerator`. The stream ends in a typed
+    `generation_unavailable` with a fixed reason and the request's trace id,
+    and carries none of the SDK's words, its type or a traceback. The chat
+    records `internal`, the answer that couldn't be completed."""
+    ledger = await _ledger()
+    requests: list[httpx.Request] = []
+    generator = quota_exhausted_generator(
+        FakeRetrievalStore(golden_chunks(), ledger=ledger), requests
+    )
+    settings = api_settings(**OFFSHORE, offshore_generation_testers=MEMBER)
+    response, events = await _ask(generator, ledger=ledger, settings=settings)
+    assert len(requests) == 1  # the model was asked, and refused
+    assert [name for name, _ in events] == ["coverage", "retrieval", "error"]
+    error = events[-1][1]
+    assert error == {
+        "chat_id": error["chat_id"],
+        "error": "generation_unavailable",
+        "reason": "quota",
+        "message": answers.UNAVAILABLE["message"],
+        "trace_id": response.headers["X-Trace-Id"],
+    }
+    for leaked in (*SDK_WORDS, "Traceback", PLACEHOLDER_TOKEN):
+        assert leaked not in response.text
+    turns = await ledger.chat_turns(POLICY_TENANT_ID, "uid-123", error["chat_id"])
+    assert [t.outcome for t in turns] == [None, TurnOutcome.INTERNAL]
+    # The server's own log keeps what Vertex said, as the cause, for whoever runs it.
+    logged = [r.exc_info[1] for r in caplog.records if r.exc_info]
+    assert any(isinstance(e.__cause__, anthropic.RateLimitError) for e in logged)
 
 
 async def test_in_sydney_any_member_is_answered_over_any_prefix(quote: str) -> None:
