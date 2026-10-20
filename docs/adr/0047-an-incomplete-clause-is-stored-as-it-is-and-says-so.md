@@ -215,6 +215,20 @@ shows the clause was incomplete and who completed it, when and why.
   column's comment, which 0014 (applied, so not edited) left describing the
   old element shape. Read-back reads the ledger and never the corpus: a clause marked
   or completed after the answer doesn't change what the chat shows.
+- **A citation that can't be read back is marked, not fatal** (#232, the
+  human's decision: "a corrupt row shouldn't make a member's chat history
+  inaccessible"). A malformed element of `citations` reads back as an
+  `UnreadableCitation` in its place, so nothing is dropped, and the chat is a
+  200. The API shows `{"unreadable": true, "reason": …}` with `clause_id`,
+  `cite` and `version_id` only when the stored id is well-formed. The model's
+  calls: the reason is one of four fixed words (`not_an_object`, `no_clause`,
+  `wrong_version`, `bad_incomplete`), never an exception message, because
+  pydantic's quotes the input; an unreadable citation carries no `incomplete`
+  (what the member was shown with it is lost, and the turn's `incomplete`
+  list is built from the readable ones, so it can understate); the corruption
+  is reported on the request's span (`chat.citation_unreadable`, ids and
+  reason) and in the log, which is how an operator learns of it. The answer
+  event and a chat build a citation with one function, `citation_json`.
 - **Every clause the parse marks is reported**, in the test that pins the
   whole compilation; a selection that grows to s16A or Part IIIA ingests those
   clauses already marked.
