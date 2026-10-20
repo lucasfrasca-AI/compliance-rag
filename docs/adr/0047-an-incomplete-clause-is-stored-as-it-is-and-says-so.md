@@ -1,14 +1,17 @@
 # ADR-0047 — An incomplete clause is stored as it is, and says so
 
 - Status: accepted. The human decided the state and refused the alt text
-  (quoted below); the model made the other calls, each named as such.
+  (quoted below), then narrowed Track A to a part year and signed the words a
+  reader is shown (Decision 9); the model made the other calls, each named as
+  such.
 - Date: 2026-10-20
 - Issue: #211 (from the #206 audit)
 - Extends: ADR-0042 (a corpus revision now compares, writes and records a
   clause's *form*: its text and its incompleteness), ADR-0003 / `D-02` (the
   verifier is unchanged; the flag is in addition to it)
 - Touches: ADR-0045 (the provision is the unit marked), ADR-0027 (Track A's
-  unassessable, held: see Consequences)
+  unassessable, for a part year only: Decision 6), D-01 (the reviewed reading,
+  Decision 9)
 
 ## Context
 
@@ -50,7 +53,8 @@ into the clause, carry it as metadata, or mark the gap.
 **1. Incomplete is a clause state, with a reason.** `ClauseRecord.incomplete`
 is a tuple of `Incompleteness(reason, detail)`, empty for a complete clause.
 The reasons are a closed enum (`IncompleteReason`), the detail the words a
-reader is shown, plain lowercase words so it is safe in a prompt marker:
+reader is shown unless a person has signed others for that clause (Decision
+9), plain lowercase words so it is safe in a prompt marker:
 
 | Reason | Detail | What |
 |---|---|---|
@@ -150,11 +154,61 @@ stored text; the flag is in addition.
   say what is missing, and never state, guess or reconstruct it. The boundary
   covers the marker. A fence with no incomplete clause keeps its bytes.
 
-**6. Track A: unassessable, derived from the state.** A leaf whose clauses
-include an incomplete one is unknown, with the clause's reason, whatever the
-evidence: no answer to the questionnaire can settle it. Derived from the
-clause state, never by editing the signed mapping. Built on its own branch and
-**held**, because it changes signed golden labels (Consequences).
+**6. Track A: unassessable where the missing content governs, derived from
+the state.** A leaf whose clauses include an incomplete one is unknown, with
+the clause's reason, for every reading the missing content governs: no figure
+settles it. Derived from the stored clause state (the Clause node on the
+graph, the committed corpus on the fake), never by editing the signed
+mapping. Which readings that is:
+
+- **By default, every one.** An incomplete clause nobody has read (no entry in
+  Decision 9's file) governs whatever the leaf reads, so the leaf is unknown
+  whatever the evidence, with no question — and so is a leaf that reads no
+  financial year (`period: current`).
+- **Only a part year, where a person has read it so.** The first version of
+  this held s6DA(2)'s three conditions unassessable whenever they cited it,
+  which made GA-01 and GA-05 — $4M in a full year, $3.2M in a full year —
+  unassessable too, overstating the gap. The human's decision (#211,
+  2026-10-20, decision 2):
+
+  > Small-business conditions: agreed. Mark them unassessable only when the
+  > facts leave open that the business ran for part of a year, not whenever
+  > the formula is cited.
+
+  The three leaves (`COND-PA-TURNOVER-PREVIOUS-YEAR-UNDER`,
+  `COND-PA-TURNOVER-CURRENT-YEAR-UNDER`, `COND-PA-S6D4A-EVER-OVER-THRESHOLD`)
+  read a tenant-supplied figure, `annual_turnover_aud`, and s6DA(2) governs
+  that figure only for "a business [that] has been carried on for only part of
+  a financial year" (its own stored words). So for each financial year a leaf
+  reads, from the profile's `business_started_on`:
+
+  | The year is | When | The leaf |
+  |---|---|---|
+  | a **part year** | the business started during it (after its 1 July) | unknown, the clause's reason, **no question** |
+  | **open** | `business_started_on` unknown, conflicting or not a date | unknown, the clause's reason, and **asked** when it started |
+  | a **full year** | it started on or before its 1 July, or after it ended (not carried on in it at all) | decided from the figure, as before |
+
+  For s6D(4)(a), which reads every year ended since the business started (or
+  21 December 2001, if later), the start year is the part year: it is never
+  read from its figure, even one over the threshold (what s6DA(2) makes of it
+  isn't in the corpus). Any other year over the threshold still decides it
+  true; every other year known and under leaves it unknown with no question;
+  another year without a figure is asked for, that year alone. With the start
+  unknown, every year might be the start year, so nothing decides it and the
+  start date is asked (`also_needs`).
+
+**How part-year relevance is known** (the model's call, the reading signed):
+not from the mapping, which says nothing of part years in structure (only in
+its question prose), and not from the clause's words, which the code doesn't
+interpret. A person records it, in the reviewed file of Decision 9, as
+`part_year_only: {started: business_started_on}` on the clause and reason it
+is for. `started` names the profile fact the signed mapping already reads for
+when the business started (`COND-PA-CARRIED-ON-LAST-YEAR`'s leaf, s6D(4)(a)'s
+`since_field`), taken, as the mapping takes it, as carried on since without a
+break. A test holds each such entry to its clause: the clause's stored text
+says "carried on for only part of a financial year", and the fact is a field
+the mapping reads. Nothing is speculated past that: the part-year test is
+dates only, and a figure in a part year decides nothing either way.
 
 **7. Why the alt text is refused.** The verifier's claim is that a quoted span
 matches the authoritative source. The alt text is an accessibility rendering
@@ -184,6 +238,60 @@ put the content in the clause's text. Never a hand edit of any store, never
 the model's say-so. The revision records the previous state, so the trail
 shows the clause was incomplete and who completed it, when and why.
 
+**9. The signed reading: what a reader is shown, and what the gap governs.**
+The human's decision (#211, 2026-10-20, decision 3):
+
+> The reason's wording: I'll sign wording. Use "the turnover formula in
+> s 6DA(2) is published as an image in the compilation and has no text form
+> in our corpus". That says what's wrong and why, which the parser's generic
+> phrasing doesn't — a reader seeing "not available in text form" can't tell
+> whether the clause is missing, unparsed, or genuinely imageless. Set
+> reviewed_by to "Lucas Frasca" dated today on whatever file carries it.
+
+- **The parser's detail stays what the parser emits**, in every store.
+- **The reading is a reviewed artefact**:
+  `corpus/instruments/privacy-act-1988/C2026C00227/incomplete.yaml`, beside
+  the version's selection manifest, with `author`, `reviewed_by`, `date` and
+  `source_clause_ids`. It maps each clause and reason to `shown`, the words a
+  reader is shown, and optionally `part_year_only` (Decision 6). This one's
+  `author` and `reviewed_by` are both Lucas Frasca, dated 2026-10-20: the
+  wording is his, verbatim, and `part_year_only` records his decision 2; the
+  model transcribed both and drafted nothing in it.
+- **Refused while pending** (`compliance_rag.corpus.incomplete_review`): a
+  file whose `reviewed_by` or `date` starts `PENDING` raises
+  `UnreviewedIncompleteness` and is never used, as `load_mappings.py`
+  refuses an unsigned mapping; the API reads the files when it is built, so an
+  unsigned one stops the build rather than the first answer. A model never
+  reviews one (`validate_review`), each entry must be a clause of the folder's
+  version, and `source_clause_ids` must be exactly the clauses read. CI loads
+  the committed file and checks each entry against the committed corpus: a
+  reason the parser marks on that clause, and for `part_year_only`, the
+  clause's own part-year words.
+- **The words are safe in a fence marker.** `shown` is one line of letters,
+  digits, spaces, balanced parentheses and plain punctuation: no `]` (closes
+  the marker), no `;` (separates two reasons), no quote, no line break
+  (#236). It is hashed into the fence's boundary with the rest of the marker.
+- **Where readers see it**, for that clause and reason only, the parser's
+  detail otherwise (another reason on the same clause, a clause nobody has
+  read): the answer event's `incomplete` on each citation and at the top
+  (each reason's `detail` is the words to show), a chat read back (the same
+  builders, #232), the prompt's fence marker (answer and repair fences alike,
+  #243), and Track A's reason, `<cite> is incomplete: <words>`.
+
+**Joined at read time, not stored** (the model's call). ADR-0042's revision
+path writes a parse of the pinned source to the bucket, Aura and Qdrant; the
+signed words are not a parse and say nothing of the clause's text, and
+storing them would put a reviewed reading in the corpus's form, so that
+changing a word would take a cloud revision with an acknowledgement and a
+re-signed plan. Joined at read time, a change is a reviewed PR, the stored
+state stays exactly what the parser found (so a drift check still compares
+parse with parse), the fake and the graph read one evaluator, and no live
+step is needed. A chat read back still reads the *reasons* from the ledger,
+as recorded with the turn (#228); only the words for a recorded reason are
+joined, so an answer shown before the signing reads back in the signed words.
+The files ship with the code, as `corpus/synthetic/registry.json` does for
+the residency gate.
+
 ## Consequences
 
 - **Deployed stores need the revision.** `scripts/revise_compilation.py`
@@ -195,15 +303,31 @@ shows the clause was incomplete and who completed it, when and why.
   under its paths.
 - **The system prompt changed**, so the first answer after deploy misses the
   prompt cache once.
-- **Track A, held.** With the state derived into Track A, GA-01, GA-04 and
-  GA-05 go from decided to unassessable for 35 obligations each, and GA-02's
-  questions lose `COND-PA-S6D4A-EVER-OVER-THRESHOLD`; GA-03, GA-06 and GA-07
-  are unchanged. Those labels are the human's, so the derivation waits on
-  their re-signing (#211 stays open).
+- **Track A, narrowed to a part year (Decision 6).** Run on the fake and on
+  Neo4j, of the seven golden profiles only GA-04 moves: Acme started on
+  2 March 2015, so FY2014-15, the first year s6D(4)(a) reads, is a part year.
+  Its 35 APPs go from not applicable to unassessable, app-entity and
+  organisation from false to unknown, with no question, and APP 11.1's chain
+  cites s6D(4)(a) and s6DA(2), not s6E(1) and s6EA(1), which decide nothing
+  once the role is unknown. The human authorised re-signing the labels that
+  move (`corpus/golden/applicability.yaml`, 2026-10-20). GA-01 and GA-05 stay
+  applicable (a full year decides), GA-02 keeps its s6D(4)(a) question (other
+  years can be answered), GA-03's outcomes and questions don't move (its
+  reasons now name s 6DA(2) too), GA-06 and GA-07 are unchanged. The first,
+  held version (every citing leaf unassessable) moved GA-01, GA-02, GA-04 and
+  GA-05, and was never merged.
 - **The reason's words.** The parser can't know a formula computes turnover
-  without reading the alt text, so the detail is "the formula is not
-  available in text form", and Track A's reason names the clause
-  ("s 6DA(2) is incomplete: the formula is not available in text form").
+  without reading the alt text, so its detail stays "the formula is not
+  available in text form"; the reader is shown the signed words (Decision 9),
+  and Track A's reason names the clause: "s 6DA(2) is incomplete: the
+  turnover formula in s 6DA(2) is published as an image in the compilation
+  and has no text form in our corpus".
+- **The corpus version moves** again (ADR-0034): `incomplete.yaml` and its
+  reader are under `corpus/instruments` and `src/compliance_rag/corpus`. The
+  graph's loaded corpus is unchanged (nothing is written to it), so the next
+  load records a new tag over the same clauses. The mapping version moves too
+  (`src/compliance_rag/graph`). The prompt's marker for s6da/2 changed; it is
+  in the retrieved fence, not the cached policy prefix, so no cache is missed.
 - **A chat read back** (#162) shows the flag the member was shown (#228). The
   turn records it with each citation, taken from the clause the verifier
   checked the quote against, in the citation's own element of the `chat`
