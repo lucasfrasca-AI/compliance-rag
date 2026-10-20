@@ -26,6 +26,7 @@ from scripts.demo_server import (
     create_demo_app,
     demo_graph,
     demo_ledger,
+    demo_member_as,
     refuse_unless_local,
     refuse_unless_local_qdrant,
     render_page,
@@ -37,7 +38,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
-from compliance_rag.adapters.interfaces import Embedder, Generation, Generator
+from compliance_rag.adapters.interfaces import Embedder, Generation, Generator, Member
 from compliance_rag.api import deps
 from compliance_rag.api.app import create_app
 from compliance_rag.assessment.evidence import Facts
@@ -52,8 +53,9 @@ from compliance_rag.eval.golden_corpus import (
 )
 from compliance_rag.eval.harness import golden_clause_store, law_source_html
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
-from compliance_rag.settings import REGION, Settings
+from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION, REGION, Settings
 from tests.api_support import api_settings, fake_api_services
+from tests.vertex_quota import PLACEHOLDER_TOKEN, SDK_WORDS, quota_exhausted_generator
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTION = "What must Acme do to protect the personal information it holds from misuse and loss?"
@@ -151,7 +153,7 @@ async def test_the_production_app_still_requires_sign_in() -> None:
     production app, built after it in the same process, still refuses an
     unsigned request."""
     demo = await _demo_app()
-    assert demo.dependency_overrides == {deps.current_member: demo_server.demo_member}
+    assert list(demo.dependency_overrides) == [deps.current_member]
     production = create_app(fake_api_services())
     assert production.dependency_overrides == {}
     transport = httpx.ASGITransport(app=production)
@@ -187,11 +189,16 @@ async def _law_sources() -> FakeClauseStore:
 
 
 async def _demo_app(
-    generator: Generator | None = None, failures: FailureLog | None = None, fake: bool = True
+    generator: Generator | None = None,
+    failures: FailureLog | None = None,
+    fake: bool = True,
+    *,
+    settings: Settings | None = None,
+    member: Member = DEMO_MEMBER,
 ) -> FastAPI:
     ledger = await demo_ledger()
     services = assemble(
-        _settings(),
+        settings or _settings(),
         ledger=ledger,
         clauses=await golden_clause_store(),
         graph=demo_graph(),
@@ -205,6 +212,7 @@ async def _demo_app(
         law_sources=await _law_sources(),
         failures=failures or FailureLog(),
         fake_generator=fake,
+        member=member,
     )
 
 
@@ -271,20 +279,20 @@ async def test_a_withheld_answer_is_shown_as_withheld() -> None:
     assert "withheld" in answer["withheld"] and answer["blocked"]
 
 
-class _QuotaExhausted(Generator):
+class _Unrecognised(Generator):
+    """A failure the API has no name for, so it reports `internal`."""
+
     async def generate(
         self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
     ) -> Generation:
         raise RuntimeError(
-            "Error code: 429 - Quota exceeded for aiplatform.googleapis.com/"
-            "us_multi_region_online_prediction_requests_per_base_model "
-            "(Authorization: Bearer ya29.not-a-real-token)"
+            "the connection to the model was reset (Authorization: Bearer ya29.not-a-real-token)"
         )
 
 
-async def test_a_generation_failure_is_shown_plainly_and_without_a_token() -> None:
+async def test_an_unrecognised_generation_failure_is_shown_plainly_and_without_a_token() -> None:
     failures = FailureLog()
-    app = await _demo_app(RecordingGenerator(_QuotaExhausted(), failures), failures, fake=False)
+    app = await _demo_app(RecordingGenerator(_Unrecognised(), failures), failures, fake=False)
     response, events = await _ask(app)
     assert events[-1] == ("error", {**events[-1][1], "error": "internal"})
     async with _client(app) as c:
@@ -292,9 +300,111 @@ async def test_a_generation_failure_is_shown_plainly_and_without_a_token() -> No
         page = (await c.get("/")).text
     [failure] = found["failures"]
     assert failure["where"] == "generation (Claude on Vertex)"
-    assert "429 - Quota exceeded" in failure["error"]
+    assert "connection to the model was reset" in failure["error"]
     assert "ya29" not in failure["error"] and "[redacted]" in failure["error"]
     assert BANNER_DIV not in page
+
+
+OFFSHORE = {"vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
+LISTED = "lucas.frasca@example.com"
+
+
+async def test_a_vertex_quota_refusal_is_shown_as_generation_unavailable_end_to_end() -> None:
+    """A listed tester asks, and Vertex answers 429 `RESOURCE_EXHAUSTED` (#251):
+    the SDK's own client raises `RateLimitError` inside the real
+    `VertexClaudeGenerator`, wrapped as `demo_server` wraps it. The stream
+    ends in `generation_unavailable`, which the page renders as its own state,
+    and none of the SDK's words reach the page by any route."""
+    ledger = await demo_ledger()
+    failures = FailureLog()
+    requests: list[httpx.Request] = []
+    store = FakeRetrievalStore(golden_chunks(), ledger=ledger)
+    app = await _demo_app(
+        RecordingGenerator(quota_exhausted_generator(store, requests), failures),
+        failures,
+        fake=False,
+        settings=_settings(**OFFSHORE, offshore_generation_testers=LISTED),
+        member=demo_member_as(LISTED),
+    )
+    response, events = await _ask(app)
+    assert len(requests) == 1
+    assert [name for name, _ in events] == ["coverage", "retrieval", "error"]
+    error = events[-1][1]
+    assert error["error"] == "generation_unavailable" and error["reason"] == "quota"
+    assert error["trace_id"] == response.headers["X-Trace-Id"]
+    async with _client(app) as c:
+        found = (await c.get(f"/demo/failures/{error['trace_id']}")).json()
+        page = (await c.get("/")).text
+    shown = response.text + json.dumps(found)
+    for leaked in (*SDK_WORDS, PLACEHOLDER_TOKEN, "Traceback"):
+        assert leaked not in shown
+    # The page's state for it: its own words, and no call for the failure's text.
+    assert 'data.error === "generation_unavailable"' in page
+    assert "Generation unavailable — the model's quota isn't granted yet" in page
+
+
+async def test_before_the_member_is_listed_the_residency_refusal_is_its_own_state() -> None:
+    """Offshore, with the tester list naming someone else: the gate refuses
+    before anything is computed (ADR-0032), and the page renders it as a
+    refusal, naming who asked and how to be listed."""
+    settings = _settings(**OFFSHORE, offshore_generation_testers=LISTED)
+    app = await _demo_app(FakeDemoGenerator(), fake=False, settings=settings)
+    _, events = await _ask(app)
+    assert [name for name, _ in events] == ["error"]
+    assert events[0][1]["error"] == "residency" and "ADR-0032" in events[0][1]["message"]
+    async with _client(app) as c:
+        page = (await c.get("/")).text
+        config = (await c.get("/demo/config")).json()
+    assert 'data.error === "residency"' in page
+    assert "Not sent — the residency gate refused this question" in page
+    assert "OFFSHORE_GENERATION_TESTERS" in page and "--member" in page
+    assert config["member"] == DEMO_MEMBER.email
+
+
+async def test_asking_as_a_listed_member_passes_the_gate_as_in_production() -> None:
+    """`--member` in any case is lowercased as the sign-in verifier lowercases
+    an email, so the operator's list decides exactly as it does for a
+    signed-in member (ADR-0032)."""
+    settings = _settings(**OFFSHORE, offshore_generation_testers=LISTED.upper())
+    app = await _demo_app(settings=settings, member=demo_member_as("Lucas.Frasca@Example.COM"))
+    _, events = await _ask(app)
+    assert [name for name, _ in events] == ["coverage", "retrieval", "answer"]
+    assert events[-1][1]["verified"] is True
+    async with _client(app) as c:
+        assert (await c.get("/demo/config")).json()["member"] == LISTED
+
+
+def test_member_names_who_asks_lowercased_and_defaults_to_the_demo_member() -> None:
+    parse = demo_server._parser().parse_args  # pyright: ignore[reportPrivateUsage]
+    assert parse([]).member == DEMO_MEMBER
+    assert parse(["--member", "Lucas.Frasca@Example.COM"]).member == Member(
+        uid=DEMO_MEMBER.uid, email=LISTED
+    )
+    for bad in ("not-an-email", "two words@example.com", "a@b@c"):
+        with pytest.raises(SystemExit):
+            parse(["--member", bad])
+
+
+def test_main_serves_as_the_member_it_was_given(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    served: dict[str, object] = {}
+
+    async def serve(*_: object, **kwargs: object) -> None:
+        served.update(kwargs)
+
+    monkeypatch.setattr(demo_server, "serve", serve)
+    def configured(_: Settings) -> None:
+        pass
+
+    monkeypatch.setattr(demo_server.telemetry, "configure", configured)
+    monkeypatch.setenv("VERTEX_CLAUDE_REGION", BUILD_PHASE_OFFSHORE_REGION)
+    monkeypatch.setenv("OFFSHORE_GENERATION_TESTERS", "")
+    demo_server.main(["--member", "Lucas.Frasca@Example.COM"])
+    assert served["member"] == Member(uid=DEMO_MEMBER.uid, email=LISTED)
+    out = capsys.readouterr().out
+    assert f"{LISTED} isn't in OFFSHORE_GENERATION_TESTERS" in out
+    assert f"Asking as {LISTED}" in out
 
 
 async def test_the_source_route_serves_library_law_only() -> None:

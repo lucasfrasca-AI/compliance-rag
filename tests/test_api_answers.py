@@ -432,7 +432,7 @@ async def test_a_vertex_quota_refusal_is_generation_unavailable_with_no_sdk_text
     assert [t.outcome for t in turns] == [None, TurnOutcome.INTERNAL]
     # The server's own log keeps what Vertex said, as the cause, for whoever runs it.
     logged = [r.exc_info[1] for r in caplog.records if r.exc_info]
-    assert any(isinstance(e.__cause__, anthropic.RateLimitError) for e in logged)
+    assert any(isinstance(e and e.__cause__, anthropic.RateLimitError) for e in logged)
 
 
 async def test_in_sydney_any_member_is_answered_over_any_prefix(quote: str) -> None:

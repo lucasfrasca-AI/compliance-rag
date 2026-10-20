@@ -42,11 +42,20 @@
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
   ol.stages { margin: 0; padding-left: 1.25rem; font-size: .9rem; }
   ol.stages li { margin: .15rem 0; }
+  ol.stages li.pending { color: var(--accent); font-weight: 600; }
+  ol.stages li.pending::before { content: ""; display: inline-block; width: .55rem; height: .55rem;
+                                 margin-right: .45rem; border-radius: 50%; background: var(--accent);
+                                 animation: pulse 1s ease-in-out infinite alternate; }
+  @keyframes pulse { from { opacity: .25; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { ol.stages li.pending::before { animation: none; } }
+  .elapsed { font-variant-numeric: tabular-nums; font-weight: 400; color: var(--muted); }
   .answer-text { white-space: pre-wrap; }
   .verdict { font-weight: 700; }
   .verdict.ok { color: var(--ok); } .verdict.bad { color: var(--bad); } .verdict.warn { color: var(--warn); }
   .withheld { border-left: 6px solid var(--bad); }
   .error { border-left: 6px solid var(--bad); }
+  .notice { border-left: 6px solid var(--warn); }
+  .notice h2 { color: var(--warn); font-size: 1.1rem; }
   .error pre { white-space: pre-wrap; word-break: break-word; background: #fbeceb; padding: .5rem;
                border-radius: 4px; font-size: .85rem; margin: .5rem 0 0; }
   ul.citations { list-style: none; padding: 0; margin: 0; }
@@ -81,12 +90,19 @@
         <button type="submit" id="go">Ask</button>
       </div>
       <p class="note">The API streams stages, not tokens: nothing unverified is ever sent (D-02),
-        so the answer arrives whole once its citations have been checked.</p>
+        so the answer arrives whole once its citations have been checked. Each stage is sent
+        when it completes, so the page shows the next one as running, with its time so far.</p>
     </form>
 
     <section class="card" id="stages-card" hidden>
       <h2>Stream</h2>
       <ol class="stages" id="stages"></ol>
+    </section>
+
+    <section class="card notice" id="notice-card" role="alert" hidden>
+      <h2 id="notice-title"></h2>
+      <div id="notice-body"></div>
+      <p class="meta" id="notice-meta"></p>
     </section>
 
     <section class="card" id="answer-card" hidden>
@@ -130,15 +146,97 @@ function el(tag, text, className) {
   return node;
 }
 
+let demoConfig = {};
+let running = null;
+// The stage under way: the API sends a stage only when it completes, and the
+// order is fixed, so the page knows which one is next and shows it running.
+
+function seconds(ms) {
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
 function reset() {
-  for (const id of ["stages", "answer-body", "citations", "incomplete"]) $(id).replaceChildren();
-  for (const id of ["answer-card", "citations-card", "incomplete-card", "panel"]) $(id).hidden = true;
+  settle();
+  for (const id of ["stages", "answer-body", "citations", "incomplete", "notice-body"]) $(id).replaceChildren();
+  for (const id of ["answer-card", "citations-card", "incomplete-card", "notice-card", "panel"]) $(id).hidden = true;
   $("verdict").textContent = ""; $("verdict").className = "verdict"; $("answer-meta").textContent = "";
+  $("answer-card").classList.remove("withheld", "error");
+}
+
+function settle() {
+  // Stops the running stage's timer; returns how long it ran, or null.
+  if (!running) return null;
+  clearInterval(running.timer);
+  const { item, started } = running;
+  running = null;
+  return { item, took: performance.now() - started };
 }
 
 function stage(text) {
+  // A stage that has landed: it takes the running line's place, with its time.
   $("stages-card").hidden = false;
-  $("stages").append(el("li", `${new Date().toLocaleTimeString()} — ${text}`));
+  const line = `${new Date().toLocaleTimeString()} — ${text}`;
+  const settled = settle();
+  if (settled) {
+    settled.item.className = "";
+    settled.item.textContent = `${line} (${seconds(settled.took)})`;
+  } else {
+    $("stages").append(el("li", line));
+  }
+}
+
+function expect(text) {
+  // The next stage, shown as running from now, its elapsed time ticking.
+  settle();
+  $("stages-card").hidden = false;
+  const item = el("li", null, "pending");
+  const elapsed = el("span", seconds(0), "elapsed");
+  elapsed.setAttribute("aria-hidden", "true");
+  item.append(el("span", `${text}… `), elapsed);
+  $("stages").append(item);
+  const started = performance.now();
+  const timer = setInterval(() => { elapsed.textContent = seconds(performance.now() - started); }, 100);
+  running = { item, started, timer };
+}
+
+function notice(title, paragraphs, traceId) {
+  $("notice-card").hidden = false;
+  $("notice-title").textContent = title;
+  for (const [text, className] of paragraphs) $("notice-body").append(el("p", text, className));
+  $("notice-meta").textContent = `trace ${traceId || "?"}`;
+}
+
+function showUnavailable(data, traceId) {
+  // The API names a quota refusal itself (`generation_unavailable`): nothing
+  // the SDK said is sent, so nothing is asked of /demo/failures either.
+  const quota = data.reason === "quota";
+  notice(
+    quota ? "Generation unavailable — the model's quota isn't granted yet" : "Generation unavailable",
+    [
+      [quota
+        ? "Vertex refused the request for quota, so no answer was generated. Coverage and retrieval ran; the model wrote nothing, and nothing unverified is shown."
+        : "The model isn't taking requests, so no answer was generated."],
+      [quota
+        ? `This clears once the quota for ${demoConfig.generation || "the model"} is granted. Nothing on this page needs fixing.`
+        : "Try again later.", "note"],
+    ],
+    data.trace_id || traceId,
+  );
+}
+
+function showRefused(data, traceId) {
+  // The residency gate (ADR-0032): before a tester is listed, every question.
+  notice(
+    "Not sent — the residency gate refused this question",
+    [
+      [data.message || "Generation runs outside Australia, and this question may not be sent there."],
+      [`Asking as ${demoConfig.member || "?"}. During the build phase generation runs outside Australia, ` +
+        "so a question is sent only when the operator lists its asker in OFFSHORE_GENERATION_TESTERS. " +
+        "To ask as yourself, restart the demo with --member and your email, and list that email.", "note"],
+      ["Nothing was retrieved or generated, and the question never left Australia.", "note"],
+    ],
+    traceId,
+  );
 }
 
 function verdict(text, kind) {
@@ -251,18 +349,23 @@ async function handle(name, data, traceId) {
   if (name === "coverage") {
     const counts = Object.entries(data.counts || {}).map(([k, v]) => `${k} ${v}`).join(", ");
     stage(`coverage (Track A on ${data.as_of}): ${counts}`);
+    expect("retrieving and reranking");
   } else if (name === "retrieval") {
     const channels = Object.entries(data.by_channel || {}).map(([k, v]) => `${k} ${v}`).join(", ");
     stage(`retrieval: ${data.candidates} candidates (${channels})`);
+    expect("generating and verifying");
   } else if (name === "answer") {
     stage(data.verified ? "answer: verified" : "answer: withheld");
     await showAnswer(data, traceId);
   } else if (name === "error") {
     stage(`error: ${data.error}`);
-    await showError(data, traceId);
+    if (data.error === "generation_unavailable") showUnavailable(data, traceId);
+    else if (data.error === "residency") showRefused(data, traceId);
+    else await showError(data, traceId);
   } else {
     stage(`${name}`);
   }
+  return name === "answer" || name === "error";
 }
 
 async function ask(event) {
@@ -272,6 +375,8 @@ async function ask(event) {
   const body = { question: $("question").value };
   if ($("as-of").value) body.as_of = $("as-of").value;
   stage("asked");
+  expect("checking coverage (Track A)");
+  let finished = false;
   try {
     const response = await fetch("/v1/answers", {
       method: "POST",
@@ -280,6 +385,8 @@ async function ask(event) {
     });
     const traceId = response.headers.get("X-Trace-Id");
     if (!response.ok) {
+      finished = true;
+      stage(`HTTP ${response.status}`);
       await showError({ error: `HTTP ${response.status}`, message: await response.text() }, traceId);
       return;
     }
@@ -299,18 +406,26 @@ async function ask(event) {
           if (line.startsWith("event: ")) name = line.slice(7);
           else if (line.startsWith("data: ")) data += line.slice(6);
         }
-        await handle(name, data ? JSON.parse(data) : {}, traceId);
+        if (await handle(name, data ? JSON.parse(data) : {}, traceId)) finished = true;
       }
     }
+    if (!finished) {
+      finished = true;
+      stage("the stream ended with no answer");
+      await showError({ error: "stream", message: "The connection closed before an answer or an error arrived." }, traceId);
+    }
   } catch (failure) {
+    if (!finished) stage("failed");
     await showError({ error: "client", message: String(failure) }, null);
   } finally {
+    settle();
     $("go").disabled = false;
   }
 }
 
 async function start() {
   const config = await fetch("/demo/config").then((r) => r.json());
+  demoConfig = config;
   $("mode").textContent =
     `tenant ${config.tenant_id} · asking as ${config.member} · generation: ${config.generation}`;
   if (config.fake_generator && !$("fake-banner")) {
