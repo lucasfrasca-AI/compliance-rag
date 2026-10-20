@@ -1,6 +1,6 @@
 # ADR-0021 — Version and retire everything; removal is three explicit states
 
-- Status: accepted; amended by ADR-0042 (a parse correction of library law is applied in place)
+- Status: accepted; amended by ADR-0042 (a parse correction of library law is applied in place) and ADR-0048 (publishing takes clauses and writes the clause store first)
 - Date: 2026-10-08
 - Decision ID: `D-18` (`DECISIONS.md`)
 - Extends: D-05 (bitemporal law), D-17 (library and subscriptions)
@@ -110,7 +110,8 @@ it would re-upsert its chunks and silently put it back into retrieval.
   the undo for a mistaken purge. Whether "purge" should mean "gone immediately"
   is a decision about the bucket's policy, not about this code, and is left
   open deliberately.
-- `publish_version` writes Qdrant only; recording the new `instrument_version`
+- (Superseded by ADR-0048: publishing now writes the clause store, then
+  Qdrant, then the ledger.) `publish_version` writes Qdrant only; recording the new `instrument_version`
   row and its `supersedes` in the ledger lands with the Postgres
   `LedgerStore` adapter (issue #69).
 - There is no Postgres `LedgerStore` adapter yet. The findings count, the
