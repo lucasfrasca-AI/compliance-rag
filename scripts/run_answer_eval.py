@@ -21,6 +21,15 @@ back, so cache hits are measured, not assumed.
 clause is added to the corpus and questions that retrieve it are asked. The
 structural control (the retriever's query is fixed) is proven without a model;
 this measures the behavioural half — does the model treat fenced text as data.
+
+`--environment` instead runs the signed out-of-environment cases
+(`corpus/golden/not_in_environment.yaml`, #252, ADR-0051) over the whole
+compilation, each tenant subscribed as its case says, and checks each answer
+(`eval/environment_cases.check_case`): the flag names the instrument, the
+label was delivered, and the answer either says the instrument isn't in the
+environment or answers from what is held, naming it. It refuses a pending
+file, and exits non-zero when any case fails. A question the vector snapshot
+lacks is embedded live (`gemini-embedding-001`, under a cent).
 """
 
 from __future__ import annotations
@@ -30,14 +39,20 @@ import asyncio
 import datetime as dt
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.assessment.prompt import SourceClause
 from compliance_rag.corpus.models import Chunk, ClauseRecord, Scope
 from compliance_rag.eval.answer_summary import summarise
+from compliance_rag.eval.environment_cases import (
+    EnvironmentCase,
+    check_case,
+    load_environment_cases,
+)
 from compliance_rag.eval.golden import load_golden_set
 from compliance_rag.eval.golden_corpus import POLICY_TENANT_ID, golden_clauses
 from compliance_rag.eval.live import live_answer_pipeline
@@ -116,6 +131,8 @@ async def _answer(
         ],
         "repairs": [_usage(r) | {"text": r.text} for r in result.repairs],
         "context": sorted(retrieved | {p.clause_id for p in policies}),
+        "delivered": sorted({c.clause_id for c in result.retrieval.delivered()}),
+        "not_in_environment": [n.json() for n in result.not_in_environment],
         "generation": _usage(result.generation),
         "cost_usd": result.cost_usd,
     }
@@ -159,7 +176,53 @@ async def _injection(pipeline: AssessmentPipeline) -> list[dict[str, Any]]:  # A
     return rows
 
 
-async def run(injection: bool) -> None:
+async def environment_row(
+    pipeline: AssessmentPipeline, case: EnvironmentCase
+) -> dict[str, Any]:  # Any: a JSON row
+    """One out-of-environment case, answered and checked. The tenant is
+    subscribed as the case says before it is asked."""
+    for instrument_id in case.subscribes:
+        await pipeline.ledger.subscribe(
+            tenant_id=case.tenant_id, instrument_id=instrument_id, subscribed_by="answer eval"
+        )
+    row = await _answer(pipeline, case.query, case.tenant_id, case.as_of)
+    flags = row.get("not_in_environment", [])
+    check = check_case(
+        case,
+        flagged=[f["known_as"] for f in flags],
+        named=[f["named"] for f in flags],
+        delivered=row.get("delivered", []),
+        answer=row.get("answer") if row.get("verified") else None,
+        cited=[
+            c["clause_id"] for c in row.get("final_citations", []) if c["outcome"] == "verified"
+        ],
+    )
+    return row | {
+        "id": case.id,
+        "tenant_id": case.tenant_id,
+        "as_of": case.as_of.isoformat(),
+        "expected_not_in_environment": list(case.not_in_environment),
+        "expected": list(case.expected_clause_ids),
+        "check": {**asdict(check), "acceptable": check.acceptable},
+    }
+
+
+async def _environment(pipeline: AssessmentPipeline) -> list[dict[str, Any]]:  # Any: JSON rows
+    cases = load_environment_cases()  # refuses a pending file (D-01)
+    if cases is None:
+        raise SystemExit("no out-of-environment cases are committed")
+    rows: list[dict[str, Any]] = []  # Any: JSON rows
+    for case in cases.cases:
+        row = await environment_row(pipeline, case)
+        rows.append(row)
+        print(json.dumps({"id": row["id"], **row["check"]}))
+    return rows
+
+
+Mode = Literal["golden", "injection", "environment"]
+
+
+async def run(mode: Mode) -> None:
     settings = Settings()
     poison = (
         Chunk(
@@ -171,29 +234,56 @@ async def run(injection: bool) -> None:
             synthetic=True,
         ),
     )
+    injection = mode == "injection"
     async with live_answer_pipeline(
         settings,
         extra_chunks=poison if injection else (),
         extra_clauses=(POISON_CLAUSE,) if injection else (),
+        whole_compilation=mode == "environment",
     ) as pipeline:
-        rows = await (_injection(pipeline) if injection else _golden(pipeline))
+        runs = {"golden": _golden, "injection": _injection, "environment": _environment}
+        rows = await runs[mode](pipeline)
 
     stamp = dt.date.today().isoformat()
-    name = f"{stamp}-{settings.vertex_claude_model}{'-injection' if injection else ''}.json"
+    suffix = "" if mode == "golden" else f"-{mode}"
+    name = f"{stamp}-{settings.vertex_claude_model}{suffix}.json"
+    failed = [r["id"] for r in rows if mode == "environment" and not r["check"]["acceptable"]]
+    summaries: dict[Mode, dict[str, Any] | None] = {  # Any: JSON document
+        "golden": summarise(rows) if mode == "golden" else None,
+        "injection": None,
+        "environment": {
+            "cases": len(rows),
+            "acceptable": len(rows) - len(failed),
+            "failed": failed,
+        },
+    }
     document: dict[str, Any] = {  # Any: JSON document
         "model": settings.vertex_claude_model,
         "region": settings.vertex_claude_region,
         "run_on": stamp,
-        "summary": summarise(rows) if not injection else None,
+        "summary": summaries[mode],
         "rows": rows,
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / name).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(document["summary"], indent=2))
     print(f"-> {OUT_DIR / name}")
+    if failed:
+        raise SystemExit(f"out-of-environment cases failed: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--injection", action="store_true")
-    asyncio.run(run(parser.parse_args().injection))
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--injection", action="store_true")
+    modes.add_argument("--environment", action="store_true")
+    arguments = parser.parse_args()
+    asyncio.run(
+        run(
+            "injection"
+            if arguments.injection
+            else "environment"
+            if arguments.environment
+            else "golden"
+        )
+    )

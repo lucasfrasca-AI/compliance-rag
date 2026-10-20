@@ -606,6 +606,27 @@ class FakeLedgerStore(LedgerStore):
             if (tenant_id, i, v) in self._titles
         }
 
+    async def environment_titles(
+        self, tenant_id: str, *, as_of: dt.date
+    ) -> dict[str, frozenset[str]]:
+        subscribed = await self.subscribed_instruments(tenant_id)
+        found: dict[str, set[str]] = {}
+        for key, (valid_from, valid_to) in self._versions.items():
+            tenant, instrument_id, _ = key
+            seen = tenant == tenant_id or (
+                tenant == PUBLIC_TENANT_ID and instrument_id in subscribed
+            )
+            if (
+                seen
+                and valid_from <= as_of
+                and (valid_to is None or as_of < valid_to)
+                and key not in self.withdrawn
+                and key not in self.purged
+                and (tenant, instrument_id, None) not in self.purged
+            ):
+                found.setdefault(instrument_id, set()).add(self._titles[key])
+        return {i: frozenset(t) for i, t in found.items()}
+
     async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:
         return tuple(
             PolicyVersion(instrument_id, version_id)

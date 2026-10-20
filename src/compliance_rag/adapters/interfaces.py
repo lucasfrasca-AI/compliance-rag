@@ -44,6 +44,7 @@ from compliance_rag.assessment.coverage import (
     Outcome,
     QualifierOf,
 )
+from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.evidence import Evidence, Facts
 from compliance_rag.corpus.models import (
     Chunk,
@@ -577,6 +578,19 @@ unreadable one has no `clause_id`: a well-formed id is a readable entry."""
 
 
 @dataclass(frozen=True, slots=True)
+class UnreadableNotInEnvironment:
+    """A stored named-instrument flag that couldn't be read back (a corrupt
+    row): it holds its place, so the turn still says an instrument it named
+    wasn't in the environment, and carries nothing of the row (#252, as
+    #232 does for a citation)."""
+
+
+StoredNotInEnvironment = NotInEnvironment | UnreadableNotInEnvironment
+"""A named-instrument flag as a chat reads it back: whole, or marked
+unreadable."""
+
+
+@dataclass(frozen=True, slots=True)
 class ChatAnswer:
     """What an answer turn holds: what the member was shown, and nothing else
     (ADR-0003). The model's unverified draft has no field here, so it cannot be
@@ -593,8 +607,16 @@ class ChatAnswer:
     blocked: tuple[str, ...] = ()
     """The clause ids of the blocked citations, for a `BLOCKED` answer only.
     Each is a stable id: the grammar admits nothing like prose."""
+    not_in_environment: tuple[NotInEnvironment, ...] = ()
+    """Each instrument the question named that the tenant's environment
+    didn't hold (#252, ADR-0051), as the member was shown it beside the
+    answer: set by the pipeline from the question, never by the model, and
+    kept with a verified or a withheld answer alike. A failed request shows
+    only its marker, so it carries none."""
 
     def __post_init__(self) -> None:
+        if self.outcome.failed and self.not_in_environment:
+            raise ValueError("a failed request is a marker only: it carries no flag")
         if self.outcome is TurnOutcome.VERIFIED:
             if self.text is None or not self.text.strip() or not self.citations or self.blocked:
                 raise ValueError("a verified answer has its text and citations, and none blocked")
@@ -641,6 +663,10 @@ class ChatTurn:
     trace_id: str
     created_at: dt.datetime | None = None
     """When the ledger recorded it; None until it has."""
+    not_in_environment: tuple[StoredNotInEnvironment, ...] = ()
+    """An answer's flags: the instruments its question named that the
+    environment didn't hold (#252). As recorded, a corrupt stored one read
+    back as an `UnreadableNotInEnvironment` in its place."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -668,6 +694,7 @@ class ChatExchange:
                 answer.outcome,
                 answer.citations,
                 answer.blocked,
+                answer.not_in_environment,
             ),
         )
 
@@ -679,6 +706,7 @@ class ChatExchange:
         outcome: TurnOutcome | None,
         citations: tuple[ChatCitation, ...],
         blocked: tuple[str, ...],
+        not_in_environment: tuple[NotInEnvironment, ...] = (),
     ) -> ChatTurn:
         return ChatTurn(
             tenant_id=self.tenant_id,
@@ -692,6 +720,7 @@ class ChatExchange:
             blocked=blocked,
             as_of=self.as_of,
             trace_id=self.trace_id,
+            not_in_environment=not_in_environment,
         )
 
 
@@ -1205,6 +1234,18 @@ class LedgerStore(ABC):
         a request reads once for every policy citation it shows (ADR-0049),
         never once per citation. A version not recorded for this tenant
         (another tenant's, or none at all) is left out, not an error."""
+
+    @abstractmethod
+    async def environment_titles(
+        self, tenant_id: str, *, as_of: dt.date
+    ) -> dict[str, frozenset[str]]:
+        """The tenant's environment on `as_of` (D-17), as the ledger records
+        it, in one read: each instrument its retrieval can see, to the
+        recorded titles of its versions in force then (ADR-0049). Its own
+        documents of every class, never withdrawn or purged, and the library
+        instruments it subscribes to; `_public`'s is the whole library. What
+        `answer()` decides a question's named instruments are held against
+        (#252, ADR-0051)."""
 
     @abstractmethod
     async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:

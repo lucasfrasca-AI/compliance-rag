@@ -27,6 +27,15 @@ An incomplete clause (ADR-0047) is marked so in its fence, and an answer that
 cites one carries it (`Answer.incomplete`): the verifier still checks the
 quote against the stored text, and the flag says that text isn't all the
 clause holds.
+
+A question that names an instrument the tenant's environment doesn't hold
+(#252, ADR-0051) is decided from the question and the ledger's record of the
+environment, before anything is retrieved and with no model
+(`environment.not_in_environment`). The model is told in a fenced note, and
+the answer carries it (`Answer.not_in_environment`) whatever the model wrote,
+verified or withheld: the verifier can't see an answer that presents APP 7
+as the Spam Act, since every quote still matches, so the flag doesn't depend
+on what the model said.
 """
 
 from __future__ import annotations
@@ -35,6 +44,8 @@ import datetime as dt
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+
+from opentelemetry.trace import Span
 
 from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import (
@@ -51,6 +62,12 @@ from compliance_rag.assessment.draft import (
     MalformedGeneration,
     parse_draft,
     parse_repair,
+)
+from compliance_rag.assessment.environment import (
+    InstrumentRegister,
+    NotInEnvironment,
+    committed_instrument_register,
+    not_in_environment,
 )
 from compliance_rag.assessment.prompt import (
     REPAIR_SYSTEM_PROMPT,
@@ -136,6 +153,12 @@ class Answer:
     """The recorded title of every policy version the model was given, read
     once for this answer (ADR-0049): what the API cites a policy clause by,
     so the member is shown the form the model was."""
+    not_in_environment: tuple[NotInEnvironment, ...] = ()
+    """Each instrument the question named that the tenant's environment
+    didn't hold on `as_of` (#252, ADR-0051). Set from the question by the
+    pipeline, never by the model, and carried whether the answer verified or
+    was withheld, so no answer about such an instrument reaches a reader
+    without it."""
 
     @property
     def incomplete(self) -> tuple[IncompleteCitation, ...]:
@@ -168,7 +191,9 @@ class AssessmentPipeline:
     """Composes one `RetrievalPipeline`, one `Generator` and one `Verifier`
     (D-08). `tenant_text` is required, like the generator's own store gate:
     no way of building the pipeline sends unregistered tenant text from the
-    bucket offshore (ADR-0032)."""
+    bucket offshore (ADR-0032). `register` is the signed instrument register
+    the question is read against (#252); by default the committed one, which
+    is empty until one is signed, so the pattern works alone."""
 
     def __init__(
         self,
@@ -178,12 +203,14 @@ class AssessmentPipeline:
         ledger: LedgerStore,
         *,
         tenant_text: TenantTextGate,
+        register: InstrumentRegister | None = None,
     ) -> None:
         self.retrieval = retrieval
         self.generator = generator
         self.verifier = verifier
         self.ledger = ledger
         self.tenant_text = tenant_text
+        self.register = committed_instrument_register() if register is None else register
 
     async def _record_usage(self, tenant_id: str, generation: Generation) -> None:
         """One ledger `usage` row per generation call — the answer and each
@@ -242,6 +269,10 @@ class AssessmentPipeline:
                 ((p.clause_id, p.text) for p in policies),
                 what="clause(s) of the CAG prefix",
             )
+            # Before anything is retrieved, from the question and the ledger's
+            # record of the environment alone: which instruments the question
+            # names that the tenant doesn't hold (#252, ADR-0051).
+            absent = await self._not_in_environment(query, tenant_id, as_of, current)
             # The prefix is the policies' authoritative copy, so retrieval
             # leaves them out and their slots go to law (ADR-0033).
             sent = PolicyCorpus(frozenset(p.clause_id for p in policies))
@@ -303,7 +334,7 @@ class AssessmentPipeline:
             generation = await self.generator.generate(
                 system=SYSTEM_PROMPT,
                 cached_prefix=policy_prefix(policies),
-                user=user_prompt(query, retrieved),
+                user=user_prompt(query, retrieved, absent),
                 max_tokens=max_tokens,
             )
             await self._record_usage(tenant_id, generation)
@@ -355,6 +386,7 @@ class AssessmentPipeline:
                 exceptions=exceptions,
                 qualifiers=qualifiers,
                 titles=titles,
+                not_in_environment=absent,
             )
             current.set_attribute("verifier.result", result.verified)
             current.set_attribute(
@@ -370,6 +402,18 @@ class AssessmentPipeline:
             )
             current.set_attribute("generation.cost_usd", result.cost_usd)
             return result
+
+    async def _not_in_environment(
+        self, query: str, tenant_id: str, as_of: dt.date, current: Span
+    ) -> tuple[NotInEnvironment, ...]:
+        """Each instrument `query` names that the tenant's environment doesn't
+        hold on `as_of`: one ledger read, no model. Recorded on the answer's
+        span: what the environment held, and what was found missing."""
+        environment = await self.ledger.environment_titles(tenant_id, as_of=as_of)
+        absent = not_in_environment(query, environment, self.register)
+        current.set_attribute("answer.environment", sorted(environment))
+        current.set_attribute("answer.not_in_environment", [a.span_form for a in absent])
+        return absent
 
     async def _with_owed(
         self,

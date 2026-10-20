@@ -45,9 +45,11 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     SourceKind,
     SourceVersion,
+    StoredNotInEnvironment,
     TurnOutcome,
     TurnRole,
     UnreadableCitation,
+    UnreadableNotInEnvironment,
     UnreadableReason,
     UsageRecord,
     check_assessment_write,
@@ -59,6 +61,7 @@ from compliance_rag.assessment.coverage import (
     question_json,
     question_of_json,
 )
+from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.evidence import (
     Evidence,
     EvidenceProvenance,
@@ -192,6 +195,49 @@ def _flag_unreadable(
             position,
             c.reason.value,
         )
+
+
+def _named_absent_row(n: StoredNotInEnvironment) -> dict[str, str | None]:
+    """A named-instrument flag as its JSONB element (#252)."""
+    if isinstance(n, UnreadableNotInEnvironment):  # read back from a corrupt row, never recorded
+        raise ValueError("an unreadable flag isn't written back")
+    return n.json()
+
+
+def _named_absent_of_row(raw: object) -> StoredNotInEnvironment:
+    """A stored element back to its flag, or to an `UnreadableNotInEnvironment`
+    in its place when it can't be (as #232 reads a citation): the turn still
+    says something it named wasn't held, and nothing of the element is kept."""
+    try:
+        return NotInEnvironment.of_json(raw)
+    except ValueError:
+        return UnreadableNotInEnvironment()
+
+
+def _flag_unreadable_absent(
+    tenant_id: str, chat_id: str, turn_index: int, entries: tuple[StoredNotInEnvironment, ...]
+) -> None:
+    """Says on the span, and in the log, where a stored flag was unreadable:
+    ids and position only, never any of the row."""
+    span = trace.get_current_span()
+    for position, n in enumerate(entries):
+        if isinstance(n, UnreadableNotInEnvironment):
+            span.add_event(
+                "chat.not_in_environment_unreadable",
+                {
+                    "chat.tenant_id": tenant_id,
+                    "chat.id": chat_id,
+                    "chat.turn_index": turn_index,
+                    "chat.not_in_environment_index": position,
+                },
+            )
+            log.warning(
+                "a stored chat flag is unreadable: tenant=%s chat=%s turn=%d position=%d",
+                tenant_id,
+                chat_id,
+                turn_index,
+                position,
+            )
 
 
 class LedgerUnreachable(ConnectionError):
@@ -469,8 +515,9 @@ class PostgresLedgerStore(LedgerStore):
                         # the transaction began, before it waited for the lock, so
                         # a chat's latest turn could carry the earlier time.
                         "INSERT INTO chat (tenant_id, chat_id, turn_index, user_id, role, content, "
-                        "outcome, citations, blocked, as_of, trace_id, created_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
+                        "outcome, citations, blocked, as_of, trace_id, not_in_environment, "
+                        "created_at) VALUES "
+                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
                         [
                             (
                                 turn.tenant_id,
@@ -484,6 +531,7 @@ class PostgresLedgerStore(LedgerStore):
                                 Jsonb([_blocked_row(b) for b in turn.blocked]),
                                 turn.as_of,
                                 turn.trace_id,
+                                Jsonb([_named_absent_row(n) for n in turn.not_in_environment]),
                             )
                             for turn in exchange.turns(0 if last is None else int(last[0]) + 1)
                         ],
@@ -501,16 +549,18 @@ class PostgresLedgerStore(LedgerStore):
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         rows = await self._fetchall(
             "SELECT turn_index, role, content, outcome, citations, blocked, as_of, trace_id, "
-            "created_at FROM chat WHERE tenant_id = %s AND user_id = %s AND chat_id = %s "
-            "ORDER BY turn_index",
+            "created_at, not_in_environment FROM chat "
+            "WHERE tenant_id = %s AND user_id = %s AND chat_id = %s ORDER BY turn_index",
             (tenant_id, user_id, chat_id),
         )
         turns: list[ChatTurn] = []
         for r in rows:
             citations = tuple(_citation_of_row(c) for c in cast("list[object]", r[4]))
             blocked = tuple(_blocked_of_row(b) for b in cast("list[object]", r[5]))
+            absent = tuple(_named_absent_of_row(n) for n in cast("list[object]", r[9]))
             _flag_unreadable(tenant_id, chat_id, int(r[0]), citations, "citation")
             _flag_unreadable(tenant_id, chat_id, int(r[0]), blocked, "blocked")
+            _flag_unreadable_absent(tenant_id, chat_id, int(r[0]), absent)
             turns.append(
                 ChatTurn(
                     tenant_id=tenant_id,
@@ -525,6 +575,7 @@ class PostgresLedgerStore(LedgerStore):
                     as_of=r[6],
                     trace_id=str(r[7]),
                     created_at=r[8],
+                    not_in_environment=absent,
                 )
             )
         return tuple(turns)
@@ -723,6 +774,24 @@ class PostgresLedgerStore(LedgerStore):
                 "0011): record the next version with its class, never a guessed one"
             )
         return tuple(PolicyVersion(str(r[0]), str(r[1])) for r in rows)
+
+    async def environment_titles(
+        self, tenant_id: str, *, as_of: dt.date
+    ) -> dict[str, frozenset[str]]:
+        # The tenant's own versions, and `_public`'s of the instruments it
+        # subscribes to (`_public` holds no subscription, and owns them all).
+        rows = await self._fetchall(
+            "SELECT v.instrument_id, v.title FROM instrument_version v "
+            "WHERE (v.tenant_id = %s OR (v.tenant_id = %s AND v.instrument_id IN "
+            "(SELECT instrument_id FROM tenant_instrument WHERE tenant_id = %s))) "
+            "AND v.valid_from <= %s AND (v.valid_to IS NULL OR %s < v.valid_to) "
+            "AND v.withdrawn_at IS NULL AND v.purged_at IS NULL",
+            (tenant_id, PUBLIC_TENANT_ID, tenant_id, as_of, as_of),
+        )
+        found: dict[str, set[str]] = {}
+        for r in rows:
+            found.setdefault(str(r[0]), set()).add(str(r[1]))
+        return {i: frozenset(t) for i, t in found.items()}
 
     async def version_titles(
         self, tenant_id: str, versions: Iterable[tuple[str, str]]
