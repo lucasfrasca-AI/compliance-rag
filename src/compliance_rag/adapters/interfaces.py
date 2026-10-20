@@ -789,12 +789,13 @@ class GraphAdmin(GraphReader):
     async def revise_clauses(self, authorization: RevisionAuthorization) -> int:
         """A parse correction of library law (ADR-0042), in one transaction:
         for each clause the authorised correction names, its Clause node's
-        `canonical_sha256` goes from the recorded previous hash to the new
-        one, and the node's `corrections` trail gains when, by whom, why, the
-        revision and the previous hash. A node already at the new hash is left
-        as it is (a re-run); one at any other hash, or missing, refuses the
-        whole revision. Nothing else on the node changes. Returns how many
-        nodes changed."""
+        form — `canonical_sha256` and its incompleteness (ADR-0047) — goes
+        from the recorded previous form to the new one, and the node's
+        `corrections` trail gains when, by whom, why, the revision and the
+        previous form. A node already in the new form is left as it is (a
+        re-run); one in any other form, or missing, refuses the whole
+        revision. Nothing else on the node changes. Returns how many nodes
+        changed."""
 
     @abstractmethod
     async def begin_load(self, version: SourceVersion) -> str:
