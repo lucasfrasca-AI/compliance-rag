@@ -60,6 +60,17 @@ A target is not a floor. Every cell's floor is enforced on every build, so nothi
 
 **Delivered-recall.** For law cross-clause it is 0.833 (ADR-0045): the ranked ten each delivered whole, 17 clauses a question on average. It is a separate metric with floors and no target, and it doesn't close the first gap.
 
+### Known risk: reranking latency against Phase 3's budget
+
+*Added 2026-10-20.* Since #207, the cross-encoder reads each library-law clause whole (chapeau, the clause, its paragraphs), which fixed GQ-10's near-tie: APP 11.2 had ranked 0.18 logit inside the cut and flipped with the CPU kernel. The human accepted the cost: "Correctness over speed — a near-tie that flips on CPU kernel is a result that isn't reproducible, and reproducibility is the product."
+
+| Measured on the deployed `reranker` (Cloud Run, 2 vCPU, warm, 20 candidates) | median | max |
+|---|---|---|
+| Before #207 (excerpt, #32) | 6.4 s | 7.7 s |
+| After #207 (whole compilation, gate questions) | 8.0 s | **22.3 s** (GQ-20) |
+
+**Against Phase 3's "full document check end to end under 60 s p95":** one 22.3 s rerank is over a third of that budget, before generation, and a document check asks more than one question. **The lever, if it becomes a problem, is the candidate count** (20 today, ADR-0022): fewer candidates means a shorter batch, at a recall cost the gate would measure. Nothing changes until a Phase 3 measurement says it must.
+
 ## Every number from the phase
 
 **Retrieval (golden set: 25 queries, signed off by Lucas Frasca on 2026-10-08)**

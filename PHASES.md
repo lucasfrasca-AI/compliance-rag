@@ -101,7 +101,7 @@ Deliverables
 - Trace UI decision point: if Logs Explorer has proven insufficient for a named debugging task, write the ADR and add Phoenix (planned) — otherwise stay on Logging
 
 Exit criteria
-- A full document check end to end under 60 s p95, under $0.50
+- A full document check end to end under 60 s p95, under $0.50 (known risk: one warm rerank is up to 22.3 s since #207; the lever is the candidate count. Handoff 0002, *Known risk*)
 - Every citation in the UI opens the source at the clause
 - Admin can approve a policy-to-law mapping and see it change a finding
 
