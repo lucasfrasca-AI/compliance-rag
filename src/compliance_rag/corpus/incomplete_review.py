@@ -177,7 +177,9 @@ class IncompleteReviews:
         return [{"reason": i.reason.value, "detail": self.shown(clause_id, i)} for i in incomplete]
 
 
-def parse_incomplete_review(source: str, *, instrument_id: str, version_id: str) -> IncompleteReview:
+def parse_incomplete_review(
+    source: str, *, instrument_id: str, version_id: str
+) -> IncompleteReview:
     """One file, for the instrument version whose folder holds it. Refused
     while it is pending review, and if it names a clause of another version."""
     loaded = yaml.safe_load(source)

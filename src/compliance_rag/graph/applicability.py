@@ -333,9 +333,7 @@ class _Evaluator:
     ) -> Explanation:
         """Unknown, and no answer settles it: the law the leaf reads for this
         reading isn't all in the stored text (ADR-0047)."""
-        return _node(
-            spec, Truth.UNKNOWN, (), evidence_ids=evidence_ids, incomplete=_pairs(gaps)
-        )
+        return _node(spec, Truth.UNKNOWN, (), evidence_ids=evidence_ids, incomplete=_pairs(gaps))
 
     def _year(self, leaf: Leaf) -> Period:
         current_year = Period.financial_year_of(self._as_of)

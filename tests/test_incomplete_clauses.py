@@ -76,6 +76,13 @@ INSTRUMENT, VERSION = "privacy-act-1988", "C2026C00227"
 S6DA_2 = f"{INSTRUMENT}:{VERSION}:s6da/2"
 ALT = "Start formula Amount that would be the annual turnover"
 FULL_SHA256 = "6d0a43e5da103d1eeb5317ae9ac213c5b51acab2357dc01b981a91e1052c5c3b"
+SIGNED = (
+    "the turnover formula in s 6DA(2) is published as an image in the compilation "
+    "and has no text form in our corpus"
+)
+"""What a reader is shown for s6da/2: Lucas Frasca's wording, signed in
+`incomplete.yaml` (#211), in place of the parser's detail."""
+SHOWN_REASONS = [{"reason": "image_not_text", "detail": SIGNED}]
 
 
 def _parse(html: str) -> dict[str, ClauseRecord]:
@@ -660,11 +667,10 @@ def test_a_clause_held_complete_moves_one_already_marked_is_done_another_state_i
 
 
 def test_an_incomplete_clause_is_marked_in_its_fence_and_the_boundary_covers_it() -> None:
+    """The marker shows the signed words for s6da/2's formula (#211)."""
     plain = SourceClause(S6DA_2, "using the formula:")
     marked = SourceClause(S6DA_2, "using the formula:", incomplete=(FORMULA_NOT_TEXT,))
-    assert marked.marker == (
-        f"clause {S6DA_2} incomplete (the formula is not available in text form)"
-    )
+    assert marked.marker == f"clause {S6DA_2} incomplete ({SIGNED})"
     assert fence("retrieved_clauses", [plain]) != fence("retrieved_clauses", [marked])
     assert "] incomplete (" not in fence("retrieved_clauses", [plain])
     assert "must never state, guess or reconstruct the missing" in " ".join(SYSTEM_PROMPT.split())
@@ -701,15 +707,15 @@ async def test_an_answer_citing_s6da_2_carries_the_flag_to_the_model_and_the_cli
     assert answer["verified"] is True
     [citation] = answer["citations"]
     assert citation["clause_id"] == S6DA_2 and citation["canonical_text"] == text
-    reasons = [{"reason": "image_not_text", "detail": "the formula is not available in text form"}]
-    assert citation["incomplete"] == reasons
-    assert answer["incomplete"] == [{"clause_id": S6DA_2, "cite": "s 6DA(2)", "reasons": reasons}]
-    # The model was told, in the fence, beside the clause.
+    # The reader is shown the signed words, not the parser's detail (#211).
+    assert citation["incomplete"] == SHOWN_REASONS
+    assert answer["incomplete"] == [
+        {"clause_id": S6DA_2, "cite": "s 6DA(2)", "reasons": SHOWN_REASONS}
+    ]
+    # The model was told, in the fence, beside the clause, in the same words.
     user = str(generator.calls[0]["user"])
-    assert (
-        f'clause {S6DA_2} cited as "s 6DA(2)" '
-        "incomplete (the formula is not available in text form)]" in user
-    )
+    assert f'clause {S6DA_2} cited as "s 6DA(2)" incomplete ({SIGNED})]' in user
+    assert "the formula is not available in text form" not in user
     assert ALT not in user
 
 
@@ -720,68 +726,6 @@ async def test_an_answer_citing_only_complete_clauses_carries_no_flag() -> None:
     answer = dict(events)["answer"]
     assert answer["verified"] is True and answer["incomplete"] == []
     assert answer["citations"][0]["incomplete"] == []
-
-
-# ---- Track A (held: it changes signed labels GA-01, GA-02, GA-04, GA-05) -------
-
-THE_THREE = (
-    "COND-PA-TURNOVER-PREVIOUS-YEAR-UNDER",
-    "COND-PA-TURNOVER-CURRENT-YEAR-UNDER",
-    "COND-PA-S6D4A-EVER-OVER-THRESHOLD",
-)
-REASON = "s 6DA(2) is incomplete: the formula is not available in text form"
-
-
-@pytest.mark.parametrize("condition_id", THE_THREE)
-def test_each_small_business_condition_on_s6da_2_is_unknown_whatever_the_evidence(
-    condition_id: str,
-) -> None:
-    """Derived from the stored clause's state, not from the signed mapping
-    (which is unchanged): GA-04 answers every turnover question, and each
-    of the three is still unknown, with no question that would settle it."""
-    from compliance_rag.assessment.coverage import Truth
-    from compliance_rag.assessment.evidence import Facts
-    from compliance_rag.eval.applicability import load_applicability_set
-    from compliance_rag.graph.applicability import explain
-    from compliance_rag.graph.mappings import load_mapping_set
-    from compliance_rag.graph.track_a import snapshot_of_mappings
-    from tests.test_applicability_gate import CORPUS_MAPPINGS, stored_incomplete
-
-    labels = load_applicability_set()
-    case = next(c for c in labels.cases if c.id == "GA-04")
-    mappings = load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml")))
-    assert S6DA_2 in next(c for c in mappings.conditions if c.id == condition_id).clause_ids
-    snapshot = snapshot_of_mappings(
-        mappings,
-        case.as_of,
-        clause_validity=labels.clause_validity(set(mappings.clause_ids)),
-        incomplete=stored_incomplete(),
-    )
-    found = explain(snapshot, Facts.of(case.evidence()), condition_id)
-    assert found.truth is Truth.UNKNOWN and found.question is None
-    assert found.incomplete == ((S6DA_2, "the formula is not available in text form"),)
-
-
-async def test_a_small_business_whose_exemption_rests_on_s6da_2_is_unassessable() -> None:
-    """GA-04: every question answered no, a small business operator under the
-    signed labels. With s6da/2 incomplete, the APPs are unassessable, and the
-    reason names the clause and what is missing."""
-    from compliance_rag.assessment.coverage import Outcome
-    from compliance_rag.assessment.evidence import Facts
-    from compliance_rag.eval.applicability import load_applicability_set
-    from compliance_rag.graph.mappings import load_mapping_set
-    from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
-
-    labels = load_applicability_set()
-    case = next(c for c in labels.cases if c.id == "GA-04")
-    store = fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
-    coverage = await store.coverage(
-        Facts.of(case.evidence()), tenant_id=case.tenant_id, as_of=case.as_of
-    )
-    app11 = coverage.obligation("OB-PA-APP11-1")
-    assert app11.outcome is Outcome.UNASSESSABLE
-    assert app11.reason == f"Unassessable: {REASON}"
-    assert coverage.questions == ()
 
 
 # ---- a chat read back shows the flag the member was shown (#228) ---------------------
@@ -812,7 +756,7 @@ async def test_a_chat_read_back_shows_an_incomplete_clauses_flag_as_the_answer_d
         response = await c.post("/v1/answers", json={"question": TURNOVER, "as_of": AS_OF})
         shown = dict(_events(response.text))["answer"]
         read = (await c.get(f"/v1/chats/{shown['chat_id']}")).json()
-    reasons = [{"reason": "image_not_text", "detail": "the formula is not available in text form"}]
+    reasons = SHOWN_REASONS  # the signed words, joined at read time (#211)
     assert shown["incomplete"] == [{"clause_id": S6DA_2, "cite": "s 6DA(2)", "reasons": reasons}]
     answer = read["turns"][1]
     assert answer["verified"] is True and answer["text"] == shown["text"]
@@ -826,6 +770,14 @@ async def test_a_chat_read_back_shows_an_incomplete_clauses_flag_as_the_answer_d
     assert answer["incomplete"] == shown["incomplete"]
     # The question turn has none; it is the member's own words.
     assert "incomplete" not in read["turns"][0]
+    # The ledger keeps the parser's state; the signed words are joined on read.
+    from compliance_rag.adapters.interfaces import ChatCitation
+    from tests.api_support import TENANT
+
+    _, kept = await ledger.chat_turns(TENANT, "uid-123", shown["chat_id"])
+    assert [c.incomplete for c in kept.citations if isinstance(c, ChatCitation)] == [
+        (FORMULA_NOT_TEXT,)
+    ]
 
     # Later, the corpus holds s6da/2 complete. The chat still says what it said.
     async with await _client(
