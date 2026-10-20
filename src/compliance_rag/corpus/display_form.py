@@ -34,8 +34,8 @@ import re
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
+from compliance_rag.corpus.models import CLAUSE_PATH_RE, instrument_tenant_prefix, parse_stable_id
 from compliance_rag.corpus.models import PARAGRAPH_SEGMENT_RE as _PARAGRAPH_RE
-from compliance_rag.corpus.models import instrument_tenant_prefix, parse_stable_id
 
 Titles = Mapping[tuple[str, str], str]
 """`(instrument_id, version_id)` to the title the ledger records with that
@@ -45,12 +45,13 @@ NO_TITLES: Titles = MappingProxyType({})
 """For a caller that cites only library law, whose form names no title: an
 obligation and its questions rest on law clauses (ADR-0028)."""
 
-_SECTION_RE = re.compile(r"^s(\d+)([a-z]{0,2})$")
-_ARTICLE_RE = re.compile(r"^art(\d+)$")
-_SCHEDULE_APP_RE = re.compile(r"^app(\d+)$")
+_SECTION_RE = re.compile(r"^s(\d+)([a-z]{0,2})\Z")
+_ARTICLE_RE = re.compile(r"^art(\d+)\Z")
+_SCHEDULE_APP_RE = re.compile(r"^app(\d+)\Z")
 
 
-_INSERTED_RE = re.compile(r"^(\d+)([a-z]+)$")
+_INSERTED_RE = re.compile(r"^(\d+)([a-z]+)\Z")
+_NUMBER_RE = re.compile(r"[0-9]+")
 
 
 def _cased(segment: str) -> str:
@@ -68,7 +69,12 @@ def display_form(clause_path: str, instrument_id: str) -> str:
     """A clause path rendered for a human, dispatching on its own segment
     shape (see module docstring for why `instrument_id` is accepted but not
     yet read). Falls back to the raw path — never raises — for a
-    clause_path shape no convention below recognises (issue #7)."""
+    clause_path shape no convention below recognises (issue #7), and for
+    anything that isn't a well-formed clause path at all: a trailing newline
+    or a space in any segment is shown as it is, never rendered as clean
+    (#240)."""
+    if not CLAUSE_PATH_RE.match(clause_path):
+        return clause_path
     segments = clause_path.split("/")
     head, rest = segments[0], segments[1:]
 
@@ -114,7 +120,7 @@ def numbering(clause_path: str, instrument_id: str) -> str:
     another shape — a law-shaped one in a document a tenant supplied — is
     rendered as `display_form` renders it."""
     segments = clause_path.split("/")
-    if all(segment.isdigit() for segment in segments):
+    if all(_NUMBER_RE.fullmatch(segment) for segment in segments):
         return ".".join(segments)
     return display_form(clause_path, instrument_id)
 
