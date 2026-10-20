@@ -145,7 +145,7 @@ def cite(clause_id: str, titles: Titles) -> str:
     return number if title is None else f"{title}, {number}"
 
 
-def policy_versions(clause_ids: Iterable[str]) -> frozenset[tuple[str, str]]:
+def cited_policy_versions(clause_ids: Iterable[str]) -> frozenset[tuple[str, str]]:
     """The policy versions among these clause ids: what a request reads the
     titles of, in one `version_titles` call. Library law needs none."""
     found: set[tuple[str, str]] = set()

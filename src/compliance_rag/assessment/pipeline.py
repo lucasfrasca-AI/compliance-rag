@@ -60,7 +60,7 @@ from compliance_rag.assessment.prompt import (
     repair_prompt,
     user_prompt,
 )
-from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite, policy_versions
+from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite, cited_policy_versions
 from compliance_rag.corpus.models import Incomplete, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.telemetry import current_trace_id, span
@@ -275,7 +275,7 @@ class AssessmentPipeline:
             # form the member is shown for it.
             titles = await self.ledger.version_titles(
                 tenant_id,
-                policy_versions(
+                cited_policy_versions(
                     [*(p.clause_id for p in policies), *(c.clause_id for c in retrieved)]
                 ),
             )

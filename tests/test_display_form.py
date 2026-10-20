@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from compliance_rag.assessment.coverage import ObligationCoverage
-from compliance_rag.corpus.display_form import NO_TITLES, cite, display_form, policy_versions
+from compliance_rag.corpus.display_form import NO_TITLES, cite, cited_policy_versions, display_form
 from compliance_rag.corpus.models import Citation, ClauseRecord, validate_title
 from compliance_rag.corpus.policy_parser import parse_policy
 from compliance_rag.eval.golden_corpus import (
@@ -202,7 +202,7 @@ def test_library_law_is_cited_as_before_whatever_titles_are_read(
 
 
 def test_only_policy_versions_have_titles_to_read() -> None:
-    assert policy_versions(
+    assert cited_policy_versions(
         [
             "acme/privacy-policy:v1:3/1",
             "acme/privacy-policy:v1:3/2",

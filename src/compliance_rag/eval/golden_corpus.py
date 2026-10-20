@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from functools import cache
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -56,12 +57,14 @@ _FRONT_MATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
 def front_matter_title(source: str) -> str:
     """A synthetic policy's title, from its front matter's `title:`: what the
-    operator records it under (ADR-0049). Document metadata, read here and
-    never by the policy parser, whose clauses don't change (#217). A fixture
-    without one is an error, not a title made up from its file name."""
+    fixtures are recorded under (`harness.golden_ledger`), and what an
+    operator script publishing them reads (ADR-0049). Document metadata, read
+    here and never by the policy parser, whose clauses don't change (#217). A
+    fixture without one is an error, not a title made up from its file name."""
     match = _FRONT_MATTER_RE.match(source)
     meta: object = yaml.safe_load(match.group(1)) if match else None
-    title = meta.get("title") if isinstance(meta, dict) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    # YAML's mapping is untyped; only a str under "title" is taken.
+    title = cast("dict[object, object]", meta).get("title") if isinstance(meta, dict) else None
     if not isinstance(title, str) or not title.strip():
         raise ValueError("a synthetic policy's front matter has no title")
     return title

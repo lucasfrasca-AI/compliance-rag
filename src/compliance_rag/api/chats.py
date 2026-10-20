@@ -48,7 +48,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.api.answers import WITHHELD, citation_json, incomplete_clauses_json
 from compliance_rag.api.deps import UUID4_HEX, CurrentCaller, services_of
-from compliance_rag.corpus.display_form import Titles, cite, policy_versions
+from compliance_rag.corpus.display_form import Titles, cite, cited_policy_versions
 
 router = APIRouter(prefix="/v1")
 
@@ -141,5 +141,5 @@ async def get_chat(
     turns = await ledger.chat_turns(who.tenant_id, who.member.uid, chat_id)
     if not turns:
         raise HTTPException(404, "no such chat")
-    titles = await ledger.version_titles(who.tenant_id, policy_versions(_named(turns)))
+    titles = await ledger.version_titles(who.tenant_id, cited_policy_versions(_named(turns)))
     return {"chat_id": chat_id, "turns": [_turn_json(t, titles) for t in turns]}

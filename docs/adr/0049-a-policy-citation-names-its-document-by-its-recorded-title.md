@@ -55,9 +55,12 @@ corpus revision is needed.
   writes it. `instrument.title` never again holds the instrument id by
   default.
 - **Where the titles come from today:**
-  - **The synthetic fixtures:** the operator reads each fixture's front-matter
-    `title:` (`golden_corpus.front_matter_title`). That is fixture code, not
-    the parser.
+  - **The synthetic fixtures:** fixture code reads each fixture's
+    front-matter `title:` (`golden_corpus.front_matter_title`). That code is
+    what records them in the eval harness's ledger, and what an operator
+    script that publishes them will call. It is not the parser. No operator
+    script publishes the fixtures to a ledger yet;
+    `register_synthetic_fixtures` writes only the registry.
   - **The Act:** "Privacy Act 1988", its compilation's own `<title>`. It is a
     constant beside `INSTRUMENT_ID` in `scripts/ingest_compilation.py`, and a
     test checks it against the source.
@@ -67,8 +70,9 @@ corpus revision is needed.
   `record_published_version`, which records the version after it, does.
 
 **3. Each version keeps its own title.** The displayed title is read from
-`instrument_version.title`, and `instrument.title` holds the latest recorded
-version's.
+`instrument_version.title`, and `instrument.title` holds the most recently
+recorded version's, by when it was recorded, not by `valid_from`. Nothing
+displays `instrument.title`.
 
 - A citation names a version, and a chat read back shows a turn as it was
   shown (#162).
@@ -76,6 +80,10 @@ version's.
   under.
 - A version's title is written once, with its record, so the form of a
   recorded version never changes.
+- **Why no `PolicyVersion` key.** A version is keyed by a plain
+  `(instrument_id, version_id)` pair, not by `PolicyVersion`. That type means
+  "an internal policy in the cached prefix", and a title is also read for an
+  external upload or a member's private addition.
 
 **4. Titles are read once per request, never once per citation.** There is
 one `LedgerStore.version_titles(tenant_id, versions)` read:
