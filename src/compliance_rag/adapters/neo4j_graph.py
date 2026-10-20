@@ -107,7 +107,7 @@ EDITION_REFUSAL = "Neo.DatabaseError.Schema.ConstraintCreationFailed"
 message naming Enterprise Edition. Both must match for a refusal to be
 reported as an edition limit rather than raised."""
 
-_PROPERTY_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
+_PROPERTY_KEY = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
 
 @dataclass(frozen=True, slots=True)

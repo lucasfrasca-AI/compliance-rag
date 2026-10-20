@@ -354,7 +354,15 @@ async def test_labels_and_edge_types_come_only_from_the_closed_sets() -> None:
 
 
 async def test_the_writer_owns_the_bitemporal_and_id_properties() -> None:
-    for key in ("valid_from", "valid_to", "status", "recorded_at", "stable_id", "Bad-Key"):
+    for key in (
+        "valid_from",
+        "valid_to",
+        "status",
+        "recorded_at",
+        "stable_id",
+        "Bad-Key",
+        "snake_key\n",
+    ):
         with pytest.raises(GraphWriteRefused):
             await _offline().put_node(C1, OPEN, {key: "x"})
 
