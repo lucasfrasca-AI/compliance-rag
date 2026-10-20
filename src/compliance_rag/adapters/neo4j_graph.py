@@ -56,12 +56,15 @@ from compliance_rag.adapters.graph_schema import (
     CORRECTIONS,
     COSMETIC,
     EDGE_TYPES,
+    ERRATUM_EDGES,
+    ERRATUM_SOURCES,
     INCOMPLETE_DETAILS,
     INCOMPLETE_REASONS,
     PERSISTED_LABELS,
     WRITER_KEYS,
     Bitemporal,
     CorrectionWrite,
+    EdgeRef,
     EdgeWrite,
     EndReason,
     GraphCounts,
@@ -74,9 +77,11 @@ from compliance_rag.adapters.graph_schema import (
     StoredNode,
     checked_edge_type,
     checked_label,
+    erratum_entry,
     incomplete_of_properties,
     incomplete_properties,
     refuse_duplicates,
+    removed_by_errata,
 )
 from compliance_rag.adapters.interfaces import (
     GraphAdmin,
@@ -747,6 +752,101 @@ class Neo4jGraph(GraphAdmin):
             ),
             {**parameters, "props": props, "entry": entry},
         )
+
+    # ---- errata: mapping edges that were never true (ADR-0050) --------------
+
+    async def remove_by_erratum(self, edges: Sequence[EdgeRef], *, by: str, reason: str) -> int:
+        """Every edge of the erratum in one transaction (all land or none
+        does). For each source node: lock, read its trail, delete each named
+        edge, and append one entry naming the edges deleted from it. An edge
+        already gone is a re-run only if the trail records an erratum removing
+        it; otherwise the whole erratum is refused. Only `ERRATUM_EDGES` from
+        an `ERRATUM_SOURCES` node to a Clause: never a node, never a meaning
+        edge, never a property."""
+        if not edges:
+            return 0
+        if not (by.strip() and reason.strip()):
+            raise GraphWriteRefused("an erratum names who acknowledged it and why (ADR-0050)")
+        for edge in edges:
+            if edge.edge_type not in ERRATUM_EDGES:
+                raise GraphWriteRefused(
+                    f"{edge}: an erratum removes only {sorted(ERRATUM_EDGES)} edges; any other "
+                    "change of meaning is a new id (D-05, ADR-0050)"
+                )
+            if edge.source.label not in ERRATUM_SOURCES or edge.target.label != "Clause":
+                raise GraphWriteRefused(
+                    f"{edge}: an erratum removes an edge from a mapping item to a Clause, "
+                    f"not from a {edge.source.label} to a {edge.target.label}"
+                )
+        refuse_duplicates("edge", [(e.edge_type, e.source, e.target) for e in edges])
+        by_source: dict[NodeRef, list[EdgeRef]] = {}
+        for edge in edges:
+            by_source.setdefault(edge.source, []).append(edge)
+        now = self._clock().isoformat()
+
+        async def work(tx: AsyncManagedTransaction) -> int:
+            deleted = 0
+            for source in sorted(by_source, key=lambda n: (n.label, n.stable_id)):
+                deleted += await self._remove_by_erratum(
+                    tx, source, by_source[source], by=by, reason=reason, now=now
+                )
+            return deleted
+
+        attributes = {
+            "graph.errata": ",".join(sorted(str(e) for e in edges)),
+            "graph.erratum_by": by,
+        }
+        return await self._write("neo4j_graph.remove_by_erratum", attributes, work)
+
+    async def _remove_by_erratum(
+        self,
+        tx: AsyncManagedTransaction,
+        source: NodeRef,
+        edges: Sequence[EdgeRef],
+        *,
+        by: str,
+        reason: str,
+        now: str,
+    ) -> int:
+        match = f"MATCH (n:{checked_label(source.label)} {{stable_id: $stable_id}}) "
+        locked = await tx.run(
+            _trusted(match + "SET n._lock = true RETURN properties(n) AS p"),
+            stable_id=source.stable_id,
+        )
+        record = await locked.single()
+        if record is None:
+            raise GraphWriteRefused(f"no {source.label} {source.stable_id!r} to remove edges from")
+        already = removed_by_errata(
+            {k: to_python(v) for k, v in cast("dict[str, object]", record["p"]).items()}
+        )
+        removed: list[EdgeRef] = []
+        for edge in edges:
+            result = await tx.run(
+                _trusted(
+                    match + f"MATCH (n)-[r:{checked_edge_type(edge.edge_type)}]->"
+                    "(:Clause {stable_id: $target}) DELETE r RETURN count(*) AS deleted"
+                ),
+                stable_id=source.stable_id,
+                target=edge.target.stable_id,
+            )
+            if (await result.single(strict=True))["deleted"]:
+                removed.append(edge)
+            elif (edge.edge_type, edge.target.stable_id) not in already:
+                raise GraphWriteRefused(
+                    f"no edge {edge} to remove, and no erratum on its trail removed it"
+                )
+        if not removed:
+            await tx.run(_trusted(match + "REMOVE n._lock"), stable_id=source.stable_id)
+            return 0  # already removed by this erratum: a re-run
+        await tx.run(
+            _trusted(
+                match + f"SET n.{CORRECTIONS} = coalesce(n.{CORRECTIONS}, []) + $entry "
+                "REMOVE n._lock"
+            ),
+            stable_id=source.stable_id,
+            entry=erratum_entry(now, by, reason, removed),
+        )
+        return len(removed)
 
     # ---- parse corrections of library law (ADR-0042) ------------------------
 
