@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from compliance_rag.adapters.generation_residency import TenantTextGate
@@ -327,6 +327,8 @@ class AssessmentPipeline:
             # set (with the exceptions and qualifiers delivered beside it)
             # plus the cached policy set. Nothing else is citable.
             context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
+            # What each clause was shown as, so a repair marks it identically.
+            shown = {c.clause_id: c for c in (*policies, *retrieved)}
             checked = await self.verifier.check_all(
                 draft.citations, context=context, as_of=as_of, user_id=user_id
             )
@@ -335,7 +337,7 @@ class AssessmentPipeline:
             for check in checked:
                 if check.outcome.repairable and check.clause is not None:
                     check, repair = await self._repair(
-                        check, context=context, as_of=as_of, user_id=user_id
+                        check, shown=shown, context=context, as_of=as_of, user_id=user_id
                     )
                     await self._record_usage(tenant_id, repair)
                     repairs.append(repair)
@@ -421,20 +423,22 @@ class AssessmentPipeline:
         self,
         failed: CheckedCitation,
         *,
+        shown: Mapping[str, SourceClause],
         context: frozenset[str],
         as_of: dt.date,
         user_id: str | None,
     ) -> tuple[CheckedCitation, Generation]:
         """One targeted regeneration of one citation, re-verified. A repair
         that changes the clause id, or isn't valid JSON, leaves the original
-        failure standing."""
+        failure standing. The clause is fenced as the answer prompt fenced it:
+        the very `SourceClause` the model was shown, so its marker (how it is
+        cited, what it excepts or qualifies, that it is incomplete) is the
+        same one, built by the same property (#243). Only its text is the
+        canonical text the verifier read."""
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
-        clause = SourceClause(
-            failed.clause.clause_id,
-            failed.clause.canonical_text,
-            incomplete=failed.clause.incomplete,
-        )
+        # Repairable only if in context, and context is exactly `shown`.
+        clause = replace(shown[failed.clause.clause_id], text=failed.clause.canonical_text)
         if failed.clause.scope is not Scope.PUBLIC:
             # Read from the bucket, which the generator's store gate never
             # asks (ADR-0032).
