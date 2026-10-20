@@ -902,6 +902,36 @@ def test_a_chat_turn_is_one_row_per_chat_and_index(
         _chat_turn(conn)
 
 
+def test_the_citations_comment_names_the_incomplete_key_0016(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    """0016 (#228) re-sets the comment 0014 left describing the old element,
+    and a citation carrying `incomplete` is accepted: no DDL was needed."""
+    (comment,) = conn.execute(
+        "SELECT col_description('chat'::regclass, attnum) FROM pg_attribute "
+        "WHERE attrelid = 'chat'::regclass AND attname = 'citations'"
+    ).fetchone() or (None,)
+    assert isinstance(comment, str) and "incomplete" in comment
+    answer: dict[str, object] = {
+        "role": "assistant",
+        "turn_index": 1,
+        "content": "It is worked out by formula.",
+        "outcome": "verified",
+        "citations": Jsonb(
+            [
+                {
+                    "clause_id": CLAUSE,
+                    "version_id": "C2026C00227",
+                    "incomplete": [{"reason": "image_not_text", "detail": "an image"}],
+                }
+            ]
+        ),
+    }
+    _insert_tenant(conn, "acme")
+    _chat_turn(conn)
+    _chat_turn(conn, answer)
+
+
 def test_every_chat_rule_is_validated_on_the_rows_there_are(
     conn: psycopg.Connection[tuple[object, ...]],
 ) -> None:

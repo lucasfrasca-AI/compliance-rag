@@ -514,10 +514,18 @@ class ChatCitation:
     """A citation an answer was shown with: the clause and the version of the
     instrument it is of, so it stays clickable after the clause is superseded
     (ADR-0021). Never the model's quote: what the member was shown is the
-    clause's canonical text, which the clause store holds under this id."""
+    clause's canonical text, which the clause store holds under this id.
+
+    `incomplete` is the clause's incompleteness as the member was shown it
+    (ADR-0047, #228): recorded with the turn, so a chat read back shows the
+    flag the original answer carried. It is never recomputed from the corpus
+    as it is today, and it is the verified clause's, never the model's."""
 
     clause_id: str
     version_id: str
+    incomplete: Incomplete = ()
+    """Empty for a complete clause, and for every turn recorded before the
+    state existed: those answers were shown without a flag."""
 
     def __post_init__(self) -> None:
         if parse_stable_id(self.clause_id)[1] != self.version_id:

@@ -39,7 +39,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
 from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
-from compliance_rag.corpus.models import DocumentClass
+from compliance_rag.corpus.models import DocumentClass, Incompleteness, IncompleteReason
 from compliance_rag.graph.mappings import load_mapping_set
 from tests.test_applicability import AS_OF as APPLICABILITY_AS_OF
 from tests.test_applicability import CLAUSES as APPLICABILITY_CLAUSES
@@ -508,6 +508,17 @@ async def test_the_fake_ledger_satisfies_the_contract() -> None:
 APP11 = "privacy-act-1988:C2026C00227:sch1/app11/1"
 APP12 = "privacy-act-1988:C2026C00227:sch1/app12/1"
 POLICY_CLAUSE = f"{POLICY}:v1:3/1"
+S6DA_2 = "privacy-act-1988:C2026C00227:s6da/2"
+S16A_1 = "privacy-act-1988:C2026C00227:s16a/1"
+FORMULA_GAP = Incompleteness(
+    reason=IncompleteReason.IMAGE_NOT_TEXT, detail="the formula is not available in text form"
+)
+TABLE_GAP = Incompleteness(
+    reason=IncompleteReason.TABLE_NOT_TEXT, detail="the table is not available in text form"
+)
+PENALTY_GAP = Incompleteness(
+    reason=IncompleteReason.PENALTY_NOT_PARSED, detail="the penalty is not in the clause text"
+)
 MODEL_PROSE = "Section 6C(2) says: a sentence the model made up that must never be kept."
 VERIFIED = ChatAnswer(
     TurnOutcome.VERIFIED,
@@ -668,6 +679,30 @@ async def assert_chat_contract(ledger: LedgerStore) -> None:
     # last, so a list ordered by recording time agrees with the turns
     stamps = [t.created_at for t in racing if t.created_at]
     assert len(stamps) == 8 and stamps == sorted(stamps)
+
+    # ---- a citation's incompleteness is kept as the member was shown it (#228,
+    # ADR-0047): each citation its own, several reasons in order, none for a
+    # complete clause, and the clause's id and version untouched by it
+    flagged = ChatAnswer(
+        TurnOutcome.VERIFIED,
+        text="Annual turnover is worked out by formula.",
+        citations=(
+            ChatCitation(APP11, "C2026C00227"),
+            ChatCitation(S6DA_2, "C2026C00227", (FORMULA_GAP,)),
+            ChatCitation(S16A_1, "C2026C00227", (TABLE_GAP, PENALTY_GAP)),
+        ),
+    )
+    await ledger.record_chat_exchange(an_exchange("flagged", answer=flagged))
+    _, shown = await turns("flagged")
+    assert shown.citations == flagged.citations
+    assert [c.incomplete for c in shown.citations] == [
+        (),
+        (FORMULA_GAP,),
+        (TABLE_GAP, PENALTY_GAP),
+    ]
+    # An answer recorded without any is read back without any.
+    await ledger.record_chat_exchange(an_exchange("unflagged"))
+    assert all(c.incomplete == () for c in (await turns("unflagged"))[1].citations)
 
 
 async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:

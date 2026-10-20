@@ -204,8 +204,17 @@ shows the clause was incomplete and who completed it, when and why.
   without reading the alt text, so the detail is "the formula is not
   available in text form", and Track A's reason names the clause
   ("s 6DA(2) is incomplete: the formula is not available in text form").
-- **A chat read back** (#162) re-displays citations by id and shows no flag:
-  #228.
+- **A chat read back** (#162) shows the flag the member was shown (#228). The
+  turn records it with each citation, taken from the clause the verifier
+  checked the quote against, in the citation's own element of the `chat`
+  table's `citations` JSONB: `incomplete` is the same list of reasons as every
+  other store, present only when there is any, so a row written before it
+  reads back complete (those answers were shown without a flag). No
+  structural migration, since the column's constraints test the array and not
+  its elements; `db/ledger/0016_chat_citation_incomplete.sql` only re-sets the
+  column's comment, which 0014 (applied, so not edited) left describing the
+  old element shape. Read-back reads the ledger and never the corpus: a clause marked
+  or completed after the answer doesn't change what the chat shows.
 - **Every clause the parse marks is reported**, in the test that pins the
   whole compilation; a selection that grows to s16A or Part IIIA ingests those
   clauses already marked.

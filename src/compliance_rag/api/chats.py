@@ -23,15 +23,23 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Request
 
 from compliance_rag.adapters.interfaces import ChatCitation, ChatTurn, TurnOutcome
-from compliance_rag.api.answers import WITHHELD
+from compliance_rag.api.answers import WITHHELD, incomplete_clauses_json
 from compliance_rag.api.deps import UUID4_HEX, CurrentCaller, services_of
 from compliance_rag.assessment.coverage_report import cite
+from compliance_rag.corpus.models import incomplete_json
 
 router = APIRouter(prefix="/v1")
 
 
 def _citation_json(c: ChatCitation) -> dict[str, object]:
-    return {"clause_id": c.clause_id, "cite": cite(c.clause_id), "version_id": c.version_id}
+    return {
+        "clause_id": c.clause_id,
+        "cite": cite(c.clause_id),
+        "version_id": c.version_id,
+        # As recorded with the turn: what the member was shown, not the
+        # clause's state in today's corpus (ADR-0047, #162, #228).
+        "incomplete": incomplete_json(c.incomplete),
+    }
 
 
 def _turn_json(turn: ChatTurn) -> dict[str, object]:
@@ -49,6 +57,7 @@ def _turn_json(turn: ChatTurn) -> dict[str, object]:
         "verified": turn.outcome is TurnOutcome.VERIFIED,
         "text": turn.content,
         "citations": [_citation_json(c) for c in turn.citations],
+        "incomplete": incomplete_clauses_json((c.clause_id, c.incomplete) for c in turn.citations),
         "blocked": [{"clause_id": b, "cite": cite(b)} for b in turn.blocked],
         "withheld": WITHHELD.get(turn.outcome),
         "error": turn.outcome.value if turn.outcome.failed else None,
