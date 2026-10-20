@@ -16,6 +16,10 @@ Two things run at startup, before anything is served:
   residency gate (ADR-0023) runs first. That gate asks whether the vector
   store holds real tenant chunks.
 
+Before either, the signed `incomplete.yaml` files are read (#211, ADR-0047):
+one still pending review refuses the build, as the mapping loader refuses an
+unsigned mapping (D-01), rather than failing the first answer that cites it.
+
 The inputs that store never sees are checked per request (ADR-0032): a
 member's question against the tester list (`api/answers.py`), and the CAG
 prefix and any clause to repair, read from the bucket, against the synthetic
@@ -36,6 +40,7 @@ from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.corpus.incomplete_review import committed_incomplete_reviews
 from compliance_rag.graph.track_a import GraphTrackA
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings, get_settings
@@ -75,6 +80,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         keys=GoogleSigningKeys(),
     )
     telemetry.configure(settings)
+    committed_incomplete_reviews()  # refuses an unsigned incomplete.yaml (D-01)
     graph = Neo4jGraph.open(settings)
     ledger = PostgresLedgerStore.from_settings(settings)
     clauses = GCSClauseStore.for_bucket(settings.corpus_bucket)

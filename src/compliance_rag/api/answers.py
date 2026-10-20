@@ -26,7 +26,10 @@ The stream carries stages and a verified result, never unverified text
 
 An answer that cites an incomplete clause (ADR-0047) says so: each citation
 carries its clause's `incomplete` reasons, and `incomplete` lists every such
-clause with its display form, so a client shows it beside the answer.
+clause with its display form, so a client shows it beside the answer. Each
+reason's `detail` is what the reader is shown: the words a person signed for
+that clause and reason (`incomplete.yaml`, #211), joined here at read time,
+else the parser's.
 
 A bad citation blocks the answer rather than shipping it (ADR-0003). So an
 answer's text and citations are sent only when every citation verified. A
@@ -100,7 +103,8 @@ from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
 from compliance_rag.corpus.display_form import Titles, cite
-from compliance_rag.corpus.models import ClauseRecord, Incomplete, incomplete_json
+from compliance_rag.corpus.incomplete_review import committed_incomplete_reviews
+from compliance_rag.corpus.models import ClauseRecord, Incomplete
 from compliance_rag.retrieval.pipeline import RetrievalTrace
 from compliance_rag.telemetry import current_trace_id
 
@@ -234,8 +238,9 @@ def citation_json(
         "version_id": version_id,
         # Whether this clause is all the law sets there (ADR-0047). On a chat
         # read back, as recorded with the turn, not the clause's state in
-        # today's corpus (#162, #228).
-        "incomplete": incomplete_json(incomplete),
+        # today's corpus (#162, #228). Each reason's `detail` is the words a
+        # reader is shown: signed, where a person read the clause (#211).
+        "incomplete": committed_incomplete_reviews().shown_json(clause_id, incomplete),
     }
 
 
@@ -253,7 +258,7 @@ def incomplete_clauses_json(
         {
             "clause_id": clause_id,
             "cite": cite(clause_id, titles),
-            "reasons": incomplete_json(incomplete),
+            "reasons": committed_incomplete_reviews().shown_json(clause_id, incomplete),
         }
         for clause_id, incomplete in found.items()
     ]

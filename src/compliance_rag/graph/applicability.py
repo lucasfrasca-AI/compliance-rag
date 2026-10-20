@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import Enum
 from typing import cast
 
 from compliance_rag.assessment.coverage import (
@@ -41,6 +42,10 @@ from compliance_rag.assessment.coverage import (
 )
 from compliance_rag.assessment.evidence import Facts, FactValue, Period, Reading
 from compliance_rag.corpus.display_form import display_form
+from compliance_rag.corpus.incomplete_review import (
+    IncompleteReviews,
+    committed_incomplete_reviews,
+)
 from compliance_rag.corpus.models import Incomplete, parse_stable_id
 from compliance_rag.graph.mappings import (
     Comparison,
@@ -106,6 +111,34 @@ class Snapshot:
     incomplete: Mapping[str, Incomplete] = field(default_factory=dict[str, Incomplete])
     """The clauses conditions cite that are incomplete, with why (ADR-0047):
     read off the stored corpus, never from the mapping."""
+    reviews: IncompleteReviews = field(default_factory=committed_incomplete_reviews)
+    """How a person read those clauses (`incomplete.yaml`, signed): the words a
+    reader is shown, and whether the missing content governs only a part
+    year. Joined here, at read time, on the fake and on the graph alike."""
+
+
+class _YearIs(Enum):
+    """Whether a financial year a leaf reads was a part year of the business."""
+
+    FULL = "full"
+    """Carried on all of it, or none of it: the clause's missing content
+    doesn't govern it, and the figure decides the leaf."""
+    PART = "part"
+    """It started during the year: the missing content governs it."""
+    OPEN = "open"
+    """When it started isn't known, so it may have been."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Gap:
+    """A clause a leaf rests on that is incomplete, for one reason."""
+
+    clause_id: str
+    shown: str
+    """What a reader is shown: the signed words, else the parser's detail."""
+    started: str | None
+    """For missing content that governs only a part year: the fact that says
+    when the business started. `None`: it governs every reading."""
 
 
 JURISDICTIONS_FIELD = "operates_in"
@@ -205,24 +238,113 @@ class _Evaluator:
     # ---- leaves ---------------------------------------------------------------
 
     def _leaf(self, spec: ConditionSpec, leaf: Leaf) -> Explanation:
-        resting = tuple(
-            (clause_id, i.detail)
-            for clause_id in spec.clause_ids
-            for i in self._snapshot.incomplete.get(clause_id, ())
-        )
-        if resting:
-            # The law this leaf reads isn't all in the stored text: no answer
-            # settles it, so it is unknown whatever the evidence (ADR-0047).
-            return Explanation(
-                condition_id=spec.id,
-                operator=spec.operator.value,
-                truth=Truth.UNKNOWN,
-                description=spec.description,
-                clause_ids=spec.clause_ids,
-                incomplete=resting,
-            )
+        """A leaf resting on an incomplete clause (ADR-0047) is unknown, with
+        the clause's reason, for every reading the missing content governs. A
+        reviewed reading can say that content governs only a part year (a
+        financial year the business was carried on for part of): then it is
+        unknown only for a year the facts show, or leave open, was one, and a
+        full year is decided from the figure as usual."""
+        gaps = self._gaps(spec)
+        if any(g.started is None for g in gaps) or (gaps and leaf.period is LeafPeriod.CURRENT):
+            # Missing content that governs every reading, or a reading that is
+            # no financial year: no answer settles it, whatever the evidence.
+            return self._unsettled(spec, gaps)
         if leaf.period is LeafPeriod.ANY_ENDED_FINANCIAL_YEAR:
-            return self._history(spec, leaf)
+            return self._history(spec, leaf, gaps)
+        decided = self._read(spec, leaf)
+        if not gaps:
+            return decided
+        year = self._year(leaf)
+        status, started = self._year_is(year, gaps)
+        if status is _YearIs.FULL:
+            return decided
+        evidence_ids = tuple(dict.fromkeys((*decided.evidence_ids, *started)))
+        if status is _YearIs.PART:
+            return self._unsettled(spec, gaps, evidence_ids=evidence_ids)
+        # Open: when the business started would say whether the year was a
+        # part year, so that is asked, beside the figure if it is missing too.
+        needs = tuple(dict.fromkeys(g.started for g in gaps if g.started is not None))
+        question = decided.question or Question(
+            condition_id=spec.id,
+            field=needs[0],
+            period=f"on {self._as_of}",
+            question=f"When did the business start? If it was during {year.label}, that was a "
+            f"part year, which {_cites(gaps)} governs.",
+            unassessable_reason=f"When the business started is not recorded, so whether "
+            f"{year.label} was a part year, which {_cites(gaps)} governs, can't be settled.",
+            clause_ids=spec.clause_ids,
+            evidence_ids=evidence_ids,
+        )
+        also = tuple(f for f in needs if f != question.field and f not in question.also_needs)
+        return _node(
+            spec,
+            Truth.UNKNOWN,
+            (),
+            question=replace(question, also_needs=(*question.also_needs, *also)),
+            evidence_ids=evidence_ids,
+            incomplete=_pairs(gaps),
+        )
+
+    def _gaps(self, spec: ConditionSpec) -> tuple[_Gap, ...]:
+        """Each incomplete clause the leaf rests on, for each reason, as the
+        stored corpus marks it and a person read it."""
+        reviews = self._snapshot.reviews
+        gaps: list[_Gap] = []
+        for clause_id in spec.clause_ids:
+            for incompleteness in self._snapshot.incomplete.get(clause_id, ()):
+                read = reviews.entry(clause_id, incompleteness.reason)
+                only = read.part_year_only if read is not None else None
+                gaps.append(
+                    _Gap(
+                        clause_id,
+                        reviews.shown(clause_id, incompleteness),
+                        only.started if only is not None else None,
+                    )
+                )
+        return tuple(gaps)
+
+    def _year_is(self, year: Period, gaps: tuple[_Gap, ...]) -> tuple[_YearIs, tuple[str, ...]]:
+        """Whether `year` was a part year, from when the business started, and
+        the evidence that said so. A start on 1 July is a full year; a start
+        after the year ended means it wasn't carried on in it at all, which is
+        no part year either."""
+        found: list[_YearIs] = []
+        evidence: list[str] = []
+        for started in dict.fromkeys(g.started for g in gaps if g.started is not None):
+            reading = self._facts.on(started, self._as_of)
+            evidence += [e.evidence_id for e in reading.evidence]
+            day = reading.value
+            if (
+                reading.missing
+                or reading.conflict
+                or not isinstance(day, dt.date)
+                or isinstance(day, dt.datetime)
+            ):
+                found.append(_YearIs.OPEN)
+            elif year.start < day < year.end:
+                found.append(_YearIs.PART)
+            else:
+                found.append(_YearIs.FULL)
+        status = next((s for s in (_YearIs.PART, _YearIs.OPEN) if s in found), _YearIs.FULL)
+        return status, tuple(evidence)
+
+    def _unsettled(
+        self, spec: ConditionSpec, gaps: tuple[_Gap, ...], *, evidence_ids: tuple[str, ...] = ()
+    ) -> Explanation:
+        """Unknown, and no answer settles it: the law the leaf reads for this
+        reading isn't all in the stored text (ADR-0047)."""
+        return _node(
+            spec, Truth.UNKNOWN, (), evidence_ids=evidence_ids, incomplete=_pairs(gaps)
+        )
+
+    def _year(self, leaf: Leaf) -> Period:
+        current_year = Period.financial_year_of(self._as_of)
+        if leaf.period is LeafPeriod.PREVIOUS_FINANCIAL_YEAR:
+            return current_year.previous_financial_year()
+        return current_year
+
+    def _read(self, spec: ConditionSpec, leaf: Leaf) -> Explanation:
+        """The leaf decided from the fact it reads, for its one period."""
         reading, label = self._reading(leaf)
         if reading.missing or reading.conflict or reading.value is None:
             return self._unknown(spec, leaf, label, reading)
@@ -247,10 +369,15 @@ class _Evaluator:
             case _:
                 return self._facts.on(leaf.field, self._as_of), f"on {self._as_of}"
 
-    def _history(self, spec: ConditionSpec, leaf: Leaf) -> Explanation:
+    def _history(self, spec: ConditionSpec, leaf: Leaf, gaps: tuple[_Gap, ...]) -> Explanation:
         """s6D(4)(a): any financial year that ended by `as_of` and after the
         later of the `since_field` date and `not_before`. True on the first
-        year that passes the test; false only if every such year is known."""
+        year that passes the test; false only if every such year is known.
+
+        With `gaps` (missing content that governs only a part year), a year
+        that was a part year — the one the business started in — or may have
+        been, because when it started isn't known, is never read from its
+        figure: it is unsettled, and only the other years can decide."""
         if leaf.since_field is None or leaf.not_before is None:
             raise ValueError(f"{spec.id}: a history leaf names since_field and not_before")
         since = self._facts.on(leaf.since_field, self._as_of)
@@ -266,9 +393,18 @@ class _Evaluator:
         years = _ended_years(after=floor, as_of=self._as_of)
         read: list[str] = list(e.evidence_id for e in since.evidence)
         unknown_years: list[str] = []
+        unsettled = False
+        open_ = False
         for year in years:
             reading = self._facts.for_period(leaf.field, year)
             read += [e.evidence_id for e in reading.evidence]
+            if gaps:
+                status, started = self._year_is(year, gaps)
+                read += started
+                if status is not _YearIs.FULL:
+                    unsettled = True
+                    open_ = open_ or status is _YearIs.OPEN
+                    continue
             if reading.missing or reading.conflict or reading.value is None:
                 unknown_years.append(year.label)
                 continue
@@ -282,12 +418,21 @@ class _Evaluator:
                 )
             if verdict is None:
                 unknown_years.append(year.label)
+        evidence_ids = tuple(dict.fromkeys(read))
+        incomplete = _pairs(gaps) if unsettled else ()
         # With the start date unknown the floor is still never earlier than
         # `not_before`, so every year since then known and none passing is a
         # sound "no". A year with turnover recorded is taken as a year the
         # business was carried on (ADR-0027).
-        if not unknown_years:
-            return _node(spec, Truth.FALSE, (), evidence_ids=tuple(read))
+        if not unknown_years and not unsettled:
+            return _node(spec, Truth.FALSE, (), evidence_ids=evidence_ids)
+        if not unknown_years and not open_:
+            # Every other year is known and none passes, but the part year
+            # can't be read: no answer settles it (ADR-0047).
+            return _node(spec, Truth.UNKNOWN, (), evidence_ids=evidence_ids, incomplete=incomplete)
+        needs = () if since_known else (leaf.since_field,)
+        if open_:
+            needs += tuple(g.started for g in gaps if g.started is not None)
         question = Question(
             condition_id=spec.id,
             field=leaf.field,
@@ -296,11 +441,18 @@ class _Evaluator:
             unassessable_reason=spec.unassessable_reason,
             clause_ids=spec.clause_ids,
             conflict=since.conflict,
-            evidence_ids=tuple(read),
+            evidence_ids=evidence_ids,
             missing_periods=tuple(unknown_years),
-            also_needs=() if since_known else (leaf.since_field,),
+            also_needs=tuple(dict.fromkeys(needs)),
         )
-        return _node(spec, Truth.UNKNOWN, (), question=question, evidence_ids=tuple(read))
+        return _node(
+            spec,
+            Truth.UNKNOWN,
+            (),
+            question=question,
+            evidence_ids=evidence_ids,
+            incomplete=incomplete,
+        )
 
     def _unknown(
         self,
@@ -490,6 +642,7 @@ def _node(
     *,
     question: Question | None = None,
     evidence_ids: tuple[str, ...] = (),
+    incomplete: tuple[tuple[str, str], ...] = (),
 ) -> Explanation:
     return Explanation(
         condition_id=spec.id,
@@ -500,7 +653,18 @@ def _node(
         because=because,
         question=question,
         evidence_ids=evidence_ids,
+        incomplete=incomplete,
     )
+
+
+def _pairs(gaps: tuple[_Gap, ...]) -> tuple[tuple[str, str], ...]:
+    """What an explanation records of each gap: the clause and what a reader
+    is shown about it."""
+    return tuple(dict.fromkeys((g.clause_id, g.shown) for g in gaps))
+
+
+def _cites(gaps: tuple[_Gap, ...]) -> str:
+    return " and ".join(dict.fromkeys(_cite(g.clause_id) for g in gaps))
 
 
 def _within(held: str, code: str) -> bool:
@@ -580,9 +744,10 @@ def _cite(clause_id: str) -> str:
 def _reason(outcome: Outcome, explanation: Explanation) -> str:
     if outcome is Outcome.UNASSESSABLE:
         questions = explanation.questions()
+        # The words a reader is shown: signed, where a person read the clause.
         missing = [
-            f"{_cite(clause_id)} is incomplete: {detail}"
-            for clause_id, detail in explanation.incompleteness()
+            f"{_cite(clause_id)} is incomplete: {shown}"
+            for clause_id, shown in explanation.incompleteness()
         ]
         if not questions:
             if missing:
