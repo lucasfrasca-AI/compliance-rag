@@ -21,10 +21,17 @@ from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore, Fake
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.interfaces import ClauseStore, RetrievalAdmin
 from compliance_rag.adapters.revision_authorization import (
+    RevisionAuthorization,
     _issue,  # pyright: ignore[reportPrivateUsage] — the stores' half of the contract
 )
 from compliance_rag.corpus.chunker import chunk_clauses
-from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Scope, canonical_sha256
+from compliance_rag.corpus.models import (
+    PUBLIC_TENANT_ID,
+    ClauseRecord,
+    Incompleteness,
+    Scope,
+    canonical_sha256,
+)
 from compliance_rag.corpus.revision import RevisedClause, RevisionDrift
 from tests.test_corpus_revision import (
     INSTRUMENT,
@@ -37,6 +44,11 @@ from tests.test_corpus_revision import (
     words,
 )
 from tests.test_gcs_clause_store import _FakeBucket  # pyright: ignore[reportPrivateUsage]
+from tests.test_incomplete_clauses import (
+    S6DA,
+    _parsed_constructs,  # pyright: ignore[reportPrivateUsage] — the shared fixture
+    _state_record,  # pyright: ignore[reportPrivateUsage]
+)
 
 
 async def assert_clause_store_revision_contract(store: ClauseStore) -> None:
@@ -139,3 +151,80 @@ async def test_the_fake_retrieval_store_satisfies_the_revise_chunks_contract() -
     # Nothing but the text changed: the valid time is the stored chunk's.
     revised = store._chunks[f"{INSTRUMENT}:{VERSION}:s6/1"]  # pyright: ignore[reportPrivateUsage]
     assert revised.valid_from == dt.date(2026, 6, 4)
+
+
+# ---- an incomplete clause (#211, ADR-0047): the state is part of the form ----
+
+
+def _state_change() -> tuple[ClauseRecord, ClauseRecord, RevisionAuthorization]:
+    """s6da/2 as deployed (complete) and as parsed (incomplete), and the
+    authorised revision between them: the same text, a new state."""
+    marked = next(c for c in S6DA.select(_parsed_constructs()) if c.clause_path == "s6da/2")
+    return marked.model_copy(update={"incomplete": ()}), marked, _issue(_state_record())
+
+
+async def assert_clause_store_state_contract(store: ClauseStore) -> None:
+    """Every `ClauseStore`: a clause's incompleteness is listed on the manifest
+    with its hash, and a revision moves it, writing the object, the record and
+    the new state, refusing a clause given in a form it doesn't record."""
+    unmarked, marked, granted = _state_change()
+    await store.put_clauses((unmarked,))
+    await store.put_manifest(
+        INSTRUMENT,
+        VERSION,
+        tenant_id=PUBLIC_TENANT_ID,
+        canonicalisation_version=2,
+        source_html="<p/>",
+    )
+    assert await store.get_incomplete(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID) == {}
+    with pytest.raises(PermissionError, match="records it incomplete"):
+        await store.record_revision(granted, (unmarked,))
+    await store.record_revision(granted, (marked,))
+    assert await store.get_incomplete(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID) == {
+        "s6da/2": marked.incomplete
+    }
+    assert await store.get_clause(marked.clause_id, tenant_id=PUBLIC_TENANT_ID) == marked
+    assert await store.revisions(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID) == (
+        granted.record,
+    )
+    # Again: nothing more is recorded.
+    await store.record_revision(granted, (marked,))
+    assert len(await store.revisions(INSTRUMENT, VERSION, tenant_id=PUBLIC_TENANT_ID)) == 1
+
+
+async def test_the_gcs_clause_store_satisfies_the_state_contract() -> None:
+    await assert_clause_store_state_contract(GCSClauseStore(_FakeBucket()))
+
+
+async def test_the_fake_clause_store_satisfies_the_state_contract() -> None:
+    await assert_clause_store_state_contract(FakeClauseStore())
+
+
+async def assert_chunk_state_contract(store: RetrievalAdmin) -> None:
+    """Every `RetrievalAdmin`: each stored chunk's incompleteness reads back,
+    `()` when complete, and a revision of state alone changes it and leaves
+    the text as it was; a chunk given in a form the revision doesn't record
+    is refused."""
+    unmarked, marked, granted = _state_change()
+    [stored] = chunk_clauses((unmarked,), count_tokens=words)
+    await store.upsert_chunks((stored,))
+
+    async def held() -> dict[str, tuple[Incompleteness, ...]]:
+        return await store.stored_chunk_incomplete(
+            instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
+        )
+
+    assert await held() == {stored.chunk_id: ()}
+    [revised] = chunk_clauses((marked,), count_tokens=words)
+    with pytest.raises(PermissionError, match="records it incomplete"):
+        await store.revise_chunks(granted, (stored,))
+    await store.revise_chunks(granted, (revised,))
+    assert await held() == {stored.chunk_id: marked.incomplete}
+    texts = await store.stored_chunk_texts(
+        instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
+    )
+    assert texts == {stored.chunk_id: stored.text}
+
+
+async def test_the_fake_retrieval_store_satisfies_the_chunk_state_contract() -> None:
+    await assert_chunk_state_contract(FakeRetrievalStore(ledger=FakeLedgerStore()))

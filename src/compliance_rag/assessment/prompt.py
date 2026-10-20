@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from compliance_rag.corpus.models import parse_stable_id
+from compliance_rag.corpus.models import Incomplete, parse_stable_id
 
 SYSTEM_PROMPT = """\
 You are a compliance assistant. You answer a question using only the source \
@@ -53,6 +53,13 @@ One marker may carry both, an exception to one clause and a qualifier of \
 another. Never describe a qualifier as an exception, or an exception as a \
 qualifier.
 
+A clause's opening marker may also end with: incomplete (<what is missing>). \
+Part of that clause's content (a formula, a table, a penalty) is not in its \
+text, so the text you are given is not all of what it says. If your answer \
+relies on an incomplete clause, it must say that the clause is incomplete and \
+what is missing, and must never state, guess or reconstruct the missing \
+content.
+
 Reply with one JSON object and nothing else:
 {"answer": "<your answer>", "citations": [{"clause_id": "<id>", "quote": "<text>"}]}
 
@@ -77,6 +84,10 @@ class SourceClause:
     text: str
     excepts: tuple[str, ...] = ()
     qualifies: tuple[str, ...] = ()
+    incomplete: Incomplete = ()
+    """Why the clause's text is not all of its content (ADR-0047), from the
+    parser, never from any text: each detail is plain lowercase words, so it
+    can't reshape the marker it goes in."""
 
     def __post_init__(self) -> None:
         # Only a well-formed stable id goes into a marker, so an id can't
@@ -96,6 +107,8 @@ class SourceClause:
         if self.qualifies:
             gloss = "how it is satisfied" if len(self.qualifies) == 1 else "how they are satisfied"
             marker += f" qualifies {' '.join(self.qualifies)} ({gloss})"
+        if self.incomplete:
+            marker += f" incomplete ({'; '.join(i.detail for i in self.incomplete)})"
         return marker
 
 
@@ -109,9 +122,10 @@ def _boundary(clauses: Sequence[SourceClause]) -> str:
         digest.update(
             clause.clause_id.encode("utf-8") + b"\0" + clause.text.encode("utf-8") + b"\0"
         )
-        # Only when present, so a fence without exceptions or qualifiers (the
-        # cached prefix, D-11) keeps the boundary it always had.
-        if clause.excepts or clause.qualifies:
+        # Only when present, so a fence without exceptions, qualifiers or an
+        # incomplete clause (the cached prefix, D-11) keeps the boundary it
+        # always had.
+        if clause.excepts or clause.qualifies or clause.incomplete:
             digest.update(clause.marker.encode("utf-8") + b"\0")
     return digest.hexdigest()[:24]
 

@@ -36,7 +36,7 @@ from compliance_rag.corpus.models import (
     canonicalise,
     sha256_hex,
 )
-from compliance_rag.corpus.parser import ParsedCompilation, parse_compilation
+from compliance_rag.corpus.parser import FORMULA_NOT_TEXT, ParsedCompilation, parse_compilation
 from compliance_rag.corpus.revision import (
     RevisedClause,
     RevisionAcknowledgement,
@@ -144,6 +144,7 @@ def plan_against(stored: tuple[ClauseRecord, ...], fresh: tuple[ClauseRecord, ..
         stored_manifest=manifest,
         stored_texts={c.clause_path: c.canonical_text for c in stored},
         stored_source_html_sha256=sha256_hex(parsed().annotated_html),
+        stored_incomplete={c.clause_path: c.incomplete for c in stored if c.incomplete},
     )
 
 
@@ -245,6 +246,7 @@ def test_a_stored_text_that_doesnt_hash_to_its_manifest_entry_is_drift() -> None
             stored_manifest=manifest,
             stored_texts=texts,
             stored_source_html_sha256="x",
+            stored_incomplete={},
         )
 
 
@@ -389,7 +391,7 @@ def test_a_record_is_refused_without_who_and_why_or_with_a_clause_twice() -> Non
 
 def test_the_graph_trail_entry_is_adr_0031s_shape_and_names_the_revision() -> None:
     record = correction_record(plan_against(deployed_clauses(), corrected_clauses()))
-    entry = json.loads(record.trail_entry("f" * 64))
+    entry = json.loads(record.trail_entry(replace(record.clauses[0], previous_sha256="f" * 64)))
     assert entry == {
         "at": record.at,
         "by": BY,
@@ -432,13 +434,15 @@ def test_an_authorization_is_issued_only_by_corpus_revision() -> None:
 def test_an_authorization_covers_its_clauses_with_their_recorded_text_only() -> None:
     granted = authorization()
     fixed = next(c for c in corrected_clauses() if c.clause_path == "s6/1/record/d")
-    granted.check_text(fixed.clause_id, fixed.canonical_text)
+    granted.check_form(fixed.clause_id, fixed.canonical_text, ())
     with pytest.raises(PermissionError, match="its hash differs"):
-        granted.check_text(fixed.clause_id, "a generally available publication; or")
+        granted.check_form(fixed.clause_id, "a generally available publication; or", ())
+    with pytest.raises(PermissionError, match="records it complete"):
+        granted.check_form(fixed.clause_id, fixed.canonical_text, (FORMULA_NOT_TEXT,))
     with pytest.raises(PermissionError, match="not a clause revision r1 writes"):
-        granted.check_text(f"{INSTRUMENT}:{VERSION}:s6/1/record/e", "anything")
+        granted.check_form(f"{INSTRUMENT}:{VERSION}:s6/1/record/e", "anything", ())
     with pytest.raises(PermissionError, match="not a clause revision r1 writes"):
-        granted.check_text(f"{INSTRUMENT}:C2026C00999:s6/1/record/d", fixed.canonical_text)
+        granted.check_form(f"{INSTRUMENT}:C2026C00999:s6/1/record/d", fixed.canonical_text, ())
 
 
 # ---- the bucket's half -----------------------------------------------------

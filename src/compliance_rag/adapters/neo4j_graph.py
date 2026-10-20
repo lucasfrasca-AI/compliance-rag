@@ -56,6 +56,8 @@ from compliance_rag.adapters.graph_schema import (
     CORRECTIONS,
     COSMETIC,
     EDGE_TYPES,
+    INCOMPLETE_DETAILS,
+    INCOMPLETE_REASONS,
     PERSISTED_LABELS,
     WRITER_KEYS,
     Bitemporal,
@@ -72,6 +74,8 @@ from compliance_rag.adapters.graph_schema import (
     StoredNode,
     checked_edge_type,
     checked_label,
+    incomplete_of_properties,
+    incomplete_properties,
     refuse_duplicates,
 )
 from compliance_rag.adapters.interfaces import (
@@ -83,6 +87,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.corpus.models import NO_END_DATE
+from compliance_rag.corpus.revision import described
 from compliance_rag.settings import Settings
 
 SCHEMA_PATH = Path(__file__).resolve().parents[3] / "db" / "neo4j" / "schema.cypher"
@@ -747,11 +752,12 @@ class Neo4jGraph(GraphAdmin):
 
     async def revise_clauses(self, authorization: RevisionAuthorization) -> int:
         """Every clause of the authorised correction in one transaction, each
-        lock, read, check, set, as `correct` does: `canonical_sha256` from the
-        recorded previous hash to the new one, and an entry on the node's
-        `corrections` trail (the revision's when, who, why, id and source, and
-        the previous hash). A node already at the new hash is left alone; a
-        missing node, or one at any other hash, refuses the whole revision."""
+        lock, read, check, set, as `correct` does: the node's form from the
+        recorded previous one to the new one — `canonical_sha256`, and its
+        incompleteness (ADR-0047) — and an entry on the node's `corrections`
+        trail (the revision's when, who, why, id and source, and the previous
+        form). A node already in the new form is left alone; a missing node,
+        or one in any other form, refuses the whole revision."""
         record = authorization.record
         if not record.corrected:
             raise GraphWriteRefused(
@@ -765,32 +771,43 @@ class Neo4jGraph(GraphAdmin):
                 clause_id = record.clause_id(entry.clause_path)
                 locked = await tx.run(
                     "MATCH (n:Clause {stable_id: $stable_id}) SET n._lock = true "
-                    "RETURN n.canonical_sha256 AS sha",
+                    "RETURN properties(n) AS p",
                     stable_id=clause_id,
                 )
                 row = await locked.single()
                 if row is None:
                     raise GraphWriteRefused(f"no Clause {clause_id!r} to correct")
-                have = row["sha"]
-                if have == entry.sha256:
+                stored = {k: to_python(v) for k, v in cast("dict[str, object]", row["p"]).items()}
+                have = (stored.get("canonical_sha256"), incomplete_of_properties(stored))
+                if have == (entry.sha256, entry.incomplete):
                     await tx.run(
                         "MATCH (n:Clause {stable_id: $stable_id}) REMOVE n._lock",
                         stable_id=clause_id,
                     )
                     continue  # already corrected: a re-run
-                if have != entry.previous_sha256 or entry.previous_sha256 is None:
+                if (
+                    have != (entry.previous_sha256, entry.previous_incomplete)
+                    or entry.previous_sha256 is None
+                ):
                     raise GraphWriteRefused(
-                        f"Clause {clause_id!r} has canonical_sha256 {have}, neither the previous "
-                        f"({entry.previous_sha256}) nor the new ({entry.sha256}) hash revision "
-                        f"{record.revision_id} records"
+                        f"Clause {clause_id!r} has canonical_sha256 {have[0]} and is "
+                        f"{described(have[1])}: neither the previous ({entry.previous_sha256}, "
+                        f"{described(entry.previous_incomplete)}) nor the new ({entry.sha256}, "
+                        f"{described(entry.incomplete)}) form revision {record.revision_id} "
+                        "records"
                     )
+                incomplete = incomplete_properties(entry.incomplete)
                 await tx.run(
                     "MATCH (n:Clause {stable_id: $stable_id}) "
                     "SET n.canonical_sha256 = $sha, "
+                    f"n.{INCOMPLETE_REASONS} = $reasons, n.{INCOMPLETE_DETAILS} = $details, "
                     "n.corrections = coalesce(n.corrections, []) + $entry REMOVE n._lock",
                     stable_id=clause_id,
                     sha=entry.sha256,
-                    entry=record.trail_entry(entry.previous_sha256),
+                    # A null removes the property: a complete clause has neither.
+                    reasons=incomplete.get(INCOMPLETE_REASONS),
+                    details=incomplete.get(INCOMPLETE_DETAILS),
+                    entry=record.trail_entry(entry),
                 )
                 changed += 1
             return changed

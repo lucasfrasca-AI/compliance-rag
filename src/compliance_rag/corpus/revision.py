@@ -14,6 +14,12 @@ Two modes share the plan, the acknowledgement and the record:
 - **amend** — a new compilation under a new `version_id`: version and retire
   (ADR-0021). The plan compares the new version's clauses with the old
   version's, path by path.
+
+What a revision compares, writes and records of each clause is its **form**:
+its canonical hash and its incompleteness (ADR-0047). A fresh parse that
+marks a stored clause incomplete, or no longer does, changes the clause as
+surely as one that changes its text, and goes through the same plan,
+acknowledgement and record.
 """
 
 from __future__ import annotations
@@ -28,7 +34,10 @@ from typing import cast
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     ClauseRecord,
+    Incomplete,
     canonical_sha256,
+    incomplete_json,
+    incomplete_of_json,
     instrument_tenant_prefix,
     sha256_hex,
     stable_id,
@@ -53,7 +62,8 @@ class RevisionDrift(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ClauseChange:
-    """One clause whose canonical text the fresh parse changes."""
+    """One clause whose form the fresh parse changes: its canonical text, its
+    incompleteness (ADR-0047), or both."""
 
     clause_path: str
     old_clause_id: str
@@ -64,7 +74,17 @@ class ClauseChange:
     new_sha256: str
     old_text: str
     new_text: str
-    """Both canonical."""
+    """Both canonical: the same text when only the incompleteness changes."""
+    old_incomplete: Incomplete = ()
+    new_incomplete: Incomplete = ()
+
+    @property
+    def text_changed(self) -> bool:
+        return self.old_sha256 != self.new_sha256
+
+    @property
+    def incompleteness_changed(self) -> bool:
+        return self.old_incomplete != self.new_incomplete
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,12 +155,15 @@ def plan_revision(
     stored_manifest: Mapping[str, str],
     stored_texts: Mapping[str, str],
     stored_source_html_sha256: str,
+    stored_incomplete: Mapping[str, Incomplete],
 ) -> RevisionPlan:
     """The plan, from a fresh parse (the clauses a selection keeps, of one
     version) and what is stored for `stored_version_id`: its manifest (path to
-    canonical hash) and the stored canonical text of every path whose hash
-    differs (`changed_paths`). A stored text that doesn't hash to its own
-    manifest entry is `RevisionDrift`: the bucket disagrees with itself."""
+    canonical hash), the stored canonical text of every path whose hash
+    differs (`changed_paths`), and each stored path that is incomplete, with
+    why (ADR-0047). A path is changed if its hash or its incompleteness
+    differs. A stored text that doesn't hash to its own manifest entry is
+    `RevisionDrift`: the bucket disagrees with itself."""
     if not fresh:
         raise ValueError("a revision of a version with no clauses")
     instrument_id, version_id = fresh[0].instrument_id, fresh[0].version_id
@@ -156,17 +179,26 @@ def plan_revision(
     if len(by_path) != len(fresh):
         raise ValueError("the fresh parse names one clause path twice")
     changed: list[ClauseChange] = []
-    for path in changed_paths(fresh, stored_manifest):
-        stored_text = stored_texts.get(path)
-        if stored_text is None:
-            raise RevisionDrift(f"{path} is in the manifest but its stored text wasn't read")
-        if canonical_sha256(stored_text) != stored_manifest[path]:
-            raise RevisionDrift(
-                f"{instrument_id}:{stored_version_id}:{path}: the stored clause doesn't hash to "
-                "its manifest entry — the bucket disagrees with itself (an unfinished revision "
-                "is reported by its status, not here)"
-            )
-        clause = by_path[path]
+    retexted = set(changed_paths(fresh, stored_manifest))
+    for clause in fresh:
+        path = clause.clause_path
+        if path not in stored_manifest:
+            continue
+        held_incomplete = stored_incomplete.get(path, ())
+        if path in retexted:
+            stored_text = stored_texts.get(path)
+            if stored_text is None:
+                raise RevisionDrift(f"{path} is in the manifest but its stored text wasn't read")
+            if canonical_sha256(stored_text) != stored_manifest[path]:
+                raise RevisionDrift(
+                    f"{instrument_id}:{stored_version_id}:{path}: the stored clause doesn't hash "
+                    "to its manifest entry — the bucket disagrees with itself (an unfinished "
+                    "revision is reported by its status, not here)"
+                )
+        elif held_incomplete != clause.incomplete:
+            stored_text = clause.canonical_text  # the same text, marked differently
+        else:
+            continue
         changed.append(
             ClauseChange(
                 clause_path=path,
@@ -176,6 +208,8 @@ def plan_revision(
                 new_sha256=canonical_sha256(clause.canonical_text),
                 old_text=stored_text,
                 new_text=clause.canonical_text,
+                old_incomplete=held_incomplete,
+                new_incomplete=clause.incomplete,
             )
         )
     added = tuple(c for c in fresh if c.clause_path not in stored_manifest)
@@ -311,12 +345,35 @@ def check_amendment(plan: RevisionPlan, *, pinned_source_sha256: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class RevisedClause:
-    """One clause of a revision on record: its hash before and after. `None`
-    before is an added clause; `None` after a removed one (amend only)."""
+    """One clause of a revision on record: its form before and after, its
+    hash and its incompleteness (ADR-0047). A `None` hash before is an added
+    clause; after, a removed one (amend only)."""
 
     clause_path: str
     previous_sha256: str | None
     sha256: str | None
+    previous_incomplete: Incomplete = ()
+    incomplete: Incomplete = ()
+
+    def to_json(self) -> dict[str, object]:
+        entry: dict[str, object] = {"previous_sha256": self.previous_sha256, "sha256": self.sha256}
+        # Only when there is one: a record of a text correction reads as it
+        # did before ADR-0047, and one written then reads back the same.
+        if self.previous_incomplete:
+            entry["previous_incomplete"] = incomplete_json(self.previous_incomplete)
+        if self.incomplete:
+            entry["incomplete"] = incomplete_json(self.incomplete)
+        return entry
+
+    @classmethod
+    def from_json(cls, clause_path: str, entry: Mapping[str, object]) -> RevisedClause:
+        return cls(
+            clause_path,
+            cast("str | None", entry["previous_sha256"]),
+            cast("str | None", entry["sha256"]),
+            incomplete_of_json(entry.get("previous_incomplete")),
+            incomplete_of_json(entry.get("incomplete")),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,6 +424,11 @@ class RevisionRecord:
         return {c.clause_path: c.sha256 for c in self.clauses if c.sha256 is not None}
 
     @property
+    def written_incomplete(self) -> dict[str, Incomplete]:
+        """Every path the revision leaves stored, with its incompleteness."""
+        return {c.clause_path: c.incomplete for c in self.clauses if c.sha256 is not None}
+
+    @property
     def corrected(self) -> tuple[RevisedClause, ...]:
         """The clauses whose text changed in place: both hashes, one version."""
         if self.mode is not RevisionMode.CORRECT:
@@ -387,16 +449,13 @@ class RevisionRecord:
             "corpus_sha": self.corpus_sha,
             "corpus_tag": self.corpus_tag,
             "findings_citing": self.findings_citing,
-            "clauses": {
-                c.clause_path: {"previous_sha256": c.previous_sha256, "sha256": c.sha256}
-                for c in self.clauses
-            },
+            "clauses": {c.clause_path: c.to_json() for c in self.clauses},
         }
 
     @classmethod
     def from_json(cls, data: Mapping[str, object]) -> RevisionRecord:
         # The manifest's own JSON: each field is read as the type `to_json` wrote.
-        clauses = cast("dict[str, dict[str, str | None]]", data["clauses"])
+        clauses = cast("dict[str, dict[str, object]]", data["clauses"])
         return cls(
             revision_id=str(data["revision_id"]),
             mode=RevisionMode(str(data["mode"])),
@@ -410,16 +469,19 @@ class RevisionRecord:
             corpus_sha=str(data["corpus_sha"]),
             corpus_tag=cast("str | None", data["corpus_tag"]),
             findings_citing=int(cast("int", data["findings_citing"])),
-            clauses=tuple(
-                RevisedClause(path, entry["previous_sha256"], entry["sha256"])
-                for path, entry in clauses.items()
-            ),
+            clauses=tuple(RevisedClause.from_json(path, entry) for path, entry in clauses.items()),
         )
 
-    def trail_entry(self, previous_sha256: str) -> str:
+    def trail_entry(self, entry: RevisedClause) -> str:
         """What a corrected Clause node's `corrections` trail gains: the same
         shape as ADR-0031's (when, by, why, the previous value), plus the
-        revision it belongs to and the source bytes it was parsed from."""
+        revision it belongs to and the source bytes it was parsed from. The
+        previous incompleteness is on it when that is what changed (ADR-0047)."""
+        if entry.previous_sha256 is None:
+            raise ValueError("only a corrected clause has a trail entry")
+        previous: dict[str, object] = {"canonical_sha256": entry.previous_sha256}
+        if entry.previous_incomplete != entry.incomplete:
+            previous["incomplete"] = incomplete_json(entry.previous_incomplete)
         return json.dumps(
             {
                 "at": self.at,
@@ -428,37 +490,56 @@ class RevisionRecord:
                 "revision_id": self.revision_id,
                 "mode": self.mode.value,
                 "source_sha256": self.source_sha256,
-                "previous": {"canonical_sha256": previous_sha256},
+                "previous": previous,
             },
             sort_keys=True,
         )
 
 
-def check_revision_hashes(record: RevisionRecord, held: Mapping[str, str]) -> list[str]:
-    """The paths whose stored hash (`held`, a manifest) a revision moves from
-    its previous hash to its new one. A path already at the new hash is done.
-    Anything else is `RevisionDrift`, before a write: a path at a hash the
-    record doesn't name, a corrected path missing, a path an amendment adds
-    not yet stored, or one it removes still listed."""
+def check_revision_hashes(
+    record: RevisionRecord,
+    held: Mapping[str, str],
+    *,
+    held_incomplete: Mapping[str, Incomplete],
+) -> list[str]:
+    """The paths whose stored form — hash (`held`, a manifest) and
+    incompleteness (`held_incomplete`, its incomplete paths, ADR-0047) — a
+    revision moves from its previous form to its new one. A path already in
+    the new form is done. Anything else is `RevisionDrift`, before a write: a
+    path in a form the record doesn't name, a corrected path missing, a path an
+    amendment adds not yet stored, or one it removes still listed."""
     moving: list[str] = []
     where = f"{record.instrument_id}:{record.version_id}"
     for entry in record.clauses:
         have = held.get(entry.clause_path)
+        have_incomplete = held_incomplete.get(entry.clause_path, ())
         if entry.sha256 is None:
             if have is not None:
                 raise RevisionDrift(f"{where}:{entry.clause_path} is retired but still stored")
             continue
-        if have == entry.sha256:
+        if (have, have_incomplete) == (entry.sha256, entry.incomplete):
             continue
-        if record.mode is RevisionMode.CORRECT and have == entry.previous_sha256:
+        if record.mode is RevisionMode.CORRECT and (have, have_incomplete) == (
+            entry.previous_sha256,
+            entry.previous_incomplete,
+        ):
             moving.append(entry.clause_path)
             continue
         raise RevisionDrift(
-            f"{where}:{entry.clause_path} is stored with hash {have}, which is neither the "
-            f"previous ({entry.previous_sha256}) nor the new ({entry.sha256}) hash revision "
+            f"{where}:{entry.clause_path} is stored with hash {have} and "
+            f"{described(have_incomplete)}, which is neither the previous "
+            f"({entry.previous_sha256}, {described(entry.previous_incomplete)}) nor the new "
+            f"({entry.sha256}, {described(entry.incomplete)}) form revision "
             f"{record.revision_id} records"
         )
     return moving
+
+
+def described(incomplete: Incomplete) -> str:
+    """A clause's incompleteness in a message a person reads."""
+    if not incomplete:
+        return "complete"
+    return "incomplete (" + "; ".join(f"{i.reason.value}: {i.detail}" for i in incomplete) + ")"
 
 
 def check_revision_recordable(
@@ -480,14 +561,15 @@ def check_revision_write(
     record: RevisionRecord,
     held: Mapping[str, str],
     *,
+    held_incomplete: Mapping[str, Incomplete],
     given: frozenset[str],
     on_record: bool,
 ) -> list[str]:
     """Everything a clause store checks before writing a revision, in one
-    place for every store: the paths whose hash moves (`check_revision_hashes`),
-    each with its new text given, and a correction that moves nothing already
+    place for every store: the paths whose form moves (`check_revision_hashes`),
+    each with its new clause given, and a correction that moves nothing already
     on record (`check_revision_recordable`). Returns the paths that move."""
-    moving = check_revision_hashes(record, held)
+    moving = check_revision_hashes(record, held, held_incomplete=held_incomplete)
     if not set(moving) <= given:
         raise RevisionDrift(f"{sorted(set(moving) - given)} move but no text was given")
     check_revision_recordable(record, moving, on_record=on_record)
@@ -505,9 +587,14 @@ def record_of(
 ) -> RevisionRecord:
     """The record of applying `plan` under `acknowledgement` (already checked)."""
     clauses = (
-        [RevisedClause(c.clause_path, c.old_sha256, c.new_sha256) for c in plan.changed]
+        [
+            RevisedClause(
+                c.clause_path, c.old_sha256, c.new_sha256, c.old_incomplete, c.new_incomplete
+            )
+            for c in plan.changed
+        ]
         + [
-            RevisedClause(c.clause_path, None, canonical_sha256(c.canonical_text))
+            RevisedClause(c.clause_path, None, canonical_sha256(c.canonical_text), (), c.incomplete)
             for c in plan.added
         ]
         + [RevisedClause(r.clause_path, r.sha256, None) for r in plan.removed]

@@ -2,7 +2,8 @@
 
 A revision rewrites stored library law, which nothing else may do: the bucket's
 clause objects and manifest hashes, the Clause nodes' `canonical_sha256`, and
-the text and vectors of Qdrant points. The guardrails (the plan, the exact
+the text and vectors of Qdrant points — and, in each, whether the clause is
+incomplete and why (ADR-0047). The guardrails (the plan, the exact
 acknowledgement, the pin, the findings count) live in `CorpusRevision`, the one
 issuer of a `RevisionAuthorization`. The store-level writes take one and touch
 only the clauses its record names, of the version it names, with the hashes
@@ -19,12 +20,13 @@ from dataclasses import dataclass, field
 
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
+    Incomplete,
     canonical_sha256,
     instrument_tenant_prefix,
     parse_stable_id,
     validate_instrument_id,
 )
-from compliance_rag.corpus.revision import RevisionRecord
+from compliance_rag.corpus.revision import RevisionRecord, described
 
 _ISSUER = object()
 
@@ -72,12 +74,25 @@ class RevisionAuthorization:
             )
         return written[path]
 
-    def check_text(self, clause_id: str, canonical_text: str) -> None:
-        """`canonical_text` is the text this revision records for `clause_id`."""
+    def incomplete_for(self, clause_id: str) -> Incomplete:
+        """The incompleteness this revision gives `clause_id` (ADR-0047), or
+        `PermissionError` if the clause isn't one it writes in its version."""
+        self.sha256_for(clause_id)
+        return self.record.written_incomplete[parse_stable_id(clause_id)[2]]
+
+    def check_form(self, clause_id: str, canonical_text: str, incomplete: Incomplete) -> None:
+        """`canonical_text` is the text this revision records for `clause_id`,
+        and `incomplete` the incompleteness it records (ADR-0047)."""
         if canonical_sha256(canonical_text) != self.sha256_for(clause_id):
             raise PermissionError(
                 f"{clause_id}: the text given is not the text revision "
                 f"{self.record.revision_id} records (its hash differs)"
+            )
+        recorded = self.incomplete_for(clause_id)
+        if incomplete != recorded:
+            raise PermissionError(
+                f"{clause_id}: given as {described(incomplete)}, but revision "
+                f"{self.record.revision_id} records it {described(recorded)}"
             )
 
 

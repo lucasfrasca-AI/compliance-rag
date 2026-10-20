@@ -68,6 +68,7 @@ def reciprocal_rank_fusion(
                 text=first_seen[chunk_id].text,
                 score=score,
                 channel=None,
+                incomplete=first_seen[chunk_id].incomplete,
             )
             for chunk_id, score in scores.items()
         ),

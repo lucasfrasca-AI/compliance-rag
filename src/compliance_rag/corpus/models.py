@@ -14,7 +14,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Iterable
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, cast
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -519,12 +519,80 @@ class InstrumentVersion(BaseModel):
         return self.status_on(as_of) is Status.IN_FORCE
 
 
+class IncompleteReason(StrEnum):
+    """Why a clause's stored text is not all of what the source sets in it
+    (ADR-0047): part of its content is not available in text form."""
+
+    IMAGE_NOT_TEXT = "image_not_text"
+    """An image — s 6DA(2)'s formula — whose content is in pixels, not text.
+    Its `alt` attribute is a transcription by whoever published the HTML, not
+    the legislative text, and never enters a clause."""
+    TABLE_NOT_TEXT = "table_not_text"
+    """A table, whose meaning is its rows and columns, which a clause's text
+    can't hold."""
+    PENALTY_NOT_PARSED = "penalty_not_parsed"
+    """A penalty line ("Civil penalty: 2,000 penalty units."): text, but text
+    the parse sets in no clause, so the provision is stored without it (#216).
+    A parse correction that takes it in is what completes the clause."""
+
+
+_DETAIL_RE = re.compile(r"^[a-z][a-z ]*[a-z]$")
+
+
+class Incompleteness(BaseModel):
+    """One reason a clause is **incomplete** (ADR-0047): a first-class clause
+    state, set by the parser and stored with the clause in every store. The
+    clause is stored as it is, its text never padded with a transcription,
+    and whatever cites it carries this with it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: IncompleteReason
+    detail: str
+    """What is missing, in words a reader is shown: "the formula is not
+    available in text form". Lowercase words and spaces only, so it is safe
+    inside a prompt's fence marker; the parser writes it, never a source."""
+
+    @field_validator("detail")
+    @classmethod
+    def _plain_words(cls, v: str) -> str:
+        if not _DETAIL_RE.match(v):
+            raise ValueError(f"an incompleteness detail is lowercase words: {v!r}")
+        return v
+
+    def to_json(self) -> dict[str, str]:
+        return {"reason": self.reason.value, "detail": self.detail}
+
+
+Incomplete = tuple[Incompleteness, ...]
+"""A clause's incompleteness: empty for a complete clause (almost all of
+them), otherwise each distinct reason once, in source order."""
+
+
+def incomplete_of_json(raw: object) -> Incomplete:
+    """The stored form (a manifest entry, a Qdrant payload) back to the state.
+    Absent — every point and manifest written before ADR-0047 — is complete."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"a stored incompleteness is a list, not {type(raw).__name__}")
+    return tuple(Incompleteness.model_validate(item) for item in cast("list[object]", raw))
+
+
+def incomplete_json(incomplete: Incomplete) -> list[dict[str, str]]:
+    return [i.to_json() for i in incomplete]
+
+
 class ClauseRecord(BaseModel):
     """The smallest citable unit of an instrument, with its canonical text.
 
     `canonical_text` is never edited after ingest, except by an acknowledged
     parse correction of library law, audited clause by clause (ADR-0042). The
     verifier compares a citation's span against it (D-02).
+
+    `incomplete` says the text is not all of what the source sets in the
+    clause, and why (ADR-0047). It is the parser's, like the text, and it
+    changes on a stored version only by the same parse correction.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -555,6 +623,7 @@ class ClauseRecord(BaseModel):
     )
     char_end: int | None = None
     page: int | None = None
+    incomplete: Incomplete = ()
 
     @property
     def clause_id(self) -> str:
@@ -605,6 +674,7 @@ class ClauseRecord(BaseModel):
         char_start: int | None = None,
         char_end: int | None = None,
         page: int | None = None,
+        incomplete: Incomplete = (),
     ) -> ClauseRecord:
         """Build a record, deriving `canonical_text` from `text`."""
         stable_id(instrument_id, version_id, clause_path)  # validate early
@@ -621,6 +691,7 @@ class ClauseRecord(BaseModel):
             char_start=char_start,
             char_end=char_end,
             page=page,
+            incomplete=incomplete,
         )
 
 
@@ -652,6 +723,9 @@ class Chunk(BaseModel):
     False on purpose: an unmarked chunk that isn't public law (tenant or user
     scope, #166) counts as real customer data, which closes the
     offshore-generation gate."""
+    incomplete: Incomplete = ()
+    """Its clause's incompleteness (ADR-0047), carried in the payload so that
+    what retrieval hands generation is marked as incomplete."""
 
     @field_validator("clause_id")
     @classmethod

@@ -96,9 +96,12 @@ from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.corpus.models import (
     Chunk,
+    Incomplete,
     Scope,
     clause_ancestors,
     epoch_days,
+    incomplete_json,
+    incomplete_of_json,
     parse_stable_id,
 )
 from compliance_rag.settings import Settings
@@ -447,6 +450,9 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     "user_id": chunk.user_id,
                     "valid_from": epoch_days(chunk.valid_from),
                     "valid_to": epoch_days(chunk.valid_to),
+                    # Its clause's incompleteness, `[]` when complete: what
+                    # marks it incomplete when it enters a prompt (ADR-0047).
+                    "incomplete": incomplete_json(chunk.incomplete),
                 },
             )
             for chunk, dense, sparse in zip(chunk_list, dense_vectors, sparse_vectors, strict=True)
@@ -707,14 +713,50 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                     span.set_attribute("retrieval.stored_chunks", len(texts))
                     return texts
 
+    async def stored_chunk_incomplete(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> dict[str, Incomplete]:
+        target = self._target(
+            instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
+        ).filter
+        held: dict[str, Incomplete] = {}
+        offset: PointId | None = None
+        with telemetry.span(
+            "qdrant.stored_chunk_incomplete",
+            **{"retrieval.version": f"{instrument_id}:{version_id}", "retrieval.tenant": tenant_id},
+        ) as span:
+            while True:
+                points, offset = await self._client.scroll(
+                    self._collection_name,
+                    scroll_filter=target,
+                    with_payload=["chunk_id", "incomplete"],
+                    with_vectors=False,
+                    limit=_SCROLL_PAGE,
+                    offset=offset,
+                )
+                held.update(
+                    {
+                        str(p.payload["chunk_id"]): incomplete_of_json(p.payload.get("incomplete"))
+                        for p in points
+                        if p.payload
+                    }
+                )
+                if offset is None:
+                    span.set_attribute(
+                        "retrieval.incomplete_chunks", sorted(c for c, i in held.items() if i)
+                    )
+                    return held
+
     async def revise_chunks(
         self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
     ) -> None:
         """Read each point's stored payload, then write the point again under
-        its own id with that payload, the new text, and vectors embedded from
-        the new text: one upsert per point, so a point never holds new text
-        beside old vectors. Every check, and the embedding, before the first
-        write (ADR-0042)."""
+        its own id with that payload, the new text and incompleteness, and
+        vectors embedded from the new text: one upsert per point, so a point
+        never holds new text beside old vectors. A chunk whose text is the
+        stored text only takes its incompleteness, by `set_payload`, with no
+        embedding: its vectors are already its text's (ADR-0047). Every
+        check, and the embedding, before the first write (ADR-0042)."""
         if not chunks:
             return
         with telemetry.span(
@@ -723,9 +765,9 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                 "retrieval.revision_id": authorization.record.revision_id,
                 "retrieval.revised_chunks": [c.chunk_id for c in chunks],
             },
-        ):
+        ) as span:
             for chunk in chunks:
-                authorization.check_text(chunk.clause_id, chunk.text)
+                authorization.check_form(chunk.clause_id, chunk.text, chunk.incomplete)
             stored = await self._client.retrieve(
                 self._collection_name,
                 ids=[_chunk_point_id(c.chunk_id) for c in chunks],
@@ -745,19 +787,36 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
                         f"{chunk.chunk_id} isn't stored as this version's library law: a "
                         "correction rewords a stored chunk, never adds one"
                     )
-            dense_vectors = await self._embedder.embed(tuple(c.text for c in chunks))
-            sparse_vectors = _encode_documents(c.text for c in chunks)
-            points = [
-                models.PointStruct(
-                    id=_chunk_point_id(chunk.chunk_id),
-                    vector={DENSE_VECTOR_NAME: list(dense), SPARSE_VECTOR_NAME: sparse},
-                    payload={**payloads[chunk.chunk_id], "text": chunk.text},
-                )
-                for chunk, dense, sparse in zip(chunks, dense_vectors, sparse_vectors, strict=True)
-            ]
+            retexted = tuple(c for c in chunks if payloads[c.chunk_id].get("text") != c.text)
+            restated = tuple(c for c in chunks if c not in retexted)
+            span.set_attribute("retrieval.reembedded_chunks", [c.chunk_id for c in retexted])
+            points: list[models.PointStruct] = []
+            if retexted:
+                dense_vectors = await self._embedder.embed(tuple(c.text for c in retexted))
+                sparse_vectors = _encode_documents(c.text for c in retexted)
+                points = [
+                    models.PointStruct(
+                        id=_chunk_point_id(chunk.chunk_id),
+                        vector={DENSE_VECTOR_NAME: list(dense), SPARSE_VECTOR_NAME: sparse},
+                        payload={
+                            **payloads[chunk.chunk_id],
+                            "text": chunk.text,
+                            "incomplete": incomplete_json(chunk.incomplete),
+                        },
+                    )
+                    for chunk, dense, sparse in zip(
+                        retexted, dense_vectors, sparse_vectors, strict=True
+                    )
+                ]
             for start in range(0, len(points), UPSERT_BATCH):
                 await self._client.upsert(
                     self._collection_name, points=points[start : start + UPSERT_BATCH]
+                )
+            for chunk in restated:
+                await self._client.set_payload(
+                    self._collection_name,
+                    payload={"incomplete": incomplete_json(chunk.incomplete)},
+                    points=[_chunk_point_id(chunk.chunk_id)],
                 )
 
     async def withdraw_version(self, authorization: RemovalAuthorization) -> None:
@@ -783,6 +842,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             text=cast("str", data["text"]),
             score=score,
             channel=channel,
+            incomplete=incomplete_of_json(data.get("incomplete")),
         )
 
     async def search(

@@ -24,7 +24,7 @@ import pytest
 from qdrant_client import AsyncQdrantClient
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
-from compliance_rag.adapters.corpus_revision import CorpusRevision, PlannedRevision
+from compliance_rag.adapters.corpus_revision import CorpusRevision, PlannedRevision, RevisionReport
 from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.graph_schema import (
@@ -34,6 +34,7 @@ from compliance_rag.adapters.graph_schema import (
     NodeWrite,
 )
 from compliance_rag.adapters.interfaces import (
+    Embedder,
     RetrievalAdmin,
     RetrievalStore,
     SourceKind,
@@ -50,6 +51,7 @@ from compliance_rag.adapters.revision_authorization import (
 )
 from compliance_rag.corpus.ingest import ingest_compilation
 from compliance_rag.corpus.models import (
+    CANONICALISATION_VERSION,
     PUBLIC_TENANT_ID,
     Chunk,
     ClauseRecord,
@@ -57,9 +59,16 @@ from compliance_rag.corpus.models import (
     Scope,
     canonical_sha256,
     canonicalise,
+    incomplete_json,
     sha256_hex,
 )
-from compliance_rag.corpus.revision import RevisionDrift, RevisionMode, RevisionRefused
+from compliance_rag.corpus.parser import FORMULA_NOT_TEXT, parse_compilation
+from compliance_rag.corpus.revision import (
+    RevisionAcknowledgement,
+    RevisionDrift,
+    RevisionMode,
+    RevisionRefused,
+)
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.corpus.vector_load import load_version_vectors
 from compliance_rag.graph.loader import (
@@ -86,6 +95,7 @@ from tests.test_corpus_revision import (
     words,
 )
 from tests.test_gcs_clause_store import _FakeBucket  # pyright: ignore[reportPrivateUsage]
+from tests.test_incomplete_clauses import S6DA
 from tests.test_neo4j_graph import cypher, needs_neo4j
 from tests.test_neo4j_graph import (
     graph as plain_graph,  # noqa: F401  # pyright: ignore[reportUnusedImport]
@@ -678,7 +688,7 @@ async def test_finishing_needs_a_parse_that_reproduces_the_recorded_text(stores:
         else c
         for c in planned.clauses
     )
-    with pytest.raises(RevisionRefused, match=r"doesn't give .*s6/1 the text"):
+    with pytest.raises(RevisionRefused, match=r"doesn't give .*s6/1 the form"):
         await revision.finish(
             replace(planned, clauses=other),
             corpus_version=FIXED_CODE,
@@ -937,3 +947,229 @@ async def test_the_scripts_apply_after_a_correction_reports_nothing_to_change(
     )
     assert "nothing to change: every store holds the parse" in capsys.readouterr().out
     assert await snapshot(stores) == after
+
+
+# ---- an incomplete clause (#211, ADR-0047): its state, by the same path -----
+#
+# The deployed state is C2026C00227 as the parser before ADR-0047 stored it:
+# the constructs fixture's `s6da/`, every clause complete, and, as the live
+# stores were written, no incompleteness key in a bucket object, a manifest, a
+# Clause node or a Qdrant payload.
+
+S6DA_2 = f"{INSTRUMENT}:{VERSION}:s6da/2"
+WHY_211 = "#211: s6DA(2)'s formula is an image, not text"
+
+
+def marked() -> tuple[ClauseRecord, ...]:
+    """Today's parse of s6DA."""
+    parsed = parse_compilation(source(), instrument_id=INSTRUMENT, version_id=VERSION)
+    return S6DA.select(parsed.clauses)
+
+
+def unmarked() -> tuple[ClauseRecord, ...]:
+    """The same clauses as the parser before ADR-0047 stored them."""
+    return tuple(c.model_copy(update={"incomplete": ()}) for c in marked())
+
+
+async def deploy_unmarked(stores: Stores) -> None:
+    clauses = unmarked()
+    await stores.clauses.put_clauses(clauses)
+    await stores.clauses.put_manifest(
+        INSTRUMENT,
+        VERSION,
+        tenant_id=PUBLIC_TENANT_ID,
+        canonicalisation_version=CANONICALISATION_VERSION,
+        source_html=parse_compilation(
+            source(), instrument_id=INSTRUMENT, version_id=VERSION
+        ).annotated_html,
+    )
+    # A bucket object written before ADR-0047 has no `incomplete` field.
+    for name, data in list(stores.bucket.objects.items()):
+        if "/clauses/" in name:
+            record = json.loads(data)
+            del record["incomplete"]
+            stores.bucket.objects[name] = json.dumps(record)
+    check = partial(
+        check_instrument_version, stores.graph, clauses, effective=EFFECTIVE, supersedes=None
+    )
+    async with recorded_load(stores.graph, DEPLOYED_CODE, check=check) as checked:
+        await write_instrument_version(
+            stores.graph,
+            clauses,
+            checked,
+            instrument_since=SINCE,
+            effective=EFFECTIVE,
+            supersedes=None,
+        )
+    await load_version_vectors(
+        clauses,
+        count_tokens=words,
+        lifecycle=stores.lifecycle(),
+        retrieval=stores.retrieval,
+        ledger=stores.ledger,
+        instrument_id=INSTRUMENT,
+        version_id=VERSION,
+        tenant_id=PUBLIC_TENANT_ID,
+        effective_from=EFFECTIVE,
+        document_class=DocumentClass.LIBRARY_LAW,
+    )
+    if stores.qdrant is not None:
+        # And a Qdrant point written then has no `incomplete` key.
+        await stores.qdrant.delete_payload(
+            stores.collection,
+            keys=["incomplete"],
+            points=[_chunk_point_id(c.clause_id) for c in clauses],
+        )
+
+
+async def plan_s6da(stores: Stores, revision: CorpusRevision) -> PlannedRevision:
+    return await revision.plan(
+        source(), instrument_id=INSTRUMENT, version_id=VERSION, selection=S6DA
+    )
+
+
+MARK_ACK = RevisionAcknowledgement(
+    clause_ids=frozenset({S6DA_2}), by=BY, reason=WHY_211, findings_citing=0
+)
+
+
+async def mark_s6da(stores: Stores, revision: CorpusRevision) -> RevisionReport:
+    return await revision.correct(
+        await plan_s6da(stores, revision),
+        MARK_ACK,
+        pinned_source_sha256=PIN,
+        corpus_version=FIXED_CODE,
+        instrument_since=SINCE,
+        effective=EFFECTIVE,
+    )
+
+
+class _NoEmbedding(Embedder):
+    """The text didn't change, so nothing is embedded: a call is a failure."""
+
+    @property
+    def dimensions(self) -> int:
+        return 8
+
+    async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        raise AssertionError(f"embedded {len(texts)} text(s) for a change of state alone")
+
+
+@needs_neo4j
+async def test_a_deployed_clause_is_marked_incomplete_in_every_store_with_its_audit(
+    stores: Stores,
+) -> None:
+    await deploy_unmarked(stores)
+    revision = stores.revision()
+    planned = await plan_s6da(stores, revision)
+    [change] = planned.plan.changed
+    assert change.new_clause_id == S6DA_2
+    assert (change.text_changed, change.new_incomplete) == (False, (FORMULA_NOT_TEXT,))
+    assert planned.plan.acknowledgeable == {S6DA_2}
+
+    report = await mark_s6da(stores, revision)
+
+    record = report.record
+    assert (record.mode, record.by, record.reason, record.at) == (
+        RevisionMode.CORRECT,
+        BY,
+        WHY_211,
+        AT.isoformat(),
+    )
+    reasons = incomplete_json((FORMULA_NOT_TEXT,))
+    sha = canonical_sha256(change.new_text)
+    # The bucket: the manifest's state and the record, in one write; the object.
+    manifest = json.loads(stores.bucket.objects[f"{INSTRUMENT}/{VERSION}/manifest.json"])
+    assert manifest["incomplete"] == {"s6da/2": reasons}
+    assert manifest["clause_paths"]["s6da/2"] == sha
+    (on_record,) = manifest["revisions"]
+    assert on_record["clauses"] == {
+        "s6da/2": {"previous_sha256": sha, "sha256": sha, "incomplete": reasons}
+    }
+    stored = await stores.clauses.get_clause(S6DA_2, tenant_id=PUBLIC_TENANT_ID)
+    assert stored is not None and stored.incomplete == (FORMULA_NOT_TEXT,)
+    assert stored.canonical_text == change.new_text  # the text is as it was
+    # The graph: the state on the node, the previous state on its trail.
+    rows = await cypher(
+        stores.graph,
+        "MATCH (c:Clause) RETURN c.stable_id AS id, c.incomplete_reasons AS r, "
+        "c.incomplete_details AS d, coalesce(c.corrections, []) AS trail",
+    )
+    by_id = {str(row["id"]): row for row in rows}
+    assert by_id[S6DA_2]["r"] == ["image_not_text"]
+    assert by_id[S6DA_2]["d"] == ["the formula is not available in text form"]
+    (entry,) = [json.loads(e) for e in by_id[S6DA_2]["trail"]]
+    assert (entry["by"], entry["reason"], entry["revision_id"]) == (BY, WHY_211, "rev-1")
+    assert entry["previous"] == {"canonical_sha256": sha, "incomplete": []}
+    assert all(row["r"] is None and not row["trail"] for i, row in by_id.items() if i != S6DA_2)
+    # Qdrant (or the fake): the chunk's state, its text unchanged.
+    held = await stores.retrieval.stored_chunk_incomplete(
+        instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
+    )
+    assert {i: v for i, v in held.items() if v} == {S6DA_2: (FORMULA_NOT_TEXT,)}
+    assert (await stores.texts())[S6DA_2] == change.new_text
+    assert isinstance(stores.retrieval, RetrievalStore)
+    found = await stores.retrieval.lookup_clause(
+        S6DA_2, law=ALL_LAW, tenant_id=PUBLIC_TENANT_ID, scopes=(Scope.PUBLIC,), as_of=AT.date()
+    )
+    assert found is not None and found.incomplete == (FORMULA_NOT_TEXT,)
+    # Finished, and a re-run plans nothing.
+    assert not (await revision.status(planned)).unfinished
+    assert (await plan_s6da(stores, stores.revision())).plan.empty
+
+
+@needs_neo4j
+@pytest.mark.parametrize("stores", ["qdrant"], indirect=True)
+async def test_on_qdrant_marking_a_clause_embeds_nothing_and_changes_only_its_state(
+    stores: Stores,
+) -> None:
+    assert stores.qdrant is not None
+    await deploy_unmarked(stores)
+    point = _chunk_point_id(S6DA_2)
+    (before,) = await stores.qdrant.retrieve(
+        stores.collection, ids=[point], with_payload=True, with_vectors=True
+    )
+    assert before.payload is not None and "incomplete" not in before.payload
+    unembedding = QdrantRetrievalStore(
+        stores.qdrant,
+        collection_name=stores.collection,
+        embedder=_NoEmbedding(),
+        ledger=stores.ledger,
+    )
+    await mark_s6da(stores, stores.revision(retrieval=unembedding))
+    (after,) = await stores.qdrant.retrieve(
+        stores.collection, ids=[point], with_payload=True, with_vectors=True
+    )
+    assert after.payload is not None
+    assert after.vector == before.vector
+    assert after.payload == {**before.payload, "incomplete": incomplete_json((FORMULA_NOT_TEXT,))}
+
+
+@needs_neo4j
+@pytest.mark.parametrize("stores", ["fake"], indirect=True)
+async def test_the_graph_refuses_a_marked_clause_over_an_unmarked_node_outside_a_revision(
+    stores: Stores,
+) -> None:
+    """Why the state needs the revision path: a Clause node is immutable, so
+    loading today's parse over the deployed graph is refused, not merged."""
+    await deploy_unmarked(stores)
+    with pytest.raises(GraphWriteRefused, match="immutable"):
+        async with recorded_load(
+            stores.graph,
+            FIXED_CODE,
+            check=partial(
+                check_instrument_version,
+                stores.graph,
+                marked(),
+                effective=EFFECTIVE,
+                supersedes=None,
+            ),
+        ) as checked:
+            await write_instrument_version(
+                stores.graph,
+                marked(),
+                checked,
+                instrument_since=SINCE,
+                effective=EFFECTIVE,
+                supersedes=None,
+            )

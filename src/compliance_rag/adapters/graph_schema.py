@@ -10,8 +10,15 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
-from compliance_rag.corpus.models import NO_END_DATE, check_end
+from compliance_rag.corpus.models import (
+    NO_END_DATE,
+    Incomplete,
+    Incompleteness,
+    IncompleteReason,
+    check_end,
+)
 from compliance_rag.corpus.models import EndReason as EndReason  # re-exported for the graph
 
 PERSISTED_LABELS = frozenset(
@@ -149,6 +156,42 @@ class GraphCounts:
 
 CORRECTIONS = "corrections"
 """The writer-kept trail of cosmetic corrections on a node or edge (ADR-0031)."""
+
+INCOMPLETE_REASONS = "incomplete_reasons"
+INCOMPLETE_DETAILS = "incomplete_details"
+"""A Clause node's incompleteness (ADR-0047): two lists, one entry per reason,
+the same length. Present only on an incomplete clause, since Neo4j stores no
+null: a node without them is complete."""
+
+
+def incomplete_properties(incomplete: Incomplete) -> dict[str, Scalar]:
+    """A clause's incompleteness as Clause node properties: none if complete."""
+    if not incomplete:
+        return {}
+    return {
+        INCOMPLETE_REASONS: tuple(i.reason.value for i in incomplete),
+        INCOMPLETE_DETAILS: tuple(i.detail for i in incomplete),
+    }
+
+
+def incomplete_of_properties(properties: Mapping[str, object]) -> Incomplete:
+    """A Clause node's incompleteness back from its properties."""
+    reasons = properties.get(INCOMPLETE_REASONS)
+    details = properties.get(INCOMPLETE_DETAILS)
+    if reasons is None and details is None:
+        return ()
+    if not isinstance(reasons, list | tuple) or not isinstance(details, list | tuple):
+        raise ValueError(f"a Clause node's {INCOMPLETE_REASONS} and {INCOMPLETE_DETAILS} are lists")
+    # Neo4j hands back a list; isinstance narrows only the container.
+    listed_reasons = tuple(cast("list[object]", reasons))
+    listed_details = tuple(cast("list[object]", details))
+    if len(listed_reasons) != len(listed_details):
+        raise ValueError(f"{INCOMPLETE_REASONS} and {INCOMPLETE_DETAILS} differ in length")
+    return tuple(
+        Incompleteness(reason=IncompleteReason(str(r)), detail=str(d))
+        for r, d in zip(listed_reasons, listed_details, strict=True)
+    )
+
 
 WRITER_KEYS = frozenset({"stable_id", "recorded_at", "valid_to", "end_reason", CORRECTIONS})
 """Stored properties a loader doesn't author: the stable ID, transaction time,

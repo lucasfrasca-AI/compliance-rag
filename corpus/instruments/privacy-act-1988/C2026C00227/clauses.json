@@ -3660,7 +3660,13 @@
    "heading": null,
    "text": "However, if a business has been carried on for only part of a financial year, its annual turnover for the financial year is the amount worked out using the formula:",
    "canonical_text": "However, if a business has been carried on for only part of a financial year, its annual turnover for the financial year is the amount worked out using the formula:",
-   "canonicalisation_version": 2
+   "canonicalisation_version": 2,
+   "incomplete": [
+    {
+     "reason": "image_not_text",
+     "detail": "the formula is not available in text form"
+    }
+   ]
   },
   {
    "clause_path": "s6e/1",
