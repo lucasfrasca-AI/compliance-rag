@@ -31,7 +31,10 @@ loaded into the graph (D-09, D-14: tenant content has no persisted node), so a
 
 Correcting a loaded item in place changes a node, which D-05 forbids: such a
 load is refused before any write, naming the item. A change of meaning is a
-new id with `supersedes` (#93 Q4).
+new id with `supersedes` (#93 Q4). Two exceptions, each only when a person
+acknowledges exactly what changes: wording (`CorrectionAcknowledgement`,
+ADR-0031), and a grow-only edge that was never true at any valid time, removed
+as an erratum (`ErratumAcknowledgement`, #245, ADR-0050).
 
 **Recording a load** (`recorded_load`, #153): each loader is split into its
 checks (`check_instrument_version`, `check_mappings`: every refusal that
@@ -61,6 +64,7 @@ from compliance_rag.adapters.graph_schema import (
     WRITER_KEYS,
     Bitemporal,
     CorrectionWrite,
+    EdgeRef,
     EdgeWrite,
     GraphCounts,
     NodeRef,
@@ -68,6 +72,7 @@ from compliance_rag.adapters.graph_schema import (
     Scalar,
     StoredNode,
     incomplete_properties,
+    removed_by_errata,
 )
 from compliance_rag.adapters.interfaces import GraphAdmin, SourceVersion
 from compliance_rag.corpus.models import (
@@ -385,7 +390,10 @@ GROW_ONLY = {
     "EXCEPTED_BY": "an exception was removed",
     "READ_WITH": "a qualifier was removed",
 }
-"""Edges a loaded item may gain and never lose, with what losing one means."""
+"""Edges a loaded item may gain and never lose, with what losing one means,
+except by an acknowledged erratum: one that was never true at any valid time
+(ADR-0050). The adapter's `ERRATUM_EDGES` is the same set (a test holds them
+equal)."""
 
 
 def _last_visible(item: Dated, today: dt.date) -> dt.date:
@@ -483,18 +491,52 @@ def _refuse(item: Dated, label: str, what: str) -> MappingError:
     )
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class ErratumEdge:
+    """One edge an erratum names, by its source item's id, its type and its
+    target clause's id (ADR-0050)."""
+
+    source_id: str
+    edge_type: str
+    target_id: str
+
+    @classmethod
+    def of(cls, edge: EdgeRef) -> ErratumEdge:
+        return cls(edge.source.stable_id, edge.edge_type, edge.target.stable_id)
+
+    def __str__(self) -> str:
+        return f"{self.source_id} {self.edge_type} {self.target_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class _Found:
+    """What `_check_unchanged` found that a load may change, if acknowledged."""
+
+    corrections: tuple[CorrectionWrite, ...]
+    """Wording changes to loaded items (ADR-0031)."""
+    removals: tuple[EdgeRef, ...]
+    """Stored grow-only edges the mappings no longer give: an erratum's, or
+    refused (ADR-0050)."""
+    removed_before: frozenset[ErratumEdge]
+    """Edges of loaded items an erratum already removed, from their trails."""
+
+
 async def _check_unchanged(
     graph: GraphAdmin, mappings: MappingSet, inside: ClausesInside
-) -> tuple[CorrectionWrite, ...]:
+) -> _Found:
     """An item already loaded is unchanged in meaning — its non-cosmetic
     properties, its valid time (retiring an open node is the one change
     allowed), and the edges that carry its meaning (`MEANING`); its
     `GROW_ONLY` edges may only grow, and a stored crosswalk's kind is fixed. A
     change of meaning is refused here, before any write, not halfway through.
     A change of wording only (`COSMETIC`) is returned as a `Correction`,
-    applied only if acknowledged (ADR-0031). One read for every item, at no
-    date (`stored`)."""
+    applied only if acknowledged (ADR-0031). A grow-only edge the mappings no
+    longer give is returned too, removed only as an acknowledged erratum
+    (ADR-0050); one an erratum removed is never given again. One read for
+    every item, at no date (`stored`)."""
     corrections: list[CorrectionWrite] = []
+    removals: list[EdgeRef] = []
+    removed_before: set[ErratumEdge] = set()
     edges = _edges(mappings, inside)
     refs = [NodeRef(label, item.id) for label, items in mappings.by_label.items() for item in items]
     loaded = await graph.stored(refs)
@@ -526,10 +568,20 @@ async def _check_unchanged(
                 wanted_targets = frozenset(e.target for e in mine if e.edge_type == edge_type)
                 if stored.targets(edge_type) != wanted_targets:
                     raise _refuse(item, label, f"{edge_type} edges")
-            for edge_type, removed in GROW_ONLY.items():
+            erratum = removed_by_errata(stored.properties)
+            removed_before |= {ErratumEdge(item.id, t, c) for t, c in erratum}
+            for edge_type in sorted(GROW_ONLY):
                 kept = {e.target for e in mine if e.edge_type == edge_type}
-                if not stored.targets(edge_type) <= kept:
-                    raise _refuse(item, label, f"{edge_type} edges ({removed})")
+                again = sorted(c.stable_id for c in kept if (edge_type, c.stable_id) in erratum)
+                if again:
+                    raise MappingError(
+                        f"{item.id}: {edge_type} {again} was removed as an erratum, never "
+                        "true at any time (ADR-0050): it is not loaded again"
+                    )
+                removals += [
+                    EdgeRef(edge_type, stored.node, target)
+                    for target in sorted(stored.targets(edge_type) - kept, key=str)
+                ]
             crosswalks = {e.target: e.properties for e in mine if e.edge_type == "CROSSWALKS_TO"}
             for edge in stored.edges:
                 if edge.edge_type != "CROSSWALKS_TO" or edge.target not in crosswalks:
@@ -551,7 +603,7 @@ async def _check_unchanged(
                             ("CROSSWALKS_TO", edge.target),
                         )
                     )
-    return tuple(corrections)
+    return _Found(tuple(corrections), tuple(removals), frozenset(removed_before))
 
 
 def _comparable(value: object) -> object:
@@ -572,6 +624,62 @@ class CorrectionAcknowledgement:
 
 
 @dataclass(frozen=True, slots=True)
+class ErratumAcknowledgement:
+    """A person's go-ahead to remove grow-only mapping edges that were never
+    true at any valid time (ADR-0050): exactly which edges, by whom, and why.
+    Only the grow-only kinds (`GROW_ONLY`): an erratum never touches a node,
+    a meaning edge or a property."""
+
+    edges: frozenset[ErratumEdge]
+    by: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.edges:
+            raise MappingError("an erratum names the edges it removes (ADR-0050)")
+        if not (self.by.strip() and self.reason.strip()):
+            raise MappingError("an erratum names who acknowledged it and why (ADR-0050)")
+        other = sorted(str(e) for e in self.edges if e.edge_type not in GROW_ONLY)
+        if other:
+            raise MappingError(
+                f"an erratum removes only {sorted(GROW_ONLY)} edges, not {other}: any other "
+                "change of meaning is a new id (D-05, ADR-0050)"
+            )
+
+
+def _check_errata(
+    removing: frozenset[ErratumEdge],
+    removed_before: frozenset[ErratumEdge],
+    errata: ErratumAcknowledgement | None,
+) -> None:
+    """A grow-only edge is removed only when acknowledged exactly: every edge
+    the load would remove named, and none it wouldn't. An edge an erratum
+    already removed may be named again, so the same command re-run is a
+    no-op."""
+    acknowledged = errata.edges if errata else frozenset[ErratumEdge]()
+    missing = sorted(removing - acknowledged)
+    named = [str(e) for e in sorted(acknowledged)]
+    if missing:
+        refusals = "; ".join(
+            f"{e.source_id} is already loaded with different {e.edge_type} edges "
+            f"({GROW_ONLY[e.edge_type]}): {e}"
+            for e in missing
+        )
+        raise MappingError(
+            f"{refusals}. A loaded item is immutable (D-05): supersede it with a new id, or, "
+            "if the edge was never true at any time, remove it as an erratum acknowledged "
+            f"exactly, with who and why (ADR-0050); acknowledged {named}"
+        )
+    extra = sorted(acknowledged - removing - removed_before)
+    if extra:
+        raise MappingError(
+            f"an erratum acknowledged {[str(e) for e in extra]}, which this load does not "
+            f"remove: it names exactly the edges removed, {[str(e) for e in sorted(removing)]} "
+            "(ADR-0050)"
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class CheckedMappings:
     """What `check_mappings` found, and what the writes need from it."""
 
@@ -580,6 +688,8 @@ class CheckedMappings:
     inside: ClausesInside
     """Each exception and qualifier, with the clauses inside it in the graph:
     the further `EXCEPTED_BY` / `READ_WITH` targets (ADR-0044)."""
+    errata: tuple[EdgeRef, ...] = ()
+    """Grow-only edges to remove, acknowledged as an erratum (ADR-0050)."""
 
 
 async def check_mappings(
@@ -588,20 +698,25 @@ async def check_mappings(
     *,
     today: dt.date | None = None,
     corrections: CorrectionAcknowledgement | None = None,
+    errata: ErratumAcknowledgement | None = None,
 ) -> CheckedMappings:
     """Everything that can refuse `load_mappings`, before its first write:
     clauses present and in force, loaded items unchanged in meaning. A change
     of wording to a loaded item is returned, to be applied in place only if
-    `corrections` acknowledges exactly the items it touches (ADR-0031). So are
-    the clauses inside each exception and qualifier, read from the graph here
-    so the writes rest on the same read as the checks (ADR-0044). A load a
-    caller records (`recorded_load`) is begun after this, so a refusal leaves
-    no record."""
+    `corrections` acknowledges exactly the items it touches (ADR-0031). A
+    grow-only edge the mappings no longer give is returned, to be removed only
+    if `errata` acknowledges exactly those edges (ADR-0050). So are the
+    clauses inside each exception and qualifier, read from the graph here so
+    the writes rest on the same read as the checks (ADR-0044). A load a caller
+    records (`recorded_load`) is begun after this, so a refusal leaves no
+    record."""
     with telemetry.span("graph_loader.check_mappings") as span:
         clauses = await _check_grounding(graph, mappings, today or dt.date.today())
         inside = await _read_inside(graph, mappings, clauses)
         found = await _check_unchanged(graph, mappings, inside)
-        touched = frozenset(c.node.stable_id for c in found)
+        removing = frozenset(ErratumEdge.of(e) for e in found.removals)
+        _check_errata(removing, found.removed_before, errata)
+        touched = frozenset(c.node.stable_id for c in found.corrections)
         acknowledged = corrections.item_ids if corrections else frozenset[str]()
         if touched != acknowledged:
             raise MappingError(
@@ -610,10 +725,11 @@ async def check_mappings(
                 f"acknowledged {sorted(acknowledged)}"
             )
         span.set_attribute("graph.corrected", sorted(touched))
+        span.set_attribute("graph.errata", [str(e) for e in sorted(removing)])
         span.set_attribute(
             "graph.inside", [f"{c} contains {' '.join(i)}" for c, i in inside.items() if i]
         )
-        return CheckedMappings(found, inside)
+        return CheckedMappings(found.corrections, inside, found.removals)
 
 
 async def load_mappings(
@@ -622,14 +738,17 @@ async def load_mappings(
     *,
     today: dt.date | None = None,
     corrections: CorrectionAcknowledgement | None = None,
+    errata: ErratumAcknowledgement | None = None,
 ) -> LoadReport:
     """Every node and edge the mapping set describes, after checking the
     graph (`check_mappings`). Then nodes (every kind, batched), then edges.
     Tenant policy mappings are validated and reported, never written (D-09,
     D-14). A caller that records the load runs the checks and the writes apart
     (`check_mappings`, `write_mappings`)."""
-    found = await check_mappings(graph, mappings, today=today, corrections=corrections)
-    return await write_mappings(graph, mappings, found, corrections)
+    found = await check_mappings(
+        graph, mappings, today=today, corrections=corrections, errata=errata
+    )
+    return await write_mappings(graph, mappings, found, corrections, errata)
 
 
 async def write_mappings(
@@ -637,10 +756,12 @@ async def write_mappings(
     mappings: MappingSet,
     found: CheckedMappings,
     corrections: CorrectionAcknowledgement | None,
+    errata: ErratumAcknowledgement | None = None,
 ) -> LoadReport:
     """The writes of `load_mappings`, once `check_mappings` has passed and
     returned `found`: the acknowledged wording corrections, in place, in one
-    transaction; then the nodes; then the edges."""
+    transaction; the acknowledged erratum's removals, in another; then the
+    nodes; then the edges."""
     attributes = {
         f"graph.{label.lower()}s": len(items) for label, items in mappings.by_label.items()
     } | {
@@ -651,6 +772,11 @@ async def write_mappings(
         if corrections is not None:
             await graph.correct(found.corrections, by=corrections.by, reason=corrections.reason)
         span.set_attribute("graph.corrected", sorted(c.node.stable_id for c in found.corrections))
+        if found.errata:
+            if errata is None:
+                raise MappingError("edges to remove with no erratum acknowledging them (ADR-0050)")
+            await graph.remove_by_erratum(found.errata, by=errata.by, reason=errata.reason)
+        span.set_attribute("graph.errata", [str(e) for e in found.errata])
         created_nodes = await graph.put_nodes(
             [
                 NodeWrite(

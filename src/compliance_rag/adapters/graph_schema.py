@@ -8,6 +8,7 @@ and the query builder (`graph_query`) take them only from these sets.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
@@ -155,7 +156,9 @@ class GraphCounts:
 
 
 CORRECTIONS = "corrections"
-"""The writer-kept trail of cosmetic corrections on a node or edge (ADR-0031)."""
+"""The writer-kept trail of cosmetic corrections on a node or edge (ADR-0031),
+of parse corrections on a Clause node (ADR-0042), and of the errata that
+removed a mapping item's edges (ADR-0050)."""
 
 INCOMPLETE_REASONS = "incomplete_reasons"
 INCOMPLETE_DETAILS = "incomplete_details"
@@ -243,6 +246,71 @@ class CorrectionWrite:
     node: NodeRef
     changes: Mapping[str, Scalar]
     edge: tuple[str, NodeRef] | None = None
+
+
+ERRATUM_EDGES = frozenset({"DERIVED_FROM", "EXCEPTED_BY", "READ_WITH"})
+"""The only edges an acknowledged erratum may remove (ADR-0050): a mapping
+item's grow-only edges to a clause of the law (`loader.GROW_ONLY`), one that
+was never true at any valid time. Never a node, never an edge that carries an
+item's meaning (`loader.MEANING`), never a property: those stay a new id."""
+
+ERRATUM_SOURCES = frozenset({"Obligation", "Condition", "Actor", "Control"})
+"""The mapping items those edges leave from. Their target is always a Clause."""
+
+ERRATUM = "erratum"
+"""The key that marks an erratum's entry on a node's `corrections` trail."""
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeRef:
+    """One stored edge, by type and both ends: what an erratum removes."""
+
+    edge_type: str
+    source: NodeRef
+    target: NodeRef
+
+    def __post_init__(self) -> None:
+        checked_edge_type(self.edge_type)
+
+    def __str__(self) -> str:
+        return f"{self.source.stable_id} {self.edge_type} {self.target.stable_id}"
+
+
+def erratum_entry(at: str, by: str, reason: str, removed: Sequence[EdgeRef]) -> str:
+    """An erratum's entry on its source node's `corrections` trail (ADR-0050):
+    when, by whom, why, and the edges it removed, so the graph itself still
+    shows what an earlier answer was given."""
+    return json.dumps(
+        {
+            "at": at,
+            "by": by,
+            "reason": reason,
+            ERRATUM: True,
+            "removed": [
+                {"edge_type": e.edge_type, "target": e.target.stable_id}
+                for e in sorted(removed, key=str)
+            ],
+        },
+        sort_keys=True,
+    )
+
+
+def removed_by_errata(properties: Mapping[str, object]) -> frozenset[tuple[str, str]]:
+    """The (edge type, target id) pairs a stored node's trail records an
+    erratum removing. Other trail entries (wording corrections, ADR-0031) are
+    not errata and are skipped."""
+    trail = properties.get(CORRECTIONS) or ()
+    if not isinstance(trail, list | tuple):
+        raise ValueError(f"a node's {CORRECTIONS} trail is a list")
+    removed: set[tuple[str, str]] = set()
+    for raw in cast("Sequence[object]", trail):
+        # json.loads returns Any: the entry is a writer-kept JSON object.
+        entry = cast("dict[str, object]", json.loads(str(raw)))
+        if entry.get(ERRATUM) is not True:
+            continue
+        for edge in cast("list[dict[str, object]]", entry["removed"]):
+            removed.add((str(edge["edge_type"]), str(edge["target"])))
+    return frozenset(removed)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,6 @@
 # ADR-0031 — Cosmetic corrections in place; a change of meaning is a new id
 
-- Status: accepted; its `corrections` trail also records a parse correction of a Clause node's hash (ADR-0042)
+- Status: accepted; its `corrections` trail also records a parse correction of a Clause node's hash (ADR-0042); amended by ADR-0050 (a grow-only mapping edge that was never true is removed as an acknowledged erratum)
 - Date: 2026-10-13
 - Issue: #120 (from the #93 design session, Q4)
 - Amends: ADR-0006 / `D-05` ("nodes are immutable")
