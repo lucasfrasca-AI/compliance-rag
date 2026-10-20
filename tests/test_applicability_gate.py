@@ -16,7 +16,7 @@ import pytest
 from compliance_rag.adapters.fakes import FakeGraphStore
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.assessment.coverage import Outcome
-from compliance_rag.corpus.models import ClauseRecord, Scope
+from compliance_rag.corpus.models import ClauseRecord, Incomplete, Scope
 from compliance_rag.eval.applicability import (
     APPLICABILITY_PATH,
     ApplicabilityGoldenSet,
@@ -24,6 +24,7 @@ from compliance_rag.eval.applicability import (
     check,
     load_applicability_set,
 )
+from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.graph.loader import load_instrument_version, load_mappings
 from compliance_rag.graph.mappings import MappingSet, load_mapping_set
 from compliance_rag.graph.track_a import GraphTrackA
@@ -42,17 +43,29 @@ def _clause_ids(mappings: MappingSet) -> set[str]:
     return set(mappings.clause_ids)
 
 
+def stored_incomplete() -> dict[str, Incomplete]:
+    """The committed corpus's incomplete clauses (ADR-0047): what the stored
+    clauses say, which Track A reads off the graph."""
+    return {c.clause_id: c.incomplete for c in load_compilation_clauses().clauses if c.incomplete}
+
+
 def fake_for(mappings: MappingSet, labels: ApplicabilityGoldenSet) -> FakeGraphStore:
-    return FakeGraphStore(mappings, clause_validity=labels.clause_validity(_clause_ids(mappings)))
+    return FakeGraphStore(
+        mappings,
+        clause_validity=labels.clause_validity(_clause_ids(mappings)),
+        incomplete=stored_incomplete(),
+    )
 
 
 async def graph_for(
     graph: Neo4jGraph, mappings: MappingSet, labels: ApplicabilityGoldenSet
 ) -> GraphTrackA:
     """The mappings loaded into a real graph over skeleton clauses: the graph
-    stores no clause text, only ids, validity and a hash, so placeholder text
-    is enough for Track A (and never leaves the test database)."""
+        stores no clause text, only ids, validity and a hash, so placeholder text
+        is enough for Track A (and never leaves the test database). Each carries the
+    committed corpus's incompleteness, as the stored Clause node does (ADR-0047)."""
     await graph.apply_schema()
+    incomplete = stored_incomplete()
     by_version: dict[tuple[str, str], list[str]] = {}
     for clause_id in sorted(_clause_ids(mappings)):
         instrument_id, version_id, path = clause_id.split(":")
@@ -67,6 +80,7 @@ async def graph_for(
                 text=f"(placeholder for {path})",
                 scope=Scope.PUBLIC,
                 tenant_id="_public",
+                incomplete=incomplete.get(f"{instrument_id}:{version_id}:{path}", ()),
             )
             for path in paths
         )

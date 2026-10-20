@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from compliance_rag.assessment.coverage import (
@@ -40,6 +40,8 @@ from compliance_rag.assessment.coverage import (
     Truth,
 )
 from compliance_rag.assessment.evidence import Facts, FactValue, Period, Reading
+from compliance_rag.corpus.display_form import display_form
+from compliance_rag.corpus.models import Incomplete, parse_stable_id
 from compliance_rag.graph.mappings import (
     Comparison,
     Leaf,
@@ -101,6 +103,9 @@ class Snapshot:
     obligations: Mapping[str, ObligationSpec]
     actors: Mapping[str, ActorSpec]
     conditions: Mapping[str, ConditionSpec]
+    incomplete: Mapping[str, Incomplete] = field(default_factory=dict[str, Incomplete])
+    """The clauses conditions cite that are incomplete, with why (ADR-0047):
+    read off the stored corpus, never from the mapping."""
 
 
 JURISDICTIONS_FIELD = "operates_in"
@@ -200,6 +205,22 @@ class _Evaluator:
     # ---- leaves ---------------------------------------------------------------
 
     def _leaf(self, spec: ConditionSpec, leaf: Leaf) -> Explanation:
+        resting = tuple(
+            (clause_id, i.detail)
+            for clause_id in spec.clause_ids
+            for i in self._snapshot.incomplete.get(clause_id, ())
+        )
+        if resting:
+            # The law this leaf reads isn't all in the stored text: no answer
+            # settles it, so it is unknown whatever the evidence (ADR-0047).
+            return Explanation(
+                condition_id=spec.id,
+                operator=spec.operator.value,
+                truth=Truth.UNKNOWN,
+                description=spec.description,
+                clause_ids=spec.clause_ids,
+                incomplete=resting,
+            )
         if leaf.period is LeafPeriod.ANY_ENDED_FINANCIAL_YEAR:
             return self._history(spec, leaf)
         reading, label = self._reading(leaf)
@@ -551,13 +572,24 @@ def _compare(fact: FactValue, test: Comparison, value: object, as_of: dt.date) -
             return left < right if test is Comparison.BEFORE else left >= right
 
 
+def _cite(clause_id: str) -> str:
+    instrument_id, _, clause_path = parse_stable_id(clause_id)
+    return display_form(clause_path, instrument_id)
+
+
 def _reason(outcome: Outcome, explanation: Explanation) -> str:
     if outcome is Outcome.UNASSESSABLE:
         questions = explanation.questions()
+        missing = [
+            f"{_cite(clause_id)} is incomplete: {detail}"
+            for clause_id, detail in explanation.incompleteness()
+        ]
         if not questions:
+            if missing:
+                return "Unassessable: " + "; ".join(missing)
             unknown = [n.description for n in explanation.walk() if n.truth is Truth.UNKNOWN]
             return "Unassessable: " + (unknown[-1] if unknown else explanation.description)
-        return "Depends on: " + "; ".join(q.unassessable_reason for q in questions)
+        return "Depends on: " + "; ".join([*(q.unassessable_reason for q in questions), *missing])
     # Each deciding fact with whether it held: a condition that wasn't met
     # is a reason too, and must never read as if it were (#130).
     label = {Truth.TRUE: "met", Truth.FALSE: "not met", Truth.UNKNOWN: "unknown"}

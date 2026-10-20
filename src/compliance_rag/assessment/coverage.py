@@ -85,6 +85,10 @@ class Explanation:
     """For a leaf: the evidence it read — what an assessment can show later."""
     absent: bool = False
     """Not in force on `as_of`: the provision doesn't exist, so it is false."""
+    incomplete: tuple[tuple[str, str], ...] = ()
+    """For a leaf: the clauses it rests on that are incomplete (ADR-0047), each
+    with what is missing. Such a leaf is unknown whatever the evidence, and no
+    question settles it."""
 
     def walk(self) -> Iterator[Explanation]:
         yield self
@@ -97,6 +101,10 @@ class Explanation:
     def questions(self) -> tuple[Question, ...]:
         found = {n.question.condition_id: n.question for n in self.walk() if n.question}
         return tuple(found.values())
+
+    def incompleteness(self) -> tuple[tuple[str, str], ...]:
+        """Every incomplete clause an unknown leaf of this tree rests on, once."""
+        return tuple(dict.fromkeys(i for n in self.walk() for i in n.incomplete))
 
     def find(self, condition_id: str) -> Explanation | None:
         return next((n for n in self.walk() if n.condition_id == condition_id), None)
