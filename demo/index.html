@@ -217,7 +217,7 @@ function showUnavailable(data, traceId) {
         ? "Vertex refused the request for quota, so no answer was generated. Coverage and retrieval ran; the model wrote nothing, and nothing unverified is shown."
         : "The model isn't taking requests, so no answer was generated."],
       [quota
-        ? `This clears once the quota for ${demoConfig.generation || "the model"} is granted. Nothing on this page needs fixing.`
+        ? "It clears once Vertex grants the model's quota (or, once granted, when it refills). Nothing on this page needs fixing."
         : "Try again later.", "note"],
     ],
     data.trace_id || traceId,
