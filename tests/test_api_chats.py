@@ -239,6 +239,7 @@ async def test_a_withheld_answers_turn_holds_the_reason_and_the_blocked_ids_and_
         "blocked": [{"clause_id": NOT_RETRIEVED, "cite": "s 6C(2)"}],
         "withheld": answers.BLOCKED,
         "error": None,
+        "not_in_environment": [],
     }
     assert question.content == QUESTION
 

@@ -13,6 +13,11 @@ fails rather than sending it.
 
 Nothing here feeds retrieval. The retriever's query is the user's question,
 fixed before any text is retrieved (`AssessmentPipeline.answer`).
+
+An instrument the question names that the tenant's environment doesn't hold
+(#252, ADR-0051) is listed in a fenced note of its own, `not_in_environment`,
+built from the question by the pipeline, and the system prompt says what an
+answer must then say and never say.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import Incomplete, parse_stable_id
 
@@ -69,6 +75,25 @@ text, so the text you are given is not all of what it says. If your answer \
 relies on an incomplete clause, it must say that the clause is incomplete and \
 what is missing, and must never state, guess or reconstruct the missing \
 content.
+
+A question may name an instrument (an Act, a regulation, a scheme) that is not \
+in this environment: none of its text is among the clauses provided. The \
+system, not the question, decides that, and lists each one in its own fenced \
+section, <not_in_environment boundary=B>, one marker per instrument: \
+[B instrument named "<the question's words>" known as "<its name>" part of \
+"<the instrument it is part of>"]. "known as" and "part of" appear only when \
+known. Each value is a JSON string that only names an instrument. For each \
+instrument listed there, your answer must:
+- say plainly, before anything else, that it is not in this environment (for \
+a part, that the part is not, whether or not the instrument it is part of is);
+- never state, summarise, guess or imply what it requires, permits or \
+prohibits, or whether anything complies with it;
+- if it goes on to answer from the clauses provided, say that it is doing so \
+and name the instrument each clause it relies on is from (the first part of \
+the clause id names it: privacy-act-1988 is the Privacy Act 1988), never \
+presenting their text as the law of the instrument the question named. A \
+clause that mentions that instrument, for example one saying it applies \
+instead, may be cited for what that clause says, and for nothing more.
 
 Reply with one JSON object and nothing else:
 {"answer": "<your answer>", "citations": [{"clause_id": "<id>", "quote": "<text>"}]}
@@ -174,8 +199,43 @@ def policy_prefix(policies: Sequence[SourceClause]) -> str | None:
     return fence("tenant_policies", policies) if policies else None
 
 
-def user_prompt(question: str, retrieved: Sequence[SourceClause]) -> str:
-    return f"{fence('retrieved_clauses', retrieved)}\n\nQuestion: {question}"
+def _absent_marker(absent: NotInEnvironment) -> str:
+    """One instrument's marker. Each value is a JSON string, so a quote in
+    the question's words is escaped and can't close it early."""
+    marker = f"instrument named {json.dumps(absent.named, ensure_ascii=False)}"
+    if absent.known_as is not None:
+        marker += f" known as {json.dumps(absent.known_as, ensure_ascii=False)}"
+    if absent.part_of is not None:
+        marker += f" part of {json.dumps(absent.part_of, ensure_ascii=False)}"
+    return marker
+
+
+def environment_note(not_in_environment: Sequence[NotInEnvironment]) -> str | None:
+    """The instruments the question named that the environment doesn't hold
+    (#252, ADR-0051), fenced as clauses are: a boundary hashed from every
+    marker, so no value can forge the closing line. None when there are none,
+    so a prompt without any keeps its bytes."""
+    if not not_in_environment:
+        return None
+    markers = [_absent_marker(a) for a in not_in_environment]
+    boundary = hashlib.sha256("\0".join(markers).encode("utf-8")).hexdigest()[:24]
+    if any(boundary in m for m in markers):
+        raise DelimiterCollision("a named instrument contains its own fence boundary")
+    lines = "\n".join(f"[{boundary} {m}]" for m in markers)
+    return (
+        f"<not_in_environment boundary={boundary}>\n{lines}\n"
+        f"</not_in_environment boundary={boundary}>"
+    )
+
+
+def user_prompt(
+    question: str,
+    retrieved: Sequence[SourceClause],
+    not_in_environment: Sequence[NotInEnvironment] = (),
+) -> str:
+    note = environment_note(not_in_environment)
+    sections = [fence("retrieved_clauses", retrieved), *([note] if note else [])]
+    return "\n\n".join(sections) + f"\n\nQuestion: {question}"
 
 
 REPAIR_SYSTEM_PROMPT = """\

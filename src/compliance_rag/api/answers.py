@@ -31,6 +31,12 @@ reason's `detail` is what the reader is shown: the words a person signed for
 that clause and reason (`incomplete.yaml`, #211), joined here at read time,
 else the parser's.
 
+An answer to a question that names an instrument the tenant's environment
+doesn't hold says so (#252, ADR-0051): `not_in_environment` lists each, with
+the question's words for it and, where the register knows it, its name. Set by
+the pipeline from the question, never by the model, it is sent with a verified
+answer and a withheld one alike, and recorded with the turn.
+
 A bad citation blocks the answer rather than shipping it (ADR-0003). So an
 answer's text and citations are sent only when every citation verified. A
 blocked answer sends its blocked citations (clause id and outcome, never the
@@ -182,10 +188,12 @@ def _shown(answer: Answer) -> ChatAnswer:
                 ChatCitation(c.clause_id, c.version_id, c.incomplete)
                 for c in _verified_clauses(answer)
             ),
+            not_in_environment=answer.not_in_environment,
         )
     return ChatAnswer(
         TurnOutcome.BLOCKED if answer.blocked else TurnOutcome.UNCITED,
         blocked=tuple(c.citation.clause_id for c in answer.blocked),
+        not_in_environment=answer.not_in_environment,
     )
 
 
@@ -197,6 +205,8 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
         ],
         "trace_id": answer.trace_id,
         "cost_usd": answer.cost_usd,
+        # Verified or withheld, whatever the model wrote (#252, ADR-0051).
+        "not_in_environment": [n.json() for n in shown.not_in_environment],
     }
     if shown.outcome is not TurnOutcome.VERIFIED:
         return {
