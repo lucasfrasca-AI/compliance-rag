@@ -5,15 +5,19 @@ from __future__ import annotations
 
 from typing import Any
 
+import anthropic
+import httpx
 import pytest
 from anthropic.types import Message, MessageParam, TextBlock, TextBlockParam, Usage
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.generation_residency import GenerationResidencyError
+from compliance_rag.adapters.interfaces import GenerationUnavailable, Unavailability
 from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator, price_usd
 from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.settings import Settings
+from tests.vertex_quota import QUOTA_BODY, SDK_WORDS, quota_exhausted_generator
 
 PREFIX = (
     "<tenant_policies boundary=x>\n[x clause acme/p:v1:1]\nPolicy.\n[x end]\n</tenant_policies>"
@@ -122,6 +126,27 @@ async def test_a_prefix_the_api_did_not_cache_is_flagged(
     assert not generation.cached_prefix_hit
     (generate_span,) = [s for s in span_exporter.get_finished_spans() if s.name.startswith("gen")]
     assert (generate_span.attributes or {})["generator.prefix_not_cached"] is True
+
+
+async def test_vertex_refusing_for_quota_is_generation_unavailable_in_our_words(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """The SDK's own client, answered 429 `RESOURCE_EXHAUSTED` as Vertex
+    answers while the quota is zero (#251): the SDK raises `RateLimitError`,
+    and the adapter raises `GenerationUnavailable(QUOTA)` with none of its
+    words. The SDK's exception is kept as the cause, for the server's log."""
+    requests: list[httpx.Request] = []
+    generator = quota_exhausted_generator(_corpus(LAW, SYNTHETIC), requests)
+    with pytest.raises(GenerationUnavailable) as raised:
+        await generator.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=64)
+    assert raised.value.reason is Unavailability.QUOTA
+    cause = raised.value.__cause__
+    assert isinstance(cause, anthropic.RateLimitError) and cause.status_code == 429
+    assert cause.body == QUOTA_BODY  # what Vertex sent, as the SDK parsed it
+    assert not any(word in str(raised.value) for word in SDK_WORDS)
+    assert len(requests) == 1 and requests[0].url.path.endswith("claude-sonnet-5:rawPredict")
+    (generate_span,) = [s for s in span_exporter.get_finished_spans() if s.name.startswith("gen")]
+    assert (generate_span.attributes or {})["generator.unavailable"] == "quota"
 
 
 def test_a_generator_with_no_model_is_refused() -> None:

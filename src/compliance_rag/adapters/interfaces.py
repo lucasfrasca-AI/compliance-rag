@@ -1444,6 +1444,26 @@ class Embedder(ABC):
     async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]: ...
 
 
+class Unavailability(StrEnum):
+    """Why a model can't take a request, in words that are ours, not its
+    provider's (#251)."""
+
+    QUOTA = "quota"
+    """The provider refused it for quota: Vertex's 429 `RESOURCE_EXHAUSTED`,
+    which is every request while a model's quota is zero."""
+
+
+class GenerationUnavailable(RuntimeError):
+    """The model can't take the request, for a reason in `Unavailability`.
+    A `Generator` raises it in place of its SDK's error, so nothing the
+    provider said reaches anything above the adapter: the SDK's exception is
+    its `__cause__`, for the server's own log, and never in its message."""
+
+    def __init__(self, reason: Unavailability) -> None:
+        super().__init__(f"generation unavailable: {reason.value}")
+        self.reason = reason
+
+
 class Generator(ABC):
     """Claude on Vertex. Never authors a citation (D-02)."""
 
@@ -1456,7 +1476,9 @@ class Generator(ABC):
         user: str,
         max_tokens: int,
     ) -> Generation:
-        """Generate with a cached prompt prefix for the tenant policy corpus (D-11)."""
+        """Generate with a cached prompt prefix for the tenant policy corpus
+        (D-11). Raises `GenerationUnavailable` when the model refuses the
+        request for a reason `Unavailability` names."""
 
 
 class CanonicalisationVersionMismatch(ValueError):
