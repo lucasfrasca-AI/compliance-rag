@@ -14,6 +14,14 @@ version, which is what keeps it clickable once the clause is superseded), or
 the reason it was withheld with the clauses whose citations blocked it, or the
 error that ended the request. Never the model's draft: the ledger has no such
 column (ADR-0003).
+
+A citation is built by the answer event's builder (`citation_json`), so a chat
+shows it as the answer did. A stored citation that can't be read (a corrupt
+row) stays in its place in the list as `{"unreadable": true, "reason": ...}`,
+with `clause_id`, `cite` and `version_id` when the stored id is well-formed:
+the chat is still returned (200), the citation asserts nothing, and no other
+part of the row is shown (#232). It carries no `incomplete`: what the member
+was shown with it is lost, and the turn's `incomplete` list can't count it.
 """
 
 from __future__ import annotations
@@ -22,24 +30,26 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Request
 
-from compliance_rag.adapters.interfaces import ChatCitation, ChatTurn, TurnOutcome
-from compliance_rag.api.answers import WITHHELD, incomplete_clauses_json
+from compliance_rag.adapters.interfaces import ChatCitation, ChatTurn, Citation, TurnOutcome
+from compliance_rag.api.answers import WITHHELD, citation_json, incomplete_clauses_json
 from compliance_rag.api.deps import UUID4_HEX, CurrentCaller, services_of
 from compliance_rag.assessment.coverage_report import cite
-from compliance_rag.corpus.models import incomplete_json
 
 router = APIRouter(prefix="/v1")
 
 
-def _citation_json(c: ChatCitation) -> dict[str, object]:
-    return {
-        "clause_id": c.clause_id,
-        "cite": cite(c.clause_id),
-        "version_id": c.version_id,
-        # As recorded with the turn: what the member was shown, not the
-        # clause's state in today's corpus (ADR-0047, #162, #228).
-        "incomplete": incomplete_json(c.incomplete),
-    }
+def _citation_json(c: Citation) -> dict[str, object]:
+    if isinstance(c, ChatCitation):
+        return citation_json(c.clause_id, c.version_id, c.incomplete)
+    # A corrupt stored citation, in its place: marked, with the clause when it
+    # could still be named, and nothing else of the row (#232).
+    unreadable: dict[str, object] = {"unreadable": True, "reason": c.reason.value}
+    if c.clause_id is not None:
+        unreadable["clause_id"] = c.clause_id
+        unreadable["cite"] = cite(c.clause_id)
+    if c.version_id is not None:
+        unreadable["version_id"] = c.version_id
+    return unreadable
 
 
 def _turn_json(turn: ChatTurn) -> dict[str, object]:
@@ -57,7 +67,9 @@ def _turn_json(turn: ChatTurn) -> dict[str, object]:
         "verified": turn.outcome is TurnOutcome.VERIFIED,
         "text": turn.content,
         "citations": [_citation_json(c) for c in turn.citations],
-        "incomplete": incomplete_clauses_json((c.clause_id, c.incomplete) for c in turn.citations),
+        "incomplete": incomplete_clauses_json(
+            (c.clause_id, c.incomplete) for c in turn.citations if isinstance(c, ChatCitation)
+        ),
         "blocked": [{"clause_id": b, "cite": cite(b)} for b in turn.blocked],
         "withheld": WITHHELD.get(turn.outcome),
         "error": turn.outcome.value if turn.outcome.failed else None,

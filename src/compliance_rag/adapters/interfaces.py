@@ -532,6 +532,43 @@ class ChatCitation:
             raise ValueError(f"{self.clause_id} is not a clause of version {self.version_id}")
 
 
+class UnreadableReason(StrEnum):
+    """Why a stored citation couldn't be read back. A closed set of fixed
+    words, so naming one never carries any of the row (#232)."""
+
+    NOT_AN_OBJECT = "not_an_object"
+    """The element isn't a JSON object."""
+    NO_CLAUSE = "no_clause"
+    """It names no clause, or not as a stable clause id."""
+    WRONG_VERSION = "wrong_version"
+    """Its version isn't the version its clause id is of."""
+    BAD_INCOMPLETE = "bad_incomplete"
+    """Its recorded incompleteness isn't a list of valid reasons."""
+
+
+@dataclass(frozen=True, slots=True)
+class UnreadableCitation:
+    """A stored citation that couldn't be read back: a corrupt row (#232). It
+    holds its place in the turn's citations, so nothing is silently dropped and
+    the member's history stays reachable, but it asserts nothing about the
+    clause: it is never shown as verified text, and the incompleteness the
+    member was shown with it is lost with it.
+
+    `clause_id` is kept when the stored one is a well-formed stable id (the
+    grammar admits nothing like prose), so the citation can still be named and
+    clicked through to its clause; `version_id` only when it agrees with it.
+    Nothing else of the element is kept, so a corrupt row's content never
+    reaches a response or a log."""
+
+    reason: UnreadableReason
+    clause_id: str | None = None
+    version_id: str | None = None
+
+
+Citation = ChatCitation | UnreadableCitation
+"""A citation as a chat reads back: whole, or marked unreadable."""
+
+
 @dataclass(frozen=True, slots=True)
 class ChatAnswer:
     """What an answer turn holds: what the member was shown, and nothing else
@@ -586,7 +623,9 @@ class ChatTurn:
     failed answer."""
     outcome: TurnOutcome | None
     """None for a question."""
-    citations: tuple[ChatCitation, ...]
+    citations: tuple[Citation, ...]
+    """As recorded; a corrupt stored one reads back as an `UnreadableCitation`
+    in its place (#232). A turn about to be written holds none."""
     blocked: tuple[str, ...]
     as_of: dt.date
     """The date the request read the law on."""

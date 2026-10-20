@@ -207,12 +207,8 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
         "text": shown.text,
         "citations": [
             {
-                "clause_id": c.clause_id,
-                "cite": cite(c.clause_id),
-                "version_id": c.version_id,
+                **citation_json(c.clause_id, c.version_id, c.incomplete),
                 "canonical_text": c.canonical_text,
-                # Whether this clause is all the law sets there (ADR-0047).
-                "incomplete": incomplete_json(c.incomplete),
             }
             for c in _verified_clauses(answer)
         ],
@@ -221,6 +217,21 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
         "incomplete": incomplete_clauses_json(
             (i.clause_id, i.incomplete) for i in answer.incomplete
         ),
+    }
+
+
+def citation_json(clause_id: str, version_id: str, incomplete: Incomplete) -> dict[str, object]:
+    """A citation as a member is shown it. One builder for the answer event
+    (which adds the clause's text) and for a chat read back (#232), so the two
+    can't drift apart: a citation is the same object in both."""
+    return {
+        "clause_id": clause_id,
+        "cite": cite(clause_id),
+        "version_id": version_id,
+        # Whether this clause is all the law sets there (ADR-0047). On a chat
+        # read back, as recorded with the turn, not the clause's state in
+        # today's corpus (#162, #228).
+        "incomplete": incomplete_json(incomplete),
     }
 
 

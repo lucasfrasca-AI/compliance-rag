@@ -28,7 +28,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import GenerationResidencyError, TenantTextGate
-from compliance_rag.adapters.interfaces import LawScope, Profile
+from compliance_rag.adapters.interfaces import LawScope, LedgerStore, Profile
 from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
 from compliance_rag.api.main import GeneratorAtStartup
@@ -76,7 +76,7 @@ async def _ledger() -> FakeLedgerStore:
 
 async def _client(
     generator: FakeGenerator,
-    ledger: FakeLedgerStore,
+    ledger: LedgerStore,
     clauses: FakeClauseStore,
     store: FakeRetrievalStore | None = None,
     settings: Settings | None = None,
