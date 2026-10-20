@@ -21,7 +21,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, LiteralString, cast
+from typing import Any, Literal, LiteralString, cast
 from urllib.parse import urlparse
 
 import psycopg
@@ -112,8 +112,9 @@ def _blocked_row(b: BlockedClause) -> str:
 
 def _stored_clause_id(raw: object) -> tuple[str, str] | None:
     """A stored clause id and the version it is of, or None when it isn't a
-    stable id. `isprintable` as well as the grammar: the id reaches a log line,
-    and a tenant-prefixed id's tenant part (`[^/:]+`) admits a line break."""
+    stable id. `isprintable` as well as the grammar: a tenant-prefixed id's
+    tenant part (`[^/:]+`) admits a line break, and a citation's id is kept and
+    reaches a span attribute and the response."""
     if not isinstance(raw, str) or not raw.isprintable():
         return None
     try:
@@ -160,7 +161,7 @@ def _flag_unreadable(
     chat_id: str,
     turn_index: int,
     entries: tuple[Citation, ...] | tuple[BlockedClause, ...],
-    kind: str,
+    kind: Literal["citation", "blocked"],
 ) -> None:
     """Says on the request's span, and in the log, that a stored element of a
     turn's `kind` (`citation` or `blocked`) was unreadable: where it is (ids and
@@ -181,11 +182,12 @@ def _flag_unreadable(
             attributes[f"chat.{kind}_clause_id"] = c.clause_id
         span.add_event(f"chat.{kind}_unreadable", attributes)
         log.warning(
-            "a stored chat %s is unreadable: tenant=%s chat=%s turn=%d position=%d reason=%s",
+            "a stored chat %s is unreadable: tenant=%s chat=%s turn=%d %s=%d reason=%s",
             kind,
             tenant_id,
             chat_id,
             turn_index,
+            kind,
             position,
             c.reason.value,
         )

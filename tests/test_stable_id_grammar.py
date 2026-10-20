@@ -78,7 +78,8 @@ def test_parse_stable_id_rejects_the_wrong_part_count(malformed: str) -> None:
         parse_stable_id(malformed)
 
 
-# `$` matches before a trailing newline; the grammar ends at the string (#234).
+# `$` matched before a final newline (only a lone "\n" was accepted before the fix; the
+# others pin that the grammar ends at the string) (#234).
 @pytest.mark.parametrize("suffix", ["\n", "\r\n", "\nx"], ids=["lf", "crlf", "lf-then-text"])
 def test_a_line_break_after_the_id_is_not_part_of_the_grammar(suffix: str) -> None:
     built = stable_id(INSTRUMENT_ID, VERSION_ID, "s6da/2")

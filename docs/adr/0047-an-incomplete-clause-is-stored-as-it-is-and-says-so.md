@@ -241,7 +241,8 @@ shows the clause was incomplete and who completed it, when and why.
   and `CLAUSE_PATH_RE` now end in `\Z`, not `$`, which matched before a trailing
   newline, so `parse_stable_id` rejects an id ending in one. The read path keeps
   `isprintable()`: a tenant-prefixed id's tenant part (`[^/:]+`) still admits a
-  line break, and the id reaches a log line.
+  line break, and a citation's kept id reaches a span attribute and the
+  response.
 - **Every clause the parse marks is reported**, in the test that pins the
   whole compilation; a selection that grows to s16A or Part IIIA ingests those
   clauses already marked.

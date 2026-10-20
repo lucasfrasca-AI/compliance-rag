@@ -539,8 +539,8 @@ class UnreadableReason(StrEnum):
     NOT_AN_OBJECT = "not_an_object"
     """The element isn't a JSON object."""
     NO_CLAUSE = "no_clause"
-    """It names no clause, or not as a stable clause id. A blocked entry that
-    isn't a readable stable id (a string or not) is this too (#234)."""
+    """It names no clause, or not as a stable clause id. A `blocked` element
+    that isn't a stable id is this too (#234)."""
     WRONG_VERSION = "wrong_version"
     """Its version isn't the version its clause id is of."""
     BAD_INCOMPLETE = "bad_incomplete"

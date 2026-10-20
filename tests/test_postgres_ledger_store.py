@@ -505,7 +505,7 @@ async def test_a_corrupt_stored_blocked_element_reads_back_unreadable_in_its_pla
     }
     (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert "reason=no_clause" in warning.getMessage()
-    assert "position=1" in warning.getMessage()
+    assert "blocked=1" in warning.getMessage()
     assert "SECRET" not in caplog.text + str(event.attributes)
     assert "INJECTED" not in caplog.text + str(event.attributes)
 
