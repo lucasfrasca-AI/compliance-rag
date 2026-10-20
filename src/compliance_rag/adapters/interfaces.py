@@ -48,6 +48,7 @@ from compliance_rag.corpus.models import (
     Chunk,
     ClauseRecord,
     DocumentClass,
+    Incomplete,
     Scope,
     clause_ancestors,
     parse_stable_id,
@@ -99,6 +100,9 @@ class Candidate:
     text: str
     score: float
     channel: Channel | None = None
+    incomplete: Incomplete = ()
+    """Its clause's incompleteness, from the stored chunk (ADR-0047): what
+    marks it incomplete when it enters a prompt."""
 
 
 UNSCOPED = "unscoped: "
@@ -973,16 +977,25 @@ class RetrievalAdmin(ABC):
         visible or not: what a revision compares with the parse (ADR-0042)."""
 
     @abstractmethod
+    async def stored_chunk_incomplete(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> dict[str, Incomplete]:
+        """The incompleteness every stored chunk of this version holds, by
+        `chunk_id`, visible or not (ADR-0047): `()` for a complete one,
+        including a chunk stored before the state existed."""
+
+    @abstractmethod
     async def revise_chunks(
         self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
     ) -> None:
         """A parse correction of library law (ADR-0042): each chunk, one the
-        authorised revision names with exactly the text it records, is
-        re-embedded and written over the stored chunk of the same id. Its text
-        and vectors change; nothing else does (valid time, withdrawal, scope,
-        owner and the rest are the stored point's). A chunk not already stored
-        is refused: a correction never adds one. Refused before anything is
-        written."""
+        authorised revision names with exactly the form it records, is written
+        over the stored chunk of the same id. A chunk whose text changes is
+        re-embedded: its text and vectors change. One whose text is the stored
+        text takes only its incompleteness, with no embedding (ADR-0047).
+        Nothing else changes (valid time, withdrawal, scope, owner and the rest
+        are the stored point's). A chunk not already stored is refused: a
+        correction never adds one. Refused before anything is written."""
 
 
 class LedgerStore(ABC):
@@ -1208,6 +1221,16 @@ class ClauseStore(ABC):
         """
 
     @abstractmethod
+    async def get_incomplete(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> dict[str, Incomplete]:
+        """Every clause path in this instrument version that is incomplete,
+        mapped to why (ADR-0047): kept on the manifest beside the hashes, so
+        an ingest's drift check and a revision's plan compare a clause's whole
+        form without reading every clause object. A path not listed is
+        complete."""
+
+    @abstractmethod
     async def put_manifest(
         self,
         instrument_id: str,
@@ -1251,13 +1274,14 @@ class ClauseStore(ABC):
         self, authorization: RevisionAuthorization, clauses: Sequence[ClauseRecord]
     ) -> None:
         """Apply a revision to the version it names (ADR-0042), the record
-        first: the manifest takes the new hash of every path the record
-        writes, and the record itself, in one write (an intent, as
-        `put_clauses` writes the manifest first). Then each of `clauses`, a
-        clause the record names with the text it records, is written over its
-        object unless the object already holds that text. A path whose
-        manifest hash is neither the record's previous nor its new one, or a
-        removed path still listed, refuses it before anything is written.
+        first: the manifest takes the new form (hash and incompleteness,
+        ADR-0047) of every path the record writes, and the record itself, in
+        one write (an intent, as `put_clauses` writes the manifest first).
+        Then each of `clauses`, a clause the record names with the form it
+        records, is written over its object unless the object already holds
+        it. A path whose manifest form is neither the record's previous nor
+        its new one, or a removed path still listed, refuses it before
+        anything is written.
         Idempotent: a record already on the manifest (by `revision_id`) isn't
         appended again, and a hash already new isn't rewritten — so a run that
         stopped part-way is finished by calling it again."""

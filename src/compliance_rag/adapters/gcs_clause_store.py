@@ -10,7 +10,10 @@ Object layout, one instrument version per prefix:
 - `{instrument_id}/{version_id}/source.html` — the exact bytes `parse_compilation`
   injected anchors into (`CONTEXT.md`: Position map).
 - `{instrument_id}/{version_id}/manifest.json` — `{"clause_paths": {path:
-  canonical_sha256}, "canonicalisation_version": int, "source_html_sha256": str}`.
+  canonical_sha256}, "canonicalisation_version": int, "source_html_sha256": str}`,
+  and `"incomplete": {path: [{"reason", "detail"}, ...]}` for each incomplete
+  clause (ADR-0047), written with its hash; absent (every manifest written
+  before then) means none is.
   `clause_paths` is upserted by `put_clause` (one read-modify-write per
   clause) and by `put_clauses` (once per version, *before* its clause objects
   — an intent record, so a crash part-way leaves every intended path listed
@@ -49,7 +52,10 @@ from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.corpus.models import (
     ClauseRecord,
+    Incomplete,
     canonical_sha256,
+    incomplete_json,
+    incomplete_of_json,
     parse_stable_id,
     sha256_hex,
 )
@@ -72,6 +78,19 @@ def _download_text_or_none(blob: _BlobLike) -> str | None:
         return blob.download_as_text()
     except NotFound:
         return None
+
+
+def _list_form(manifest: dict[str, Any], path: str, sha256: str, incomplete: Incomplete) -> None:
+    """One clause's form on the manifest: its hash, and its incompleteness if
+    it has one (ADR-0047)."""
+    manifest.setdefault("clause_paths", {})[path] = sha256
+    listed: dict[str, object] = manifest.setdefault("incomplete", {})
+    if incomplete:
+        listed[path] = incomplete_json(incomplete)
+    else:
+        listed.pop(path, None)
+    if not listed:
+        del manifest["incomplete"]
 
 
 class GCSClauseStore(ClauseStore):
@@ -162,8 +181,11 @@ class GCSClauseStore(ClauseStore):
             content_type="application/json",
         )
         manifest = await self._read_manifest_or_empty(clause.instrument_id, clause.version_id)
-        manifest.setdefault("clause_paths", {})[clause.clause_path] = canonical_sha256(
-            clause.canonical_text
+        _list_form(
+            manifest,
+            clause.clause_path,
+            canonical_sha256(clause.canonical_text),
+            clause.incomplete,
         )
         await self._write_manifest(clause.instrument_id, clause.version_id, manifest)
 
@@ -186,10 +208,14 @@ class GCSClauseStore(ClauseStore):
         versions = sorted({(c.instrument_id, c.version_id) for c in clauses})
         for instrument_id, version_id in versions:
             manifest = await self._read_manifest_or_empty(instrument_id, version_id)
-            paths = manifest.setdefault("clause_paths", {})
             for clause in clauses:
                 if (clause.instrument_id, clause.version_id) == (instrument_id, version_id):
-                    paths[clause.clause_path] = canonical_sha256(clause.canonical_text)
+                    _list_form(
+                        manifest,
+                        clause.clause_path,
+                        canonical_sha256(clause.canonical_text),
+                        clause.incomplete,
+                    )
             await self._write_manifest(instrument_id, version_id, manifest)
         for clause in clauses:
             blob = self._bucket.blob(
@@ -207,6 +233,13 @@ class GCSClauseStore(ClauseStore):
             return {}
         clause_paths: dict[str, str] = manifest.get("clause_paths", {})
         return clause_paths
+
+    async def get_incomplete(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> dict[str, Incomplete]:
+        manifest = await self._read_manifest(instrument_id, version_id)
+        listed: dict[str, object] = (manifest or {}).get("incomplete", {})
+        return {path: incomplete_of_json(raw) for path, raw in listed.items()}
 
     async def put_manifest(
         self,
@@ -248,37 +281,42 @@ class GCSClauseStore(ClauseStore):
     async def record_revision(
         self, authorization: RevisionAuthorization, clauses: Sequence[ClauseRecord]
     ) -> None:
-        """The manifest first — the record and the new hashes in one write, the
+        """The manifest first — the record and the new forms in one write, the
         revision's commit point — then the clause objects that don't already
-        hold their new text. The bucket is versioned, so each object written
-        over keeps its previous text as a noncurrent generation, and so does
-        the manifest (ADR-0042)."""
+        hold their new form. The bucket is versioned, so each object written
+        over keeps its previous form as a noncurrent generation, and so does
+        the manifest (ADR-0042, ADR-0047)."""
         record = authorization.record
         for clause in clauses:
-            authorization.check_text(clause.clause_id, clause.canonical_text)
+            authorization.check_form(clause.clause_id, clause.canonical_text, clause.incomplete)
         manifest = await self._read_manifest(record.instrument_id, record.version_id)
         if manifest is None or "source_html_sha256" not in manifest:
             raise RevisionDrift(
                 f"{record.instrument_id}:{record.version_id} has no completed ingest to revise"
             )
         paths: dict[str, str] = manifest.setdefault("clause_paths", {})
+        listed: dict[str, object] = manifest.get("incomplete", {})
         recorded: list[dict[str, object]] = manifest.setdefault("revisions", [])
         on_record = any(r.get("revision_id") == record.revision_id for r in recorded)
         changed = check_revision_write(
             record,
             paths,
+            held_incomplete={p: incomplete_of_json(raw) for p, raw in listed.items()},
             given=frozenset(c.clause_path for c in clauses),
             on_record=on_record,
         )
         if changed or not on_record:
             for path in changed:
-                paths[path] = record.written[path]
+                _list_form(manifest, path, record.written[path], record.written_incomplete[path])
             if not on_record:
                 recorded.append(record.to_json())
             await self._write_manifest(record.instrument_id, record.version_id, manifest)
         for clause in clauses:
             stored = await self.get_clause(clause.clause_id, tenant_id=clause.tenant_id)
-            if stored is not None and stored.canonical_text == clause.canonical_text:
+            if stored is not None and (stored.canonical_text, stored.incomplete) == (
+                clause.canonical_text,
+                clause.incomplete,
+            ):
                 continue  # already written: no noncurrent generation for nothing
             blob = self._bucket.blob(
                 self._clauses_key(clause.instrument_id, clause.version_id, clause.clause_path)

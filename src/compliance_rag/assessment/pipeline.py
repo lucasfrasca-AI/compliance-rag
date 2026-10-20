@@ -15,6 +15,11 @@ each: whatever the ranking returned, every one Track A names for a clause in
 the context is delivered with it, fetched by id if need be, and marked as
 what it is. An exception says when the obligation doesn't apply; a qualifier
 says how it is satisfied. The marker and the system prompt keep them apart.
+
+An incomplete clause (ADR-0047) is marked so in its fence, and an answer that
+cites one carries it (`Answer.incomplete`): the verifier still checks the
+quote against the stored text, and the flag says that text isn't all the
+clause holds.
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ from compliance_rag.assessment.prompt import (
     repair_prompt,
     user_prompt,
 )
-from compliance_rag.corpus.models import Scope
+from compliance_rag.corpus.models import Incomplete, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.telemetry import current_trace_id, span
 from compliance_rag.verifier.citations import CheckedCitation, Verifier
@@ -84,6 +89,15 @@ class OwedClauseUndelivered(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class IncompleteCitation:
+    """A cited clause that is incomplete, and why (ADR-0047): what an answer
+    citing it carries, so a reader can't take the clause for all of the law."""
+
+    clause_id: str
+    incomplete: Incomplete
+
+
+@dataclass(frozen=True, slots=True)
 class Answer:
     retrieval: RetrievalTrace
     generation: Generation
@@ -110,6 +124,21 @@ class Answer:
     naming the clauses it qualifies, delivered the same way (#182,
     ADR-0044). Kept apart from `exceptions`, so a client can tell "when it
     doesn't apply" from "how it is satisfied"."""
+
+    @property
+    def incomplete(self) -> tuple[IncompleteCitation, ...]:
+        """Each verified citation of an incomplete clause, with why (ADR-0047),
+        read from the clause the verifier checked the quote against — the
+        stored corpus, not retrieval's copy. The quote still matched; this
+        says the clause it matched is not all of what the law sets there."""
+        found: dict[str, IncompleteCitation] = {}
+        for check in self.citations:
+            clause = check.clause
+            if clause is not None and clause.incomplete:
+                found.setdefault(
+                    clause.clause_id, IncompleteCitation(clause.clause_id, clause.incomplete)
+                )
+        return tuple(found.values())
 
     @property
     def verified(self) -> bool:
@@ -221,7 +250,11 @@ class AssessmentPipeline:
 
             # The ranked clauses, each whole: with its chapeaux and its
             # paragraphs, never a fragment of the law (ADR-0045).
-            retrieved = [SourceClause(c.clause_id, c.text) for c in trace.delivered()]
+            # Each marked incomplete where it is (ADR-0047).
+            retrieved = [
+                SourceClause(c.clause_id, c.text, incomplete=c.incomplete)
+                for c in trace.delivered()
+            ]
             retrieved, fetched = await self._with_owed(
                 retrieved, tenant_id, as_of, law=law, policy_corpus=sent
             )
@@ -300,6 +333,13 @@ class AssessmentPipeline:
                 "verifier.outcomes", [f"{c.citation.clause_id}:{c.outcome.value}" for c in final]
             )
             current.set_attribute("verifier.repairs", len(repairs))
+            current.set_attribute(
+                "answer.incomplete",
+                [
+                    f"{c.clause_id}: {'; '.join(i.reason.value for i in c.incomplete)}"
+                    for c in result.incomplete
+                ],
+            )
             current.set_attribute("generation.cost_usd", result.cost_usd)
             return result
 
@@ -340,7 +380,9 @@ class AssessmentPipeline:
                     f"retrievable on {as_of}, so the answer is refused rather than state the "
                     "rule without it (ADR-0037, ADR-0044)"
                 )
-            delivered += [SourceClause(e, found[e].text) for e in missing]
+            delivered += [
+                SourceClause(e, found[e].text, incomplete=found[e].incomplete) for e in missing
+            ]
             fetched += missing
         marked = [
             replace(c, excepts=owed[c.clause_id].excepts, qualifies=owed[c.clause_id].qualifies)

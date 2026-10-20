@@ -13,8 +13,10 @@ exact acknowledgement an `--apply` needs:
 `--apply --mode correct` applies a parse correction in place: the bucket's
 clause objects and manifest hashes (with the revision's record on the
 manifest), the graph's Clause nodes (with a trail entry on each) under a
-recorded corpus load, and the changed chunks in Qdrant, re-embedded. Only when
-the acknowledgement names exactly the changed clauses:
+recorded corpus load, and the changed chunks in Qdrant, re-embedded. A clause
+the parse marks incomplete, or no longer does (ADR-0047), is a change too: its
+state is set in each store, with no re-embedding when its text is the same.
+Only when the acknowledgement names exactly the changed clauses:
 
     uv run python -m scripts.revise_compilation --bucket compliance-rag-508904-corpus \\
         --html path/to/document_1.html --apply --mode correct \\
@@ -59,6 +61,7 @@ from compliance_rag.corpus.revision import (
     RevisionDrift,
     RevisionPlan,
     RevisionRefused,
+    described,
     opening_words,
 )
 from compliance_rag.corpus.selection_manifest import parse_selection_manifest
@@ -115,6 +118,16 @@ def render_plan(plan: RevisionPlan, *, show_text: bool = False) -> str:
         lines.append("")
         for row in rows:
             lines.append(f"{row[0]:<{widths[0]}} | {row[1]:<{widths[1]}} | {row[2]}")
+    restated = [c for c in plan.changed if c.incompleteness_changed]
+    if restated:
+        lines.append("")
+        lines.append("incompleteness (ADR-0047), stored -> parsed:")
+        for change in restated:
+            text = "text changes too" if change.text_changed else "text unchanged"
+            lines.append(
+                f"  {change.new_clause_id}: {described(change.old_incomplete)} -> "
+                f"{described(change.new_incomplete)} ({text})"
+            )
     for clause in plan.added:
         lines.append(f"added   {clause.clause_id}: {clause.canonical_text[:80]}")
     for removed in plan.removed:
@@ -287,7 +300,8 @@ async def _report_or_apply(
         f"{record.by}: {len(record.clauses)} clause(s) on the bucket manifest; graph: "
         f"{report.graph_nodes_corrected} node(s) corrected"
         + (", corpus load recorded" if report.graph_loaded else ", not loaded (no version)")
-        + f"; Qdrant: {report.chunks_revised} chunk(s) re-embedded"
+        + f"; Qdrant: {report.chunks_revised} chunk(s) revised (re-embedded only where the "
+        "text changed)"
     )
     print(render_status(await revision.status(planned)))
 

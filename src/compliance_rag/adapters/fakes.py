@@ -56,6 +56,7 @@ from compliance_rag.corpus.models import (
     Chunk,
     ClauseRecord,
     DocumentClass,
+    Incomplete,
     Scope,
     canonical_sha256,
     canonicalise,
@@ -191,11 +192,17 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         key = (tenant_id, instrument_id, version_id)
         return {c.chunk_id: c.text for c in self._chunks.values() if _version_key(c) == key}
 
+    async def stored_chunk_incomplete(
+        self, *, instrument_id: str, tenant_id: str, version_id: str
+    ) -> dict[str, Incomplete]:
+        key = (tenant_id, instrument_id, version_id)
+        return {c.chunk_id: c.incomplete for c in self._chunks.values() if _version_key(c) == key}
+
     async def revise_chunks(
         self, authorization: RevisionAuthorization, chunks: tuple[Chunk, ...]
     ) -> None:
         for chunk in chunks:
-            authorization.check_text(chunk.clause_id, chunk.text)
+            authorization.check_form(chunk.clause_id, chunk.text, chunk.incomplete)
             stored = self._chunks.get(chunk.chunk_id)
             if stored is None or (stored.clause_id, stored.tenant_id) != (
                 chunk.clause_id,
@@ -206,10 +213,11 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                     "rewords a stored chunk, never adds one"
                 )
         for chunk in chunks:
-            # The text changes and nothing else, as on Qdrant: the stored
-            # chunk keeps its valid time, scope, owner and withdrawal.
+            # The text and the incompleteness change and nothing else, as on
+            # Qdrant: the stored chunk keeps its valid time, scope, owner and
+            # withdrawal.
             self._chunks[chunk.chunk_id] = self._chunks[chunk.chunk_id].model_copy(
-                update={"text": chunk.text}
+                update={"text": chunk.text, "incomplete": chunk.incomplete}
             )
 
     @property
@@ -288,6 +296,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                     text=c.text,
                     score=self._score(channel, query, c.text),
                     channel=channel,
+                    incomplete=c.incomplete,
                 )
                 for c in pool
             )
@@ -392,6 +401,7 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
                         text=c.text,
                         score=1.0,
                         channel=Channel.KEYWORD,
+                        incomplete=c.incomplete,
                     )
                 )
                 break
@@ -674,19 +684,23 @@ class FakeClauseStore(ClauseStore):
         the clauses, so the record and the clauses land together."""
         record = authorization.record
         for clause in clauses:
-            authorization.check_text(clause.clause_id, clause.canonical_text)
+            authorization.check_form(clause.clause_id, clause.canonical_text, clause.incomplete)
         key = (authorization.tenant_id, record.instrument_id, record.version_id)
         if key not in self._manifest_metadata:
             raise RevisionDrift(
                 f"{record.instrument_id}:{record.version_id} has no completed ingest to revise"
             )
-        held = await self.get_manifest(
-            record.instrument_id, record.version_id, tenant_id=authorization.tenant_id
-        )
+        version = (record.instrument_id, record.version_id)
+        held = await self.get_manifest(*version, tenant_id=authorization.tenant_id)
+        held_incomplete = await self.get_incomplete(*version, tenant_id=authorization.tenant_id)
         recorded = self._revisions.setdefault(key, [])
         on_record = any(r.revision_id == record.revision_id for r in recorded)
         check_revision_write(
-            record, held, given=frozenset(c.clause_path for c in clauses), on_record=on_record
+            record,
+            held,
+            held_incomplete=held_incomplete,
+            given=frozenset(c.clause_path for c in clauses),
+            on_record=on_record,
         )
         if not on_record:
             recorded.append(record)
@@ -717,6 +731,18 @@ class FakeClauseStore(ClauseStore):
             if stored_tenant_id == tenant_id
             and clause.instrument_id == instrument_id
             and clause.version_id == version_id
+        }
+
+    async def get_incomplete(
+        self, instrument_id: str, version_id: str, *, tenant_id: str
+    ) -> dict[str, Incomplete]:
+        return {
+            clause.clause_path: clause.incomplete
+            for (stored_tenant_id, _), clause in self._clauses.items()
+            if stored_tenant_id == tenant_id
+            and clause.instrument_id == instrument_id
+            and clause.version_id == version_id
+            and clause.incomplete
         }
 
     async def put_manifest(

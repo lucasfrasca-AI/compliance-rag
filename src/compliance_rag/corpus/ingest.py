@@ -131,6 +131,24 @@ async def ingest_compilation(
 
     source_html_sha256 = sha256_hex(parsed.annotated_html)
     if completed:
+        # A clause newly marked incomplete, or no longer so, changes the
+        # stored corpus as an edit does (ADR-0047): a corpus revision.
+        held_incomplete = await store.get_incomplete(
+            instrument_id, version_id, tenant_id=tenant_id
+        )
+        restated = sorted(
+            c.clause_path
+            for c in in_scope
+            if c.clause_path in old_manifest
+            and held_incomplete.get(c.clause_path, ()) != c.incomplete
+        )
+        if restated:
+            raise IngestDriftError(
+                f"{instrument_id}:{version_id} re-ingest does not match the stored manifest — "
+                f"the parse marks {restated!r} incomplete differently from what is stored; "
+                "a changed clause state is a corpus revision (scripts/revise_compilation.py, "
+                "ADR-0042, ADR-0047), never a re-ingest"
+            )
         diff = _diff_manifests(old_manifest, new_manifest)
         added = frozenset(new_manifest) - frozenset(old_manifest)
         unchanged = (

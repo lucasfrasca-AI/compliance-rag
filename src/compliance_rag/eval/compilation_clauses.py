@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from compliance_rag.corpus.models import ClauseRecord
+from compliance_rag.corpus.models import ClauseRecord, incomplete_json, incomplete_of_json
 from compliance_rag.corpus.parser import parse_compilation
 from compliance_rag.corpus.selection_manifest import SelectionManifest, parse_selection_manifest
 
@@ -85,18 +85,24 @@ def render_compilation_clauses(
         "source_sha256": source_sha256,
         "selection": list(selection),
         "clause_count": len(clauses),
-        "clauses": [
-            {
-                "clause_path": c.clause_path,
-                "heading": c.heading,
-                "text": c.text,
-                "canonical_text": c.canonical_text,
-                "canonicalisation_version": c.canonicalisation_version,
-            }
-            for c in clauses
-        ],
+        "clauses": [_entry(c) for c in clauses],
     }
     return json.dumps(document, indent=1, ensure_ascii=False) + "\n"
+
+
+def _entry(clause: ClauseRecord) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "clause_path": clause.clause_path,
+        "heading": clause.heading,
+        "text": clause.text,
+        "canonical_text": clause.canonical_text,
+        "canonicalisation_version": clause.canonicalisation_version,
+    }
+    if clause.incomplete:
+        # Only when there is one (ADR-0047), so the file shows the clauses
+        # that are incomplete and nothing else changes.
+        entry["incomplete"] = incomplete_json(clause.incomplete)
+    return entry
 
 
 def load_compilation_clauses(path: Path = COMPILATION_CLAUSES_PATH) -> CompilationClauses:
@@ -115,6 +121,7 @@ def load_compilation_clauses(path: Path = COMPILATION_CLAUSES_PATH) -> Compilati
             text=str(entry["text"]),
             canonical_text=str(entry["canonical_text"]),
             canonicalisation_version=int(entry["canonicalisation_version"]),
+            incomplete=incomplete_of_json(entry.get("incomplete")),
         )
         for entry in entries
     )

@@ -24,6 +24,10 @@ The stream carries stages and a verified result, never unverified text
 - `answer`;
 - or `error`.
 
+An answer that cites an incomplete clause (ADR-0047) says so: each citation
+carries its clause's `incomplete` reasons, and `incomplete` lists every such
+clause with its display form, so a client shows it beside the answer.
+
 A bad citation blocks the answer rather than shipping it (ADR-0003). So an
 answer's text and citations are sent only when every citation verified. A
 blocked answer sends its blocked citations (clause id and outcome, never the
@@ -96,7 +100,7 @@ from compliance_rag.assessment.coverage_report import cite
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
-from compliance_rag.corpus.models import ClauseRecord
+from compliance_rag.corpus.models import ClauseRecord, incomplete_json
 from compliance_rag.retrieval.pipeline import RetrievalTrace
 from compliance_rag.telemetry import current_trace_id
 
@@ -187,7 +191,13 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
         "cost_usd": answer.cost_usd,
     }
     if shown.outcome is not TurnOutcome.VERIFIED:
-        return {**common, "text": None, "citations": [], "withheld": WITHHELD[shown.outcome]}
+        return {
+            **common,
+            "text": None,
+            "citations": [],
+            "incomplete": [],
+            "withheld": WITHHELD[shown.outcome],
+        }
     return {
         **common,
         "text": shown.text,
@@ -197,8 +207,20 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
                 "cite": cite(c.clause_id),
                 "version_id": c.version_id,
                 "canonical_text": c.canonical_text,
+                # Whether this clause is all the law sets there (ADR-0047).
+                "incomplete": incomplete_json(c.incomplete),
             }
             for c in _verified_clauses(answer)
+        ],
+        # Every cited clause that isn't, once each, with why: the field a
+        # reader checks first, so the flag can't be missed (ADR-0047).
+        "incomplete": [
+            {
+                "clause_id": i.clause_id,
+                "cite": cite(i.clause_id),
+                "reasons": incomplete_json(i.incomplete),
+            }
+            for i in answer.incomplete
         ],
     }
 

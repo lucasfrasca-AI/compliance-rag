@@ -67,6 +67,7 @@ from compliance_rag.adapters.graph_schema import (
     NodeWrite,
     Scalar,
     StoredNode,
+    incomplete_properties,
 )
 from compliance_rag.adapters.interfaces import GraphAdmin, SourceVersion
 from compliance_rag.corpus.models import (
@@ -256,6 +257,7 @@ async def write_instrument_version(
                         "clause_path": clause.clause_path,
                         "canonical_sha256": canonical_sha256(clause.canonical_text),
                         "canonicalisation_version": clause.canonicalisation_version,
+                        **incomplete_properties(clause.incomplete),
                     },
                 )
                 for clause in clauses

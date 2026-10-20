@@ -49,7 +49,7 @@ from functools import partial
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
-from compliance_rag.adapters.graph_schema import NodeRef
+from compliance_rag.adapters.graph_schema import NodeRef, incomplete_of_properties
 from compliance_rag.adapters.interfaces import (
     ClauseStore,
     GraphAdmin,
@@ -67,6 +67,7 @@ from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     ClauseRecord,
     DocumentClass,
+    Incomplete,
     Scope,
     canonical_sha256,
     stable_id,
@@ -83,6 +84,7 @@ from compliance_rag.corpus.revision import (
     check_acknowledgement,
     check_amendment,
     check_correction,
+    described,
     plan_revision,
     record_of,
 )
@@ -262,6 +264,9 @@ class CorpusRevision:
                 stored_manifest=manifest,
                 stored_texts=texts,
                 stored_source_html_sha256=metadata.source_html_sha256,
+                stored_incomplete=await self._clauses.get_incomplete(
+                    instrument_id, stored_version, tenant_id=PUBLIC_TENANT_ID
+                ),
             )
             span.set_attribute("revision.mode", plan.mode.value)
             span.set_attribute("revision.changed", [c.new_clause_id for c in plan.changed])
@@ -286,27 +291,25 @@ class CorpusRevision:
             )
             in_graph = bool(await self._graph.stored([version_ref(instrument_id, version_id)]))
             loaded = (await self._graph.loaded_sources()).corpus
-            texts = await self._retrieval.stored_chunk_texts(
-                instrument_id=instrument_id, tenant_id=PUBLIC_TENANT_ID, version_id=version_id
-            )
+            chunk_forms = await self._chunk_forms(instrument_id, version_id)
             record = records[-1] if records else None
             objects: list[str] = []
             nodes: list[str] = []
             chunks: list[str] = []
             if record is not None and record.mode is RevisionMode.CORRECT:
-                ids = {record.clause_id(c.clause_path): c.sha256 for c in record.corrected}
+                ids = {
+                    record.clause_id(c.clause_path): (c.sha256, c.incomplete)
+                    for c in record.corrected
+                }
                 stored_nodes = await self._graph.stored([_clause_ref(i) for i in ids])
-                for clause_id, sha in sorted(ids.items()):
+                for clause_id, form in sorted(ids.items()):
                     stored = await self._clauses.get_clause(clause_id, tenant_id=PUBLIC_TENANT_ID)
-                    if stored is None or canonical_sha256(stored.canonical_text) != sha:
+                    if stored is None or _form(stored) != form:
                         objects.append(clause_id)
                     node = stored_nodes.get(_clause_ref(clause_id))
-                    if in_graph and (
-                        node is None or node.properties.get("canonical_sha256") != sha
-                    ):
+                    if in_graph and (node is None or _node_form(node.properties) != form):
                         nodes.append(clause_id)
-                    text = texts.get(clause_id)
-                    if texts and (text is None or canonical_sha256(text) != sha):
+                    if chunk_forms and chunk_forms.get(clause_id) != form:
                         chunks.append(clause_id)
             status = RevisionStatus(
                 record=record,
@@ -314,7 +317,7 @@ class CorpusRevision:
                 graph_behind=tuple(nodes),
                 chunks_behind=tuple(chunks),
                 graph_holds_version=in_graph,
-                retrieval_holds_version=bool(texts),
+                retrieval_holds_version=bool(chunk_forms),
                 corpus_load_open=loaded.loading,
                 corpus_load_blocked=loaded.blocked_by_abandoned,
             )
@@ -323,6 +326,17 @@ class CorpusRevision:
             span.set_attribute("revision.graph_behind", list(nodes))
             span.set_attribute("revision.chunks_behind", list(chunks))
             return status
+
+    async def _chunk_forms(self, instrument_id: str, version_id: str) -> dict[str, _Form]:
+        """Each stored chunk of the version's form: its text's hash and its
+        incompleteness (ADR-0047)."""
+        texts = await self._retrieval.stored_chunk_texts(
+            instrument_id=instrument_id, tenant_id=PUBLIC_TENANT_ID, version_id=version_id
+        )
+        held = await self._retrieval.stored_chunk_incomplete(
+            instrument_id=instrument_id, tenant_id=PUBLIC_TENANT_ID, version_id=version_id
+        )
+        return {i: (canonical_sha256(text), held.get(i, ())) for i, text in texts.items()}
 
     # ---- correct: same source, same version, in place ------------------------
 
@@ -406,9 +420,9 @@ class CorpusRevision:
             fresh = {c.clause_path: c for c in planned.clauses}
             for path, sha in record.written.items():
                 clause = fresh.get(path)
-                if clause is None or canonical_sha256(clause.canonical_text) != sha:
+                if clause is None or _form(clause) != (sha, record.written_incomplete[path]):
                     raise RevisionRefused(
-                        f"this checkout's parse doesn't give {record.clause_id(path)} the text "
+                        f"this checkout's parse doesn't give {record.clause_id(path)} the form "
                         f"revision {record.revision_id} records: finish it from the code it was "
                         f"made with (corpus commit {record.corpus_sha})"
                     )
@@ -442,24 +456,21 @@ class CorpusRevision:
         stored = await self._graph.stored([_clause_ref(c.clause_id) for c in planned.clauses])
         for clause in planned.clauses:
             node = stored.get(_clause_ref(clause.clause_id))
-            have = None if node is None else node.properties.get("canonical_sha256")
-            _check_derived("graph", clause, None if have is None else str(have), record)
+            _check_derived(
+                "graph", clause, None if node is None else _node_form(node.properties), record
+            )
 
     async def _check_retrieval(self, planned: PlannedRevision, record: RevisionRecord) -> None:
         plan = planned.plan
-        texts = await self._retrieval.stored_chunk_texts(
-            instrument_id=plan.instrument_id, tenant_id=PUBLIC_TENANT_ID, version_id=plan.version_id
-        )
-        foreign = set(texts) - {c.clause_id for c in planned.clauses}
+        forms = await self._chunk_forms(plan.instrument_id, plan.version_id)
+        foreign = set(forms) - {c.clause_id for c in planned.clauses}
         if foreign:
             raise RevisionDrift(
                 f"Qdrant holds {len(foreign)} chunk(s) of {plan.instrument_id}:{plan.version_id} "
                 f"the parse doesn't have (e.g. {min(foreign)}): a different clause set"
             )
         for clause in planned.clauses:
-            text = texts.get(clause.clause_id)
-            have = None if text is None else canonical_sha256(text)
-            _check_derived("Qdrant", clause, have, record)
+            _check_derived("Qdrant", clause, forms.get(clause.clause_id), record)
 
     async def _apply(
         self,
@@ -506,12 +517,8 @@ class CorpusRevision:
             chunks_revised = 0
             if status.retrieval_holds_version:
                 plan = planned.plan
-                texts = await self._retrieval.stored_chunk_texts(
-                    instrument_id=plan.instrument_id,
-                    tenant_id=PUBLIC_TENANT_ID,
-                    version_id=plan.version_id,
-                )
-                behind = [c for c in revised if texts.get(c.clause_id) != c.canonical_text]
+                forms = await self._chunk_forms(plan.instrument_id, plan.version_id)
+                behind = [c for c in revised if forms.get(c.clause_id) != _form(c)]
                 chunks = chunk_clauses(behind, count_tokens=self._count_tokens)
                 await self._retrieval.revise_chunks(authorization, chunks)
                 chunks_revised = len(chunks)
@@ -634,15 +641,31 @@ class CorpusRevision:
             return RevisionReport(record, 0, True, load.written)
 
 
+_Form = tuple[str | None, Incomplete]
+"""What a store holds of one clause: its canonical hash and its
+incompleteness (ADR-0047)."""
+
+
+def _form(clause: ClauseRecord) -> _Form:
+    return canonical_sha256(clause.canonical_text), clause.incomplete
+
+
+def _node_form(properties: Mapping[str, object]) -> _Form:
+    sha = properties.get("canonical_sha256")
+    return None if sha is None else str(sha), incomplete_of_properties(properties)
+
+
 def _check_derived(
-    store: str, clause: ClauseRecord, have: str | None, record: RevisionRecord
+    store: str, clause: ClauseRecord, have: _Form | None, record: RevisionRecord
 ) -> None:
-    """A derived store's hash for one clause is the parse's, or, for a clause
-    the revision writes, its previous hash (not yet revised)."""
-    new = canonical_sha256(clause.canonical_text)
+    """A derived store's form for one clause is the parse's, or, for a clause
+    the revision writes, its previous form (not yet revised)."""
+    new = _form(clause)
     if have == new:
         return
-    revised: Mapping[str, str | None] = {c.clause_path: c.previous_sha256 for c in record.corrected}
+    revised: Mapping[str, _Form] = {
+        c.clause_path: (c.previous_sha256, c.previous_incomplete) for c in record.corrected
+    }
     if clause.clause_path in revised and have == revised[clause.clause_path]:
         return
     if have is None:
@@ -650,7 +673,8 @@ def _check_derived(
             f"the {store} holds the version but not {clause.clause_id}: finish that load first"
         )
     raise RevisionDrift(
-        f"the {store} holds {clause.clause_id} at hash {have}, which is neither the parse's "
-        f"({new}) nor the stored text the revision replaces: it disagrees with the bucket, and "
-        "a person looks before anything is written"
+        f"the {store} holds {clause.clause_id} at hash {have[0]}, {described(have[1])}, which "
+        f"is neither the parse's ({new[0]}, {described(new[1])}) nor the stored form the "
+        "revision replaces: it disagrees with the bucket, and a person looks before anything "
+        "is written"
     )

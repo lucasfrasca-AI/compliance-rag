@@ -40,6 +40,15 @@ implements are all from issue #9's ePub format spike
   keeps its connector with its closing words, which complete the connector's
   sentence (s26WF(2): "this Part does not require: (e) ...; to take steps to
   notify ..."): it is stored as it always was, until the human decides.
+- Content the parse can't render as text — an `<img>` (s6DA(2)'s formula) or a
+  `<table>` (s16A(1)'s permitted general situations) — or a penalty line it
+  takes into no clause, marks the provision it falls in **incomplete**, with
+  the reason (issue #211, ADR-0047): the clause
+  that is open when it occurs, and every clause in that clause's provision. An
+  image's `alt` attribute is a transcription by whoever published the HTML,
+  not the legislative text, so it never enters a clause: the parser reads text
+  nodes only. An element no provision is open for (the coat of arms, the
+  endnotes' tables, anything after a heading or a note) marks nothing.
 """
 
 from __future__ import annotations
@@ -50,6 +59,9 @@ from dataclasses import dataclass, field
 
 from compliance_rag.corpus.models import (
     ClauseRecord,
+    Incomplete,
+    Incompleteness,
+    IncompleteReason,
     Scope,
     assert_unique_clause_ids,
     assert_unique_definition_slugs,
@@ -102,6 +114,7 @@ class _Block:
     inner_text: str  # tags stripped, entities unescaped, whitespace collapsed
     inner_html: str  # raw, tags intact — only Definition's term-span split needs this
     open_tag_start: int
+    end: int = 0
 
 
 def _scan_blocks(source: str) -> list[_Block]:
@@ -119,9 +132,84 @@ def _scan_blocks(source: str) -> list[_Block]:
                 inner_text=_normalise_ws(_strip_tags(inner)),
                 inner_html=inner,
                 open_tag_start=match.start(),
+                end=match.end(),
             )
         )
     return blocks
+
+
+# --------------------------------------------------------------------------
+# Content that isn't text (issue #211, ADR-0047): where each image and table
+# is, and what it makes the provision it falls in.
+# --------------------------------------------------------------------------
+
+_IMG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_TABLE_RE = re.compile(r"<table\b.*?</table\s*>", re.DOTALL | re.IGNORECASE)
+
+FORMULA_NOT_TEXT = Incompleteness(
+    reason=IncompleteReason.IMAGE_NOT_TEXT, detail="the formula is not available in text form"
+)
+IMAGE_NOT_TEXT = Incompleteness(
+    reason=IncompleteReason.IMAGE_NOT_TEXT, detail="an image is not available in text form"
+)
+TABLE_NOT_TEXT = Incompleteness(
+    reason=IncompleteReason.TABLE_NOT_TEXT, detail="the table is not available in text form"
+)
+PENALTY_NOT_PARSED = Incompleteness(
+    reason=IncompleteReason.PENALTY_NOT_PARSED, detail="the penalty is not in the clause text"
+)
+
+_CLAUSE_CLASSES = frozenset(
+    {"subsection", "subsection2", "Definition", "paragraph", "paragraphsub", "paragraphsub-sub"}
+)
+"""The blocks whose text the parse takes into a clause: after one, the
+provision open is the parser's own (its open definition, else its open
+subsection)."""
+_TRANSPARENT_CLASSES = frozenset({"Formula", "Penalty"})
+"""Blocks that hold content of the provision before them, and nothing else:
+a formula is set in a block of its own, between the words that introduce it
+and whatever follows, and a penalty line under the provision it penalises.
+An empty block (a table's spacer) is transparent too. Any other block — a
+heading, a note, an example, an outline — ends the provision for what follows
+it: no note or example in C2026C00227 is operative."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Element:
+    offset: int
+    incompleteness: Incompleteness
+
+
+def _non_text_elements(source: str, blocks: list[_Block]) -> tuple[list[_Element], frozenset[int]]:
+    """Every image, table and penalty line in the source, in document order,
+    as what each makes a clause; and the indexes of the blocks inside a table
+    (its cells, which belong to the table, not to a provision of their own).
+    An image or a penalty inside a table is the table's: it marks nothing
+    more. A penalty line is text, but text the parse doesn't take into any
+    clause, so the provision it belongs to is stored without it (#216)."""
+    tables = [(m.start(), m.end()) for m in _TABLE_RE.finditer(source)]
+    in_table = frozenset(
+        i for i, b in enumerate(blocks) if any(s <= b.open_tag_start < e for s, e in tables)
+    )
+    elements = [_Element(start, TABLE_NOT_TEXT) for start, _ in tables]
+    elements += [
+        _Element(b.open_tag_start, PENALTY_NOT_PARSED)
+        for i, b in enumerate(blocks)
+        if b.class_name == "Penalty" and i not in in_table
+    ]
+    for match in _IMG_RE.finditer(source):
+        offset = match.start()
+        if any(s <= offset < e for s, e in tables):
+            continue
+        holder = next((b for b in blocks if b.open_tag_start <= offset < b.end), None)
+        formula = holder is not None and holder.class_name == "Formula"
+        elements.append(_Element(offset, FORMULA_NOT_TEXT if formula else IMAGE_NOT_TEXT))
+    return sorted(elements, key=lambda e: e.offset), in_table
+
+
+def _with(incomplete: Incomplete, more: Incomplete) -> Incomplete:
+    """Both, each distinct reason once, in the order first met."""
+    return tuple(dict.fromkeys((*incomplete, *more)))
 
 
 def _is_bold(span_attrs: str) -> bool:
@@ -210,6 +298,8 @@ class _DefinitionNode:
     # text (`_definition_text`): "that carries on a credit reporting business."
     # closes the whole of *credit reporting body*, not just its last paragraph.
     unclaimed: list[str] = field(default_factory=list[str])
+    # Why this definition's provision is incomplete, if it is (ADR-0047).
+    incomplete: Incomplete = ()
 
 
 @dataclass
@@ -233,6 +323,8 @@ class _SubsectionNode:
     unclaimed: list[str] = field(default_factory=list[str])
     # The paragraphs a connector leads, in document order.
     led: list[_ParagraphNode] = field(default_factory=list[_ParagraphNode])
+    # Why this subsection's provision is incomplete, if it is (ADR-0047).
+    incomplete: Incomplete = ()
 
     def settle(self) -> None:
         """The subsection's list has ended (or a Definition opens): words no
@@ -299,7 +391,46 @@ def _section_prefix(title_text: str, sectno: str, current_schedule: str | None) 
     return f"sch{current_schedule}/{local}" if current_schedule is not None else local
 
 
-def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
+def _provision_after(
+    block: _Block,
+    owner: _DefinitionNode | _SubsectionNode | None,
+    provision: _DefinitionNode | _SubsectionNode | None,
+) -> _DefinitionNode | _SubsectionNode | None:
+    """The provision open after `block`, for a non-text element that follows
+    it (ADR-0047): the parser's own after a block it takes text from; the same
+    one after a transparent block; none after anything else."""
+    if block.class_name in _CLAUSE_CLASSES:
+        return owner
+    if block.class_name in _TRANSPARENT_CLASSES or not block.inner_text:
+        return provision
+    return None
+
+
+_END = 1 << 62
+"""An offset past the end of any source."""
+
+
+def _parse_tree(
+    blocks: list[_Block],
+    elements: list[_Element] | None = None,
+    in_table: frozenset[int] = frozenset(),
+) -> list[_SectionNode]:
+    """The section tree, and each image or table in `elements` placed on the
+    provision open where it occurs (ADR-0047). A block inside a table is the
+    table's: it neither opens nor ends a provision."""
+    pending = list(reversed(elements or []))
+    provision: _DefinitionNode | _SubsectionNode | None = None
+    last_index: int | None = None
+
+    def place(before: int, owner: _DefinitionNode | _SubsectionNode | None) -> None:
+        nonlocal provision
+        if last_index is not None and last_index not in in_table:
+            provision = _provision_after(blocks[last_index], owner, provision)
+        while pending and pending[-1].offset < before:
+            element = pending.pop()
+            if provision is not None:
+                provision.incomplete = _with(provision.incomplete, (element.incompleteness,))
+
     sections: list[_SectionNode] = []
     current_schedule: str | None = None
     current_section: _SectionNode | None = None
@@ -319,6 +450,10 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
         # children a paragraph joins: the open definition's, else the open
         # subsection's (issues #178, #186).
         owner = current_definition if current_definition is not None else current_subsection
+        # The images and tables before this block are the provision's that the
+        # previous block left open (ADR-0047).
+        place(block.open_tag_start, owner)
+        last_index = index
 
         if cls == "ActHead1":
             # CharChapNo carries the schedule number as its own span text,
@@ -426,6 +561,9 @@ def _parse_tree(blocks: list[_Block]) -> list[_SectionNode]:
         # any other class the spike catalogued as "not operative text" —
         # skipped: no clause, no contribution to any clause's text.
 
+    # Whatever follows the last block.
+    place(_END, current_definition if current_definition is not None else current_subsection)
+
     for section in sections:
         for subsection in section.subsections:
             subsection.settle()
@@ -453,7 +591,7 @@ class _EmitContext:
     clauses: list[ClauseRecord]
     anchors: dict[int, str]
 
-    def build(self, clause_path: str, text: str) -> ClauseRecord:
+    def build(self, clause_path: str, text: str, incomplete: Incomplete) -> ClauseRecord:
         return ClauseRecord.build(
             instrument_id=self.instrument_id,
             version_id=self.version_id,
@@ -461,15 +599,20 @@ class _EmitContext:
             text=text,
             scope=self.scope,
             tenant_id=self.tenant_id,
+            incomplete=incomplete,
         )
 
 
-def _emit_paragraph(node: _ParagraphNode, *, parent_path: str, ctx: _EmitContext) -> None:
+def _emit_paragraph(
+    node: _ParagraphNode, *, parent_path: str, ctx: _EmitContext, incomplete: Incomplete
+) -> None:
+    """A paragraph and its subparagraphs, each carrying its provision's
+    incompleteness (ADR-0047)."""
     path = f"{parent_path}/{node.token}"
-    ctx.clauses.append(ctx.build(path, _paragraph_text(node)))
+    ctx.clauses.append(ctx.build(path, _paragraph_text(node), incomplete))
     ctx.anchors[node.block_index] = path
     for child in node.children:
-        _emit_paragraph(child, parent_path=path, ctx=ctx)
+        _emit_paragraph(child, parent_path=path, ctx=ctx, incomplete=incomplete)
 
 
 def _emit_subsection(
@@ -497,21 +640,31 @@ def _emit_subsection(
                 rendered_parts.append(_definition_text(part))
         else:
             rendered_parts.append(part)
-    ctx.clauses.append(ctx.build(subsection_path, " ".join(p for p in rendered_parts if p)))
+    # A singleton Definition is its subsection's own text, so the two are one
+    # provision; several are each a provision of their own (ADR-0045).
+    incomplete = subsection.incomplete
+    if singleton:
+        for definition in definitions:
+            incomplete = _with(incomplete, definition.incomplete)
+    ctx.clauses.append(
+        ctx.build(subsection_path, " ".join(p for p in rendered_parts if p), incomplete)
+    )
     ctx.anchors[subsection.block_index] = subsection_path
 
     for definition in definitions:
         if singleton:
             definition_path = subsection_path
+            within = incomplete
         else:
             definition_path = f"{subsection_path}/{definition_slug(definition.term)}"
-            ctx.clauses.append(ctx.build(definition_path, _definition_text(definition)))
+            within = definition.incomplete
+            ctx.clauses.append(ctx.build(definition_path, _definition_text(definition), within))
             ctx.anchors[definition.block_index] = definition_path
         for child in definition.children:
-            _emit_paragraph(child, parent_path=definition_path, ctx=ctx)
+            _emit_paragraph(child, parent_path=definition_path, ctx=ctx, incomplete=within)
 
     for paragraph in bare_paragraphs:
-        _emit_paragraph(paragraph, parent_path=subsection_path, ctx=ctx)
+        _emit_paragraph(paragraph, parent_path=subsection_path, ctx=ctx, incomplete=incomplete)
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,7 +695,8 @@ def parse_compilation(
     function's.
     """
     blocks = _scan_blocks(source)
-    sections = _parse_tree(blocks)
+    elements, in_table = _non_text_elements(source, blocks)
+    sections = _parse_tree(blocks, elements, in_table)
 
     ctx = _EmitContext(
         instrument_id=instrument_id,

@@ -678,7 +678,7 @@ async def test_finishing_needs_a_parse_that_reproduces_the_recorded_text(stores:
         else c
         for c in planned.clauses
     )
-    with pytest.raises(RevisionRefused, match=r"doesn't give .*s6/1 the text"):
+    with pytest.raises(RevisionRefused, match=r"doesn't give .*s6/1 the form"):
         await revision.finish(
             replace(planned, clauses=other),
             corpus_version=FIXED_CODE,
