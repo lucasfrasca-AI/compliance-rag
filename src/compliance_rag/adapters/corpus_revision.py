@@ -550,6 +550,7 @@ class CorpusRevision:
         lifecycle: CorpusLifecycle,
         instrument_since: dt.date,
         effective: dt.date,
+        title: str,
     ) -> RevisionReport:
         """Publish the plan's new version and retire the stored one from
         `effective` (ADR-0021), through the existing paths: `ingest_compilation`
@@ -558,7 +559,8 @@ class CorpusRevision:
         recorded load, and `load_version_vectors` through `lifecycle`, which
         retires the old version's chunks and ends it in the ledger. Every
         step is idempotent, so re-running the same call finishes one that
-        stopped part-way; a record already on the new version is reused."""
+        stopped part-way; a record already on the new version is reused.
+        `title` is the new compilation's, recorded with it (ADR-0049)."""
         plan = planned.plan
         old = plan.stored_version_id
         with telemetry.span(
@@ -644,6 +646,7 @@ class CorpusRevision:
                 tenant_id=PUBLIC_TENANT_ID,
                 effective_from=effective,
                 document_class=DocumentClass.LIBRARY_LAW,
+                title=title,
                 supersedes=old,
             )
             return RevisionReport(record, 0, True, load.written)

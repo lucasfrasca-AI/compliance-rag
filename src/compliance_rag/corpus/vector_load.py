@@ -105,6 +105,7 @@ async def load_version_vectors(
     tenant_id: str,
     effective_from: dt.date,
     document_class: DocumentClass,
+    title: str,
     supersedes: str | None = None,
 ) -> VectorLoad:
     """Bring the store and the ledger up to the clause store's version (module
@@ -115,7 +116,8 @@ async def load_version_vectors(
 
     `supersedes` names the version this one retires from `effective_from`
     (an amendment, ADR-0021, ADR-0042): the lifecycle retires its chunks and
-    ends it in the ledger when it records this one."""
+    ends it in the ledger when it records this one. `title` is the
+    document's, recorded with the version (ADR-0049)."""
     chunks = chunk_clauses(clauses, count_tokens=count_tokens)
     with telemetry.span(
         "vector_load.load_version",
@@ -143,6 +145,7 @@ async def load_version_vectors(
                 effective_from=effective_from,
                 supersedes=supersedes,
                 document_class=document_class,
+                title=title,
             )
             span.set_attribute("load.written", len(chunks))
             return VectorLoad(len(chunks), 0, written=len(chunks), recorded_in_ledger=True)
@@ -173,6 +176,7 @@ async def load_version_vectors(
                 effective_from=effective_from,
                 supersedes=supersedes,
                 document_class=document_class,
+                title=title,
             )
             return VectorLoad(len(chunks), len(stored), written=written, recorded_in_ledger=True)
         valid_from, _ = recorded

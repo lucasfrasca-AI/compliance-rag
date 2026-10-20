@@ -59,6 +59,7 @@ async def test_law_withdrawn_policies_and_external_uploads_are_not_in_it() -> No
         valid_from=GOLDEN_VALID_FROM,
         supersedes=None,
         document_class=DocumentClass.EXTERNAL_UPLOAD,
+        title="The document's title",
     )
     prefix = await tenant_policies(ledger, clauses, tenant_id=POLICY_TENANT_ID, as_of=AS_OF)
     instruments = {c.clause_id.split(":")[0] for c in prefix}

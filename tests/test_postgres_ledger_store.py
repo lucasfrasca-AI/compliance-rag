@@ -255,6 +255,7 @@ async def test_postgres_satisfies_the_retrieval_store_contract(
         valid_from=dt.date(2000, 1, 1),
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     await assert_retrieval_store_contract(
         FakeRetrievalStore(contract_chunks(), ledger=ledger), ledger
@@ -279,6 +280,7 @@ async def test_a_version_needs_its_tenant_registered(ledger: PostgresLedgerStore
             valid_from=dt.date(2026, 1, 1),
             supersedes=None,
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
 
 
@@ -309,10 +311,57 @@ async def test_a_policy_recorded_before_document_class_is_refused_until_classifi
         valid_from=jun,
         supersedes="v1",
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     assert await ledger.policy_versions("acme", as_of=mar) == (
         PolicyVersion("acme/old-policy", "v1"),
     )
+
+
+async def test_the_title_columns_hold_the_documents_title_never_its_id(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """Before #239 `record_version` wrote the instrument id into both title
+    columns. Now each version keeps the title it was published with, the
+    instrument holds its latest, and the database refuses a blank one
+    whatever writes it (0017, ADR-0049)."""
+    await ledger.put_profile(Profile("acme"))
+    for version_id, title, valid_from in (
+        ("v1", "Acme Pty Ltd — Privacy Policy", dt.date(2026, 1, 1)),
+        ("v2", "Acme Pty Ltd — Privacy Statement", dt.date(2026, 6, 1)),
+    ):
+        await ledger.record_version(
+            tenant_id="acme",
+            instrument_id="acme/privacy-policy",
+            version_id=version_id,
+            valid_from=valid_from,
+            supersedes=None if version_id == "v1" else "v1",
+            document_class=DocumentClass.INTERNAL_POLICY,
+            title=title,
+        )
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        instrument = await (
+            await conn.execute(
+                "SELECT title FROM instrument WHERE instrument_id = %s", ("acme/privacy-policy",)
+            )
+        ).fetchall()
+        versions = await (
+            await conn.execute(
+                "SELECT version_id, title FROM instrument_version WHERE instrument_id = %s "
+                "ORDER BY version_id",
+                ("acme/privacy-policy",),
+            )
+        ).fetchall()
+        assert instrument == [("Acme Pty Ltd — Privacy Statement",)]
+        assert versions == [
+            ("v1", "Acme Pty Ltd — Privacy Policy"),
+            ("v2", "Acme Pty Ltd — Privacy Statement"),
+        ]
+        with pytest.raises(psycopg.errors.CheckViolation, match="title_nonblank"):
+            await conn.execute(
+                "UPDATE instrument_version SET title = '  ' WHERE instrument_id = %s",
+                ("acme/privacy-policy",),
+            )
 
 
 @pytest.mark.parametrize(

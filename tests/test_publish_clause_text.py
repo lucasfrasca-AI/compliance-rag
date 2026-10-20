@@ -127,6 +127,7 @@ class _Stores:
             effective_from=EFFECTIVE,
             supersedes=None,
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
 
     async def complete(self, clauses: tuple[ClauseRecord, ...], *, source: str) -> int:
@@ -149,6 +150,7 @@ class _Stores:
             effective_from=EFFECTIVE,
             supersedes=None,
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
 
     async def check(self, clause_id: str, quote: str) -> Outcome:
@@ -413,6 +415,7 @@ async def test_a_users_private_addition_is_stored_for_and_verified_for_its_owner
         effective_from=EFFECTIVE,
         supersedes=None,
         document_class=DocumentClass.EXTERNAL_UPLOAD,
+        title="The document's title",
     )
     verifier = Verifier(backend.clauses, ledger, CanonicalCitationVerifier())
     citation = DraftCitation(clause_id=note.clause_id, quote="the backup keys stay offline")
@@ -467,6 +470,7 @@ async def test_a_private_clause_is_never_written_onto_a_path_its_owner_cant_read
             effective_from=EFFECTIVE,
             supersedes=None,
             document_class=DocumentClass.EXTERNAL_UPLOAD,
+            title="The document's title",
         )
     assert (
         await backend.clauses.get_clause(bobs.clause_id, tenant_id=TENANT, user_id="uid-bob")

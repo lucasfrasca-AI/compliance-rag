@@ -217,6 +217,64 @@ async def test_the_tenants_policies_are_the_cached_prefix_and_a_withdrawn_one_is
     assert f"{policy}:v1:" not in sent
 
 
+D2_3_1 = "acme/data-security-policy:v1:3/1"
+D2_3_1_CITED = "Acme Pty Ltd — Data Security and Retention Policy (Internal), 3.1"
+"""The title recorded with the version (the fixture's front matter, as the
+operator records it) and the clause's number as the policy writes it."""
+
+
+async def test_a_policy_citation_is_named_by_its_title_in_the_event_the_chat_and_the_fence(
+    quote: str,
+) -> None:
+    """One form everywhere (#239, ADR-0049): the model's fence, the answer
+    event and the chat read back all cite D2 3/1 as its document's title and
+    "3.1", and law as before. The titles are read once for the answer and
+    once for the read-back, however many policy clauses are in the context
+    (six policies' worth here) or cited."""
+    ledger = await _ledger()
+    clauses = await golden_clause_store()
+    d2 = _canonical(D2_3_1)[:50]
+    generator = FakeGenerator(_reply((APP11, quote), (D2_3_1, d2)))
+    async with await _client(generator, ledger, clauses) as c:
+        before = ledger.title_reads
+        response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
+        assert ledger.title_reads == before + 1
+        answer = dict(_events(response.text))["answer"]
+        assert answer["verified"] is True
+        assert {x["clause_id"]: x["cite"] for x in answer["citations"]} == {
+            APP11: "APP 11.1",
+            D2_3_1: D2_3_1_CITED,
+        }
+        read = (await c.get(f"/v1/chats/{answer['chat_id']}")).json()
+        assert ledger.title_reads == before + 2
+    shown = read["turns"][1]["citations"]
+    assert {x["clause_id"]: x["cite"] for x in shown} == {APP11: "APP 11.1", D2_3_1: D2_3_1_CITED}
+    sent = generator.calls[0]
+    assert f'clause {D2_3_1} cited as "{D2_3_1_CITED}"]' in str(sent["cached_prefix"])
+    assert f'clause {APP11} cited as "APP 11.1"' in str(sent["user"])
+    # No policy clause reaches the model as its bare path.
+    assert 'cited as "3.1"' not in str(sent["cached_prefix"])
+
+
+async def test_a_blocked_policy_citation_reads_back_by_its_title_too(quote: str) -> None:
+    """A blocked clause is named in the read-back with the same form, from the
+    same one read; one whose version the ledger never recorded is its number
+    alone, never a title made from its id."""
+    invented = "acme/made-up-policy:v1:2/4"
+    ledger = await _ledger()
+    generator = FakeGenerator(
+        _reply((APP11, quote), (D2_3_1, SECRET_QUOTE), (invented, SECRET_QUOTE))
+    )
+    async with await _client(generator, ledger, await golden_clause_store()) as c:
+        response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
+        chat_id = dict(_events(response.text))["answer"]["chat_id"]
+        read = (await c.get(f"/v1/chats/{chat_id}")).json()
+    assert {b["clause_id"]: b["cite"] for b in read["turns"][1]["blocked"]} == {
+        D2_3_1: D2_3_1_CITED,
+        invented: "2.4",
+    }
+
+
 async def test_the_requests_usage_rows_carry_its_trace(quote: str) -> None:
     ledger = await _ledger()
     response, _ = await _ask(FakeGenerator(_reply((APP11, quote))), ledger=ledger)

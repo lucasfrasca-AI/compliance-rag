@@ -36,6 +36,10 @@ from compliance_rag.corpus.selection_manifest import parse_selection_manifest
 
 INSTRUMENT_ID = "privacy-act-1988"
 VERSION_ID = "C2026C00227"
+TITLE = "Privacy Act 1988"
+"""The Act's title as the compilation's own `<title>` gives it: what the
+ledger records with the version (ADR-0049). Library law's display form doesn't
+name it ("APP 11.1"), but no version is recorded without its title."""
 SERIES_ID = "C2004A03712"
 START = "2026-06-04"
 """The compilation's effective date: the Register serves its unpacked ePub

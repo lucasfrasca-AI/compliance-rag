@@ -17,8 +17,11 @@ with the six synthetic policies as `acme`'s own documents:
 
 from __future__ import annotations
 
+import re
 from functools import cache
 from pathlib import Path
+
+import yaml
 
 from compliance_rag.corpus.chunker import chunk_clauses
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, ClauseRecord, Scope
@@ -33,6 +36,8 @@ FIXTURES = Path(__file__).resolve().parents[3] / "docs" / "research" / "fixtures
 LAW_FIXTURE = FIXTURES / "privacy-act-1988-C2026C00227.excerpt.html"
 LAW_INSTRUMENT_ID = "privacy-act-1988"
 LAW_VERSION_ID = "C2026C00227"
+LAW_TITLE = "Privacy Act 1988"
+"""The Act's title as the fixture's own `<title>` gives it (ADR-0049)."""
 POLICY_TENANT_ID = "acme"
 POLICY_VERSION_ID = "v1"
 
@@ -46,13 +51,41 @@ POLICY_INSTRUMENT_IDS = {
 }
 """The instrument ids the golden set's policy labels use (agreed for #27)."""
 
+_FRONT_MATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+
+
+def front_matter_title(source: str) -> str:
+    """A synthetic policy's title, from its front matter's `title:`: what the
+    operator records it under (ADR-0049). Document metadata, read here and
+    never by the policy parser, whose clauses don't change (#217). A fixture
+    without one is an error, not a title made up from its file name."""
+    match = _FRONT_MATTER_RE.match(source)
+    meta: object = yaml.safe_load(match.group(1)) if match else None
+    title = meta.get("title") if isinstance(meta, dict) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("a synthetic policy's front matter has no title")
+    return title
+
+
+def policy_source(filename: str) -> str:
+    return (FIXTURES / "synthetic-policies" / filename).read_text(encoding="utf-8")
+
+
+@cache
+def policy_titles() -> dict[str, str]:
+    """Each synthetic policy's instrument id to its front matter's title."""
+    return {
+        instrument_id: front_matter_title(policy_source(filename))
+        for filename, instrument_id in POLICY_INSTRUMENT_IDS.items()
+    }
+
 
 def _policy_clauses() -> tuple[ClauseRecord, ...]:
     return tuple(
         clause
         for filename, instrument_id in POLICY_INSTRUMENT_IDS.items()
         for clause in parse_policy(
-            (FIXTURES / "synthetic-policies" / filename).read_text(encoding="utf-8"),
+            policy_source(filename),
             instrument_id=instrument_id,
             version_id=POLICY_VERSION_ID,
             tenant_id=POLICY_TENANT_ID,

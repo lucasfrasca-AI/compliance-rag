@@ -12,6 +12,13 @@ APP (`APP 5.2(b)`), all-bracketed for a section or an EU article
 (`s 6C(1)(a)`, `Art 9(2)(b)`), all-dotted for an ISO Annex A control
 (`A.8.3`).
 
+A **policy** clause (a tenant-prefixed instrument's, ADR-0049) is cited by
+its document's recorded title and its numbering as the document writes it:
+`acme/privacy-policy:v1:3/1` -> "Acme Pty Ltd — Privacy Policy, 3.1". That
+is not a function of the path alone — the title is recorded in the ledger,
+with the version — so `cite()` takes the titles a request has read, once,
+for every citation it shows. Library law's form never reads them.
+
 `instrument_id` is part of the signature (issue #7) because the shape alone
 won't stay sufficient forever: a future instrument could reuse an existing
 shape (say, another `sN...`-style Act) while wanting a different citation
@@ -24,8 +31,19 @@ collision exists to resolve.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
+from types import MappingProxyType
 
 from compliance_rag.corpus.models import PARAGRAPH_SEGMENT_RE as _PARAGRAPH_RE
+from compliance_rag.corpus.models import instrument_tenant_prefix, parse_stable_id
+
+Titles = Mapping[tuple[str, str], str]
+"""`(instrument_id, version_id)` to the title the ledger records with that
+version (`LedgerStore.version_titles`, ADR-0049)."""
+
+NO_TITLES: Titles = MappingProxyType({})
+"""For a caller that cites only library law, whose form names no title: an
+obligation and its questions rest on law clauses (ADR-0028)."""
 
 _SECTION_RE = re.compile(r"^s(\d+)([a-z]{0,2})$")
 _ARTICLE_RE = re.compile(r"^art(\d+)$")
@@ -88,3 +106,45 @@ def display_form(clause_path: str, instrument_id: str) -> str:
         return ".".join(("A", *rest)) if rest else "A"
 
     return clause_path
+
+
+def numbering(clause_path: str, instrument_id: str) -> str:
+    """A policy clause's number as the document writes it: `3/1` -> "3.1"
+    (`policy_parser`'s `## N.` section and `N.M` paragraph). A path of
+    another shape — a law-shaped one in a document a tenant supplied — is
+    rendered as `display_form` renders it."""
+    segments = clause_path.split("/")
+    if all(segment.isdigit() for segment in segments):
+        return ".".join(segments)
+    return display_form(clause_path, instrument_id)
+
+
+def cite(clause_id: str, titles: Titles) -> str:
+    """A stable ID as a reader cites it: the one form the answer event, a chat
+    read back and the model's fence all show (ADR-0049).
+
+    - Library law: `display_form`, unchanged — "s 6D(4)(b)", "APP 11.1".
+    - A policy clause: "{title}, {numbering}", the title the ledger records
+      for its version: "Acme Pty Ltd — Privacy Policy, 3.1". A comma, as a
+      pinpoint follows the document it is in; no "§", which the policies
+      never write. A version with no recorded title — only a citation that
+      didn't verify can name one — is its numbering alone, never a title
+      made up from the instrument id.
+    """
+    instrument_id, version_id, clause_path = parse_stable_id(clause_id)
+    if instrument_tenant_prefix(instrument_id) is None:
+        return display_form(clause_path, instrument_id)
+    number = numbering(clause_path, instrument_id)
+    title = titles.get((instrument_id, version_id))
+    return number if title is None else f"{title}, {number}"
+
+
+def policy_versions(clause_ids: Iterable[str]) -> frozenset[tuple[str, str]]:
+    """The policy versions among these clause ids: what a request reads the
+    titles of, in one `version_titles` call. Library law needs none."""
+    found: set[tuple[str, str]] = set()
+    for clause_id in clause_ids:
+        instrument_id, version_id, _ = parse_stable_id(clause_id)
+        if instrument_tenant_prefix(instrument_id) is not None:
+            found.add((instrument_id, version_id))
+    return frozenset(found)

@@ -15,8 +15,9 @@ from pathlib import Path
 from compliance_rag.adapters.fakes import FakeGraphStore
 from compliance_rag.adapters.interfaces import GraphStore
 from compliance_rag.assessment.coverage import Coverage, Explanation
-from compliance_rag.assessment.coverage_report import cite, render
+from compliance_rag.assessment.coverage_report import render
 from compliance_rag.assessment.evidence import Facts
+from compliance_rag.corpus.display_form import NO_TITLES, cite
 from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.graph.mappings import load_mapping_set
 
@@ -24,7 +25,9 @@ MAPPINGS = Path(__file__).resolve().parents[1] / "corpus" / "mappings"
 
 
 def tree(node: Explanation, depth: int = 0) -> list[str]:
-    cites = f" [{', '.join(cite(c) for c in node.clause_ids)}]" if node.clause_ids else ""
+    cites = (
+        f" [{', '.join(cite(c, NO_TITLES) for c in node.clause_ids)}]" if node.clause_ids else ""
+    )
     line = f"{'  ' * depth}{node.truth.value.upper():8} {node.condition_id}{cites}"
     return [line, *(row for child in node.because for row in tree(child, depth + 1))]
 
@@ -57,7 +60,7 @@ def main() -> None:
     coverage = asyncio.run(run(args.case, aura=args.aura, obligation=args.obligation))
     chosen = coverage.obligation(args.obligation)
     print(f"{args.obligation}: {chosen.outcome.value} — {chosen.reason}\n")
-    print("Citation chain:", ", ".join(cite(c) for c in chosen.citations), "\n")
+    print("Citation chain:", ", ".join(cite(c, NO_TITLES) for c in chosen.citations), "\n")
     print("\n".join(tree(chosen.explanation)), "\n")
     print(render(coverage))
 

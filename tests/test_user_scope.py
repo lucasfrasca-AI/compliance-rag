@@ -164,6 +164,7 @@ async def _publish(
         effective_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=document_class,
+        title="The document's title",
     )
 
 
@@ -311,6 +312,7 @@ async def test_a_private_clause_listed_in_a_policy_never_reaches_the_prefix() ->
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     await clauses.put_clause(_private(ALICE))
     with pytest.raises(LookupError) as raised:
@@ -352,6 +354,7 @@ async def _pipeline(
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.EXTERNAL_UPLOAD,
+        title="The document's title",
     )
     mine = _private(ALICE)
     await clauses.put_clause(mine)

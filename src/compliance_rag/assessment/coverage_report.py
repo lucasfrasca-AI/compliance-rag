@@ -9,21 +9,15 @@ Rendered as Markdown for a human; the structured form is `Coverage` itself.
 from __future__ import annotations
 
 from compliance_rag.assessment.coverage import Coverage, Outcome, Question
-from compliance_rag.corpus.display_form import display_form
-from compliance_rag.corpus.models import parse_stable_id
+from compliance_rag.corpus.display_form import NO_TITLES, cite
 
 SHOWN_PERIODS = 6
 """Missing years listed by name before the rest are counted."""
 
 
-def cite(clause_id: str) -> str:
-    """A stable ID as a reader cites it: `s 6D(4)(b)`, `APP 11.1`."""
-    instrument_id, _, clause_path = parse_stable_id(clause_id)
-    return display_form(clause_path, instrument_id)
-
-
 def _cites(clause_ids: tuple[str, ...]) -> str:
-    return ", ".join(cite(c) for c in clause_ids) or "no clause (reference data)"
+    # An obligation and its questions rest on library law (ADR-0028).
+    return ", ".join(cite(c, NO_TITLES) for c in clause_ids) or "no clause (reference data)"
 
 
 def _question(question: Question) -> str:

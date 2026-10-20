@@ -104,6 +104,7 @@ async def _publish(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
             if chunk.scope is Scope.USER
             else DocumentClass.INTERNAL_POLICY
         ),
+        title="The document's title",
     )
 
 

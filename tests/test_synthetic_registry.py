@@ -85,6 +85,7 @@ async def _upload(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
         effective_from=dt.date(2026, 10, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
 
 
@@ -220,6 +221,7 @@ async def test_registered_clauses_pass_replace_in_place() -> None:
         effective_from=dt.date(2026, 10, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     await lifecycle.replace_in_place(
         (chunk,),

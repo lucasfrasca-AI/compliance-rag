@@ -698,6 +698,7 @@ async def test_a_chat_is_recorded_and_read_back_through_the_api_on_postgres(quot
                 document_class=DocumentClass.LIBRARY_LAW
                 if tenant_id == PUBLIC_TENANT_ID
                 else DocumentClass.INTERNAL_POLICY,
+                title="The document's title",
             )
         await postgres.subscribe(
             tenant_id=POLICY_TENANT_ID, instrument_id="privacy-act-1988", subscribed_by="setup"

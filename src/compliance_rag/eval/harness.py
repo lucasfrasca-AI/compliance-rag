@@ -35,8 +35,10 @@ from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
 from compliance_rag.eval.golden_corpus import (
     LAW_FIXTURE,
     LAW_INSTRUMENT_ID,
+    LAW_TITLE,
     LAW_VERSION_ID,
     golden_clauses,
+    policy_titles,
 )
 from compliance_rag.reranker_service.app import create_app
 from compliance_rag.reranker_service.model import RerankerModel
@@ -105,6 +107,7 @@ async def golden_ledger() -> FakeLedgerStore:
             document_class=DocumentClass.LIBRARY_LAW
             if tenant_id == PUBLIC_TENANT_ID
             else DocumentClass.INTERNAL_POLICY,
+            title=LAW_TITLE if tenant_id == PUBLIC_TENANT_ID else policy_titles()[instrument_id],
         )
     return ledger
 

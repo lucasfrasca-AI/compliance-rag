@@ -217,6 +217,7 @@ async def deploy(
         tenant_id=PUBLIC_TENANT_ID,
         effective_from=EFFECTIVE,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
 
 
@@ -753,6 +754,7 @@ async def test_an_amendment_publishes_the_new_version_and_retires_the_old(stores
             lifecycle=stores.lifecycle(),
             instrument_since=SINCE,
             effective=NOV,
+            title="The document's title",
         )
 
     with pytest.raises(RevisionRefused, match="not the one pinned"):
@@ -764,6 +766,7 @@ async def test_an_amendment_publishes_the_new_version_and_retires_the_old(stores
             lifecycle=stores.lifecycle(),
             instrument_since=SINCE,
             effective=NOV,
+            title="The document's title",
         )
     report = await amend()
     # The bucket: the new version, with the amendment on its manifest; the old untouched.
@@ -1024,6 +1027,7 @@ async def deploy_unmarked(stores: Stores) -> None:
         tenant_id=PUBLIC_TENANT_ID,
         effective_from=EFFECTIVE,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     if stores.qdrant is not None:
         # And a Qdrant point written then has no `incomplete` key.

@@ -129,6 +129,7 @@ async def _load(
         tenant_id=PUBLIC_TENANT_ID,
         effective_from=EFFECTIVE,
         document_class=document_class,
+        title="The document's title",
     )
 
 
@@ -180,6 +181,7 @@ async def test_a_load_whose_clauses_disagree_with_the_clause_store_is_refused() 
             tenant_id=PUBLIC_TENANT_ID,
             effective_from=EFFECTIVE,
             document_class=DocumentClass.LIBRARY_LAW,
+            title="The document's title",
         )
     assert store.upserted == [] and bucket.written == []
     assert await _validity(ledger) is None
@@ -276,6 +278,7 @@ async def test_a_ledger_that_disagrees_on_the_start_date_is_refused() -> None:
         valid_from=dt.date(2026, 1, 1),
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     with pytest.raises(ValueError, match="in force from 2026-01-01, not 2026-06-04"):
         await _load(store, ledger, clause_store=bucket)

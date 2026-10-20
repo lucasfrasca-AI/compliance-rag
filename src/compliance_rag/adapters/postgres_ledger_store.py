@@ -19,7 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
 from typing import Any, Literal, LiteralString, cast
 from urllib.parse import urlparse
@@ -75,6 +75,7 @@ from compliance_rag.corpus.models import (
     parse_stable_id,
     validate_library_instrument_id,
     validate_tenant_id,
+    validate_title,
 )
 from compliance_rag.settings import Settings
 
@@ -641,17 +642,21 @@ class PostgresLedgerStore(LedgerStore):
         valid_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         check_document_class(tenant_id, document_class)
+        validate_title(title)
         scope = "public" if tenant_id == PUBLIC_TENANT_ID else "tenant"
         try:
             async with self._connection() as conn:
+                # The instrument's title is its latest recorded version's
+                # (ADR-0049); each version keeps its own below.
                 await conn.execute(
                     "INSERT INTO instrument "
                     "(tenant_id, instrument_id, title, jurisdiction, scope, document_class) "
                     "VALUES (%s, %s, %s, 'AU', %s, %s) "
-                    "ON CONFLICT (tenant_id, instrument_id) DO NOTHING",
-                    (tenant_id, instrument_id, instrument_id, scope, document_class.value),
+                    "ON CONFLICT (tenant_id, instrument_id) DO UPDATE SET title = EXCLUDED.title",
+                    (tenant_id, instrument_id, title, scope, document_class.value),
                 )
                 # An instrument recorded before 0011 has no class: this
                 # version states it. One already classified must agree.
@@ -667,7 +672,7 @@ class PostgresLedgerStore(LedgerStore):
                     "INSERT INTO instrument_version "
                     "(tenant_id, instrument_id, version_id, title, valid_from, supersedes) "
                     "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (tenant_id, instrument_id, version_id, instrument_id, valid_from, supersedes),
+                    (tenant_id, instrument_id, version_id, title, valid_from, supersedes),
                 )
         except psycopg.errors.UniqueViolation as exc:
             # Re-recording would reset valid_to and silently un-retire it.
@@ -718,6 +723,20 @@ class PostgresLedgerStore(LedgerStore):
                 "0011): record the next version with its class, never a guessed one"
             )
         return tuple(PolicyVersion(str(r[0]), str(r[1])) for r in rows)
+
+    async def version_titles(
+        self, tenant_id: str, versions: Iterable[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        wanted = sorted(set(versions))
+        if not wanted:
+            return {}
+        rows = await self._fetchall(
+            "SELECT v.instrument_id, v.version_id, v.title FROM instrument_version v "
+            "JOIN unnest(%s::text[], %s::text[]) AS w(instrument_id, version_id) "
+            "USING (instrument_id, version_id) WHERE v.tenant_id = %s",
+            ([i for i, _ in wanted], [v for _, v in wanted], tenant_id),
+        )
+        return {(str(r[0]), str(r[1])): str(r[2]) for r in rows}
 
     async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
         row = await self._fetchone(

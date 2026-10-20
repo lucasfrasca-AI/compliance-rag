@@ -71,6 +71,7 @@ from compliance_rag.corpus.models import (
     instrument_tenant_prefix,
     parse_stable_id,
     sha256_hex,
+    validate_title,
 )
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 
@@ -196,6 +197,7 @@ class CorpusLifecycle:
         effective_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         """Publish a new version: its clauses' canonical text and its manifest
         to the clause store, the chunks derived from them (`count_tokens` is
@@ -210,12 +212,19 @@ class CorpusLifecycle:
         version joins the tenant's cached policy prefix (D-11). A class that
         disagrees with the instrument's is refused before anything is written.
 
+        `title` is the document's, as the publisher gives it: the front
+        matter's `title:` for an operator-registered fixture, a request field
+        for an upload. Recorded with the version, it is what a policy citation
+        names the document by (ADR-0049). An empty or multi-line one is
+        refused before anything is written.
+
         Refused once retrieval holds any of the version: that is
         `complete_version`'s to finish, or a replace in place. Before then a
         re-run finishes one that stopped in the clause store (module
         docstring), writing nothing the clause store already holds."""
         if supersedes == version_id:
             raise ValueError("a version cannot supersede itself — that is replace-in-place")
+        validate_title(title)
         await self._check_class(tenant_id, instrument_id, document_class)
         chunks = self._admitted(
             clauses,
@@ -247,6 +256,7 @@ class CorpusLifecycle:
             effective_from=effective_from,
             supersedes=supersedes,
             document_class=document_class,
+            title=title,
         )
 
     async def complete_version(
@@ -310,6 +320,7 @@ class CorpusLifecycle:
         effective_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         """Record in the ledger a version whose chunks are already stored: a
         ledger that came after the vectors (#144, #174), or a publish whose
@@ -317,7 +328,9 @@ class CorpusLifecycle:
         `publish_version`; refused if retrieval holds none of the version, or
         the clause store doesn't hold it complete (its manifest's source not
         written): the record is what makes a version citable and puts a
-        policy in the cached prefix, and both read the clause store."""
+        policy in the cached prefix, and both read the clause store. `title`
+        as `publish_version` takes it (ADR-0049)."""
+        validate_title(title)
         await self._check_class(tenant_id, instrument_id, document_class)
         if not await self._retrieval.version_exists(
             instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
@@ -340,6 +353,7 @@ class CorpusLifecycle:
             effective_from=effective_from,
             supersedes=supersedes,
             document_class=document_class,
+            title=title,
         )
 
     async def _check_class(
@@ -515,6 +529,7 @@ class CorpusLifecycle:
         effective_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         # The ledger is the record the verifier trusts (ADR-0021 mechanism
         # 3): written alongside the payload dates, never derived from them.
@@ -525,6 +540,7 @@ class CorpusLifecycle:
             valid_from=effective_from,
             supersedes=supersedes,
             document_class=document_class,
+            title=title,
         )
         if supersedes is not None:
             # Ledger first: a crash between the two leaves the verifier

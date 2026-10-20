@@ -220,6 +220,27 @@ def instrument_owner(instrument_id: str) -> str:
     return instrument_tenant_prefix(instrument_id) or PUBLIC_TENANT_ID
 
 
+def validate_title(title: str) -> str:
+    """A document's title as the ledger records it (ADR-0049): what a policy
+    citation names the document by. Supplied by whoever publishes the
+    version, never derived from the instrument id, so an empty one is
+    refused rather than defaulted. One line of text: no control, format or
+    line-separator characters, so it can't reshape the prompt marker that
+    carries it (`assessment/prompt.py`)."""
+    if not title.strip():
+        raise ValueError("a version is recorded with its document's title, not an empty one")
+    bad = sorted(
+        {
+            f"U+{ord(c):04X}"
+            for c in title
+            if unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp")
+        }
+    )
+    if bad:
+        raise ValueError(f"a title is one line of text, not one with {', '.join(bad)}")
+    return title
+
+
 class Scope(StrEnum):
     """Which corpus partition a record belongs to (`CONTEXT.md`, D-14)."""
 
