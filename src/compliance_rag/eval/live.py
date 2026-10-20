@@ -12,11 +12,14 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from compliance_rag.adapters.generation_residency import TenantTextGate
+from compliance_rag.adapters.interfaces import Embedder
 from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator
+from compliance_rag.adapters.vertex_embedder import VertexEmbedder
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
-from compliance_rag.eval.golden_corpus import golden_chunks
+from compliance_rag.eval.embedding_cache import EmbeddingCache, text_key
+from compliance_rag.eval.golden_corpus import gate_chunks, golden_chunks
 from compliance_rag.eval.harness import (
     golden_clause_store,
     golden_ledger,
@@ -29,28 +32,62 @@ from compliance_rag.settings import Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
 
 
+class LiveFallbackEmbedder(Embedder):
+    """The checked-in snapshot's vectors, and the live model's for a text the
+    snapshot lacks: a question of the out-of-environment cases (#252) is not
+    in the snapshot the recall gate reads. Only a live run builds one."""
+
+    def __init__(self, cache: EmbeddingCache, live: Embedder) -> None:
+        self._cache = cache
+        self._live = live
+
+    @property
+    def dimensions(self) -> int:
+        return self._cache.dimensions
+
+    async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        missing = tuple(dict.fromkeys(self._cache.missing(texts)))
+        fresh = dict(zip(missing, await self._live.embed(missing), strict=True)) if missing else {}
+        return tuple(fresh.get(t) or self._cache.vectors[text_key(t)] for t in texts)
+
+
 @asynccontextmanager
 async def live_answer_pipeline(
     settings: Settings,
     *,
     extra_chunks: tuple[Chunk, ...] = (),
     extra_clauses: tuple[ClauseRecord, ...] = (),
+    whole_compilation: bool = False,
 ) -> AsyncGenerator[AssessmentPipeline]:
     """`answer()` on the golden corpus with every real stage: Qdrant, cached
     real embeddings, the int8 cross-encoder, **live Claude** (built only
     through `VertexClaudeGenerator.create`, so the residency gate runs first —
     ADR-0023/0024), and the real verifier against golden canonical text and a
     ledger with every golden version recorded. Shared by the live eval and
-    the demo."""
-    clauses = await golden_clause_store()
+    the demo.
+
+    `whole_compilation` puts it in place of the excerpt, in Qdrant and
+    in the clause store alike, so the verifier can verify whatever is
+    retrieved; and embeds a question the snapshot lacks with the live model.
+    The out-of-environment cases need it: APP 7 isn't in the excerpt."""
+    clauses = await golden_clause_store(whole_compilation=whole_compilation)
     for clause in extra_clauses:
         await clauses.put_clause(clause)
     ledger = await golden_ledger()
+    embedder = (
+        LiveFallbackEmbedder(EmbeddingCache.load(), VertexEmbedder.from_settings(settings))
+        if whole_compilation
+        else None
+    )
     async with (
-        # The excerpt, not the gate's whole compilation: the verifier holds the
-        # excerpt's canonical text, so it can verify whatever this retrieves.
+        # The excerpt, not the gate's whole compilation, unless asked: the
+        # verifier holds the same canonical text, so it can verify whatever
+        # this retrieves.
         golden_store(
-            settings.qdrant_url or "http://localhost:6333", prefix="answer", chunks=golden_chunks()
+            settings.qdrant_url or "http://localhost:6333",
+            prefix="answer",
+            chunks=gate_chunks() if whole_compilation else golden_chunks(),
+            embedder=embedder,
         ) as store,
         in_process_reranker(RerankerModel()) as reranker,
     ):

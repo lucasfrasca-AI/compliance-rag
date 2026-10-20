@@ -29,6 +29,10 @@ was shown with it is lost, and the turn's `incomplete` list can't count it.
 
 A blocked clause id that can't be read is marked the same way, in its place in
 `blocked` (#234); it names no clause, since a readable id is a readable entry.
+
+An answer turn reads back the `not_in_environment` flags it was shown with
+(#252): the instruments its question named that the environment didn't hold.
+A stored flag that can't be read is `{"unreadable": true}` in its place.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.api.answers import WITHHELD, citation_json, incomplete_clauses_json
 from compliance_rag.api.deps import UUID4_HEX, CurrentCaller, services_of
+from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.corpus.display_form import Titles, cite, cited_policy_versions
 
 router = APIRouter(prefix="/v1")
@@ -111,6 +116,11 @@ def _turn_json(turn: ChatTurn, titles: Titles) -> dict[str, object]:
         "blocked": [_blocked_json(b, titles) for b in turn.blocked],
         "withheld": WITHHELD.get(turn.outcome),
         "error": turn.outcome.value if turn.outcome.failed else None,
+        # As recorded with the turn, the flag the member was shown (#252).
+        "not_in_environment": [
+            n.json() if isinstance(n, NotInEnvironment) else {"unreadable": True}
+            for n in turn.not_in_environment
+        ],
     }
 
 
