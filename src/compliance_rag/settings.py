@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     (ADR-0032). Empty: no member's question leaves Australia. Ignored when
     generation runs in Sydney."""
 
+    # --- Where this process runs -------------------------------------------
+    k_service: str = ""
+    """`K_SERVICE`, set by Cloud Run in every deployed service. Read only so a
+    local-only tool refuses to start there."""
+    cloud_run_job: str = ""
+    """`CLOUD_RUN_JOB`, set by Cloud Run in every job, for the same reason."""
+
     # --- Web fallback ------------------------------------------------------
     web_search_provider: Literal["brave", "tavily", "none"] = "none"
     web_search_api_key: SecretStr = SecretStr("")
@@ -159,6 +166,17 @@ class Settings(BaseSettings):
         return frozenset(
             e.strip().lower() for e in self.offshore_generation_testers.split(",") if e.strip()
         )
+
+    @property
+    def production_markers(self) -> tuple[str, ...]:
+        """What says this process is deployed, by name: `ENV=cloud`, or a
+        variable Cloud Run sets. Empty on a laptop or a CI runner."""
+        markers = (
+            ("ENV=cloud", self.env == "cloud"),
+            ("K_SERVICE", bool(self.k_service)),
+            ("CLOUD_RUN_JOB", bool(self.cloud_run_job)),
+        )
+        return tuple(name for name, present in markers if present)
 
     @property
     def sinks(self) -> tuple[str, ...]:
