@@ -1,5 +1,6 @@
 """Track A over an incomplete clause, narrowed to a part year (#211, ADR-0047),
-and the signed reading that narrows it (`incomplete.yaml`).
+and the signed readings: the words a reader is shown (`incomplete.yaml`) and
+the part-year reading that narrows it (`part_year.yaml`, ADR-0051).
 
 s6DA(2)'s formula is an image, so the clause is incomplete. The three signed
 small-business conditions that cite it read a tenant-supplied turnover figure,
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -38,6 +40,7 @@ from compliance_rag.corpus.incomplete_reading import (
     committed_incomplete_readings,
     load_incomplete_readings,
     parse_incomplete_reading_file,
+    parse_part_year_file,
 )
 from compliance_rag.corpus.models import IncompleteReason
 from compliance_rag.corpus.parser import FORMULA_NOT_TEXT, TABLE_NOT_TEXT
@@ -53,6 +56,7 @@ from tests.test_obligation_qualifiers import strings
 
 S6DA_2 = "privacy-act-1988:C2026C00227:s6da/2"
 REVIEW = INSTRUMENTS_ROOT / "privacy-act-1988" / "C2026C00227" / "incomplete.yaml"
+PART_YEAR = REVIEW.with_name("part_year.yaml")
 SIGNED = (
     "the turnover formula in s 6DA(2) is published as an image in the compilation "
     "and has no text form in our corpus"
@@ -333,10 +337,17 @@ async def test_ga_01_a_full_year_over_the_threshold_still_applies() -> None:
     assert coverage.obligation("OB-PA-APP11-1").outcome is Outcome.APPLICABLE
 
 
-# ---- the reviewed file ------------------------------------------------------------------
+# ---- the reviewed files ------------------------------------------------------------------
+#
+# Two files, because a file names its author (ADR-0051): `incomplete.yaml`
+# holds Lucas Frasca's words and nothing else; `part_year.yaml` holds the
+# field the model shaped, authored by the model and signed by him.
+
+READINGS = (REVIEW, PART_YEAR)
+"""Both reviewed files; every rule of a reviewed file holds for each."""
 
 
-def test_the_committed_reading_is_signed_and_says_what_lucas_frasca_signed() -> None:
+def test_the_committed_wording_is_signed_by_its_author_and_holds_nothing_else() -> None:
     review = parse_incomplete_reading_file(
         REVIEW.read_text(encoding="utf-8"),
         instrument_id="privacy-act-1988",
@@ -349,14 +360,38 @@ def test_the_committed_reading_is_signed_and_says_what_lucas_frasca_signed() -> 
     )
     assert review.source_clause_ids == (S6DA_2,)
     [entry] = review.clauses
-    assert (entry.clause_id, entry.reason, entry.shown) == (
-        S6DA_2,
-        IncompleteReason.IMAGE_NOT_TEXT,
-        SIGNED,
+    assert entry.model_dump() == {
+        "clause_id": S6DA_2,
+        "reason": IncompleteReason.IMAGE_NOT_TEXT,
+        "shown": SIGNED,
+    }
+
+
+def test_the_part_year_reading_is_the_models_and_signed_by_a_person() -> None:
+    """The model shaped `part_year_only`, so it is the author, and the field
+    is used only once a person has signed it (D-01, ADR-0051)."""
+    part_year = parse_part_year_file(
+        PART_YEAR.read_text(encoding="utf-8"),
+        instrument_id="privacy-act-1988",
+        version_id="C2026C00227",
     )
-    assert (
-        entry.part_year_only is not None and entry.part_year_only.started == "business_started_on"
+    assert part_year.author == "model:claude-opus-5-5"
+    assert part_year.reviewed_by == "Lucas Frasca"
+    assert dt.date.fromisoformat(part_year.date) >= dt.date(2026, 10, 21)
+    assert part_year.source_clause_ids == (S6DA_2,)
+    [entry] = part_year.clauses
+    assert (entry.clause_id, entry.reason) == (S6DA_2, IncompleteReason.IMAGE_NOT_TEXT)
+    assert entry.part_year_only.started == "business_started_on"
+
+
+def test_the_human_signed_file_cant_hold_the_part_year_field(tmp_path: Path) -> None:
+    """A field the model shaped can't ride in a file that names a person as
+    its author: `incomplete.yaml` refuses `part_year_only` (ADR-0051)."""
+    text = REVIEW.read_text(encoding="utf-8") + (
+        "    part_year_only:\n      started: business_started_on\n"
     )
+    with pytest.raises(ValidationError, match="part_year_only"):
+        load_incomplete_readings(_copy_readings(tmp_path, {REVIEW.name: text}))
 
 
 def test_every_reading_is_of_a_reason_the_parser_marks_and_a_part_year_one_says_so() -> None:
@@ -365,66 +400,85 @@ def test_every_reading_is_of_a_reason_the_parser_marks_and_a_part_year_one_says_
     must be one the signed mapping reads."""
     clauses = {c.clause_id: c for c in load_compilation_clauses().clauses}
     mapping = (CORPUS_MAPPINGS / "privacy-act-1988.yaml").read_text()
-    entries = committed_incomplete_readings().entries
-    assert entries
-    for (clause_id, reason), entry in entries.items():
+    readings = committed_incomplete_readings()
+    assert readings.entries and readings.part_years
+    for clause_id, reason in (*readings.entries, *readings.part_years):
         assert reason in {i.reason for i in clauses[clause_id].incomplete}
-        if entry.part_year_only is not None:
-            assert "carried on for only part of a financial year" in clauses[clause_id].text
-            assert f"field: {entry.part_year_only.started}" in mapping
+    for (clause_id, _), only in readings.part_years.items():
+        assert "carried on for only part of a financial year" in clauses[clause_id].text
+        assert f"field: {only.started}" in mapping
 
 
-def _copy_reading(tmp_path: Path, text: str) -> Path:
+def test_the_signed_wording_without_the_part_year_reading_governs_every_year() -> None:
+    """Each file does one thing: the words alone change what a reader is
+    shown, not which years the gap governs."""
+    words_only = IncompleteReadings(entries=committed_incomplete_readings().entries)
+    found = explain(
+        _snapshot(words_only),
+        _facts(FULL_YEAR_START, {2025: 2_500_000}),
+        PREVIOUS,
+    )
+    assert found.truth is Truth.UNKNOWN and found.incomplete == GAP
+
+
+def _copy_readings(tmp_path: Path, texts: dict[str, str] | None = None) -> Path:
+    """Both committed files in a fresh version folder, any of them replaced
+    by `texts` (by file name)."""
     folder = tmp_path / "privacy-act-1988" / "C2026C00227"
     folder.mkdir(parents=True)
-    (folder / "incomplete.yaml").write_text(text, encoding="utf-8")
+    for path in READINGS:
+        text = (texts or {}).get(path.name, path.read_text(encoding="utf-8"))
+        (folder / path.name).write_text(text, encoding="utf-8")
     return tmp_path
 
 
-@pytest.mark.parametrize(
-    ("signed", "pending"),
-    [
-        ('reviewed_by: "Lucas Frasca"', 'reviewed_by: "PENDING — Lucas Frasca"'),
-        ("date: 2026-10-20", 'date: "PENDING"'),
-    ],
-)
+@pytest.mark.parametrize("reading", READINGS, ids=lambda p: p.name)
+@pytest.mark.parametrize("field", ["reviewed_by", "date"])
 def test_a_reading_pending_review_is_refused_not_used(
-    tmp_path: Path, signed: str, pending: str
+    tmp_path: Path, reading: Path, field: str
 ) -> None:
-    text = REVIEW.read_text(encoding="utf-8")
-    assert signed in text
-    root = _copy_reading(tmp_path, text.replace(signed, pending))
-    with pytest.raises(UnsignedIncompleteReading, match="awaiting review"):
+    text = reading.read_text(encoding="utf-8")
+    pending = "PENDING — Lucas Frasca" if field == "reviewed_by" else "PENDING"
+    text = re.sub(rf"^{field}: .*$", f'{field}: "{pending}"', text, count=1, flags=re.MULTILINE)
+    root = _copy_readings(tmp_path, {reading.name: text})
+    with pytest.raises(UnsignedIncompleteReading, match=f"{reading.name} is awaiting review"):
         load_incomplete_readings(root)
 
 
-def test_the_committed_file_loads_from_a_copy(tmp_path: Path) -> None:
+def test_the_committed_files_load_from_a_copy(tmp_path: Path) -> None:
     root = tmp_path / "instruments"
     shutil.copytree(INSTRUMENTS_ROOT, root)
     assert load_incomplete_readings(root) == committed_incomplete_readings()
 
 
-def test_a_model_never_reviews_a_reading(tmp_path: Path) -> None:
-    text = REVIEW.read_text(encoding="utf-8").replace(
-        'reviewed_by: "Lucas Frasca"', 'reviewed_by: "model: Claude"'
+@pytest.mark.parametrize("reading", READINGS, ids=lambda p: p.name)
+def test_a_model_never_reviews_a_reading(tmp_path: Path, reading: Path) -> None:
+    text = re.sub(
+        r"^reviewed_by: .*$",
+        'reviewed_by: "model: Claude"',
+        reading.read_text(encoding="utf-8"),
+        count=1,
+        flags=re.MULTILINE,
     )
     with pytest.raises(ValidationError, match="never a model"):
-        load_incomplete_readings(_copy_reading(tmp_path, text))
+        load_incomplete_readings(_copy_readings(tmp_path, {reading.name: text}))
 
 
-def test_a_reading_of_another_versions_clause_is_refused(tmp_path: Path) -> None:
-    text = REVIEW.read_text(encoding="utf-8").replace("C2026C00227:s6da/2", "C2099C00001:s6da/2")
+@pytest.mark.parametrize("reading", READINGS, ids=lambda p: p.name)
+def test_a_reading_of_another_versions_clause_is_refused(tmp_path: Path, reading: Path) -> None:
+    text = reading.read_text(encoding="utf-8").replace("C2026C00227:s6da/2", "C2099C00001:s6da/2")
     with pytest.raises(ValueError, match="not a clause of"):
-        load_incomplete_readings(_copy_reading(tmp_path, text))
+        load_incomplete_readings(_copy_readings(tmp_path, {reading.name: text}))
 
 
-def test_source_clause_ids_must_be_the_clauses_read(tmp_path: Path) -> None:
-    text = REVIEW.read_text(encoding="utf-8").replace(
+@pytest.mark.parametrize("reading", READINGS, ids=lambda p: p.name)
+def test_source_clause_ids_must_be_the_clauses_read(tmp_path: Path, reading: Path) -> None:
+    text = reading.read_text(encoding="utf-8").replace(
         "source_clause_ids:\n  - privacy-act-1988:C2026C00227:s6da/2",
         "source_clause_ids:\n  - privacy-act-1988:C2026C00227:s6da/1",
     )
     with pytest.raises(ValidationError, match="are not the clauses read"):
-        load_incomplete_readings(_copy_reading(tmp_path, text))
+        load_incomplete_readings(_copy_readings(tmp_path, {reading.name: text}))
 
 
 @pytest.mark.parametrize(
@@ -441,7 +495,7 @@ def test_source_clause_ids_must_be_the_clauses_read(tmp_path: Path) -> None:
 def test_what_a_reader_is_shown_cant_reshape_the_fence_marker(tmp_path: Path, shown: str) -> None:
     text = REVIEW.read_text(encoding="utf-8").replace(f'"{SIGNED}"', json.dumps(shown))
     with pytest.raises(ValidationError):
-        load_incomplete_readings(_copy_reading(tmp_path, text))
+        load_incomplete_readings(_copy_readings(tmp_path, {REVIEW.name: text}))
 
 
 def test_the_signed_words_stand_in_only_for_the_reason_they_were_signed_for() -> None:
@@ -454,3 +508,4 @@ def test_the_signed_words_stand_in_only_for_the_reason_they_were_signed_for() ->
     assert readings.shown_json(s16a, (TABLE_NOT_TEXT,)) == [
         {"reason": "table_not_text", "detail": TABLE_NOT_TEXT.detail}
     ]
+    assert readings.part_year_only(S6DA_2, IncompleteReason.TABLE_NOT_TEXT) is None

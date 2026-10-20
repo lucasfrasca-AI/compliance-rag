@@ -303,8 +303,7 @@ class _Evaluator:
         gaps: list[_Gap] = []
         for clause_id in spec.clause_ids:
             for incompleteness in self._snapshot.incomplete.get(clause_id, ()):
-                read = readings.entry(clause_id, incompleteness.reason)
-                only = read.part_year_only if read is not None else None
+                only = readings.part_year_only(clause_id, incompleteness.reason)
                 gaps.append(
                     _Gap(
                         clause_id,

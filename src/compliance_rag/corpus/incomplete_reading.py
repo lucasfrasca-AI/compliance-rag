@@ -1,28 +1,33 @@
-"""The reviewed reading of an incomplete clause (#211, ADR-0047): what a reader
-is shown about it, and, where the law says so, which years its missing content
-governs.
+"""The reviewed readings of an incomplete clause (#211, ADR-0047, ADR-0051):
+what a reader is shown about it, and, where the law says so, which years its
+missing content governs.
 
 The parser marks a clause incomplete with a closed reason and a generic
 detail ("the formula is not available in text form"), and that is what every
 store holds: a corpus revision is the only thing that changes it. The parser
 can't say what the missing content *is* — that needs the alt text it refuses —
-so a person may say it, in a reviewed artefact beside the instrument version's
-other reviewed file: `corpus/instruments/{instrument}/{version}/incomplete.yaml`.
+so a person may say it, in reviewed artefacts beside the instrument version's
+other reviewed files, `corpus/instruments/{instrument}/{version}/`. Two files,
+because a file names its author, and the two readings can have different
+authors (ADR-0051):
 
-Each entry names a clause and the reason it is for, and carries:
+- **`incomplete.yaml`, `shown`**: the words a reader is shown in place of the
+  parser's detail — in an answer, a chat read back, the prompt's fence and
+  Track A's reason. Joined at read time, never written to a store (ADR-0047's
+  "The signed wording"). The file holds nothing else, so a person's name on
+  it is on their own words only.
+- **`part_year.yaml`, `part_year_only`**: the missing content governs a
+  financial year only when the business was carried on for part of it, and
+  `started` names the profile fact that says when it started. Track A then
+  holds a leaf resting on the clause unassessable only for a year the facts
+  show, or leave open, was a part year (ADR-0047, the human's decision 2 on
+  #211). The model shaped this encoding of that decision, so the model is
+  its author and a person signs it.
 
-- **`shown`**: the words a reader is shown in place of the parser's detail —
-  in an answer, a chat read back, the prompt's fence and Track A's reason.
-  Joined at read time, never written to a store (ADR-0047's "The signed
-  wording").
-- **`part_year_only`** (optional): the missing content governs a financial
-  year only when the business was carried on for part of it, and `started`
-  names the profile fact that says when it started. Track A then holds a
-  leaf resting on the clause unassessable only for a year the facts show, or
-  leave open, was a part year (ADR-0047, the human's decision 2 on #211).
-
-It is corpus content under D-01: `author`, `reviewed_by`, `date` and
-`source_clause_ids`, and a file still pending review is refused, not skipped.
+Each entry names a clause and the reason it is for. Each file is corpus
+content under D-01: `author`, `reviewed_by`, `date` and `source_clause_ids`,
+and a file still pending review is refused, not skipped: nothing reads any
+reading until every file is signed.
 """
 
 from __future__ import annotations
@@ -48,6 +53,9 @@ from compliance_rag.corpus.models import (
 
 INSTRUMENTS_ROOT = Path(__file__).resolve().parents[3] / "corpus" / "instruments"
 FILE_NAME = "incomplete.yaml"
+"""What a reader is shown (`shown`)."""
+PART_YEAR_FILE_NAME = "part_year.yaml"
+"""Which years the missing content governs (`part_year_only`)."""
 PENDING = "PENDING"
 
 # What a reader is shown goes into the prompt's fence marker, `incomplete (…)`,
@@ -57,9 +65,12 @@ PENDING = "PENDING"
 _SHOWN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 (),.'-]*[A-Za-z0-9)]\Z")
 _FIELD_RE = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
+Key = tuple[str, IncompleteReason]
+"""A clause and the parser's reason a reading is for."""
+
 
 class UnsignedIncompleteReading(ValueError):
-    """An `incomplete.yaml` nobody has signed: never used (D-01)."""
+    """A reading nobody has signed: never used (D-01)."""
 
 
 class _Strict(BaseModel):
@@ -83,21 +94,27 @@ class PartYearOnly(_Strict):
         return v
 
 
-class IncompleteReading(_Strict):
-    """One clause's reason, as a person read it."""
-
+class _Entry(_Strict):
     clause_id: str
     reason: IncompleteReason
     """The parser's reason this entry is for: a clause marked for another
-    reason too keeps the parser's detail for that one."""
-    shown: str
-    part_year_only: PartYearOnly | None = None
+    reason too keeps the parser's reading for that one."""
 
     @field_validator("clause_id")
     @classmethod
     def _stable(cls, v: str) -> str:
         parse_stable_id(v)
         return v
+
+    @property
+    def key(self) -> Key:
+        return (self.clause_id, self.reason)
+
+
+class IncompleteReading(_Entry):
+    """One clause's reason, in the words a person signed for it."""
+
+    shown: str
 
     @field_validator("shown")
     @classmethod
@@ -110,6 +127,12 @@ class IncompleteReading(_Strict):
         return v
 
 
+class PartYearReading(_Entry):
+    """One clause's reason, read as governing only a part year."""
+
+    part_year_only: PartYearOnly
+
+
 def _balanced(text: str) -> bool:
     depth = 0
     for char in text:
@@ -119,14 +142,14 @@ def _balanced(text: str) -> bool:
     return depth == 0
 
 
-class IncompleteReadingFile(_Strict):
-    """One `incomplete.yaml`."""
+class _ReviewedFile[E: _Entry](_Strict):
+    """The front matter every reading file carries (D-01), and its entries."""
 
     author: str
     reviewed_by: str
     date: str
     source_clause_ids: tuple[str, ...] = Field(min_length=1)
-    clauses: tuple[IncompleteReading, ...] = Field(min_length=1)
+    clauses: tuple[E, ...] = Field(min_length=1)
 
     @field_validator("date", mode="before")
     @classmethod
@@ -136,7 +159,7 @@ class IncompleteReadingFile(_Strict):
     @model_validator(mode="after")
     def _consistent(self) -> Self:
         validate_review(self.author, self.reviewed_by)
-        keys = [(c.clause_id, c.reason) for c in self.clauses]
+        keys = [c.key for c in self.clauses]
         if len(keys) != len(set(keys)):
             raise ValueError("a clause's reason is read once")
         named = {c.clause_id for c in self.clauses}
@@ -154,16 +177,28 @@ class IncompleteReadingFile(_Strict):
         return not (self.reviewed_by.startswith(PENDING) or self.date.startswith(PENDING))
 
 
+class IncompleteReadingFile(_ReviewedFile[IncompleteReading]):
+    """One `incomplete.yaml`: what a reader is shown, and nothing else."""
+
+
+class PartYearFile(_ReviewedFile[PartYearReading]):
+    """One `part_year.yaml`: which reasons govern only a part year."""
+
+
 @dataclass(frozen=True, slots=True)
 class IncompleteReadings:
     """Every signed entry, by clause and reason."""
 
-    entries: Mapping[tuple[str, IncompleteReason], IncompleteReading] = field(
-        default_factory=dict[tuple[str, IncompleteReason], IncompleteReading]
-    )
+    entries: Mapping[Key, IncompleteReading] = field(default_factory=dict[Key, IncompleteReading])
+    part_years: Mapping[Key, PartYearOnly] = field(default_factory=dict[Key, PartYearOnly])
 
     def entry(self, clause_id: str, reason: IncompleteReason) -> IncompleteReading | None:
         return self.entries.get((clause_id, reason))
+
+    def part_year_only(self, clause_id: str, reason: IncompleteReason) -> PartYearOnly | None:
+        """Whether this reason's missing content governs only a part year,
+        as a signed `part_year.yaml` reads it; `None` where none does."""
+        return self.part_years.get((clause_id, reason))
 
     def shown(self, clause_id: str, incompleteness: Incompleteness) -> str:
         """What a reader is shown for this reason: the signed words where a
@@ -177,19 +212,19 @@ class IncompleteReadings:
         return [{"reason": i.reason.value, "detail": self.shown(clause_id, i)} for i in incomplete]
 
 
-def parse_incomplete_reading_file(
-    source: str, *, instrument_id: str, version_id: str
-) -> IncompleteReadingFile:
+def _parse[F: (IncompleteReadingFile, PartYearFile)](
+    model: type[F], file_name: str, source: str, *, instrument_id: str, version_id: str
+) -> F:
     """One file, for the instrument version whose folder holds it. Refused
     while it is pending review, and if it names a clause of another version."""
     loaded = yaml.safe_load(source)
     if not isinstance(loaded, dict):
-        raise ValueError(f"{FILE_NAME} must be a YAML mapping")
+        raise ValueError(f"{file_name} must be a YAML mapping")
     data = cast("dict[str, Any]", loaded)  # Any: yaml.safe_load is untyped
-    review = IncompleteReadingFile.model_validate(data)
+    review = model.model_validate(data)
     if not review.is_signed_off:
         raise UnsignedIncompleteReading(
-            f"{instrument_id}/{version_id}/{FILE_NAME} is awaiting review, not used (D-01)"
+            f"{instrument_id}/{version_id}/{file_name} is awaiting review, not used (D-01)"
         )
     for clause in review.clauses:
         found_instrument, found_version, _ = parse_stable_id(clause.clause_id)
@@ -198,17 +233,50 @@ def parse_incomplete_reading_file(
     return review
 
 
+def parse_incomplete_reading_file(
+    source: str, *, instrument_id: str, version_id: str
+) -> IncompleteReadingFile:
+    """One `incomplete.yaml`."""
+    return _parse(
+        IncompleteReadingFile,
+        FILE_NAME,
+        source,
+        instrument_id=instrument_id,
+        version_id=version_id,
+    )
+
+
+def parse_part_year_file(source: str, *, instrument_id: str, version_id: str) -> PartYearFile:
+    """One `part_year.yaml`."""
+    return _parse(
+        PartYearFile,
+        PART_YEAR_FILE_NAME,
+        source,
+        instrument_id=instrument_id,
+        version_id=version_id,
+    )
+
+
 def load_incomplete_readings(root: Path = INSTRUMENTS_ROOT) -> IncompleteReadings:
-    """Every `incomplete.yaml` under `root`, one per instrument version."""
-    entries: dict[tuple[str, IncompleteReason], IncompleteReading] = {}
+    """Every `incomplete.yaml` and `part_year.yaml` under `root`, each at most
+    one per instrument version."""
+    entries: dict[Key, IncompleteReading] = {}
     for path in sorted(root.glob(f"*/*/{FILE_NAME}")):
         review = parse_incomplete_reading_file(
             path.read_text(encoding="utf-8"),
             instrument_id=path.parent.parent.name,
             version_id=path.parent.name,
         )
-        entries |= {(c.clause_id, c.reason): c for c in review.clauses}
-    return IncompleteReadings(entries)
+        entries |= {c.key: c for c in review.clauses}
+    part_years: dict[Key, PartYearOnly] = {}
+    for path in sorted(root.glob(f"*/*/{PART_YEAR_FILE_NAME}")):
+        part_year = parse_part_year_file(
+            path.read_text(encoding="utf-8"),
+            instrument_id=path.parent.parent.name,
+            version_id=path.parent.name,
+        )
+        part_years |= {c.key: c.part_year_only for c in part_year.clauses}
+    return IncompleteReadings(entries, part_years)
 
 
 @functools.cache
