@@ -1,0 +1,326 @@
+<!doctype html>
+<!--
+  THROWAWAY DEMO (#247). One page over the production POST /v1/answers, served
+  by scripts/demo_server.py on 127.0.0.1 only. Disposable on purpose: it
+  prejudges nothing about Phase 3's UI. Plain HTML and JS, no build step.
+  Every value from the server is written with textContent, never as HTML.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>compliance-rag throwaway demo</title>
+<style>
+  :root {
+    --ink: #1d232b; --muted: #5d6773; --line: #d9dee4; --paper: #f7f8fa; --card: #fff;
+    --ok: #1f7a4d; --warn: #9a6200; --bad: #b3261e; --accent: #2457a6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         color: var(--ink); background: var(--paper); }
+  .throwaway { background: #3b3f45; color: #fff; padding: .5rem 1rem; font-size: .85rem; }
+  .throwaway strong { letter-spacing: .06em; }
+  .fake-banner { background: var(--bad); color: #fff; padding: 1rem; font-size: 1.35rem;
+                 font-weight: 700; text-align: center; border-bottom: 4px solid #7a1913; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 24rem); gap: 1.25rem;
+         max-width: 78rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  @media (max-width: 52rem) { main { grid-template-columns: 1fr; } }
+  h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  .mode { color: var(--muted); font-size: .85rem; margin: 0 0 1rem; }
+  form { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
+  textarea { width: 100%; min-height: 5rem; font: inherit; padding: .5rem; border: 1px solid var(--line);
+             border-radius: 6px; resize: vertical; }
+  .row { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-top: .5rem; }
+  label { font-size: .85rem; color: var(--muted); }
+  input[type=date] { font: inherit; padding: .25rem; }
+  button { font: inherit; padding: .4rem .9rem; border-radius: 6px; border: 1px solid var(--accent);
+           background: var(--accent); color: #fff; cursor: pointer; }
+  button.link { background: none; color: var(--accent); border: none; padding: 0; text-decoration: underline; }
+  button:disabled { opacity: .6; cursor: progress; }
+  section { margin-top: 1rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
+  ol.stages { margin: 0; padding-left: 1.25rem; font-size: .9rem; }
+  ol.stages li { margin: .15rem 0; }
+  .answer-text { white-space: pre-wrap; }
+  .verdict { font-weight: 700; }
+  .verdict.ok { color: var(--ok); } .verdict.bad { color: var(--bad); } .verdict.warn { color: var(--warn); }
+  .withheld { border-left: 6px solid var(--bad); }
+  .error { border-left: 6px solid var(--bad); }
+  .error pre { white-space: pre-wrap; word-break: break-word; background: #fbeceb; padding: .5rem;
+               border-radius: 4px; font-size: .85rem; margin: .5rem 0 0; }
+  ul.citations { list-style: none; padding: 0; margin: 0; }
+  ul.citations li { border-top: 1px solid var(--line); padding: .6rem 0; }
+  .cite { font-weight: 600; }
+  .meta { color: var(--muted); font-size: .8rem; word-break: break-all; }
+  .flag { display: inline-block; font-size: .75rem; font-weight: 700; padding: 0 .4rem; border-radius: 4px;
+          margin-left: .35rem; vertical-align: middle; }
+  .flag.incomplete { background: #fff1d6; color: var(--warn); border: 1px solid #e7c27a; }
+  .flag.unreadable { background: #fbeceb; color: var(--bad); border: 1px solid #e3a9a4; }
+  .reasons { font-size: .85rem; color: var(--warn); margin: .25rem 0 0; }
+  aside .card { position: sticky; top: 1rem; }
+  aside .text { white-space: pre-wrap; font-family: Georgia, serif; font-size: .95rem; }
+  .note { color: var(--muted); font-size: .8rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="throwaway"><strong>THROWAWAY DEMO</strong> — local only, single tenant, no sign-in, deliberately
+  disposable (#247). It prejudges nothing about Phase 3's UI.</div>
+<!-- demo:fake-banner -->
+<main>
+  <div>
+    <h1>Ask a question</h1>
+    <p class="mode" id="mode">…</p>
+    <form id="ask">
+      <textarea id="question" required maxlength="2000"
+        placeholder="What must Acme do with personal information it no longer needs?"></textarea>
+      <div class="row">
+        <label>as of <input type="date" id="as-of"></label>
+        <span class="note">blank: today in Sydney</span>
+        <button type="submit" id="go">Ask</button>
+      </div>
+      <p class="note">The API streams stages, not tokens: nothing unverified is ever sent (D-02),
+        so the answer arrives whole once its citations have been checked.</p>
+    </form>
+
+    <section class="card" id="stages-card" hidden>
+      <h2>Stream</h2>
+      <ol class="stages" id="stages"></ol>
+    </section>
+
+    <section class="card" id="answer-card" hidden>
+      <h2>Answer <span class="verdict" id="verdict"></span></h2>
+      <div id="answer-body"></div>
+      <p class="meta" id="answer-meta"></p>
+    </section>
+
+    <section class="card" id="incomplete-card" hidden>
+      <h2>Incomplete clauses cited</h2>
+      <p class="note">The text stored for these clauses is not all of what they say (ADR-0047).</p>
+      <ul class="citations" id="incomplete"></ul>
+    </section>
+
+    <section class="card" id="citations-card" hidden>
+      <h2>Citations</h2>
+      <p class="note">Law opens the stored source at the clause (ADR-0019). Policies have no anchors
+        yet (I2 is open), so a policy citation shows its canonical text in the side panel.</p>
+      <ul class="citations" id="citations"></ul>
+    </section>
+  </div>
+
+  <aside>
+    <div class="card" id="panel" hidden>
+      <h2 id="panel-cite"></h2>
+      <p class="meta" id="panel-id"></p>
+      <p class="note" id="panel-why"></p>
+      <div class="text" id="panel-text"></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  if (className) node.className = className;
+  return node;
+}
+
+function reset() {
+  for (const id of ["stages", "answer-body", "citations", "incomplete"]) $(id).replaceChildren();
+  for (const id of ["answer-card", "citations-card", "incomplete-card", "panel"]) $(id).hidden = true;
+  $("verdict").textContent = ""; $("verdict").className = "verdict"; $("answer-meta").textContent = "";
+}
+
+function stage(text) {
+  $("stages-card").hidden = false;
+  $("stages").append(el("li", `${new Date().toLocaleTimeString()} — ${text}`));
+}
+
+function verdict(text, kind) {
+  $("answer-card").hidden = false;
+  $("verdict").textContent = text;
+  $("verdict").className = `verdict ${kind}`;
+}
+
+function reasonsText(reasons) {
+  return (reasons || []).map((r) => r.detail || r.reason).join("; ");
+}
+
+function showPanel(citation, why) {
+  $("panel").hidden = false;
+  $("panel-cite").textContent = citation.cite || citation.clause_id;
+  $("panel-id").textContent = `${citation.clause_id} · ${citation.version_id || ""}`;
+  $("panel-why").textContent = why;
+  $("panel-text").textContent = citation.canonical_text || "(no text was sent with this citation)";
+}
+
+async function citationItem(citation) {
+  const item = el("li");
+  const head = el("div");
+  head.append(el("span", citation.cite || citation.clause_id || "(unnamed)", "cite"));
+  if (citation.unreadable) {
+    head.append(el("span", "UNREADABLE", "flag unreadable"));
+  }
+  if (citation.incomplete && citation.incomplete.length) {
+    head.append(el("span", "INCOMPLETE", "flag incomplete"));
+  }
+  item.append(head);
+  if (citation.unreadable) {
+    item.append(el("p", `This stored citation can't be read (${citation.reason}); it asserts nothing.`, "reasons"));
+  }
+  if (citation.incomplete && citation.incomplete.length) {
+    item.append(el("p", `Incomplete: ${reasonsText(citation.incomplete)}`, "reasons"));
+  }
+  item.append(el("div", `${citation.clause_id || ""} · version ${citation.version_id || "?"}`, "meta"));
+  if (!citation.clause_id || citation.unreadable) return item;
+
+  const opens = await fetch(`/demo/open/${encodeURIComponent(citation.clause_id)}`).then((r) => r.json());
+  const actions = el("div");
+  if (opens.href) {
+    const link = el("a", "Open at the clause in the stored source ↗");
+    link.href = opens.href; link.target = "_blank"; link.rel = "noopener";
+    actions.append(link);
+  } else {
+    const show = el("button", "Show the clause's text", "link");
+    show.type = "button";
+    show.addEventListener("click", () => showPanel(citation, opens.why));
+    actions.append(show);
+  }
+  item.append(actions);
+  return item;
+}
+
+async function showAnswer(data, traceId) {
+  const body = $("answer-body");
+  if (data.verified) {
+    verdict("verified", "ok");
+    body.append(el("div", data.text, "answer-text"));
+  } else {
+    verdict("WITHHELD", "bad");
+    $("answer-card").classList.add("withheld");
+    body.append(el("p", data.withheld || "The answer was withheld."));
+    body.append(el("p", "Nothing the model wrote is shown: its prose can repeat a quote the verifier refused (ADR-0003).", "note"));
+    if (data.blocked && data.blocked.length) {
+      const list = el("ul");
+      for (const b of data.blocked) list.append(el("li", `${b.clause_id} — ${b.outcome}`));
+      body.append(el("p", "Blocked citations:"), list);
+    }
+  }
+  const cost = typeof data.cost_usd === "number" ? ` · cost $${data.cost_usd.toFixed(4)}` : "";
+  $("answer-meta").textContent = `trace ${data.trace_id || traceId || "?"}${cost}`;
+
+  if (data.incomplete && data.incomplete.length) {
+    $("incomplete-card").hidden = false;
+    for (const c of data.incomplete) {
+      const item = el("li");
+      item.append(el("span", c.cite || c.clause_id, "cite"), el("span", "INCOMPLETE", "flag incomplete"));
+      item.append(el("p", reasonsText(c.reasons), "reasons"));
+      $("incomplete").append(item);
+    }
+  }
+  if (data.citations && data.citations.length) {
+    $("citations-card").hidden = false;
+    for (const c of data.citations) $("citations").append(await citationItem(c));
+  }
+}
+
+async function showError(data, traceId) {
+  $("answer-card").hidden = false;
+  $("answer-card").classList.add("error");
+  verdict(`ERROR: ${data.error || "unknown"}`, "bad");
+  const body = $("answer-body");
+  body.append(el("p", data.message || "The request failed."));
+  if (traceId) {
+    const found = await fetch(`/demo/failures/${encodeURIComponent(traceId)}`).then((r) => r.json());
+    if (found.failures && found.failures.length) {
+      body.append(el("p", "What failed (from the demo server; the API itself never echoes an exception):", "note"));
+      for (const f of found.failures) body.append(el("pre", `${f.where}\n${f.error}`));
+    } else if (data.error === "internal") {
+      body.append(el("p", "Nothing more was recorded for this request; see the demo server's console.", "note"));
+    }
+  }
+  $("answer-meta").textContent = `trace ${traceId || "?"}`;
+}
+
+async function handle(name, data, traceId) {
+  if (name === "coverage") {
+    const counts = Object.entries(data.counts || {}).map(([k, v]) => `${k} ${v}`).join(", ");
+    stage(`coverage (Track A on ${data.as_of}): ${counts}`);
+  } else if (name === "retrieval") {
+    const channels = Object.entries(data.by_channel || {}).map(([k, v]) => `${k} ${v}`).join(", ");
+    stage(`retrieval: ${data.candidates} candidates (${channels})`);
+  } else if (name === "answer") {
+    stage(data.verified ? "answer: verified" : "answer: withheld");
+    await showAnswer(data, traceId);
+  } else if (name === "error") {
+    stage(`error: ${data.error}`);
+    await showError(data, traceId);
+  } else {
+    stage(`${name}`);
+  }
+}
+
+async function ask(event) {
+  event.preventDefault();
+  reset();
+  $("go").disabled = true;
+  const body = { question: $("question").value };
+  if ($("as-of").value) body.as_of = $("as-of").value;
+  stage("asked");
+  try {
+    const response = await fetch("/v1/answers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const traceId = response.headers.get("X-Trace-Id");
+    if (!response.ok) {
+      await showError({ error: `HTTP ${response.status}`, message: await response.text() }, traceId);
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        let name = "message", data = "";
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event: ")) name = line.slice(7);
+          else if (line.startsWith("data: ")) data += line.slice(6);
+        }
+        await handle(name, data ? JSON.parse(data) : {}, traceId);
+      }
+    }
+  } catch (failure) {
+    await showError({ error: "client", message: String(failure) }, null);
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+async function start() {
+  const config = await fetch("/demo/config").then((r) => r.json());
+  $("mode").textContent =
+    `tenant ${config.tenant_id} · asking as ${config.member} · generation: ${config.generation}`;
+  if (config.fake_generator && !$("fake-banner")) {
+    // The server writes the banner in; this is only a second line of defence.
+    const banner = el("div", "FAKE GENERATOR — not a real answer", "fake-banner");
+    document.body.prepend(banner);
+  }
+  $("ask").addEventListener("submit", ask);
+}
+start();
+</script>
+</body>
+</html>
