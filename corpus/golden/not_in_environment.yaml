@@ -1,0 +1,40 @@
+# Out-of-environment cases (#252, ADR-0051; CONTEXT.md: Out of environment).
+#
+# Questions naming an instrument the tenant doesn't hold, with what every
+# answer to each must carry and what it may say. The answer eval checks them
+# live (`scripts/run_answer_eval.py --environment`, `eval/environment_cases.py`):
+#   - `not_in_environment` names each instrument listed here, by the
+#     register's name (so the register must be signed too);
+#   - each `expected_clause_ids` clause is in what the model was given;
+#   - the answer either says the instrument isn't in the environment, or
+#     answers from the clauses provided, naming `cites_instead`, citing only
+#     held law, and never speaking as the named instrument's law.
+#
+# Not in queries.yaml: the recall gate embeds every query there from the
+# checked-in vector snapshot, which holds no vector for this question.
+#
+# GE-01's question is the human's own, verbatim, as asked of the demo on
+# 2026-10-21. The expectations and the label were drafted by the model.
+
+author: "model: Claude Opus 5.5 — expectations and label drafted for #252; GE-01's question is Lucas Frasca's"
+reviewed_by: "PENDING — Lucas Frasca"
+date: "PENDING"
+
+cases:
+  - id: GE-01
+    query: "under the spam act, can i send emails to customers without consent from a personal email instead of business one"
+    tenant_id: acme
+    subscribes: [privacy-act-1988]
+    as_of: 2026-10-21
+    not_in_environment: ["Spam Act 2003"]
+    expected_clause_ids: ["privacy-act-1988:C2026C00227:sch1/app7/8/b"]
+    cites_instead: "Privacy Act 1988"
+    notes: >
+      The subscription boundary: Acme holds its six synthetic policies and the
+      Privacy Act, not the Spam Act. APP 7.8(b) ("the Spam Act 2003;") is the
+      Privacy Act's own provision that APP 7 does not apply to the extent the
+      Spam Act applies, and was ranked first in both channels when the human
+      asked. The human's two acceptable answers: "the Spam Act isn't in your
+      environment", or an answer from APP 7 on direct marketing that is
+      explicit it cites the Privacy Act. Never a confident answer about the
+      Spam Act built from APP 7 text.

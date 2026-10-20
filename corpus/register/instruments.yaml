@@ -1,0 +1,60 @@
+# The instrument register (#252, ADR-0051; CONTEXT.md: Instrument register).
+#
+# The names and aliases a question is read against to find the instruments it
+# names, beside the "<Name> Act [year]" pattern. Reviewed content under D-01:
+# `load_instrument_register` refuses this file while it is pending, and the
+# app reads it when the pipeline is built, so an unsigned file stops the build.
+#
+# Three kinds of entry:
+#   library_id  an instrument the library holds: held wherever a tenant
+#               subscribes to it;
+#   (neither)   one the library doesn't hold: held only where a tenant holds a
+#               document whose recorded title contains one of its names;
+#   part_of     a part of a library instrument, with the clause-path prefixes
+#               it covers (plain string prefixes): held only where its
+#               instrument is held and every committed selection manifest of it
+#               selects into one of them.
+#
+# Names are matched case-insensitively, as whole words, longest first. Each is
+# one line of letters, digits, spaces and plain punctuation: no quote, `]`,
+# `;` or `[`, because a name reaches the model's fenced note.
+#
+# Drafted by the model at the human's request (#252); every entry is the
+# model's, for Lucas Frasca to check and sign.
+
+author: "model: Claude Opus 5.5 — drafted for #252 at Lucas Frasca's request"
+reviewed_by: "PENDING — Lucas Frasca"
+date: "PENDING"
+
+instruments:
+  - known_as: "Privacy Act 1988"
+    library_id: privacy-act-1988
+    aliases: ["Privacy Act", "Privacy Act 1988 (Cth)", "Commonwealth Privacy Act"]
+
+  - known_as: "Spam Act 2003"
+    aliases: ["Spam Act", "Spam Act 2003 (Cth)"]
+
+  - known_as: "Do Not Call Register Act 2006"
+    aliases: ["Do Not Call Register Act", "DNCR Act"]
+
+  - known_as: "Interactive Gambling Act 2001"
+    aliases: ["Interactive Gambling Act"]
+
+  - known_as: "Telecommunications (Interception and Access) Act 1979"
+    aliases:
+      - "Telecommunications (Interception and Access) Act"
+      - "Telecommunications Interception and Access Act"
+      - "TIA Act"
+
+  - known_as: "General Data Protection Regulation (EU) 2016/679"
+    aliases: ["GDPR", "EU GDPR", "General Data Protection Regulation"]
+
+  - known_as: "Notifiable Data Breaches scheme (Part IIIC of the Privacy Act 1988)"
+    part_of: privacy-act-1988
+    paths: ["s26w"]
+    aliases:
+      - "Notifiable Data Breaches scheme"
+      - "Notifiable Data Breach scheme"
+      - "NDB scheme"
+      - "notifiable data breaches"
+      - "Part IIIC"
