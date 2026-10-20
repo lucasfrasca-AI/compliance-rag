@@ -133,9 +133,7 @@ async def ingest_compilation(
     if completed:
         # A clause newly marked incomplete, or no longer so, changes the
         # stored corpus as an edit does (ADR-0047): a corpus revision.
-        held_incomplete = await store.get_incomplete(
-            instrument_id, version_id, tenant_id=tenant_id
-        )
+        held_incomplete = await store.get_incomplete(instrument_id, version_id, tenant_id=tenant_id)
         restated = sorted(
             c.clause_path
             for c in in_scope

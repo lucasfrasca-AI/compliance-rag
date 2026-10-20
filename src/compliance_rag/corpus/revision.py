@@ -185,32 +185,20 @@ def plan_revision(
         if path not in stored_manifest:
             continue
         held_incomplete = stored_incomplete.get(path, ())
-        if path not in retexted:
-            if held_incomplete != clause.incomplete:
-                # The same text, newly marked incomplete or no longer so.
-                changed.append(
-                    ClauseChange(
-                        clause_path=path,
-                        old_clause_id=stable_id(instrument_id, stored_version_id, path),
-                        new_clause_id=clause.clause_id,
-                        old_sha256=stored_manifest[path],
-                        new_sha256=stored_manifest[path],
-                        old_text=clause.canonical_text,
-                        new_text=clause.canonical_text,
-                        old_incomplete=held_incomplete,
-                        new_incomplete=clause.incomplete,
-                    )
+        if path in retexted:
+            stored_text = stored_texts.get(path)
+            if stored_text is None:
+                raise RevisionDrift(f"{path} is in the manifest but its stored text wasn't read")
+            if canonical_sha256(stored_text) != stored_manifest[path]:
+                raise RevisionDrift(
+                    f"{instrument_id}:{stored_version_id}:{path}: the stored clause doesn't hash "
+                    "to its manifest entry — the bucket disagrees with itself (an unfinished "
+                    "revision is reported by its status, not here)"
                 )
+        elif held_incomplete != clause.incomplete:
+            stored_text = clause.canonical_text  # the same text, marked differently
+        else:
             continue
-        stored_text = stored_texts.get(path)
-        if stored_text is None:
-            raise RevisionDrift(f"{path} is in the manifest but its stored text wasn't read")
-        if canonical_sha256(stored_text) != stored_manifest[path]:
-            raise RevisionDrift(
-                f"{instrument_id}:{stored_version_id}:{path}: the stored clause doesn't hash to "
-                "its manifest entry — the bucket disagrees with itself (an unfinished revision "
-                "is reported by its status, not here)"
-            )
         changed.append(
             ClauseChange(
                 clause_path=path,

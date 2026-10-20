@@ -405,7 +405,11 @@ class AssessmentPipeline:
         failure standing."""
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
-        clause = SourceClause(failed.clause.clause_id, failed.clause.canonical_text)
+        clause = SourceClause(
+            failed.clause.clause_id,
+            failed.clause.canonical_text,
+            incomplete=failed.clause.incomplete,
+        )
         if failed.clause.scope is not Scope.PUBLIC:
             # Read from the bucket, which the generator's store gate never
             # asks (ADR-0032).

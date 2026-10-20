@@ -80,7 +80,9 @@ def _download_text_or_none(blob: _BlobLike) -> str | None:
         return None
 
 
-def _list_form(manifest: dict[str, Any], path: str, sha256: str, incomplete: Incomplete) -> None:
+def _set_manifest_entry(
+    manifest: dict[str, Any], path: str, sha256: str, incomplete: Incomplete
+) -> None:
     """One clause's form on the manifest: its hash, and its incompleteness if
     it has one (ADR-0047)."""
     manifest.setdefault("clause_paths", {})[path] = sha256
@@ -181,7 +183,7 @@ class GCSClauseStore(ClauseStore):
             content_type="application/json",
         )
         manifest = await self._read_manifest_or_empty(clause.instrument_id, clause.version_id)
-        _list_form(
+        _set_manifest_entry(
             manifest,
             clause.clause_path,
             canonical_sha256(clause.canonical_text),
@@ -210,7 +212,7 @@ class GCSClauseStore(ClauseStore):
             manifest = await self._read_manifest_or_empty(instrument_id, version_id)
             for clause in clauses:
                 if (clause.instrument_id, clause.version_id) == (instrument_id, version_id):
-                    _list_form(
+                    _set_manifest_entry(
                         manifest,
                         clause.clause_path,
                         canonical_sha256(clause.canonical_text),
@@ -307,7 +309,9 @@ class GCSClauseStore(ClauseStore):
         )
         if changed or not on_record:
             for path in changed:
-                _list_form(manifest, path, record.written[path], record.written_incomplete[path])
+                _set_manifest_entry(
+                    manifest, path, record.written[path], record.written_incomplete[path]
+                )
             if not on_record:
                 recorded.append(record.to_json())
             await self._write_manifest(record.instrument_id, record.version_id, manifest)

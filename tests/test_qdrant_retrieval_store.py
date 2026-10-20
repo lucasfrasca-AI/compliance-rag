@@ -116,6 +116,14 @@ async def test_qdrant_satisfies_the_revise_chunks_contract(store: QdrantRetrieva
     await assert_revise_chunks_contract(store)
 
 
+async def test_qdrant_satisfies_the_chunk_state_contract(store: QdrantRetrievalStore) -> None:
+    """An incomplete clause's state is in its point's payload, and a revision
+    of state alone sets it with no embedding (ADR-0047)."""
+    from tests.contracts.test_corpus_revision import assert_chunk_state_contract
+
+    await assert_chunk_state_contract(store)
+
+
 async def test_qdrant_retrieval_store_satisfies_the_shared_contract(
     store: QdrantRetrievalStore, ledger: FakeLedgerStore
 ) -> None:

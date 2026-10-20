@@ -74,6 +74,12 @@ class RevisionAuthorization:
             )
         return written[path]
 
+    def incomplete_for(self, clause_id: str) -> Incomplete:
+        """The incompleteness this revision gives `clause_id` (ADR-0047), or
+        `PermissionError` if the clause isn't one it writes in its version."""
+        self.sha256_for(clause_id)
+        return self.record.written_incomplete[parse_stable_id(clause_id)[2]]
+
     def check_form(self, clause_id: str, canonical_text: str, incomplete: Incomplete) -> None:
         """`canonical_text` is the text this revision records for `clause_id`,
         and `incomplete` the incompleteness it records (ADR-0047)."""
@@ -82,7 +88,7 @@ class RevisionAuthorization:
                 f"{clause_id}: the text given is not the text revision "
                 f"{self.record.revision_id} records (its hash differs)"
             )
-        recorded = self.record.written_incomplete[parse_stable_id(clause_id)[2]]
+        recorded = self.incomplete_for(clause_id)
         if incomplete != recorded:
             raise PermissionError(
                 f"{clause_id}: given as {described(incomplete)}, but revision "

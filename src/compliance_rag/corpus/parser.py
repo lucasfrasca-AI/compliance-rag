@@ -114,7 +114,7 @@ class _Block:
     inner_text: str  # tags stripped, entities unescaped, whitespace collapsed
     inner_html: str  # raw, tags intact — only Definition's term-span split needs this
     open_tag_start: int
-    end: int = 0
+    end: int
 
 
 def _scan_blocks(source: str) -> list[_Block]:
@@ -207,7 +207,7 @@ def _non_text_elements(source: str, blocks: list[_Block]) -> tuple[list[_Element
     return sorted(elements, key=lambda e: e.offset), in_table
 
 
-def _with(incomplete: Incomplete, more: Incomplete) -> Incomplete:
+def _merged(incomplete: Incomplete, more: Incomplete) -> Incomplete:
     """Both, each distinct reason once, in the order first met."""
     return tuple(dict.fromkeys((*incomplete, *more)))
 
@@ -412,13 +412,13 @@ _END = 1 << 62
 
 def _parse_tree(
     blocks: list[_Block],
-    elements: list[_Element] | None = None,
-    in_table: frozenset[int] = frozenset(),
+    elements: list[_Element],
+    in_table: frozenset[int],
 ) -> list[_SectionNode]:
     """The section tree, and each image or table in `elements` placed on the
     provision open where it occurs (ADR-0047). A block inside a table is the
     table's: it neither opens nor ends a provision."""
-    pending = list(reversed(elements or []))
+    pending = list(reversed(elements))
     provision: _DefinitionNode | _SubsectionNode | None = None
     last_index: int | None = None
 
@@ -429,7 +429,7 @@ def _parse_tree(
         while pending and pending[-1].offset < before:
             element = pending.pop()
             if provision is not None:
-                provision.incomplete = _with(provision.incomplete, (element.incompleteness,))
+                provision.incomplete = _merged(provision.incomplete, (element.incompleteness,))
 
     sections: list[_SectionNode] = []
     current_schedule: str | None = None
@@ -645,7 +645,7 @@ def _emit_subsection(
     incomplete = subsection.incomplete
     if singleton:
         for definition in definitions:
-            incomplete = _with(incomplete, definition.incomplete)
+            incomplete = _merged(incomplete, definition.incomplete)
     ctx.clauses.append(
         ctx.build(subsection_path, " ".join(p for p in rendered_parts if p), incomplete)
     )

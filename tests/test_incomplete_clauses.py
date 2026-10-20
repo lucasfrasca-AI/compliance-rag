@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,7 @@ def test_s6da_2_is_stored_as_it_is_and_marked_incomplete_for_its_formula() -> No
     """The constructs cut holds s6DA verbatim, its formula an `<img>` in a
     `Formula` block. The clause ends where the Act's words end; the formula
     marks it incomplete; nothing else in the cut is."""
+    assert _fixture("constructs").count("<img") == 1  # every image in the cut is accounted for
     clauses = _parse(_fixture("constructs"))
     s6da_2 = clauses["s6da/2"]
     assert s6da_2.text.endswith("is the amount worked out using the formula:")
@@ -337,6 +339,19 @@ def test_every_clause_the_whole_compilation_marks() -> None:
     assert len(marked) == 1 + len(tables) + len(PENALTY_CLAUSES) == 166
     selected = {c.clause_path for c in load_compilation_clauses().clauses}
     assert set(marked) & selected == {"s6da/2"}
+    # What the conservation test (ADR-0039) can't see, accounted for (#211):
+    # every image and table between section 1 and the endnotes marks a
+    # provision; the only others are the coat of arms before section 1 and
+    # the endnotes' four tables, which belong to no provision.
+    text = raw.decode("utf-8")
+    first_section, endnotes = text.find('class="ActHead5"'), text.find('class="ENotesHeading1"')
+    tables = [m.start() for m in re.finditer(r"<table\b", text)]
+    images = [m.start() for m in re.finditer(r"<img\b", text)]
+    assert len([t for t in tables if first_section < t < endnotes]) == len(TABLE_PROVISIONS)
+    assert len([t for t in tables if t > endnotes]) == 4
+    assert len([i for i in images if first_section < i < endnotes]) == 1  # the formula
+    assert len([i for i in images if i < first_section]) == 1  # the coat of arms
+    assert len(re.findall(r'<p class="Penalty"', text)) == 61
     assert not any(ALT.lower() in c.text.lower() for c in clauses.values())
 
 

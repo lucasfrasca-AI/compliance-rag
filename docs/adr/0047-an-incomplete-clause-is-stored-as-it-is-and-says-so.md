@@ -94,6 +94,17 @@ inside it). The model's calls:
 - The coat of arms (before s1) and the endnotes' four tables are in no
   provision and mark nothing.
 
+**This is what #211 asked of the conservation test** (the model's call: in
+its own test, not by widening ADR-0039's word count). ADR-0039's test counts
+the words of six text classes and so can't see an image or a table. The new
+test accounts for every image, table and penalty line: each one between
+section 1 and the endnotes marks a provision, and the only others are named
+(the coat of arms; the endnotes' four tables). The next compilation's formula
+can't disappear unnoticed: it either marks its clause or fails that count.
+It runs on the whole compilation only where the pinned source is on disk, as
+the parser's other whole-compilation test does; in CI, the constructs cut
+(which holds s6DA) and `clauses.json` carry it.
+
 **3. Where the state lives: with the clause, in every store** (the model's
 call). It is part of the stored corpus, not derived metadata: what a citation
 of the clause means depends on it.
@@ -194,7 +205,7 @@ shows the clause was incomplete and who completed it, when and why.
   available in text form", and Track A's reason names the clause
   ("s 6DA(2) is incomplete: the formula is not available in text form").
 - **A chat read back** (#162) re-displays citations by id and shows no flag:
-  a follow-up.
+  #228.
 - **Every clause the parse marks is reported**, in the test that pins the
   whole compilation; a selection that grows to s16A or Part IIIA ingests those
   clauses already marked.

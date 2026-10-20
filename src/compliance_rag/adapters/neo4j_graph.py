@@ -800,7 +800,7 @@ class Neo4jGraph(GraphAdmin):
                 await tx.run(
                     "MATCH (n:Clause {stable_id: $stable_id}) "
                     "SET n.canonical_sha256 = $sha, "
-                    "n.incomplete_reasons = $reasons, n.incomplete_details = $details, "
+                    f"n.{INCOMPLETE_REASONS} = $reasons, n.{INCOMPLETE_DETAILS} = $details, "
                     "n.corrections = coalesce(n.corrections, []) + $entry REMOVE n._lock",
                     stable_id=clause_id,
                     sha=entry.sha256,
