@@ -3,7 +3,8 @@
 - Status: accepted. The coordinator chose option (a) of the #239 comment
   (2026-10-20). The details below are the model's calls, made within that.
 - Date: 2026-10-20
-- Issue: #239 (gap 6 and I2 of `docs/research/phase3-product-options.md`)
+- Issue: #239 (gap 6 and I2 of `docs/research/phase3-product-options.md`);
+  #243 amended section 5
 - Amends: `CONTEXT.md`'s Display form entry ("a pure function of the path"
   now holds for library law only)
 - Touches: ADR-0003 (blocked citations), ADR-0019 (anchors: unchanged),
@@ -116,8 +117,19 @@ the system prompt tells the model to name a clause in prose by that form. The
 form goes in as a JSON string, so a quote in a title is escaped and can't
 close it early to pose as an exception, a qualifier or an incompleteness. It
 is also hashed into the fence's boundary, so a title can't contain its
-boundary, as clause text can't. The repair prompt's single-clause fence is
-unchanged.
+boundary, as clause text can't.
+
+**The repair prompt's fence is marked the same way (amended by #243).** It
+first left the repair's single-clause fence as it was, so the model saw one
+clause under two labels between an attempt and its repair. The repair now
+fences the very `SourceClause` the answer prompt did (`answer()` keeps what it
+showed, and `_repair` takes only its text from the verifier's canonical text),
+so the form, the exception and qualifier glosses (ADR-0037, ADR-0044) and the
+incomplete flag (ADR-0047) come from the one `SourceClause.marker`, and are
+JSON-quoted and hashed into the repair fence's boundary as they are here. The
+failed-quote fence still marks by id alone. The repair's system prompt says
+the marker may say more than the id and that it describes the clause rather
+than being part of its text.
 
 **6. A missing title gives the number alone.** A citation of a version the
 ledger doesn't hold for this tenant (only a citation that failed
