@@ -539,7 +539,8 @@ class UnreadableReason(StrEnum):
     NOT_AN_OBJECT = "not_an_object"
     """The element isn't a JSON object."""
     NO_CLAUSE = "no_clause"
-    """It names no clause, or not as a stable clause id."""
+    """It names no clause, or not as a stable clause id. A blocked entry that
+    isn't a readable stable id (a string or not) is this too (#234)."""
     WRONG_VERSION = "wrong_version"
     """Its version isn't the version its clause id is of."""
     BAD_INCOMPLETE = "bad_incomplete"
@@ -567,6 +568,11 @@ class UnreadableCitation:
 
 Citation = ChatCitation | UnreadableCitation
 """A citation as a chat reads back: whole, or marked unreadable."""
+
+BlockedClause = str | UnreadableCitation
+"""A blocked citation's clause id as a chat reads it back: the stable id, or an
+`UnreadableCitation` in its place when the stored element isn't one (#234). An
+unreadable one has no `clause_id`: a well-formed id is a readable entry."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -626,7 +632,9 @@ class ChatTurn:
     citations: tuple[Citation, ...]
     """As recorded; a corrupt stored one reads back as an `UnreadableCitation`
     in its place (#232). A turn about to be written holds none."""
-    blocked: tuple[str, ...]
+    blocked: tuple[BlockedClause, ...]
+    """As recorded; a corrupt stored element reads back as an
+    `UnreadableCitation` in its place (#234)."""
     as_of: dt.date
     """The date the request read the law on."""
     trace_id: str

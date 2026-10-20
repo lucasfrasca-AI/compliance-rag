@@ -43,16 +43,18 @@ _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 # _TENANT_PREFIX can't express as a character class (`_public` reserved) are
 # enforced by validate_tenant_id() in validate_instrument_id() below.
 _TENANT_PREFIX = r"[^/:]+"
-INSTRUMENT_ID_RE = re.compile(rf"^(?:(?P<tenant>{_TENANT_PREFIX})/)?(?P<instrument>{_SEGMENT})$")
+# These four end in `\Z`, not `$`: `$` also matches before a trailing newline,
+# so `"…:s6da/2\n"` was a stable id (#234). `\Z` is the end of the string only.
+INSTRUMENT_ID_RE = re.compile(rf"^(?:(?P<tenant>{_TENANT_PREFIX})/)?(?P<instrument>{_SEGMENT})\Z")
 _INSTRUMENT_ID_BODY = rf"(?:{_TENANT_PREFIX}/)?{_SEGMENT}"
-VERSION_ID_RE = re.compile(rf"^{_SEGMENT}$")
+VERSION_ID_RE = re.compile(rf"^{_SEGMENT}\Z")
 # A clause path is slash-separated, hierarchical and lowercase (CONTEXT.md):
 # "sch1/app11/1", "s6c/1/a", "art9/2/b". The dot is still accepted inside a
 # segment for ids that genuinely contain one, e.g. an instrument id.
-CLAUSE_PATH_RE = re.compile(rf"^{_SEGMENT}(?:[./]{_SEGMENT})*$")
+CLAUSE_PATH_RE = re.compile(rf"^{_SEGMENT}(?:[./]{_SEGMENT})*\Z")
 STABLE_ID_RE = re.compile(
     rf"^(?P<instrument_id>{_INSTRUMENT_ID_BODY}):(?P<version_id>{_SEGMENT}):"
-    rf"(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)$"
+    rf"(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)\Z"
 )
 
 

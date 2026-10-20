@@ -229,6 +229,19 @@ shows the clause was incomplete and who completed it, when and why.
   is reported on the request's span (`chat.citation_unreadable`, ids and
   reason) and in the log, which is how an operator learns of it. The answer
   event and a chat build a citation with one function, `citation_json`.
+- **The same for a `blocked` element** (#234). A stored element of `blocked`
+  that isn't a stable clause id (prose, a number, null, an object, an id with a
+  line break) reads back as an `UnreadableCitation` with reason `no_clause` in
+  its place, and the API returns `{"unreadable": true, "reason": "no_clause"}`
+  there; the withheld turn and the rest of the chat are intact (200). It never
+  carries a clause id: a well-formed one is a readable entry. It is reported
+  as `chat.blocked_unreadable` on the span and a warning log, ids, position and
+  the fixed word only. No schema change (the column's constraints test the
+  array, not its elements). `STABLE_ID_RE`, `INSTRUMENT_ID_RE`, `VERSION_ID_RE`
+  and `CLAUSE_PATH_RE` now end in `\Z`, not `$`, which matched before a trailing
+  newline, so `parse_stable_id` rejects an id ending in one. The read path keeps
+  `isprintable()`: a tenant-prefixed id's tenant part (`[^/:]+`) still admits a
+  line break, and the id reaches a log line.
 - **Every clause the parse marks is reported**, in the test that pins the
   whole compilation; a selection that grows to s16A or Part IIIA ingests those
   clauses already marked.

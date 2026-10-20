@@ -22,6 +22,9 @@ with `clause_id`, `cite` and `version_id` when the stored id is well-formed:
 the chat is still returned (200), the citation asserts nothing, and no other
 part of the row is shown (#232). It carries no `incomplete`: what the member
 was shown with it is lost, and the turn's `incomplete` list can't count it.
+
+A blocked clause id that can't be read is marked the same way, in its place in
+`blocked` (#234); it names no clause, since a readable id is a readable entry.
 """
 
 from __future__ import annotations
@@ -30,7 +33,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Request
 
-from compliance_rag.adapters.interfaces import ChatCitation, ChatTurn, Citation, TurnOutcome
+from compliance_rag.adapters.interfaces import (
+    BlockedClause,
+    ChatCitation,
+    ChatTurn,
+    Citation,
+    TurnOutcome,
+    UnreadableCitation,
+)
 from compliance_rag.api.answers import WITHHELD, citation_json, incomplete_clauses_json
 from compliance_rag.api.deps import UUID4_HEX, CurrentCaller, services_of
 from compliance_rag.assessment.coverage_report import cite
@@ -38,11 +48,9 @@ from compliance_rag.assessment.coverage_report import cite
 router = APIRouter(prefix="/v1")
 
 
-def _citation_json(c: Citation) -> dict[str, object]:
-    if isinstance(c, ChatCitation):
-        return citation_json(c.clause_id, c.version_id, c.incomplete)
-    # A corrupt stored citation, in its place: marked, with the clause when it
-    # could still be named, and nothing else of the row (#232).
+def _unreadable_json(c: UnreadableCitation) -> dict[str, object]:
+    # A corrupt stored element, in its place: marked, with the clause when it
+    # could still be named, and nothing else of the row (#232, #234).
     unreadable: dict[str, object] = {"unreadable": True, "reason": c.reason.value}
     if c.clause_id is not None:
         unreadable["clause_id"] = c.clause_id
@@ -50,6 +58,18 @@ def _citation_json(c: Citation) -> dict[str, object]:
     if c.version_id is not None:
         unreadable["version_id"] = c.version_id
     return unreadable
+
+
+def _citation_json(c: Citation) -> dict[str, object]:
+    if isinstance(c, ChatCitation):
+        return citation_json(c.clause_id, c.version_id, c.incomplete)
+    return _unreadable_json(c)
+
+
+def _blocked_json(b: BlockedClause) -> dict[str, object]:
+    if isinstance(b, UnreadableCitation):
+        return _unreadable_json(b)
+    return {"clause_id": b, "cite": cite(b)}
 
 
 def _turn_json(turn: ChatTurn) -> dict[str, object]:
@@ -70,7 +90,7 @@ def _turn_json(turn: ChatTurn) -> dict[str, object]:
         "incomplete": incomplete_clauses_json(
             (c.clause_id, c.incomplete) for c in turn.citations if isinstance(c, ChatCitation)
         ),
-        "blocked": [{"clause_id": b, "cite": cite(b)} for b in turn.blocked],
+        "blocked": [_blocked_json(b) for b in turn.blocked],
         "withheld": WITHHELD.get(turn.outcome),
         "error": turn.outcome.value if turn.outcome.failed else None,
     }

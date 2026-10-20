@@ -10,7 +10,14 @@ from __future__ import annotations
 
 import pytest
 
-from compliance_rag.corpus.models import parse_stable_id, stable_id
+from compliance_rag.corpus.models import (
+    CLAUSE_PATH_RE,
+    INSTRUMENT_ID_RE,
+    STABLE_ID_RE,
+    VERSION_ID_RE,
+    parse_stable_id,
+    stable_id,
+)
 
 INSTRUMENT_ID = "privacy-act-1988"
 VERSION_ID = "TEST-FIXTURE-001"
@@ -69,3 +76,25 @@ def test_colon_is_rejected_in_every_segment(
 def test_parse_stable_id_rejects_the_wrong_part_count(malformed: str) -> None:
     with pytest.raises(ValueError, match="not a stable clause ID"):
         parse_stable_id(malformed)
+
+
+# `$` matches before a trailing newline; the grammar ends at the string (#234).
+@pytest.mark.parametrize("suffix", ["\n", "\r\n", "\nx"], ids=["lf", "crlf", "lf-then-text"])
+def test_a_line_break_after_the_id_is_not_part_of_the_grammar(suffix: str) -> None:
+    built = stable_id(INSTRUMENT_ID, VERSION_ID, "s6da/2")
+    with pytest.raises(ValueError, match="not a stable clause ID"):
+        parse_stable_id(built + suffix)
+    for pattern, whole in (
+        (STABLE_ID_RE, built),
+        (INSTRUMENT_ID_RE, INSTRUMENT_ID),
+        (VERSION_ID_RE, VERSION_ID),
+        (CLAUSE_PATH_RE, "s6da/2"),
+    ):
+        assert pattern.match(whole) is not None
+        assert pattern.match(whole + suffix) is None
+    with pytest.raises(ValueError):
+        stable_id(INSTRUMENT_ID, VERSION_ID, "s6da/2" + suffix)
+    with pytest.raises(ValueError):
+        stable_id(INSTRUMENT_ID, VERSION_ID + suffix, "s6da/2")
+    with pytest.raises(ValueError):
+        stable_id(INSTRUMENT_ID + suffix, VERSION_ID, "s6da/2")

@@ -451,3 +451,65 @@ async def test_a_corrupt_stored_citation_reads_back_unreadable_in_its_place_and_
     assert f"reason={unreadable.reason.value}" in warning.getMessage()
     # Ids and a fixed word, nothing the row held.
     assert "SECRET" not in caplog.text + str(event.attributes)
+
+
+NO_CLAUSE = UnreadableCitation(UnreadableReason.NO_CLAUSE)
+CORRUPT_BLOCKED = [
+    pytest.param("SECRET not a clause id", id="prose"),
+    pytest.param(7, id="number"),
+    pytest.param(None, id="null"),
+    pytest.param({"clause_id": S6DA_2}, id="object"),
+    pytest.param(["SECRET"], id="array"),
+    pytest.param("", id="empty-string"),
+    pytest.param(S6DA_2 + "\n", id="trailing-newline"),
+    pytest.param(S6DA_2 + "\nINJECTED", id="line-break"),
+    pytest.param("acme\nINJECTED/policy:v1:s1", id="line-break-in-the-tenant-part"),
+]
+
+
+@pytest.mark.parametrize("element", CORRUPT_BLOCKED)
+async def test_a_corrupt_stored_blocked_element_reads_back_unreadable_in_its_place(
+    ledger: PostgresLedgerStore, caplog: pytest.LogCaptureFixture, element: object
+) -> None:
+    """#234: a malformed element of the `blocked` JSONB must not make the chat
+    unreachable. It reads back as an `UnreadableCitation` where it was, with no
+    clause id (a readable one would be a readable entry), its neighbours
+    intact; and the span and the log say where, by ids and a fixed reason,
+    never by the row."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_chat_exchange(
+        an_exchange("c1", answer=ChatAnswer(TurnOutcome.BLOCKED, blocked=(S6DA_2,)))
+    )
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute(
+            "UPDATE chat SET blocked = %s WHERE turn_index = 1",
+            (json.dumps([S6DA_2, element, APP11]),),
+        )
+        await conn.commit()
+    with (
+        caplog.at_level(logging.WARNING, logger=postgres_ledger_store.__name__),
+        trace.get_tracer("test").start_as_current_span("request") as span,
+    ):
+        question, answer = await ledger.chat_turns("acme", "uid-1", "c1")
+    assert question.blocked == () and question.content is not None
+    assert answer.blocked == (S6DA_2, NO_CLAUSE, APP11)
+    assert answer.outcome is TurnOutcome.BLOCKED and answer.content is None
+
+    (event,) = [e for e in cast(ReadableSpan, span).events if e.name == "chat.blocked_unreadable"]
+    assert dict(event.attributes or {}) == {
+        "chat.tenant_id": "acme",
+        "chat.id": "c1",
+        "chat.turn_index": 1,
+        "chat.blocked_index": 1,
+        "chat.blocked_unreadable_reason": "no_clause",
+    }
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "reason=no_clause" in warning.getMessage()
+    assert "position=1" in warning.getMessage()
+    assert "SECRET" not in caplog.text + str(event.attributes)
+    assert "INJECTED" not in caplog.text + str(event.attributes)
+
+
+def test_an_unreadable_blocked_entry_is_never_written_back() -> None:
+    with pytest.raises(ValueError, match="isn't written back"):
+        postgres_ledger_store._blocked_row(NO_CLAUSE)  # pyright: ignore[reportPrivateUsage]

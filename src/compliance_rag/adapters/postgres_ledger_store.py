@@ -31,6 +31,7 @@ from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
+    BlockedClause,
     ChatCitation,
     ChatExchange,
     ChatSummary,
@@ -102,6 +103,36 @@ def _citation_row(c: Citation) -> dict[str, object]:
     return row
 
 
+def _blocked_row(b: BlockedClause) -> str:
+    """A blocked clause id as its JSONB element."""
+    if isinstance(b, UnreadableCitation):  # read back from a corrupt row, never recorded
+        raise ValueError("an unreadable blocked entry isn't written back")
+    return b
+
+
+def _stored_clause_id(raw: object) -> tuple[str, str] | None:
+    """A stored clause id and the version it is of, or None when it isn't a
+    stable id. `isprintable` as well as the grammar: the id reaches a log line,
+    and a tenant-prefixed id's tenant part (`[^/:]+`) admits a line break."""
+    if not isinstance(raw, str) or not raw.isprintable():
+        return None
+    try:
+        _, version_id, _ = parse_stable_id(raw)
+    except ValueError:
+        return None
+    return raw, version_id
+
+
+def _blocked_of_row(raw: object) -> BlockedClause:
+    """A stored `blocked` element back to its clause id, or to an
+    `UnreadableCitation` in its place when it isn't a stable id (#234): a
+    corrupt row must not make the member's history unreachable. Nothing of the
+    element is kept, so a corrupt row's content never reaches a response or a
+    log; the reason is the fixed word `no_clause`."""
+    named = _stored_clause_id(raw)
+    return UnreadableCitation(UnreadableReason.NO_CLAUSE) if named is None else named[0]
+
+
 def _citation_of_row(raw: object) -> Citation:
     """A stored element back to its citation, or to an `UnreadableCitation` when
     it can't be: a corrupt row must not make the member's history unreachable
@@ -110,15 +141,11 @@ def _citation_of_row(raw: object) -> Citation:
     if not isinstance(raw, dict):
         return UnreadableCitation(UnreadableReason.NOT_AN_OBJECT)
     element = cast("dict[str, object]", raw)
-    clause_id, version_id = element.get("clause_id"), element.get("version_id")
-    try:
-        if not isinstance(clause_id, str) or not clause_id.isprintable():
-            # `isprintable` too: the id's pattern ends in `$`, which matches
-            # before a trailing newline, and the id reaches a log line.
-            raise ValueError("no clause id")
-        _, clause_version, _ = parse_stable_id(clause_id)
-    except ValueError:
+    version_id = element.get("version_id")
+    named = _stored_clause_id(element.get("clause_id"))
+    if named is None:
         return UnreadableCitation(UnreadableReason.NO_CLAUSE)
+    clause_id, clause_version = named
     if version_id != clause_version:
         return UnreadableCitation(UnreadableReason.WRONG_VERSION, clause_id)
     try:
@@ -129,28 +156,33 @@ def _citation_of_row(raw: object) -> Citation:
 
 
 def _flag_unreadable(
-    tenant_id: str, chat_id: str, turn_index: int, citations: tuple[Citation, ...]
+    tenant_id: str,
+    chat_id: str,
+    turn_index: int,
+    entries: tuple[Citation, ...] | tuple[BlockedClause, ...],
+    kind: str,
 ) -> None:
-    """Says on the request's span, and in the log, that a stored citation was
-    unreadable: where it is (ids and position) and the fixed reason, never any
-    of the row. An operator learns of the corruption; the member still gets
-    their chat."""
+    """Says on the request's span, and in the log, that a stored element of a
+    turn's `kind` (`citation` or `blocked`) was unreadable: where it is (ids and
+    position) and the fixed reason, never any of the row. An operator learns of
+    the corruption; the member still gets their chat."""
     span = trace.get_current_span()
-    for position, c in enumerate(citations):
+    for position, c in enumerate(entries):
         if not isinstance(c, UnreadableCitation):
             continue
         attributes: dict[str, str | int] = {
             "chat.tenant_id": tenant_id,
             "chat.id": chat_id,
             "chat.turn_index": turn_index,
-            "chat.citation_index": position,
-            "chat.citation_unreadable_reason": c.reason.value,
+            f"chat.{kind}_index": position,
+            f"chat.{kind}_unreadable_reason": c.reason.value,
         }
         if c.clause_id is not None:
-            attributes["chat.citation_clause_id"] = c.clause_id
-        span.add_event("chat.citation_unreadable", attributes)
+            attributes[f"chat.{kind}_clause_id"] = c.clause_id
+        span.add_event(f"chat.{kind}_unreadable", attributes)
         log.warning(
-            "a stored chat citation is unreadable: tenant=%s chat=%s turn=%d citation=%d reason=%s",
+            "a stored chat %s is unreadable: tenant=%s chat=%s turn=%d position=%d reason=%s",
+            kind,
             tenant_id,
             chat_id,
             turn_index,
@@ -446,7 +478,7 @@ class PostgresLedgerStore(LedgerStore):
                                 turn.content,
                                 None if turn.outcome is None else turn.outcome.value,
                                 Jsonb([_citation_row(c) for c in turn.citations]),
-                                Jsonb(list(turn.blocked)),
+                                Jsonb([_blocked_row(b) for b in turn.blocked]),
                                 turn.as_of,
                                 turn.trace_id,
                             )
@@ -473,7 +505,9 @@ class PostgresLedgerStore(LedgerStore):
         turns: list[ChatTurn] = []
         for r in rows:
             citations = tuple(_citation_of_row(c) for c in cast("list[object]", r[4]))
-            _flag_unreadable(tenant_id, chat_id, int(r[0]), citations)
+            blocked = tuple(_blocked_of_row(b) for b in cast("list[object]", r[5]))
+            _flag_unreadable(tenant_id, chat_id, int(r[0]), citations, "citation")
+            _flag_unreadable(tenant_id, chat_id, int(r[0]), blocked, "blocked")
             turns.append(
                 ChatTurn(
                     tenant_id=tenant_id,
@@ -484,7 +518,7 @@ class PostgresLedgerStore(LedgerStore):
                     content=None if r[2] is None else str(r[2]),
                     outcome=None if r[3] is None else TurnOutcome(str(r[3])),
                     citations=citations,
-                    blocked=tuple(str(b) for b in cast("list[object]", r[5])),
+                    blocked=blocked,
                     as_of=r[6],
                     trace_id=str(r[7]),
                     created_at=r[8],
