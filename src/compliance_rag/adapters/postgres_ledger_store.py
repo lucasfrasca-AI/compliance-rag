@@ -112,7 +112,9 @@ def _citation_of_row(raw: object) -> Citation:
     element = cast("dict[str, object]", raw)
     clause_id, version_id = element.get("clause_id"), element.get("version_id")
     try:
-        if not isinstance(clause_id, str):
+        if not isinstance(clause_id, str) or not clause_id.isprintable():
+            # `isprintable` too: the id's pattern ends in `$`, which matches
+            # before a trailing newline, and the id reaches a log line.
             raise ValueError("no clause id")
         _, clause_version, _ = parse_stable_id(clause_id)
     except ValueError:

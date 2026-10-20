@@ -372,6 +372,16 @@ CORRUPT = [
         id="malformed-id",
     ),
     pytest.param(
+        {"clause_id": S6DA_2 + "\nINJECTED", "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="id-with-a-line-break",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2 + "\n", "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="id-with-a-trailing-newline",
+    ),
+    pytest.param(
         {"clause_id": S6DA_2, "version_id": "v9"},
         UnreadableCitation(UnreadableReason.WRONG_VERSION, S6DA_2),
         id="wrong-version",
