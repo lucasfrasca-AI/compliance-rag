@@ -41,7 +41,7 @@ import json
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
@@ -176,9 +176,11 @@ async def _injection(pipeline: AssessmentPipeline) -> list[dict[str, Any]]:  # A
     return rows
 
 
-async def environment_row(pipeline: AssessmentPipeline, case: EnvironmentCase) -> dict[str, Any]:
+async def environment_row(
+    pipeline: AssessmentPipeline, case: EnvironmentCase
+) -> dict[str, Any]:  # Any: a JSON row
     """One out-of-environment case, answered and checked. The tenant is
-    subscribed as the case says before it is asked."""  # Any: a JSON row
+    subscribed as the case says before it is asked."""
     for instrument_id in case.subscribes:
         await pipeline.ledger.subscribe(
             tenant_id=case.tenant_id, instrument_id=instrument_id, subscribed_by="answer eval"
@@ -217,7 +219,10 @@ async def _environment(pipeline: AssessmentPipeline) -> list[dict[str, Any]]:  #
     return rows
 
 
-async def run(injection: bool, environment: bool = False) -> None:
+Mode = Literal["golden", "injection", "environment"]
+
+
+async def run(mode: Mode) -> None:
     settings = Settings()
     poison = (
         Chunk(
@@ -229,33 +234,34 @@ async def run(injection: bool, environment: bool = False) -> None:
             synthetic=True,
         ),
     )
+    injection = mode == "injection"
     async with live_answer_pipeline(
         settings,
         extra_chunks=poison if injection else (),
         extra_clauses=(POISON_CLAUSE,) if injection else (),
-        gate=environment,
+        whole_compilation=mode == "environment",
     ) as pipeline:
-        if environment:
-            rows = await _environment(pipeline)
-        else:
-            rows = await (_injection(pipeline) if injection else _golden(pipeline))
+        runs = {"golden": _golden, "injection": _injection, "environment": _environment}
+        rows = await runs[mode](pipeline)
 
     stamp = dt.date.today().isoformat()
-    suffix = "-environment" if environment else "-injection" if injection else ""
+    suffix = "" if mode == "golden" else f"-{mode}"
     name = f"{stamp}-{settings.vertex_claude_model}{suffix}.json"
-    failed = [r["id"] for r in rows if environment and not r["check"]["acceptable"]]
-    summary: dict[str, Any] | None = (  # Any: JSON document
-        {"cases": len(rows), "acceptable": len(rows) - len(failed), "failed": failed}
-        if environment
-        else None
-        if injection
-        else summarise(rows)
-    )
+    failed = [r["id"] for r in rows if mode == "environment" and not r["check"]["acceptable"]]
+    summaries: dict[Mode, dict[str, Any] | None] = {  # Any: JSON document
+        "golden": summarise(rows) if mode == "golden" else None,
+        "injection": None,
+        "environment": {
+            "cases": len(rows),
+            "acceptable": len(rows) - len(failed),
+            "failed": failed,
+        },
+    }
     document: dict[str, Any] = {  # Any: JSON document
         "model": settings.vertex_claude_model,
         "region": settings.vertex_claude_region,
         "run_on": stamp,
-        "summary": summary,
+        "summary": summaries[mode],
         "rows": rows,
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -272,4 +278,12 @@ if __name__ == "__main__":
     modes.add_argument("--injection", action="store_true")
     modes.add_argument("--environment", action="store_true")
     arguments = parser.parse_args()
-    asyncio.run(run(arguments.injection, arguments.environment))
+    asyncio.run(
+        run(
+            "injection"
+            if arguments.injection
+            else "environment"
+            if arguments.environment
+            else "golden"
+        )
+    )

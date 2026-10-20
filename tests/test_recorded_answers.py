@@ -38,9 +38,11 @@ RECORDED = sorted(
 async def test_recorded_citations_reverify_to_the_same_outcome(path: Path) -> None:
     document: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))  # Any: JSON
     # An out-of-environment run (#252) retrieves over the whole compilation.
-    gate = path.stem.endswith("-environment")
+    whole_compilation = path.stem.endswith("-environment")
     verifier = Verifier(
-        await golden_clause_store(gate=gate), await golden_ledger(), CanonicalCitationVerifier()
+        await golden_clause_store(whole_compilation=whole_compilation),
+        await golden_ledger(),
+        CanonicalCitationVerifier(),
     )
     drifted: list[str] = []
     for row in document["rows"]:

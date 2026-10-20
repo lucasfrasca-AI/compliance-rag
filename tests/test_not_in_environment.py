@@ -104,6 +104,9 @@ def test_the_humans_lowercase_spam_act_question_is_flagged_by_the_pattern_alone(
         ("Under the Privacy Act 2020, what changed?", ["Privacy Act 2020"]),
         ("Both the Spam Act and the SPAM ACT, under the spam act", ["Spam Act"]),
         ("(see the Spam Act)", ["Spam Act"]),
+        # The verb after a title-case name reads as a verb, unless a statute
+        # is introduced ("under the").
+        ("Under the Spam Act on 1 July, what changed?", ["Spam Act"]),
     ],
 )
 def test_the_pattern_flags_an_act_the_environment_doesnt_hold(
@@ -127,6 +130,9 @@ def test_the_pattern_flags_an_act_the_environment_doesnt_hold(
         "How do I act on a request to delete data?",
         "Is it different in the ACT?",
         "an act or practice that breaches an APP",
+        "Can Acme Act on the Board decision?",
+        "Should Legal Act On It",
+        "Our Marketing Team Act fast",
     ],
 )
 def test_the_pattern_flags_nothing_held_and_never_the_verb_or_the_territory(
@@ -265,6 +271,15 @@ def test_a_part_the_selection_doesnt_hold_is_flagged_though_its_instrument_is(
     assert [a.known_as for a in not_in_environment("the NDB scheme", {}, selected)] == [
         "Notifiable Data Breaches scheme"
     ]
+    # A second committed version that leaves Part IIIC out: held on no date,
+    # since which version is in force isn't known when the register loads.
+    (root / LAW / "v10").mkdir()
+    (root / LAW / "v10" / "manifest.yaml").write_text(
+        'author: "Lucas Frasca"\nreviewed_by: "Lucas Frasca"\ndate: 2026-10-21\n'
+        "prefixes:\n  - sch1/\n",
+        encoding="utf-8",
+    )
+    assert _register(tmp_path, root=root).selected_parts == frozenset()
 
 
 def test_an_absent_register_is_empty_and_a_pending_one_is_refused(tmp_path: Path) -> None:

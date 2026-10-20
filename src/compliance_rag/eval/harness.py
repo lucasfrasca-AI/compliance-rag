@@ -93,12 +93,12 @@ GOLDEN_VALID_FROM = dt.date(2026, 1, 1)
 every golden query's `as_of` (2026-10-01). A fixture date, not a legal one."""
 
 
-async def golden_clause_store(*, gate: bool = False) -> FakeClauseStore:
+async def golden_clause_store(*, whole_compilation: bool = False) -> FakeClauseStore:
     """The golden corpus's canonical text, as `GCSClauseStore` would serve it:
-    the excerpt's, or with `gate` the whole compilation's (`gate_clauses()`),
+    the excerpt's, or with `whole_compilation` the whole compilation's (`gate_clauses()`),
     whose clauses are the same versions as the excerpt's."""
     store = FakeClauseStore()
-    for clause in gate_clauses() if gate else golden_clauses():
+    for clause in gate_clauses() if whole_compilation else golden_clauses():
         await store.put_clause(clause)
     return store
 

@@ -42,6 +42,7 @@ from typing import Any, cast
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from compliance_rag.assessment.environment import contains_words, name_words
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     instrument_owner,
@@ -62,7 +63,6 @@ _NEGATED_PRESENCE = re.compile(
     r"loaded|held|subscribed|part of)\b",
     re.IGNORECASE,
 )
-_WORD = re.compile(r"[a-z0-9]+")
 
 
 class UnsignedEnvironmentCases(ValueError):
@@ -158,17 +158,56 @@ def load_environment_cases(path: Path = ENVIRONMENT_CASES_PATH) -> EnvironmentCa
     return cases
 
 
-def _words(text: str) -> tuple[str, ...]:
-    return tuple(_WORD.findall(text.lower()))
+def _without_year(name: str) -> tuple[str, ...]:
+    needle = name_words(name)
+    return needle[:-1] if len(needle) > 1 and needle[-1].isdigit() else needle
 
 
 def _mentions(text: str, name: str) -> bool:
     """Whether `text` names `name`, with or without its year."""
-    words, needle = _words(text), _words(name)
-    if needle and needle[-1].isdigit() and len(needle) > 1:
-        needle = needle[:-1]
+    return contains_words(name_words(text), _without_year(name))
+
+
+def _asserts(text: str, name: str) -> bool:
+    """Whether `text` speaks as the named instrument's law: "under the Spam
+    Act you may…", "the Spam Act requires…", not after a negation within a
+    few words ("I can't say what the Spam Act requires")."""
+    words, needle = name_words(text), _without_year(name)
     n = len(needle)
-    return n > 0 and any(words[i : i + n] == needle for i in range(len(words) - n + 1))
+    for i in range(len(words) - n + 1):
+        if not needle or words[i : i + n] != needle:
+            continue
+        before, after = set(words[max(0, i - 6) : i]), words[i + n : i + n + 3]
+        if before & _NEGATIONS:
+            continue
+        if (
+            before & {"under", "per"}
+            or set(after) & _ASSERTIVE
+            or ("you" in after and set(after) & {"can", "may", "must", "need", "should"})
+        ):
+            return True
+    return False
+
+
+_NEGATIONS = frozenset({"not", "no", "can", "cannot", "t", "unable", "isn", "without"})
+"""Words that, just before a name, read it as not answered from ("can't" is
+"can" and "t" once punctuation is dropped)."""
+_ASSERTIVE = frozenset(
+    {
+        "require",
+        "requires",
+        "say",
+        "says",
+        "allow",
+        "allows",
+        "permit",
+        "permits",
+        "prohibit",
+        "prohibits",
+        "lets",
+        "means",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +217,9 @@ class CaseCheck:
     says_not_in_environment: bool
     names_held_instrument: bool
     cites_only_held: bool
+    speaks_as_named: bool
+    """The prose speaks as the named instrument's law: the answer the human
+    said must never happen, unless it also says the instrument isn't here."""
 
     @property
     def acceptable(self) -> bool:
@@ -187,7 +229,9 @@ class CaseCheck:
             and self.delivered
             and (
                 self.says_not_in_environment
-                or (self.names_held_instrument and self.cites_only_held)
+                or (
+                    self.names_held_instrument and self.cites_only_held and not self.speaks_as_named
+                )
             )
         )
 
@@ -221,4 +265,5 @@ def check_case(
         names_held_instrument=_mentions(text, case.cites_instead),
         cites_only_held=bool(cited_ids)
         and all(case.holds(parse_stable_id(c)[0]) for c in cited_ids),
+        speaks_as_named=any(_asserts(text, w) for w in words),
     )

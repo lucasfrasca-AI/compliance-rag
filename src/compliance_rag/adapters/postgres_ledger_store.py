@@ -38,7 +38,6 @@ from compliance_rag.adapters.interfaces import (
     ChatTurn,
     Citation,
     LedgerStore,
-    NamedAbsent,
     PolicyVersion,
     Profile,
     RemovalAction,
@@ -46,6 +45,7 @@ from compliance_rag.adapters.interfaces import (
     RemovalOutcome,
     SourceKind,
     SourceVersion,
+    StoredNotInEnvironment,
     TurnOutcome,
     TurnRole,
     UnreadableCitation,
@@ -197,14 +197,14 @@ def _flag_unreadable(
         )
 
 
-def _named_absent_row(n: NamedAbsent) -> dict[str, str | None]:
+def _named_absent_row(n: StoredNotInEnvironment) -> dict[str, str | None]:
     """A named-instrument flag as its JSONB element (#252)."""
     if isinstance(n, UnreadableNotInEnvironment):  # read back from a corrupt row, never recorded
         raise ValueError("an unreadable flag isn't written back")
     return n.json()
 
 
-def _named_absent_of_row(raw: object) -> NamedAbsent:
+def _named_absent_of_row(raw: object) -> StoredNotInEnvironment:
     """A stored element back to its flag, or to an `UnreadableNotInEnvironment`
     in its place when it can't be (as #232 reads a citation): the turn still
     says something it named wasn't held, and nothing of the element is kept."""
@@ -215,7 +215,7 @@ def _named_absent_of_row(raw: object) -> NamedAbsent:
 
 
 def _flag_unreadable_absent(
-    tenant_id: str, chat_id: str, turn_index: int, entries: tuple[NamedAbsent, ...]
+    tenant_id: str, chat_id: str, turn_index: int, entries: tuple[StoredNotInEnvironment, ...]
 ) -> None:
     """Says on the span, and in the log, where a stored flag was unreadable:
     ids and position only, never any of the row."""

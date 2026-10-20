@@ -57,7 +57,7 @@ async def live_answer_pipeline(
     *,
     extra_chunks: tuple[Chunk, ...] = (),
     extra_clauses: tuple[ClauseRecord, ...] = (),
-    gate: bool = False,
+    whole_compilation: bool = False,
 ) -> AsyncGenerator[AssessmentPipeline]:
     """`answer()` on the golden corpus with every real stage: Qdrant, cached
     real embeddings, the int8 cross-encoder, **live Claude** (built only
@@ -66,17 +66,17 @@ async def live_answer_pipeline(
     ledger with every golden version recorded. Shared by the live eval and
     the demo.
 
-    `gate` puts the whole compilation in place of the excerpt, in Qdrant and
+    `whole_compilation` puts it in place of the excerpt, in Qdrant and
     in the clause store alike, so the verifier can verify whatever is
     retrieved; and embeds a question the snapshot lacks with the live model.
     The out-of-environment cases need it: APP 7 isn't in the excerpt."""
-    clauses = await golden_clause_store(gate=gate)
+    clauses = await golden_clause_store(whole_compilation=whole_compilation)
     for clause in extra_clauses:
         await clauses.put_clause(clause)
     ledger = await golden_ledger()
     embedder = (
         LiveFallbackEmbedder(EmbeddingCache.load(), VertexEmbedder.from_settings(settings))
-        if gate
+        if whole_compilation
         else None
     )
     async with (
@@ -86,7 +86,7 @@ async def live_answer_pipeline(
         golden_store(
             settings.qdrant_url or "http://localhost:6333",
             prefix="answer",
-            chunks=gate_chunks() if gate else golden_chunks(),
+            chunks=gate_chunks() if whole_compilation else golden_chunks(),
             embedder=embedder,
         ) as store,
         in_process_reranker(RerankerModel()) as reranker,

@@ -585,7 +585,7 @@ class UnreadableNotInEnvironment:
     #232 does for a citation)."""
 
 
-NamedAbsent = NotInEnvironment | UnreadableNotInEnvironment
+StoredNotInEnvironment = NotInEnvironment | UnreadableNotInEnvironment
 """A named-instrument flag as a chat reads it back: whole, or marked
 unreadable."""
 
@@ -663,7 +663,7 @@ class ChatTurn:
     trace_id: str
     created_at: dt.datetime | None = None
     """When the ledger recorded it; None until it has."""
-    not_in_environment: tuple[NamedAbsent, ...] = ()
+    not_in_environment: tuple[StoredNotInEnvironment, ...] = ()
     """An answer's flags: the instruments its question named that the
     environment didn't hold (#252). As recorded, a corrupt stored one read
     back as an `UnreadableNotInEnvironment` in its place."""

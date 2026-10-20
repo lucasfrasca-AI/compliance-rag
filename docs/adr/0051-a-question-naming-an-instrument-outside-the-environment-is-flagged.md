@@ -59,7 +59,9 @@ Two matchers (the model's design):
 - **A conservative pattern**, "<Name> Act [year]", for names the register
   doesn't hold. Case-insensitive, but it reads the words around "act":
   - a title-case name before a capitalised "Act" ("Spam Act", "Fair Work
-    Act") is a statute, and so is any name with a year after "Act";
+    Act") is a statute, unless a verb's word follows and nothing before says
+    statute ("Can Acme Act on it" names nothing; "under the Spam Act on 1
+    July" does), and so is any name with a year after "Act";
   - a lowercase one is a statute only where its context says so: after a
     word like "under" or "against", after "the" with such a word before it
     ("under the spam act"), or after "the" with a statute's verb or pinpoint
@@ -94,8 +96,11 @@ its versions in force (ADR-0049).
 - A register entry is held by its library id, or by any of its names in a
   held title (a tenant that supplied the Spam Act as an external upload holds
   it).
-- **A part** is held only where its instrument is held *and* a committed
+- **A part** is held only where its instrument is held *and* every committed
   selection manifest of that instrument selects into one of its prefixes.
+  Every, not any (from the review): which version is in force on a date isn't
+  known when the register loads, so a version that leaves the part out flags
+  it on every date, the safe direction.
   The Notifiable Data Breaches scheme is Part IIIC of the Privacy Act
   (ss 26WA–26WT, paths `s26w…`). C2026C00227's selection is Schedule 1 and ss
   6, 6C–6EA and 15, so a tenant holding the Act does not hold the scheme. The
@@ -178,7 +183,10 @@ gate). The model's call:
   snapshot lacks it. Per case: the flag names the instrument by the
   register's name; APP 7.8(b) is in the delivered list; and the answer either
   says the instrument isn't in the environment, or names the held
-  instrument with every citation of held law. The last two are a plain-text
+  instrument with every citation of held law and never speaks as the named
+  instrument's law ("under the Spam Act you may…", "the Spam Act requires…"
+  outside a negation), since naming the Privacy Act in passing doesn't make a
+  Spam Act answer acceptable. The last two are a plain-text
   proxy on the model's prose, recorded for a reviewer to read. A case failing
   any of them fails the run. It can't run today: Claude's quota is zero.
 

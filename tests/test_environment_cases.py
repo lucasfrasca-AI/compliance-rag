@@ -117,6 +117,11 @@ def test_either_accepted_answer_passes_and_the_confident_one_fails(tmp_path: Pat
     assert _check(case, names_held) == {"acceptable": True, "says": False}
     # The failure the human named: a confident Spam Act answer from APP 7 text.
     assert _check(case, CONFIDENT) == {"acceptable": False, "says": False}
+    # Naming the Privacy Act doesn't save an answer that speaks as the Spam Act.
+    speaks_as = "Under the Spam Act you need consent; see APP 7 of the Privacy Act 1988."
+    assert not _check(case, speaks_as)["acceptable"]
+    declines = "I can't say what the Spam Act requires. The Privacy Act 1988's APP 7.2 permits it."
+    assert _check(case, declines)["acceptable"]
     # The flag and the label are required whatever the answer says.
     assert not _check(case, says, flagged=[None])["acceptable"]
     assert not _check(case, says, delivered=[APP7_2])["acceptable"]
@@ -143,6 +148,7 @@ async def test_the_eval_row_subscribes_answers_and_checks_one_case(tmp_path: Pat
         "says_not_in_environment": False,
         "names_held_instrument": False,
         "cites_only_held": True,
+        "speaks_as_named": True,
         "acceptable": False,
     }
     json.dumps(row)  # what the script records

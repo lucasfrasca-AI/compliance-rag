@@ -366,6 +366,11 @@ VERB_FOLLOWS = frozenset(
         "without",
         "against",
         "with",
+        "fast",
+        "first",
+        "early",
+        "late",
+        "out",
     ]
 )
 """The word after "act" that reads it as the verb ("the board act on advice")."""
@@ -453,7 +458,7 @@ class RegisterFile(_Strict):
         seen: dict[tuple[str, ...], str] = {}
         for entry in self.instruments:
             for name in entry.names:
-                key = _words(name)
+                key = name_words(name)
                 if key in seen and seen[key] != entry.known_as:
                     raise ValueError(f"{name!r} names both {seen[key]} and {entry.known_as}")
                 seen[key] = entry.known_as
@@ -490,15 +495,21 @@ def _overlaps(entry: str, prefix: str) -> bool:
 
 
 def part_selected(entry: RegisterEntry, instruments_root: Path = INSTRUMENTS_ROOT) -> bool:
-    """A part is selected when a committed selection manifest of its
-    instrument selects into one of its prefixes."""
+    """A part is selected when every committed selection manifest of its
+    instrument selects into one of its prefixes. Every, not any: which
+    version is in force on a date isn't known here, so a version that leaves
+    the part out flags it on every date, the safe direction, rather than an
+    old one that held it vouching for one that doesn't."""
     if entry.part_of is None:
         raise ValueError(f"{entry.known_as} is not a part")
-    for path in sorted((instruments_root / entry.part_of).glob("*/manifest.yaml")):
-        manifest = parse_selection_manifest(path.read_text(encoding="utf-8"))
-        if any(_overlaps(e, p) for e in manifest.prefixes for p in entry.paths):
-            return True
-    return False
+    manifests = [
+        parse_selection_manifest(path.read_text(encoding="utf-8"))
+        for path in sorted((instruments_root / entry.part_of).glob("*/manifest.yaml"))
+    ]
+    return bool(manifests) and all(
+        any(_overlaps(e, p) for e in manifest.prefixes for p in entry.paths)
+        for manifest in manifests
+    )
 
 
 def load_instrument_register(
@@ -545,7 +556,9 @@ class NamedInstrument:
     """The register's entry, when the register matched it."""
 
 
-def _words(text: str) -> tuple[str, ...]:
+def name_words(text: str) -> tuple[str, ...]:
+    """A name's words as they are compared: lowercase letters and digits,
+    punctuation dropped ("Telecommunications (Interception and Access) Act")."""
     return tuple(_TITLE_WORD_RE.findall(text.lower()))
 
 
@@ -585,7 +598,7 @@ def _register_matches(question: str, register: InstrumentRegister) -> list[Named
         if kept and start < kept[-1].end:
             continue
         text = question[start:end]
-        kept.append(NamedInstrument(_fold(text), start, end, _words(text), entry))
+        kept.append(NamedInstrument(_fold(text), start, end, name_words(text), entry))
     return kept
 
 
@@ -659,8 +672,12 @@ def _pattern_match(question: str, act: re.Match[str]) -> NamedInstrument | None:
     is_title = title_case and all(
         _is_capitalised(w) for w, _ in name if _bare(w) not in TITLE_CONNECTORS
     )
+    # A title-case name reads as a statute's unless the verb follows and
+    # nothing before it says statute: "Can Acme Act on it" names nothing,
+    # "under the Spam Act on 1 July" does.
+    verb = next_word in VERB_FOLLOWS and before != "the" and before not in STATUTE_AFTER
     reads_as_statute = (
-        is_title
+        (is_title and not verb)
         or year is not None
         or before in STATUTE_AFTER
         or (
@@ -675,7 +692,7 @@ def _pattern_match(question: str, act: re.Match[str]) -> NamedInstrument | None:
         return None
     start = name[0][1]
     text = question[start:end]
-    return NamedInstrument(_fold(text), start, end, _words(text))
+    return NamedInstrument(_fold(text), start, end, name_words(text))
 
 
 def named_instruments(question: str, register: InstrumentRegister) -> tuple[NamedInstrument, ...]:
@@ -743,14 +760,17 @@ class NotInEnvironment:
         return shown if self.part_of is None else f"{shown} (part of {self.part_of})"
 
 
-def _contains(haystack: tuple[str, ...], needle: tuple[str, ...]) -> bool:
+def contains_words(haystack: tuple[str, ...], needle: tuple[str, ...]) -> bool:
+    """Whether `needle`'s words appear in `haystack`, together and in order."""
     n = len(needle)
     return n > 0 and any(haystack[i : i + n] == needle for i in range(len(haystack) - n + 1))
 
 
 def _in_a_title(words: tuple[str, ...], environment: EnvironmentTitles) -> bool:
     return any(
-        _contains(_words(title), words) for titles in environment.values() for title in titles
+        contains_words(name_words(title), words)
+        for titles in environment.values()
+        for title in titles
     )
 
 
@@ -764,7 +784,7 @@ def _held(
         return entry.part_of in environment and entry.known_as in register.selected_parts
     if entry.library_id is not None and entry.library_id in environment:
         return True
-    return any(_in_a_title(_words(name), environment) for name in entry.names)
+    return any(_in_a_title(name_words(name), environment) for name in entry.names)
 
 
 def not_in_environment(
