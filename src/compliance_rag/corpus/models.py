@@ -392,7 +392,7 @@ def clause_ancestors(clause_id: str) -> tuple[str, ...]:
     )
 
 
-PARAGRAPH_SEGMENT_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+[a-z]?)$")
+PARAGRAPH_SEGMENT_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+[a-z]?)\Z")
 """A subsection, paragraph or subparagraph segment of a clause path: `1`,
 `1a`, `a`, `ca`, `iii`, `iia`. Anything else under a section is a defined
 term's slug (`CONTEXT.md`: Definition) — every one in C2026C00227 has three or
@@ -559,7 +559,9 @@ class IncompleteReason(StrEnum):
     A parse correction that takes it in is what completes the clause."""
 
 
-_DETAIL_RE = re.compile(r"^[a-z][a-z ]*[a-z]$")
+# `\Z`, not `$`: `$` also matches before a trailing newline, and a detail is
+# placed in the prompt's fence marker (#236).
+_DETAIL_RE = re.compile(r"^[a-z][a-z ]*[a-z]\Z")
 
 
 class Incompleteness(BaseModel):
