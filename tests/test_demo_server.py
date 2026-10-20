@@ -343,11 +343,14 @@ async def test_a_vertex_quota_refusal_is_shown_as_generation_unavailable_end_to_
     assert "Generation unavailable — the model's quota isn't granted yet" in page
 
 
-async def test_before_the_member_is_listed_the_residency_refusal_is_its_own_state() -> None:
-    """Offshore, with the tester list naming someone else: the gate refuses
+@pytest.mark.parametrize("testers", ["", LISTED])
+async def test_before_the_member_is_listed_the_residency_refusal_is_its_own_state(
+    testers: str,
+) -> None:
+    """Offshore, with no tester listed, or someone else: the gate refuses
     before anything is computed (ADR-0032), and the page renders it as a
     refusal, naming who asked and how to be listed."""
-    settings = _settings(**OFFSHORE, offshore_generation_testers=LISTED)
+    settings = _settings(**OFFSHORE, offshore_generation_testers=testers)
     app = await _demo_app(FakeDemoGenerator(), fake=False, settings=settings)
     _, events = await _ask(app)
     assert [name for name, _ in events] == ["error"]
@@ -394,6 +397,7 @@ def test_main_serves_as_the_member_it_was_given(
         served.update(kwargs)
 
     monkeypatch.setattr(demo_server, "serve", serve)
+
     def configured(_: Settings) -> None:
         pass
 

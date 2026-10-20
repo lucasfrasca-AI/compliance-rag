@@ -363,9 +363,10 @@ async function handle(name, data, traceId) {
     else if (data.error === "residency") showRefused(data, traceId);
     else await showError(data, traceId);
   } else {
-    stage(`${name}`);
+    // An event this page doesn't know: listed above the running stage,
+    // which it neither ends nor relabels.
+    $("stages").insertBefore(el("li", `${new Date().toLocaleTimeString()} — ${name}`), running ? running.item : null);
   }
-  return name === "answer" || name === "error";
 }
 
 async function ask(event) {
@@ -406,7 +407,9 @@ async function ask(event) {
           if (line.startsWith("event: ")) name = line.slice(7);
           else if (line.startsWith("data: ")) data += line.slice(6);
         }
-        if (await handle(name, data ? JSON.parse(data) : {}, traceId)) finished = true;
+        // Ended once the answer or error has arrived, even if showing it fails.
+        if (name === "answer" || name === "error") finished = true;
+        await handle(name, data ? JSON.parse(data) : {}, traceId);
       }
     }
     if (!finished) {
