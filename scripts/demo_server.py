@@ -8,12 +8,15 @@ never deployed, and nothing in `src/` imports it.
     uv run python -m scripts.demo_server --fake-generator \
         --bucket compliance-rag-508904-corpus              # no model is called
     VERTEX_CLAUDE_MODEL=claude-sonnet-5 VERTEX_CLAUDE_REGION=us \
-    OFFSHORE_GENERATION_TESTERS=local-demo@acme.example \
-        uv run python -m scripts.demo_server --bucket compliance-rag-508904-corpus
+    OFFSHORE_GENERATION_TESTERS=you@example.com \
+        uv run python -m scripts.demo_server --member you@example.com \
+        --bucket compliance-rag-508904-corpus
 
-The real run sends the question offshore only with the demo member listed
-as a tester (ADR-0032); leave the list out and the page shows the gate's
-refusal instead. Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`, the
+The real run sends the question offshore only with the member listed as a
+tester (ADR-0032); leave the list out, or ask as someone it doesn't name, and
+the page shows the gate's refusal instead. `--member` (default
+`local-demo@acme.example`) is who asks, lowercased as the sign-in verifier
+lowercases an email. Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`, the
 corpus is loaded into it at start), the reranker's ONNX model
 (`models/reranker-onnx/`, or `--reranker-onnx`), and Application Default
 Credentials with `GCP_PROJECT_ID` set (the question is embedded in Sydney, and
@@ -22,11 +25,12 @@ law source HTML is read from the corpus bucket, `--bucket` or `CORPUS_BUCKET`).
 **The app is production's.** `api.app.create_app` with its own routers, so the
 answer comes from the same `answer()`, verifier, `answers.citation_json` and
 display form (ADR-0049) a deployment uses. One thing differs: whoever asks is
-a fixed local member of Acme (`DEMO_MEMBER`), by a dependency override on this
-app instance alone. `api/main.py` and `deps.current_member` are untouched, so
-the production app still requires sign-in (`tests/test_demo_server.py`). With
-no sign-in, the server binds 127.0.0.1 and nothing else, and won't start where
-a production marker says it is deployed (`refuse_unless_local`).
+a fixed local member of Acme (`--member`, `DEMO_MEMBER` by default), by a
+dependency override on this app instance alone. `api/main.py` and
+`deps.current_member` are untouched, so the production app still requires
+sign-in (`tests/test_demo_server.py`). With no sign-in, the server binds
+127.0.0.1 and nothing else, and won't start where a production marker says it
+is deployed (`refuse_unless_local`).
 
 **What it runs on:**
 - **Retrieval:** a throwaway collection on a *local* Qdrant (a remote URL is
@@ -48,10 +52,13 @@ a production marker says it is deployed (`refuse_unless_local`).
   `GCSClauseStore.get_source_html`.
 - **Generation:** Claude on Vertex, built by `VertexClaudeGenerator.create`, so
   the residency gate runs first (ADR-0023, ADR-0024). Offshore, ADR-0032 holds
-  as it does in production: the demo member's question is sent only if
-  `OFFSHORE_GENERATION_TESTERS` names `DEMO_MEMBER`'s email, which this server
-  never adds for you. Until the US quota is raised, the call fails with a 429.
-  The API reports that as `internal`, as it must, so the page asks
+  as it does in production: the member's question is sent only if
+  `OFFSHORE_GENERATION_TESTERS` names the `--member` email, which this server
+  never adds for you; otherwise the page shows the residency gate's refusal.
+  Until the US quota is raised, Vertex answers 429 `RESOURCE_EXHAUSTED`: the
+  API sends that as `generation_unavailable` (reason `quota`), and the page
+  shows "Generation unavailable" and nothing the SDK said. For any other
+  failure, which the API reports only as `internal`, as it must, the page asks
   `/demo/failures/<trace id>` what failed and shows it plainly.
 - **`--fake-generator`:** an in-process stand-in that quotes the top-ranked
   retrieved clause and Acme's first policy clause verbatim, so the page can be
@@ -135,8 +142,28 @@ DEFAULT_QDRANT = "http://127.0.0.1:6333"
 
 DEMO_TENANT = POLICY_TENANT_ID
 DEMO_MEMBER = Member(uid="local-demo-member", email="local-demo@acme.example")
-"""Whoever uses the page. Not a tester unless the operator lists this email in
-`OFFSHORE_GENERATION_TESTERS` (ADR-0032)."""
+"""Whoever uses the page, unless `--member` names someone else. Not a tester
+unless the operator lists the email in `OFFSHORE_GENERATION_TESTERS`
+(ADR-0032)."""
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+")
+
+
+def demo_member_as(email: str) -> Member:
+    """The demo member asking as `email`, lowercased as the sign-in verifier
+    lowercases a member's email (`FirebaseTokenVerifier`), so the operator's
+    `OFFSHORE_GENERATION_TESTERS` decides exactly as it does in production."""
+    if not _EMAIL_RE.fullmatch(email):
+        raise ValueError(f"not an email address: {email!r}")
+    return dataclasses.replace(DEMO_MEMBER, email=email.lower())
+
+
+def _member_arg(value: str) -> Member:
+    try:
+        return demo_member_as(value)
+    except ValueError as refused:
+        raise argparse.ArgumentTypeError(str(refused)) from None
+
+
 DEMO_PROFILE = "GA-01"
 """The applicability set's base Acme profile: every APP applies but the two
 that bind only agencies."""
@@ -200,8 +227,9 @@ def describe(error: BaseException) -> str:
 class FailureLog:
     """What failed in a request, by its trace id. The API's `error` event
     says only "internal" for a failure it doesn't recognise, rightly, so the
-    page asks here what it was: today, the zero-quota 429. In memory, local,
-    the most recent requests only."""
+    page asks here what it was. Not for a quota refusal, which the API names
+    itself (`generation_unavailable`), so the page shows none of the SDK's
+    words for it. In memory, local, the most recent requests only."""
 
     limit: int = 50
     _by_trace: OrderedDict[str, list[dict[str, str]]] = field(
@@ -349,10 +377,6 @@ class NoSignIn(TokenVerifier):
         pass
 
 
-async def demo_member() -> Member:
-    return DEMO_MEMBER
-
-
 def render_page(*, fake_generator: bool) -> str:
     """The page, with the fake banner written in by the server whenever the
     fake generator is on: it doesn't depend on the page's script running."""
@@ -381,11 +405,16 @@ def create_demo_app(
     law_sources: ClauseStore,
     failures: FailureLog,
     fake_generator: bool,
+    member: Member = DEMO_MEMBER,
 ) -> FastAPI:
-    """Production's app over `services`, answering as `DEMO_MEMBER`, plus the
+    """Production's app over `services`, answering as `member`, plus the
     page and the three things it needs: where a citation opens, the stored
     law source, and what a failed request's failure was."""
     app = create_app(services)
+
+    async def demo_member() -> Member:
+        return member
+
     app.dependency_overrides[current_member] = demo_member
     page = render_page(fake_generator=fake_generator)
     sources: dict[tuple[str, str], str] = {}
@@ -400,7 +429,7 @@ def create_demo_app(
         return {
             "fake_generator": fake_generator,
             "tenant_id": services.settings.tenant_id,
-            "member": DEMO_MEMBER.email,
+            "member": member.email,
             "generation": "fake, in process"
             if fake_generator
             else f"{services.settings.vertex_claude_model or '(no model configured)'} at {region}"
@@ -589,7 +618,13 @@ def demo_settings(*, qdrant_url: str, fake_generator: bool, bucket: str | None =
 
 
 async def serve(
-    settings: Settings, *, host: str, port: int, fake_generator: bool, onnx_path: Path | None
+    settings: Settings,
+    *,
+    host: str,
+    port: int,
+    fake_generator: bool,
+    onnx_path: Path | None,
+    member: Member = DEMO_MEMBER,
 ) -> None:
     # Again here, as well as in `main`: whatever calls `serve` is refused too.
     refuse_unless_local(host, settings)
@@ -598,7 +633,11 @@ async def serve(
         settings, fake_generator=fake_generator, onnx_path=onnx_path, failures=failures
     ) as (services, law_sources):
         app = create_demo_app(
-            services, law_sources=law_sources, failures=failures, fake_generator=fake_generator
+            services,
+            law_sources=law_sources,
+            failures=failures,
+            fake_generator=fake_generator,
+            member=member,
         )
         await uvicorn.Server(uvicorn.Config(app, host=host, port=port)).serve()
 
@@ -617,6 +656,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="answer with an in-process stand-in, never a model; the page says so",
     )
+    parser.add_argument(
+        "--member",
+        type=_member_arg,
+        default=DEMO_MEMBER,
+        metavar="EMAIL",
+        help=f"ask as this email, lowercased (default: {DEMO_MEMBER.email}); offshore, "
+        "OFFSHORE_GENERATION_TESTERS must list it (ADR-0032)",
+    )
     return parser
 
 
@@ -632,16 +679,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"*** {FAKE_BANNER}: answers come from an in-process stand-in ***", flush=True)
     elif (
         is_offshore(settings.vertex_claude_region)
-        and DEMO_MEMBER.email not in settings.offshore_testers
+        and args.member.email not in settings.offshore_testers
     ):
         print(
             f"Generation runs at {settings.vertex_claude_region}, outside Australia, and "
-            f"{DEMO_MEMBER.email} isn't in OFFSHORE_GENERATION_TESTERS: every question will "
+            f"{args.member.email} isn't in OFFSHORE_GENERATION_TESTERS: every question will "
             "be refused by the residency gate (ADR-0032) until the operator lists it.",
             flush=True,
         )
     print(
-        f"Loading the gate corpus into {settings.qdrant_url}, then http://{LOCAL_HOST}:{args.port}/",
+        f"Asking as {args.member.email}. Loading the gate corpus into {settings.qdrant_url}, "
+        f"then http://{LOCAL_HOST}:{args.port}/",
         flush=True,
     )
     asyncio.run(
@@ -651,6 +699,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             port=args.port,
             fake_generator=args.fake_generator,
             onnx_path=args.reranker_onnx,
+            member=args.member,
         )
     )
 

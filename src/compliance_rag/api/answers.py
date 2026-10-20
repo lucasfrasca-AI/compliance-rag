@@ -52,7 +52,11 @@ is checked, retrieved, generated or written.
   has left still finds it in the chat afterwards, as the tokens it spent are
   recorded either way.
 - **A refused or failed request** records the question and an error marker:
-  `residency`, `malformed_generation` or `internal`. Never the model's text,
+  `residency`, `malformed_generation` or `internal`. A model that refused the
+  request for quota (`GenerationUnavailable`) is sent as
+  `generation_unavailable`, with a fixed reason and the trace id and none of
+  its SDK's words, so a client can say so plainly (#251). It is recorded as
+  `internal`: the answer couldn't be completed. Never the model's text,
   and not the message, which can name clauses: the marker is the whole record.
   The question is the member's own words and stays in the ledger, in Sydney
   (SERVICES.md); a residency refusal exists so that it never leaves Australia,
@@ -84,6 +88,7 @@ from compliance_rag.adapters.interfaces import (
     ChatAnswer,
     ChatCitation,
     ChatExchange,
+    GenerationUnavailable,
     LawScope,
     LedgerStore,
     TurnOutcome,
@@ -115,6 +120,10 @@ MALFORMED: dict[str, object] = {
     "message": "the model's reply wasn't a valid answer; nothing in it is shown",
 }
 FAILED: dict[str, object] = {"error": "internal", "message": "the answer couldn't be completed"}
+UNAVAILABLE: dict[str, object] = {
+    "error": "generation_unavailable",
+    "message": "the model isn't taking requests, so nothing was generated",
+}
 BLOCKED = "a citation didn't match its clause, so the answer is withheld (ADR-0003)"
 UNCITED = "the answer cited no clause, so nothing in it could be verified"
 WITHHELD = {TurnOutcome.BLOCKED: BLOCKED, TurnOutcome.UNCITED: UNCITED}
@@ -274,6 +283,8 @@ def _failure(error: Exception) -> TurnOutcome:
 
 
 def _error_json(outcome: TurnOutcome, error: Exception) -> dict[str, object]:
+    if isinstance(error, GenerationUnavailable):
+        return {**UNAVAILABLE, "reason": error.reason.value, "trace_id": current_trace_id()}
     if outcome is TurnOutcome.RESIDENCY:
         return {"error": "residency", "message": str(error)}
     return MALFORMED if outcome is TurnOutcome.MALFORMED_GENERATION else FAILED
