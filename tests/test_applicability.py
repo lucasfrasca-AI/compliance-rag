@@ -18,8 +18,9 @@ import yaml
 
 from compliance_rag.adapters.fakes import FakeGraphStore
 from compliance_rag.assessment.coverage import Coverage, Outcome, Truth
-from compliance_rag.assessment.coverage_report import cite, render
+from compliance_rag.assessment.coverage_report import render
 from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
+from compliance_rag.corpus.display_form import NO_TITLES, cite
 from compliance_rag.corpus.models import NO_END_DATE
 from compliance_rag.graph.applicability import Snapshot, explain
 from compliance_rag.graph.mappings import MappingSet, load_mapping_set
@@ -299,8 +300,8 @@ async def test_track_b_gets_the_clauses_of_what_applies_or_might_and_nothing_els
 
 
 def test_a_citation_reads_as_a_reader_cites_it() -> None:
-    assert cite("privacy-act-1988:C2026C00227:s6d/4/b") == "s 6D(4)(b)"
-    assert cite("privacy-act-1988:C2026C00227:sch1/app11/1") == "APP 11.1"
+    assert cite("privacy-act-1988:C2026C00227:s6d/4/b", NO_TITLES) == "s 6D(4)(b)"
+    assert cite("privacy-act-1988:C2026C00227:sch1/app11/1", NO_TITLES) == "APP 11.1"
 
 
 # ---- review of #125 ----------------------------------------------------------------

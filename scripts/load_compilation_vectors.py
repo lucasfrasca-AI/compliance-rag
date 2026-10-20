@@ -45,7 +45,7 @@ from compliance_rag.corpus.vector_load import (
     read_version_source,
 )
 from compliance_rag.settings import Settings
-from scripts.ingest_compilation import INSTRUMENT_ID, START, VERSION_ID
+from scripts.ingest_compilation import INSTRUMENT_ID, START, TITLE, VERSION_ID
 
 EFFECTIVE = dt.date.fromisoformat(START)
 """In force from the compilation's start date, as the graph has it
@@ -102,6 +102,7 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
         tenant_id=PUBLIC_TENANT_ID,
         effective_from=EFFECTIVE,
         document_class=DocumentClass.LIBRARY_LAW,
+        title=TITLE,
     )
     stored = len(
         await retrieval.version_chunk_ids(

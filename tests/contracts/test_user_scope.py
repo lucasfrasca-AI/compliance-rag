@@ -258,6 +258,7 @@ async def assert_a_published_private_addition_is_private(
         effective_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.EXTERNAL_UPLOAD,
+        title="The document's title",
     )
     # The store holds only the published chunk, whose id is its clause's.
     for viewer in VIEWERS:

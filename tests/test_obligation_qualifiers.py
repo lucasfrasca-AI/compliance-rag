@@ -484,6 +484,7 @@ async def answering(
         valid_from=OPEN[0],
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     await ledger.subscribe(tenant_id="acme", instrument_id="test-act", subscribed_by="test")
     clauses = FakeClauseStore()
@@ -533,17 +534,34 @@ async def test_an_answer_given_an_obligations_clause_is_given_its_qualifier_and_
         QUALIFIER_B,
     ]
     assert answer.qualifiers == tuple(
-        SourceClause(c, TEXTS[c.split(":")[2]], qualifies=(KEEP,))
-        for c in (QUALIFIER, QUALIFIER_A, QUALIFIER_B)
+        SourceClause(c, TEXTS[c.split(":")[2]], qualifies=(KEEP,), cited_as=cited)
+        for c, cited in (
+            (QUALIFIER, "s 1(3)"),
+            (QUALIFIER_A, "s 1(3)(a)"),
+            (QUALIFIER_B, "s 1(3)(b)"),
+        )
     )
     assert answer.exceptions == tuple(
-        SourceClause(c, TEXTS[c.split(":")[2]], excepts=(KEEP,))
-        for c in (EXCEPTION, EXCEPTION_A, EXCEPTION_B)
+        SourceClause(c, TEXTS[c.split(":")[2]], excepts=(KEEP,), cited_as=cited)
+        for c, cited in (
+            (EXCEPTION, "s 1(2)"),
+            (EXCEPTION_A, "s 1(2)(a)"),
+            (EXCEPTION_B, "s 1(2)(b)"),
+        )
     )
     sent = str(generator.calls[0]["user"])
-    assert f" clause {QUALIFIER} qualifies {KEEP} (how it is satisfied)]\n{TEXTS['s1/3']}\n" in sent
-    assert f" clause {QUALIFIER_B} qualifies {KEEP} (how it is satisfied)]\n" in sent
-    assert f" clause {EXCEPTION_A} excepts {KEEP} (when it does not apply)]\n" in sent
+    assert (
+        f' clause {QUALIFIER} cited as "s 1(3)" qualifies {KEEP} (how it is satisfied)]\n'
+        f"{TEXTS['s1/3']}\n" in sent
+    )
+    assert (
+        f' clause {QUALIFIER_B} cited as "s 1(3)(b)" qualifies {KEEP} (how it is satisfied)]\n'
+        in sent
+    )
+    assert (
+        f' clause {EXCEPTION_A} cited as "s 1(2)(a)" excepts {KEEP} (when it does not apply)]\n'
+        in sent
+    )
     assert TEXTS["s1/30"] not in sent
     assert answer.verified
     assert [c.clause.clause_id for c in answer.citations if c.clause] == [QUALIFIER_A]
@@ -584,8 +602,9 @@ async def test_a_qualifier_the_ranking_returned_is_marked_not_fetched_again() ->
     assert QUALIFIER_B in {c.clause_id for c in answer.retrieval.paragraphs}
     assert store.looked_up == []
     assert {c.clause_id for c in answer.qualifiers} == {QUALIFIER, QUALIFIER_A, QUALIFIER_B}
-    assert f" clause {QUALIFIER_A} qualifies {KEEP} (how it is satisfied)]" in str(
-        generator.calls[0]["user"]
+    assert (
+        f' clause {QUALIFIER_A} cited as "s 1(3)(a)" qualifies {KEEP} (how it is satisfied)]'
+        in str(generator.calls[0]["user"])
     )
 
 

@@ -706,7 +706,10 @@ async def test_an_answer_citing_s6da_2_carries_the_flag_to_the_model_and_the_cli
     assert answer["incomplete"] == [{"clause_id": S6DA_2, "cite": "s 6DA(2)", "reasons": reasons}]
     # The model was told, in the fence, beside the clause.
     user = str(generator.calls[0]["user"])
-    assert f"clause {S6DA_2} incomplete (the formula is not available in text form)]" in user
+    assert (
+        f'clause {S6DA_2} cited as "s 6DA(2)" '
+        "incomplete (the formula is not available in text form)]" in user
+    )
     assert ALT not in user
 
 

@@ -401,6 +401,7 @@ async def test_the_model_is_given_a_ranked_chapeaus_paragraphs_and_may_cite_them
         valid_from=dt.date(2026, 1, 1),
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     clauses = FakeClauseStore()
     for record in records:

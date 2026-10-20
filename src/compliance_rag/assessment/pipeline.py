@@ -16,6 +16,13 @@ the context is delivered with it, fetched by id if need be, and marked as
 what it is. An exception says when the obligation doesn't apply; a qualifier
 says how it is satisfied. The marker and the system prompt keep them apart.
 
+Every clause in the fences carries the form a reader cites it by
+(`display_form.cite`, ADR-0049), so the model names a clause as the member is
+shown it. A policy's form names its document by the title the ledger records
+with the version: read once per answer, for every policy version in the
+context, never once per clause or per citation. The answer carries what was
+read, so the API shows the same form.
+
 An incomplete clause (ADR-0047) is marked so in its fence, and an answer that
 cites one carries it (`Answer.incomplete`): the verifier still checks the
 quote against the stored text, and the flag says that text isn't all the
@@ -53,6 +60,7 @@ from compliance_rag.assessment.prompt import (
     repair_prompt,
     user_prompt,
 )
+from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite, cited_policy_versions
 from compliance_rag.corpus.models import Incomplete, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.telemetry import current_trace_id, span
@@ -124,6 +132,10 @@ class Answer:
     naming the clauses it qualifies, delivered the same way (#182,
     ADR-0044). Kept apart from `exceptions`, so a client can tell "when it
     doesn't apply" from "how it is satisfied"."""
+    titles: Titles = NO_TITLES
+    """The recorded title of every policy version the model was given, read
+    once for this answer (ADR-0049): what the API cites a policy clause by,
+    so the member is shown the form the model was."""
 
     @property
     def incomplete(self) -> tuple[IncompleteCitation, ...]:
@@ -258,6 +270,18 @@ class AssessmentPipeline:
             retrieved, fetched = await self._with_owed(
                 retrieved, tenant_id, as_of, law=law, policy_corpus=sent
             )
+            # One read for every policy version in the context, prefix and
+            # retrieved alike (ADR-0049): each clause is then marked with the
+            # form the member is shown for it.
+            titles = await self.ledger.version_titles(
+                tenant_id,
+                cited_policy_versions(
+                    [*(p.clause_id for p in policies), *(c.clause_id for c in retrieved)]
+                ),
+            )
+            policies = [replace(p, cited_as=cite(p.clause_id, titles)) for p in policies]
+            retrieved = [replace(c, cited_as=cite(c.clause_id, titles)) for c in retrieved]
+            current.set_attribute("answer.titles_read", len(titles))
             exceptions = tuple(c for c in retrieved if c.excepts)
             qualifiers = tuple(c for c in retrieved if c.qualifies)
             current.set_attribute(
@@ -327,6 +351,7 @@ class AssessmentPipeline:
                 trace_id=current_trace_id(),
                 exceptions=exceptions,
                 qualifiers=qualifiers,
+                titles=titles,
             )
             current.set_attribute("verifier.result", result.verified)
             current.set_attribute(

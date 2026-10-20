@@ -129,6 +129,7 @@ async def publish(
         effective_from=effective_from,
         supersedes=supersedes,
         document_class=document_class,
+        title="The document's title",
     )
 
 
@@ -165,6 +166,7 @@ async def assert_corpus_lifecycle_contract(
         valid_from=dt.date(2000, 1, 1),
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     lifecycle = CorpusLifecycle(
         ledger=ledger,
@@ -527,6 +529,7 @@ async def test_a_version_cannot_supersede_itself() -> None:
             effective_from=V1_FROM,
             supersedes="v1",
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
 
 

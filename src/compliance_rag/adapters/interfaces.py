@@ -1170,12 +1170,28 @@ class LedgerStore(ABC):
         valid_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         """A version comes into force (ledger `instrument_version`). The
         record the verifier checks a cited version against, independently of
         what retrieval returned (ADR-0021 mechanism 3). `document_class` is
         the instrument's (#148): the same for every version, and library law
-        if and only if the tenant is `_public` (`check_document_class`)."""
+        if and only if the tenant is `_public` (`check_document_class`).
+
+        `title` is the document's title as its publisher gives it, recorded
+        on the version and as the instrument's latest (ADR-0049): what a
+        policy citation names the document by. Never the instrument id by
+        default; an empty or multi-line one is refused (`validate_title`)."""
+
+    @abstractmethod
+    async def version_titles(
+        self, tenant_id: str, versions: Iterable[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        """The recorded title of each `(instrument_id, version_id)` this
+        tenant's ledger holds, in one read, however many are asked for: what
+        a request reads once for every policy citation it shows (ADR-0049),
+        never once per citation. A version not recorded for this tenant
+        (another tenant's, or none at all) is left out, not an error."""
 
     @abstractmethod
     async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:

@@ -14,6 +14,7 @@ import datetime as dt
 import pytest
 
 from compliance_rag.assessment.evidence import FIELD, Evidence, EvidenceProvenance, Period
+from compliance_rag.corpus.display_form import display_form, numbering
 from compliance_rag.corpus.models import (
     PARAGRAPH_SEGMENT_RE,
     Incompleteness,
@@ -82,3 +83,31 @@ def test_a_golden_fact_field_ending_in_a_newline_is_refused() -> None:
     GoldenFact(field="annual_turnover_aud", value=1, financial_year=2025)
     with pytest.raises(ValueError, match="not snake_case"):
         GoldenFact(field="annual_turnover_aud\n", value=1, financial_year=2025)
+
+
+@pytest.mark.parametrize(
+    ("clause_path", "clean"),
+    [
+        pytest.param("s6", "s 6", id="section"),
+        pytest.param("s6da", "s 6DA", id="section-letters"),
+        pytest.param("art9", "Art 9", id="article"),
+        pytest.param("sch1/app11", "APP 11", id="schedule-app"),
+        pytest.param("s6e/1a", "s 6E(1A)", id="inserted-subsection"),
+        pytest.param("s6c/1/a", "s 6C(1)(a)", id="paragraph"),
+        pytest.param("annexa/8/3", "A.8.3", id="annex"),
+    ],
+)
+def test_a_clause_path_ending_in_a_newline_is_shown_raw_not_rendered_clean(
+    clause_path: str, clean: str
+) -> None:
+    """display_form's _SECTION_RE, _ARTICLE_RE, _SCHEDULE_APP_RE and
+    _INSERTED_RE (#240), and a newline after any segment: the function never
+    raises, and a path that isn't one falls back to itself, newline and all."""
+    assert display_form(clause_path, "privacy-act-1988") == clean
+    assert display_form(clause_path + "\n", "privacy-act-1988") == clause_path + "\n"
+
+
+def test_a_policy_number_ending_in_a_newline_is_not_a_number() -> None:
+    """`numbering`'s digits-only rule, by the same standard (#240)."""
+    assert numbering("3/1", "acme/privacy-policy") == "3.1"
+    assert numbering("3/1\n", "acme/privacy-policy") == "3/1\n"

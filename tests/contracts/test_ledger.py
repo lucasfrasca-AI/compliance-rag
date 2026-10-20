@@ -242,6 +242,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             valid_from=JAN,
             supersedes=None,
             document_class=DocumentClass.LIBRARY_LAW,
+            title="The document's title",
         )
     await ledger.subscribe(tenant_id="acme", instrument_id=LAW, subscribed_by="u1")
     await ledger.subscribe(tenant_id="acme", instrument_id=LAW, subscribed_by="u2")  # idempotent
@@ -265,6 +266,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         valid_from=JAN,
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="Acme Privacy Policy",
     )
     await ledger.record_version(
         tenant_id="acme",
@@ -273,6 +275,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         valid_from=JUN,
         supersedes="v1",
         document_class=DocumentClass.INTERNAL_POLICY,
+        title='Acme "Customer" Privacy Statement',  # renamed in v2
     )
     await ledger.end_version(tenant_id="acme", instrument_id=POLICY, version_id="v1", valid_to=JUN)
     assert await ledger.version_validity(
@@ -288,6 +291,31 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         await ledger.version_validity(tenant_id="acme", instrument_id=POLICY, version_id="v9")
         is None
     )
+    # ---- each version's recorded title, read in one batch (ADR-0049)
+    assert await ledger.version_titles(
+        "acme", [(POLICY, "v1"), (POLICY, "v2"), (POLICY, "v9"), (LAW, "v1")]
+    ) == {
+        (POLICY, "v1"): "Acme Privacy Policy",
+        # A renamed document's earlier version keeps the title it was cited by.
+        (POLICY, "v2"): 'Acme "Customer" Privacy Statement',
+    }
+    assert await ledger.version_titles("other-corp", [(POLICY, "v1")]) == {}
+    assert await ledger.version_titles("acme", []) == {}
+    for bad in ("", "   ", "Acme\nPrivacy Policy", "Acme\u2028Policy", "Acme\x00Policy"):
+        with pytest.raises(ValueError, match="title"):
+            await ledger.record_version(
+                tenant_id="acme",
+                instrument_id=POLICY,
+                version_id="v8",
+                valid_from=JUN,
+                supersedes=None,
+                document_class=DocumentClass.INTERNAL_POLICY,
+                title=bad,
+            )
+    assert (
+        await ledger.version_validity(tenant_id="acme", instrument_id=POLICY, version_id="v8")
+        is None
+    )  # refused before anything was recorded
     with pytest.raises(ValueError, match="already recorded"):
         await ledger.record_version(
             tenant_id="acme",
@@ -296,6 +324,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             valid_from=JAN,
             supersedes=None,
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
     with pytest.raises(KeyError):
         await ledger.end_version(
@@ -326,6 +355,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             valid_from=valid_from,
             supersedes=supersedes,
             document_class=document_class,
+            title="The document's title",
         )
 
     await record("beta/handbook", "v1", JAN)
@@ -417,6 +447,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             valid_from=JAN,
             supersedes=None,
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
 
     # ---- findings citing, by stable-id prefix

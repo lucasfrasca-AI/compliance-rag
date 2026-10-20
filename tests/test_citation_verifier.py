@@ -91,6 +91,7 @@ async def _setup(
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     await ledger.record_version(
         tenant_id=TENANT,
@@ -99,6 +100,7 @@ async def _setup(
         valid_from=V2_FROM,
         supersedes="v1",
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     await ledger.end_version(
         tenant_id=TENANT, instrument_id=POLICY, version_id="v1", valid_to=V2_FROM
@@ -173,6 +175,7 @@ async def test_curly_quotes_and_collapsed_whitespace_still_match() -> None:
         valid_from=V2_FROM,
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     verifier = Verifier(clauses, ledger, CanonicalCitationVerifier())
     checked = await verifier.check(
@@ -199,6 +202,7 @@ async def test_canonicalisation_versions_are_compared_like_for_like() -> None:
         valid_from=V2_FROM,
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     checked = await Verifier(clauses, ledger, CanonicalCitationVerifier()).check(
         DraftCitation(clause_id=old.clause_id, quote="reasonable steps"),
@@ -306,6 +310,7 @@ async def test_library_law_is_read_from_the_public_store() -> None:
         valid_from=dt.date(2026, 1, 1),
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     checked = await Verifier(clauses, ledger, CanonicalCitationVerifier()).check(
         DraftCitation(clause_id=law.clause_id, quote="reasonable in the circumstances"),
@@ -351,6 +356,7 @@ async def test_verification_runs_through_the_real_cloud_storage_clause_store() -
         valid_from=V2_FROM,
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     verifier = Verifier(store, ledger, CanonicalCitationVerifier())
     context = frozenset({V2_PROTECT.clause_id})
@@ -408,6 +414,7 @@ async def test_a_version_cannot_be_recorded_twice() -> None:
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     with pytest.raises(ValueError, match="already recorded"):
         await ledger.record_version(
@@ -417,6 +424,7 @@ async def test_a_version_cannot_be_recorded_twice() -> None:
             valid_from=dt.date(2025, 1, 1),
             supersedes=None,
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
 
 
