@@ -3,7 +3,8 @@
 - Status: accepted. The human decided the state and refused the alt text
   (quoted below), then narrowed Track A to a part year and signed the words a
   reader is shown (Decision 9); the model made the other calls, each named as
-  such.
+  such. Decision 9 amended by ADR-0051 (#254): `part_year_only`, which the
+  model shaped, moves to a model-authored `part_year.yaml`.
 - Date: 2026-10-20
 - Issue: #211 (from the #206 audit)
 - Extends: ADR-0042 (a corpus revision now compares, writes and records a

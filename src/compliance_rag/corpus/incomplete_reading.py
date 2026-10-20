@@ -98,7 +98,7 @@ class _Entry(_Strict):
     clause_id: str
     reason: IncompleteReason
     """The parser's reason this entry is for: a clause marked for another
-    reason too keeps the parser's reading for that one."""
+    reason too keeps the parser's detail for that one."""
 
     @field_validator("clause_id")
     @classmethod
@@ -260,23 +260,29 @@ def parse_part_year_file(source: str, *, instrument_id: str, version_id: str) ->
 def load_incomplete_readings(root: Path = INSTRUMENTS_ROOT) -> IncompleteReadings:
     """Every `incomplete.yaml` and `part_year.yaml` under `root`, each at most
     one per instrument version."""
-    entries: dict[Key, IncompleteReading] = {}
-    for path in sorted(root.glob(f"*/*/{FILE_NAME}")):
-        review = parse_incomplete_reading_file(
-            path.read_text(encoding="utf-8"),
-            instrument_id=path.parent.parent.name,
-            version_id=path.parent.name,
-        )
-        entries |= {c.key: c for c in review.clauses}
-    part_years: dict[Key, PartYearOnly] = {}
-    for path in sorted(root.glob(f"*/*/{PART_YEAR_FILE_NAME}")):
-        part_year = parse_part_year_file(
-            path.read_text(encoding="utf-8"),
-            instrument_id=path.parent.parent.name,
-            version_id=path.parent.name,
-        )
-        part_years |= {c.key: c.part_year_only for c in part_year.clauses}
+    entries = {c.key: c for f in _files(root, IncompleteReadingFile, FILE_NAME) for c in f.clauses}
+    part_years = {
+        c.key: c.part_year_only
+        for f in _files(root, PartYearFile, PART_YEAR_FILE_NAME)
+        for c in f.clauses
+    }
     return IncompleteReadings(entries, part_years)
+
+
+def _files[F: (IncompleteReadingFile, PartYearFile)](
+    root: Path, model: type[F], file_name: str
+) -> list[F]:
+    """Every `file_name` under `root`, each for its folder's version."""
+    return [
+        _parse(
+            model,
+            file_name,
+            path.read_text(encoding="utf-8"),
+            instrument_id=path.parent.parent.name,
+            version_id=path.parent.name,
+        )
+        for path in sorted(root.glob(f"*/*/{file_name}"))
+    ]
 
 
 @functools.cache
