@@ -1,6 +1,7 @@
 """Load the ingested compilation into the deployed Qdrant collection (#144):
-the clauses `scripts/ingest_compilation.py` wrote to the corpus bucket, read
-back, chunked with the real reranker tokenizer, embedded with
+the clauses and source `scripts/ingest_compilation.py` wrote to the corpus
+bucket, read back (the lifecycle checks the bucket holds exactly them and
+writes nothing there, #233), chunked with the real reranker tokenizer, embedded with
 `gemini-embedding-001` in australia-southeast1, and published through
 `CorpusLifecycle` (ADR-0021), which records the version in the ledger too.
 
@@ -38,7 +39,11 @@ from compliance_rag.adapters.vertex_embedder import VertexEmbedder
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, DocumentClass
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
-from compliance_rag.corpus.vector_load import load_version_vectors, read_version_clauses
+from compliance_rag.corpus.vector_load import (
+    load_version_vectors,
+    read_version_clauses,
+    read_version_source,
+)
 from compliance_rag.settings import Settings
 from scripts.ingest_compilation import INSTRUMENT_ID, START, VERSION_ID
 
@@ -71,6 +76,9 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
     clauses = await read_version_clauses(
         clause_store, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID, tenant_id=PUBLIC_TENANT_ID
     )
+    source_html = await read_version_source(
+        clause_store, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID, tenant_id=PUBLIC_TENANT_ID
+    )
     ledger, ledger_location = await _ledger(settings, defer=defer_ledger)
     embedder = VertexEmbedder.from_settings(settings)
     retrieval = QdrantRetrievalStore.from_settings(settings, embedder=embedder, ledger=ledger)
@@ -84,6 +92,7 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
     )
     load = await load_version_vectors(
         clauses,
+        source_html=source_html,
         count_tokens=count_reranker_tokens,
         lifecycle=lifecycle,
         retrieval=retrieval,

@@ -284,6 +284,27 @@ async def test_gcs_clause_store_satisfies_the_purge_contract() -> None:
     await assert_clause_store_purge_contract(GCSClauseStore(_FakeBucket()))
 
 
+async def test_gcs_clause_store_satisfies_the_corpus_lifecycle_contract() -> None:
+    """The lifecycle contract on the real clause store's local path: publishing
+    writes clause text and the manifest through it (#233), and withdraw, purge
+    and replace in place act on what it holds."""
+    from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
+    from tests.contracts.test_corpus_lifecycle import assert_corpus_lifecycle_contract
+
+    ledger = FakeLedgerStore()
+    store = FakeRetrievalStore(ledger=ledger)
+
+    async def stored() -> frozenset[str]:
+        return store.stored_chunk_ids
+
+    async def seed(tenant_id: str, clause_id: str) -> None:
+        ledger.seed_finding(tenant_id, clause_id)
+
+    await assert_corpus_lifecycle_contract(
+        store, store, ledger, GCSClauseStore(_FakeBucket()), stored, seed
+    )
+
+
 async def test_purge_deletes_noncurrent_generations_too() -> None:
     """The versioned bucket keeps every overwrite as a noncurrent generation;
     purge must take those as well, not just the live objects."""

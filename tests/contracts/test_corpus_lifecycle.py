@@ -25,6 +25,7 @@ from compliance_rag.adapters.interfaces import (
     Channel,
     ClauseStore,
     LedgerStore,
+    ManifestMetadata,
     Profile,
     RemovalAction,
     RemovalOutcome,
@@ -39,6 +40,8 @@ from compliance_rag.corpus.models import (
     ClauseRecord,
     DocumentClass,
     Scope,
+    canonical_sha256,
+    sha256_hex,
 )
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry, synthetic_key
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
@@ -87,10 +90,46 @@ gate requires of any tenant upload (ADR-0023)."""
 SYNTHETIC = SyntheticRegistry(keys=INVENTED, source="the lifecycle contract's invented documents")
 
 
+def _words(text: str) -> int:
+    return len(text.split())
+
+
 def _chunk(record: ClauseRecord) -> Chunk:
-    chunk = chunk_clause(record, count_tokens=lambda text: len(text.split()))
+    chunk = chunk_clause(record, count_tokens=_words)
     INVENTED.add(synthetic_key(chunk.tenant_id, chunk.text))
     return chunk
+
+
+def _invented(record: ClauseRecord) -> ClauseRecord:
+    """`record`, registered as the contract's invented content."""
+    INVENTED.add(synthetic_key(record.tenant_id, record.canonical_text))
+    return record
+
+
+def _source(instrument_id: str, version_id: str) -> str:
+    return f"<p>{instrument_id} {version_id}</p>"
+
+
+async def publish(
+    lifecycle: CorpusLifecycle,
+    *clauses: ClauseRecord,
+    effective_from: dt.date,
+    supersedes: str | None = None,
+    document_class: DocumentClass = DocumentClass.INTERNAL_POLICY,
+) -> None:
+    """One version of one instrument, published with its clauses (#233)."""
+    first = clauses[0]
+    await lifecycle.publish_version(
+        tuple(_invented(c) for c in clauses),
+        count_tokens=_words,
+        source_html=_source(first.instrument_id, first.version_id),
+        instrument_id=first.instrument_id,
+        tenant_id=first.tenant_id,
+        version_id=first.version_id,
+        effective_from=effective_from,
+        supersedes=supersedes,
+        document_class=document_class,
+    )
 
 
 def _routes(trace: RetrievalTrace) -> dict[str, frozenset[str]]:
@@ -143,30 +182,30 @@ async def assert_corpus_lifecycle_contract(
         LAW_CLAUSE, "destroy the information or ensure it is de-identified", tenant_id="_public"
     )
     beta = _clause(BETA_DOC, "Beta keeps customer account records for ten years.", tenant_id="beta")
-    for record in (v1, v2, law, beta):
+    for record in (law, beta):
         await clauses.put_clause(record)
     await admin.upsert_chunks((_chunk(law), _chunk(beta)))
 
     # --- Version and retire: v2 supersedes v1; both stay stored. ----------
-    await lifecycle.publish_version(
-        (_chunk(v1),),
-        instrument_id=POLICY,
-        tenant_id="acme",
-        version_id="v1",
-        effective_from=V1_FROM,
-        supersedes=None,
-        document_class=DocumentClass.INTERNAL_POLICY,
-    )
-    await lifecycle.publish_version(
-        (_chunk(v2),),
-        instrument_id=POLICY,
-        tenant_id="acme",
-        version_id="v2",
-        effective_from=V2_FROM,
-        supersedes="v1",
-        document_class=DocumentClass.INTERNAL_POLICY,
-    )
+    await publish(lifecycle, v1, effective_from=V1_FROM)
+    await publish(lifecycle, v2, effective_from=V2_FROM, supersedes="v1")
     assert {V1, V2} <= await stored_chunk_ids()
+    # Publishing writes the clause store too (#233): each version's canonical
+    # text, which the verifier and the cached prefix read, and its manifest.
+    for record in (v1, v2):
+        assert await clauses.get_clause(record.clause_id, tenant_id="acme") == record
+        assert await clauses.get_manifest(POLICY, record.version_id, tenant_id="acme") == {
+            "3/1": canonical_sha256(record.canonical_text)
+        }
+        assert await clauses.get_source_html(
+            POLICY, record.version_id, tenant_id="acme"
+        ) == _source(POLICY, record.version_id)
+        assert await clauses.get_manifest_metadata(
+            POLICY, record.version_id, tenant_id="acme"
+        ) == ManifestMetadata(
+            canonicalisation_version=CANONICALISATION_VERSION,
+            source_html_sha256=sha256_hex(_source(POLICY, record.version_id)),
+        )
     # Each version lists exactly its own chunks (#144), never another's.
     for version_id, chunk_id in (("v1", V1), ("v2", V2)):
         assert await admin.version_chunk_ids(
@@ -202,34 +241,29 @@ async def assert_corpus_lifecycle_contract(
         tenant_id="acme", instrument_id=POLICY, version_id="v2"
     ) == (V2_FROM, None)
 
-    # Re-publishing an existing version would be a replace in place.
-    with pytest.raises(ValueError, match="already published"):
-        await lifecycle.publish_version(
-            (_chunk(v2),),
-            instrument_id=POLICY,
-            tenant_id="acme",
-            version_id="v2",
-            effective_from=V2_FROM,
-            supersedes="v1",
-            document_class=DocumentClass.INTERNAL_POLICY,
-        )
+    # Re-publishing an existing version would be a replace in place, with
+    # the same text or another.
+    retyped = _clause(V2, "Customer account records are kept for one year.", tenant_id="acme")
+    for again in (v2, retyped):
+        with pytest.raises(ValueError, match="already published"):
+            await publish(lifecycle, again, effective_from=V2_FROM, supersedes="v1")
+    assert await clauses.get_clause(V2, tenant_id="acme") == v2
 
     # The class is the instrument's (#148): a version claiming another is
     # refused before anything is written, so a corrected retry still works.
     v3 = _clause(f"{POLICY}:v3:3/1", "Acme keeps customer records for six years.", tenant_id="acme")
-    await clauses.put_clause(v3)
     before = await stored_chunk_ids()
     with pytest.raises(ValueError, match="internal_policy, not external_upload"):
-        await lifecycle.publish_version(
-            (_chunk(v3),),
-            instrument_id=POLICY,
-            tenant_id="acme",
-            version_id="v3",
+        await publish(
+            lifecycle,
+            v3,
             effective_from=AFTER_V2,
             supersedes="v2",
             document_class=DocumentClass.EXTERNAL_UPLOAD,
         )
     assert await stored_chunk_ids() == before
+    assert await clauses.get_clause(v3.clause_id, tenant_id="acme") is None
+    assert not await clauses.get_manifest(POLICY, "v3", tenant_id="acme")
     assert (
         await ledger.version_validity(tenant_id="acme", instrument_id=POLICY, version_id="v3")
         is None
@@ -388,16 +422,7 @@ async def assert_corpus_lifecycle_contract(
     fixed = _clause(
         f"{HANDBOOK}:v1:1/1", "Staff must lock screens when away from their desk.", tenant_id="acme"
     )
-    await clauses.put_clause(typo)
-    await lifecycle.publish_version(
-        (_chunk(typo),),
-        instrument_id=HANDBOOK,
-        tenant_id="acme",
-        version_id="v1",
-        effective_from=V1_FROM,
-        supersedes=None,
-        document_class=DocumentClass.INTERNAL_POLICY,
-    )
+    await publish(lifecycle, typo, effective_from=V1_FROM)
     # A malformed replacement is refused before anything is touched: the
     # target would otherwise be deleted with nothing put back.
     malformed = [
@@ -494,6 +519,8 @@ async def test_a_version_cannot_supersede_itself() -> None:
     with pytest.raises(ValueError, match="replace-in-place"):
         await lifecycle.publish_version(
             (),
+            count_tokens=_words,
+            source_html="<p/>",
             instrument_id=POLICY,
             tenant_id="acme",
             version_id="v1",

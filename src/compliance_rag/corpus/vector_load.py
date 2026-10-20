@@ -1,7 +1,9 @@
 """Load an ingested instrument version into the retrieval store (#144): its
-clauses read back from the clause store, chunked with the real reranker
-tokenizer, and published through `CorpusLifecycle` (ADR-0021), which embeds
-and upserts them and records the version in the ledger.
+clauses and source read back from the clause store, and published through
+`CorpusLifecycle` (ADR-0021), which checks the clause store holds exactly them
+(#233: ingest wrote them, so it writes nothing there), chunks them with the
+real reranker tokenizer, embeds and upserts them and records the version in
+the ledger.
 
 Idempotent on the deterministic chunk ids, never by writing over a stored
 chunk:
@@ -10,9 +12,11 @@ chunk:
 - some of it stored, all of them the clause store's: a load that stopped
   part-way, so the missing chunks are upserted (`complete_version`);
 - every chunk stored and the ledger has the version: nothing to do;
-- every chunk stored, the ledger hasn't: record the version in the ledger
-  only. That is how a ledger that comes later (Cloud SQL, Phase 3, #174)
-  learns of a version whose vectors were loaded before it existed;
+- every chunk stored, the ledger hasn't: record the version in the ledger,
+  after `complete_version` has checked the clause store holds it (writing
+  any clause text a pre-#233 publish never wrote). That is how a ledger that
+  comes later (Cloud SQL, Phase 3, #174) learns of a version whose vectors
+  were loaded before it existed;
 - a stored chunk the clause store doesn't have: refused. It is a different
   clause set, and writing over a stored version is a replace in place, which
   needs a person and `CorpusLifecycle`'s guardrails, not a re-run.
@@ -74,9 +78,24 @@ async def read_version_clauses(
     return tuple(await asyncio.gather(*(read(path) for path in paths)))
 
 
+async def read_version_source(
+    store: ClauseStore, *, instrument_id: str, version_id: str, tenant_id: str
+) -> str:
+    """The source ingest stored beside the version's clauses: what
+    `load_version_vectors` hands the lifecycle, which checks it against the
+    manifest. A version whose ingest never finished has none, and is an error."""
+    source = await store.get_source_html(instrument_id, version_id, tenant_id=tenant_id)
+    if source is None:
+        raise LookupError(
+            f"{instrument_id}:{version_id} has no stored source: its ingest didn't finish"
+        )
+    return source
+
+
 async def load_version_vectors(
     clauses: tuple[ClauseRecord, ...],
     *,
+    source_html: str,
     count_tokens: Callable[[str], int],
     lifecycle: CorpusLifecycle,
     retrieval: RetrievalAdmin,
@@ -91,6 +110,8 @@ async def load_version_vectors(
     """Bring the store and the ledger up to the clause store's version (module
     docstring). Every write goes through `lifecycle`; `retrieval` and `ledger`
     are only read here, and must be the ones `lifecycle` writes to.
+    `clauses` and `source_html` are the version as the clause store holds it
+    (`read_version_clauses`, `read_version_source`).
 
     `supersedes` names the version this one retires from `effective_from`
     (an amendment, ADR-0021, ADR-0042): the lifecycle retires its chunks and
@@ -113,7 +134,9 @@ async def load_version_vectors(
             )
         if not stored:
             await lifecycle.publish_version(
-                chunks,
+                clauses,
+                count_tokens=count_tokens,
+                source_html=source_html,
                 instrument_id=instrument_id,
                 tenant_id=tenant_id,
                 version_id=version_id,
@@ -124,9 +147,17 @@ async def load_version_vectors(
             span.set_attribute("load.written", len(chunks))
             return VectorLoad(len(chunks), 0, written=len(chunks), recorded_in_ledger=True)
         written = 0
-        if len(stored) < len(chunks):
+        recorded = await ledger.version_validity(
+            tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
+        )
+        # Completing before a ledger record also brings the clause store up to
+        # the version (#233), which the record requires; it writes nothing that
+        # is already there.
+        if len(stored) < len(chunks) or recorded is None:
             written = await lifecycle.complete_version(
-                chunks,
+                clauses,
+                count_tokens=count_tokens,
+                source_html=source_html,
                 instrument_id=instrument_id,
                 tenant_id=tenant_id,
                 version_id=version_id,
@@ -134,9 +165,6 @@ async def load_version_vectors(
                 document_class=document_class,
             )
         span.set_attribute("load.written", written)
-        recorded = await ledger.version_validity(
-            tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
-        )
         if recorded is None:
             await lifecycle.record_published_version(
                 instrument_id=instrument_id,

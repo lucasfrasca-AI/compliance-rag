@@ -28,7 +28,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.interfaces import Channel, LawScope, RetrievalAdmin, RetrievalStore
-from compliance_rag.corpus.models import Chunk, DocumentClass, Scope
+from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import REGION
@@ -228,17 +228,30 @@ async def assert_a_published_private_addition_is_private(
     """The write path carries the owner to the store (#171): alice's private
     addition, published through `CorpusLifecycle` like any other document
     (an external upload, never the policy corpus), is reached by alice by
-    every route and by no one else. `store` and `admin` are one backend."""
+    every route and by no one else. `store` and `admin` are one backend.
+    So is her clause's canonical text, which publishing writes too (#233)."""
     ledger = FakeLedgerStore()
+    clauses = FakeClauseStore()
     lifecycle = CorpusLifecycle(
         ledger=ledger,
         retrieval=admin,
-        clauses=FakeClauseStore(),
+        clauses=clauses,
         generation_region=REGION,  # in-region, where real customer data is allowed
         synthetic_registry=SyntheticRegistry(keys=set(), source="no synthetic content"),
     )
+    note = ClauseRecord.build(
+        instrument_id="acme/alice-notes",
+        version_id="v1",
+        clause_path="1/1",
+        text=ALICE_NOTE.text,
+        scope=Scope.USER,
+        tenant_id=ACME,
+        user_id=ALICE,
+    )
     await lifecycle.publish_version(
-        (ALICE_NOTE,),
+        (note,),
+        count_tokens=lambda text: len(text.split()),
+        source_html="<p>alice's notes</p>",
         instrument_id="acme/alice-notes",
         tenant_id=ACME,
         version_id="v1",
@@ -246,15 +259,17 @@ async def assert_a_published_private_addition_is_private(
         supersedes=None,
         document_class=DocumentClass.EXTERNAL_UPLOAD,
     )
+    # The store holds only the published chunk, whose id is its clause's.
     for viewer in VIEWERS:
         routes = await reach(store, viewer, law=ALL_LAW, scopes=EVERYTHING)
         # Her uid in another tenant is not her: the owner is a member of a tenant.
         is_alice = viewer.tenant_id == ACME and viewer.user_id == ALICE
-        expected = frozenset({ALICE_NOTE.chunk_id}) if is_alice else frozenset[str]()
-        assert all(found == expected for found in private_to(routes).values()), (
-            viewer.name,
-            routes,
+        expected = frozenset({note.clause_id}) if is_alice else frozenset[str]()
+        assert all(found == expected for found in routes.values()), (viewer.name, routes)
+        held = await clauses.get_clause(
+            note.clause_id, tenant_id=viewer.tenant_id, user_id=viewer.user_id
         )
+        assert held == (note if is_alice else None), viewer.name
 
 
 async def test_fake_stores_what_the_write_path_publishes_for_its_owner_alone() -> None:
