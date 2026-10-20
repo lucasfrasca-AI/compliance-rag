@@ -24,6 +24,7 @@ from compliance_rag.adapters.graph_query import BuiltQuery
 from compliance_rag.adapters.graph_schema import (
     Bitemporal,
     CorrectionWrite,
+    EdgeRef,
     EdgeWrite,
     EndReason,
     GraphCounts,
@@ -839,6 +840,18 @@ class GraphAdmin(GraphReader):
         each changes only `COSMETIC` properties its node (or crosswalk edge)
         already has, and appends the previous wording, who and why to that
         node's or edge's `corrections` trail. All land, or none does."""
+
+    @abstractmethod
+    async def remove_by_erratum(self, edges: Sequence[EdgeRef], *, by: str, reason: str) -> int:
+        """An acknowledged erratum (ADR-0050), in one transaction: each named
+        edge, of a kind in `ERRATUM_EDGES` from a mapping item
+        (`ERRATUM_SOURCES`) to a Clause, is deleted, and its source node's
+        `corrections` trail gains one entry for the edges removed from it:
+        when, by whom, why, `"erratum": true` and the edges. An edge already
+        gone whose removal the trail records is left as it is (a re-run); one
+        gone with no such record, or any other kind of edge, refuses the
+        whole erratum. Nothing else on any node changes. Returns how many
+        edges were deleted. All land, or none does."""
 
     @abstractmethod
     async def revise_clauses(self, authorization: RevisionAuthorization) -> int:

@@ -1,6 +1,6 @@
 # ADR-0044 — A qualifier travels with its obligation, and so does what is inside an exception or a qualifier
 
-- Status: accepted
+- Status: accepted; its sign-off's APP 12.6 is removed as an erratum (ADR-0050)
 - Date: 2026-10-15
 - Issue: #182
 - Amends: ADR-0037 (an obligation names its exceptions, and they travel with
@@ -201,14 +201,18 @@ each category ends.
   qualifiers: "They're permissions, not qualifiers; 'you may do X' doesn't
   change how an obligation is satisfied, it creates a separate allowance, and
   including them dilutes a category that has to mean something precise to a
-  reader." APP 12.6 stays, as signed. It also says "may", but (the model's
+  reader." APP 12.6 stayed, as signed. It also says "may", but (the model's
   reading) it names a way of giving the access 12.5 requires, so it says how
-  12.5 is satisfied rather than granting a separate allowance.
+  12.5 is satisfied rather than granting a separate allowance. **Superseded
+  on 2026-10-20 by ADR-0050:** the human trimmed 12.6 as a permission like
+  4.2 and 12.10, and its `READ_WITH` edge is removed as an acknowledged
+  erratum, since it never qualified 12.5 at any valid time.
 - **A deeming rule is a possible third category.** APP 6.6 stays out of both:
   "note deeming rules as a possible third category rather than forcing them
   into one of two". A deeming rule says what counts as what. Whether it
   travels with its obligation, labelled as such, is #210 (later).
 
 As signed: **24 exception pairs over 15 obligations**, and **5 qualifier
-pairs** (5.2→5.1, 7.6→7.7, 11.3→11.1, 11.3→11.2, 12.6→12.5). The edge counts
+pairs** (5.2→5.1, 7.6→7.7, 11.3→11.1, 11.3→11.2, 12.6→12.5); after ADR-0050's
+erratum, 4 (12.6→12.5 removed). The edge counts
 as loaded into Aura are in `BUILD_LOG.md`.
