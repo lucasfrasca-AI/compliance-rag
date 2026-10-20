@@ -67,7 +67,7 @@ def fact(
 
 
 def snapshot(source: MappingSet | None = None, as_of: dt.date = AS_OF) -> Snapshot:
-    return snapshot_of_mappings(source or mappings(), as_of, clause_validity=CLAUSES)
+    return snapshot_of_mappings(source or mappings(), as_of, clause_validity=CLAUSES, incomplete={})
 
 
 async def assess(

@@ -148,7 +148,6 @@ async def test_ga05_applies_because_of_the_fy2023_24_figure() -> None:
         pytest.param(
             [(2025, 2_500_000), (2026, 3_200_000)], None, id="over-3m-only-in-a-year-not-yet-ended"
         ),
-        pytest.param(None, dt.date(2024, 8, 1), id="fy2023-24-ended-before-it-started"),
         pytest.param(
             [(2000, 3_200_000), (2025, 2_500_000)],
             dt.date(1999, 1, 1),
@@ -165,10 +164,26 @@ async def test_a_year_s6d4a_does_not_count_leaves_it_asked(
     assert S6D4A in asked
 
 
+async def test_fy2023_24_ended_before_it_started_and_its_start_year_is_a_part_year() -> None:
+    """Started 1 August 2024: FY2023-24's figure doesn't count, and FY2024-25,
+    the year it started in, is a part year, whose turnover s6DA(2)'s formula
+    sets and the corpus doesn't hold (#211, ADR-0047). No figure settles it,
+    so s6D(4)(a) is unassessable and not asked."""
+    app11, asked = await _app11(_ga05(started=dt.date(2024, 8, 1)))
+    assert app11.outcome is Outcome.UNASSESSABLE
+    assert S6D4A not in asked
+    leaf = app11.explanation.find(S6D4A)
+    assert leaf is not None and leaf.truth is Truth.UNKNOWN
+    assert [clause for clause, _ in leaf.incomplete] == [f"{P}s6da/2"]
+
+
 async def test_every_ended_year_known_and_under_settles_s6d4a_false() -> None:
     every_year = [_turnover(fy, 2_000_000) for fy in range(2014, 2026)]
-    app11, asked = await _app11(_ga05(turnover=every_year))
+    # Started on 1 July 2014, so FY2014-15 is a full year too: none is a part
+    # year whose turnover s6DA(2) sets (#211).
+    app11, asked = await _app11(_ga05(turnover=every_year, started=dt.date(2014, 7, 1)))
     assert S6D4A not in asked and S6D1 not in asked
+    assert "6DA(2)" not in app11.reason  # settled false, not left unsettled
     assert app11.outcome is Outcome.UNASSESSABLE  # the other routes are still open
 
 
