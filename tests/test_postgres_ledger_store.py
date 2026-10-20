@@ -38,10 +38,12 @@ from compliance_rag.adapters.interfaces import (
     SourceVersion,
     TurnOutcome,
     UnreadableCitation,
+    UnreadableNotInEnvironment,
     UnreadableReason,
 )
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
+from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.corpus.models import DocumentClass
 from tests.contracts.test_corpus_lifecycle import assert_corpus_lifecycle_contract
 from tests.contracts.test_interfaces import (
@@ -57,6 +59,7 @@ from tests.contracts.test_ledger import (
     S6DA_2,
     an_exchange,
     assert_chat_contract,
+    assert_environment_titles_contract,
     assert_ledger_contract,
 )
 
@@ -128,6 +131,70 @@ async def test_postgres_satisfies_the_ledger_contract(ledger: PostgresLedgerStor
 
 async def test_postgres_satisfies_the_chat_contract(ledger: PostgresLedgerStore) -> None:
     await assert_chat_contract(ledger)
+
+
+async def test_postgres_satisfies_the_environment_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_environment_titles_contract(ledger)
+
+
+async def test_the_database_refuses_a_flag_on_a_question_or_a_failed_request(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """#252: 0018's constraint, whatever writes the row. A flag sits on an
+    answer that was shown, verified or withheld; a question and a failed
+    request's marker hold none."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_chat_exchange(an_exchange("c1", answer=ChatAnswer(TurnOutcome.INTERNAL)))
+    flag = json.dumps([{"named": "spam act", "known_as": None, "part_of": None}])
+    for turn_index in (0, 1):
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            with pytest.raises(psycopg.errors.CheckViolation, match="chat_not_in_environment"):
+                await conn.execute(
+                    "UPDATE chat SET not_in_environment = %s WHERE turn_index = %s",
+                    (flag, turn_index),
+                )
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        with pytest.raises(psycopg.errors.CheckViolation, match="chat_not_in_environment"):
+            await conn.execute("UPDATE chat SET not_in_environment = '{}' WHERE turn_index = 1")
+
+
+async def test_a_flag_is_its_own_jsonb_element_and_a_corrupt_one_reads_back_unreadable(
+    ledger: PostgresLedgerStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The stored shape, and #232's rule for a flag (#252): a malformed element
+    reads back as `UnreadableNotInEnvironment` in its place, its neighbours
+    intact, and the span and the log say where and nothing of the row."""
+    await ledger.put_profile(Profile("acme"))
+    spam = NotInEnvironment("spam act", known_as="Spam Act 2003")
+    await ledger.record_chat_exchange(
+        an_exchange("c1", answer=ChatAnswer(TurnOutcome.UNCITED, not_in_environment=(spam,)))
+    )
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        row = await (
+            await conn.execute("SELECT not_in_environment FROM chat WHERE turn_index = 1")
+        ).fetchone()
+        assert row is not None and row[0] == [
+            {"named": "spam act", "known_as": "Spam Act 2003", "part_of": None}
+        ]
+        await conn.execute(
+            "UPDATE chat SET not_in_environment = %s WHERE turn_index = 1",
+            (json.dumps([spam.json(), {"named": "SECRET"}, "SECRET", spam.json()]),),
+        )
+        await conn.commit()
+    with (
+        caplog.at_level(logging.WARNING, logger=postgres_ledger_store.__name__),
+        trace.get_tracer("test").start_as_current_span("request") as span,
+    ):
+        _, answer = await ledger.chat_turns("acme", "uid-1", "c1")
+    unreadable = UnreadableNotInEnvironment()
+    assert answer.not_in_environment == (spam, unreadable, unreadable, spam)
+    events = [
+        e for e in cast(ReadableSpan, span).events if e.name == "chat.not_in_environment_unreadable"
+    ]
+    assert [dict(e.attributes or {})["chat.not_in_environment_index"] for e in events] == [1, 2]
+    assert "SECRET" not in caplog.text + str([e.attributes for e in events])
+    with pytest.raises(ValueError, match="isn't written back"):
+        postgres_ledger_store._named_absent_row(unreadable)  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_a_withheld_answer_carrying_text_is_refused_by_the_database_with_its_question(

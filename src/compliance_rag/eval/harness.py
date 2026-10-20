@@ -19,6 +19,7 @@ import httpx
 from pydantic import SecretStr
 
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore
+from compliance_rag.adapters.interfaces import Embedder
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.adapters.reranker_client import RerankerClient
 from compliance_rag.adapters.reranker_http_client import build_reranker_http_client
@@ -37,6 +38,7 @@ from compliance_rag.eval.golden_corpus import (
     LAW_INSTRUMENT_ID,
     LAW_TITLE,
     LAW_VERSION_ID,
+    gate_clauses,
     golden_clauses,
     policy_titles,
 )
@@ -46,15 +48,22 @@ from compliance_rag.reranker_service.model import RerankerModel
 
 @asynccontextmanager
 async def golden_store(
-    qdrant_url: str, *, prefix: str, chunks: tuple[Chunk, ...], api_key: SecretStr | None = None
+    qdrant_url: str,
+    *,
+    prefix: str,
+    chunks: tuple[Chunk, ...],
+    api_key: SecretStr | None = None,
+    embedder: Embedder | None = None,
 ) -> AsyncGenerator[QdrantRetrievalStore]:
     """`chunks` on a throwaway collection, with the real
     `gemini-embedding-001` snapshot as its embedder: `gate_chunks()` to
     measure recall, `golden_chunks()` for the answer eval. `api_key` only for
-    the one-off run on the deployed cluster (#144); the gates pass none."""
+    the one-off run on the deployed cluster (#144); the gates pass none.
+    `embedder` only for a live run that may ask what the snapshot lacks
+    (`eval/live.py`); the gates pass none."""
     async with QdrantRetrievalStore.ephemeral(
         qdrant_url,
-        embedder=CachedEmbedder(EmbeddingCache.load()),
+        embedder=embedder or CachedEmbedder(EmbeddingCache.load()),
         ledger=FakeLedgerStore(),
         prefix=prefix,
         api_key=api_key,
@@ -84,10 +93,12 @@ GOLDEN_VALID_FROM = dt.date(2026, 1, 1)
 every golden query's `as_of` (2026-10-01). A fixture date, not a legal one."""
 
 
-async def golden_clause_store() -> FakeClauseStore:
-    """The golden corpus's canonical text, as `GCSClauseStore` would serve it."""
+async def golden_clause_store(*, gate: bool = False) -> FakeClauseStore:
+    """The golden corpus's canonical text, as `GCSClauseStore` would serve it:
+    the excerpt's, or with `gate` the whole compilation's (`gate_clauses()`),
+    whose clauses are the same versions as the excerpt's."""
     store = FakeClauseStore()
-    for clause in golden_clauses():
+    for clause in gate_clauses() if gate else golden_clauses():
         await store.put_clause(clause)
     return store
 

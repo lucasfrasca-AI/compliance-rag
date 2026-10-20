@@ -38,6 +38,7 @@ from compliance_rag.adapters.interfaces import (
     UsageRecord,
 )
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
+from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
 from compliance_rag.corpus.models import DocumentClass, Incompleteness, IncompleteReason
 from compliance_rag.graph.mappings import load_mapping_set
@@ -736,6 +737,92 @@ async def assert_chat_contract(ledger: LedgerStore) -> None:
     plain = (await turns("unflagged"))[1].citations
     assert plain and all(isinstance(c, ChatCitation) and c.incomplete == () for c in plain)
 
+    # ---- an instrument the question named that wasn't held is kept with the
+    # answer as the member was shown it (#252): verified or withheld, in order
+    spam = NotInEnvironment("spam act", known_as="Spam Act 2003")
+    ndb = NotInEnvironment("NDB scheme", known_as="NDB", part_of="Privacy Act 1988")
+    for chat_id, shown in (
+        ("named-verified", replace(VERIFIED, not_in_environment=(spam, ndb))),
+        (
+            "named-blocked",
+            ChatAnswer(TurnOutcome.BLOCKED, blocked=(APP12,), not_in_environment=(spam,)),
+        ),
+        ("named-uncited", ChatAnswer(TurnOutcome.UNCITED, not_in_environment=(spam,))),
+    ):
+        await ledger.record_chat_exchange(an_exchange(chat_id, answer=shown))
+        question, answer = await turns(chat_id)
+        assert question.not_in_environment == ()
+        assert answer.not_in_environment == shown.not_in_environment
+    assert (await turns("unflagged"))[1].not_in_environment == ()
+
+
+async def assert_environment_titles_contract(ledger: LedgerStore) -> None:
+    """What a tenant's retrieval can see on a date, as titles (#252): its own
+    documents in force, never withdrawn or purged, and the library
+    instruments it subscribes to; `_public` sees the whole library."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+
+    async def record(tenant: str, instrument: str, version: str, title: str, **kw: Any) -> None:
+        library = tenant == "_public"
+        await ledger.record_version(
+            tenant_id=tenant,
+            instrument_id=instrument,
+            version_id=version,
+            valid_from=kw.get("valid_from", JAN),
+            supersedes=kw.get("supersedes"),
+            document_class=kw.get(
+                "document_class",
+                DocumentClass.LIBRARY_LAW if library else DocumentClass.INTERNAL_POLICY,
+            ),
+            title=title,
+        )
+
+    await record("_public", LAW, "C1", "Privacy Act 1988")
+    await record("_public", "spam-act-2003", "C1", "Spam Act 2003")
+    await record("acme", POLICY, "v1", "Acme — Privacy Policy")
+    await record(
+        "acme", POLICY, "v2", "Acme — Privacy Policy (2026)", valid_from=JUN, supersedes="v1"
+    )
+    await ledger.end_version(tenant_id="acme", instrument_id=POLICY, version_id="v1", valid_to=JUN)
+    supplied = {"document_class": DocumentClass.EXTERNAL_UPLOAD}
+    await record("acme", "acme/supplied-act", "v1", "A Supplied Act 2020", **supplied)
+    await record("acme", "acme/withdrawn", "v1", "Withdrawn Act 2021", **supplied)
+    await ledger.mark_withdrawn(
+        tenant_id="acme", instrument_id="acme/withdrawn", version_id="v1", withdrawn_by="u"
+    )
+    await record("other-corp", "other-corp/policy", "v1", "Their Policy")
+    await ledger.subscribe(tenant_id="acme", instrument_id=LAW, subscribed_by="setup")
+
+    held = {
+        LAW: frozenset({"Privacy Act 1988"}),
+        "acme/supplied-act": frozenset({"A Supplied Act 2020"}),
+    }
+    assert await ledger.environment_titles("acme", as_of=JAN) == {
+        **held,
+        POLICY: frozenset({"Acme — Privacy Policy"}),
+    }
+    # v1 retired on JUN, and v2 in force from it.
+    assert await ledger.environment_titles("acme", as_of=JUN) == {
+        **held,
+        POLICY: frozenset({"Acme — Privacy Policy (2026)"}),
+    }
+    # Before anything was in force, nothing; another tenant sees only its own.
+    assert await ledger.environment_titles("acme", as_of=JAN - dt.timedelta(days=1)) == {}
+    assert await ledger.environment_titles("other-corp", as_of=JAN) == {
+        "other-corp/policy": frozenset({"Their Policy"})
+    }
+    assert await ledger.environment_titles("_public", as_of=JAN) == {
+        LAW: frozenset({"Privacy Act 1988"}),
+        "spam-act-2003": frozenset({"Spam Act 2003"}),
+    }
+    await ledger.unsubscribe(tenant_id="acme", instrument_id=LAW)
+    assert LAW not in await ledger.environment_titles("acme", as_of=JAN)
+
+
+async def test_the_fake_ledger_satisfies_the_environment_contract() -> None:
+    await assert_environment_titles_contract(FakeLedgerStore())
+
 
 async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:
     await assert_chat_contract(FakeLedgerStore())
@@ -791,6 +878,15 @@ async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:
         pytest.param(
             lambda: ChatCitation(APP11, "v9"), "not a clause of version v9", id="wrong-version"
         ),
+        pytest.param(
+            lambda: ChatAnswer(
+                TurnOutcome.INTERNAL, not_in_environment=(NotInEnvironment("spam act"),)
+            ),
+            "marker only",
+            id="failed-with-a-flag",
+        ),
+        pytest.param(lambda: NotInEnvironment(" "), "printable line", id="blank-flag"),
+        pytest.param(lambda: NotInEnvironment("a\nb"), "printable line", id="multi-line-flag"),
     ],
 )
 def test_what_an_answer_turn_may_hold_is_fixed_when_the_answer_is_built(
