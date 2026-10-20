@@ -12,9 +12,11 @@ chunk:
 - some of it stored, all of them the clause store's: a load that stopped
   part-way, so the missing chunks are upserted (`complete_version`);
 - every chunk stored and the ledger has the version: nothing to do;
-- every chunk stored, the ledger hasn't: record the version in the ledger
-  only. That is how a ledger that comes later (Cloud SQL, Phase 3, #174)
-  learns of a version whose vectors were loaded before it existed;
+- every chunk stored, the ledger hasn't: record the version in the ledger,
+  after `complete_version` has checked the clause store holds it (writing
+  any clause text a pre-#233 publish never wrote). That is how a ledger that
+  comes later (Cloud SQL, Phase 3, #174) learns of a version whose vectors
+  were loaded before it existed;
 - a stored chunk the clause store doesn't have: refused. It is a different
   clause set, and writing over a stored version is a replace in place, which
   needs a person and `CorpusLifecycle`'s guardrails, not a re-run.
@@ -145,7 +147,13 @@ async def load_version_vectors(
             span.set_attribute("load.written", len(chunks))
             return VectorLoad(len(chunks), 0, written=len(chunks), recorded_in_ledger=True)
         written = 0
-        if len(stored) < len(chunks):
+        recorded = await ledger.version_validity(
+            tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
+        )
+        # Completing before a ledger record also brings the clause store up to
+        # the version (#233), which the record requires; it writes nothing that
+        # is already there.
+        if len(stored) < len(chunks) or recorded is None:
             written = await lifecycle.complete_version(
                 clauses,
                 count_tokens=count_tokens,
@@ -157,9 +165,6 @@ async def load_version_vectors(
                 document_class=document_class,
             )
         span.set_attribute("load.written", written)
-        recorded = await ledger.version_validity(
-            tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
-        )
         if recorded is None:
             await lifecycle.record_published_version(
                 instrument_id=instrument_id,

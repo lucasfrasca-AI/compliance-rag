@@ -330,3 +330,25 @@ async def test_an_unreachable_ledger_is_named_by_where_it_is_never_by_who() -> N
     assert "127.0.0.1:1/ledger" in str(refused.value)
     assert "hunter2" not in str(refused.value) and "someone" not in str(refused.value)
     assert refused.value.__cause__ is None
+
+
+async def test_vectors_published_without_clause_text_are_completed_before_the_record() -> None:
+    """Every chunk stored by a publish that wrote no clause text (before #233),
+    and no ledger record: the load writes the clause text through
+    `complete_version` first, then records the version, instead of stopping
+    at the record's refusal."""
+    ledger = FakeLedgerStore()
+    bucket = CountingClauseStore()  # nothing ingested into it
+    store = CountingStore(ledger=ledger)
+    await store.upsert_chunks(
+        tuple(Chunk(chunk_id=c.clause_id, clause_id=c.clause_id, text=c.text) for c in LAW)
+    )
+    store.upserted.clear()
+    load = await _load(store, ledger, clause_store=bucket)
+    assert load == VectorLoad(len(LAW), len(LAW), written=0, recorded_in_ledger=True)
+    assert store.upserted == []
+    assert sorted(bucket.written[:-1]) == sorted(c.clause_id for c in LAW)
+    assert await bucket.get_manifest_metadata(
+        LAW_INSTRUMENT_ID, LAW_VERSION_ID, tenant_id=PUBLIC_TENANT_ID
+    )
+    assert await _validity(ledger) == (EFFECTIVE, None)

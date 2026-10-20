@@ -425,3 +425,50 @@ async def test_a_users_private_addition_is_stored_for_and_verified_for_its_owner
             citation, context=frozenset({note.clause_id}), as_of=AS_OF, user_id=member
         )
         assert checked.outcome is outcome, member
+
+
+async def test_a_private_clause_is_never_written_onto_a_path_its_owner_cant_read(
+    backend: _Backend,
+) -> None:
+    """Owner-only reads (ADR-0036) can't tell an owner's own unwritten object
+    from another member's private clause on the same path, so the lifecycle
+    refuses rather than write over what might be someone else's."""
+    words = "My notes: the backup keys stay offline."
+
+    def note(owner: str) -> ClauseRecord:
+        return ClauseRecord.build(
+            instrument_id="acme/shared-notes",
+            version_id=VERSION,
+            clause_path="1/1",
+            text=words,
+            scope=Scope.USER,
+            tenant_id=TENANT,
+            user_id=owner,
+        )
+
+    bobs = note("uid-bob")
+    await backend.clauses.put_clauses((bobs,))
+    ledger = FakeLedgerStore()
+    lifecycle = CorpusLifecycle(
+        ledger=ledger,
+        retrieval=FakeRetrievalStore(ledger=ledger),
+        clauses=backend.clauses,
+        generation_region="australia-southeast1",
+        synthetic_registry=SyntheticRegistry.load(),
+    )
+    with pytest.raises(ValueError, match="its owner can't read it"):
+        await lifecycle.publish_version(
+            (note("uid-alice"),),
+            count_tokens=count_reranker_tokens,
+            source_html=words,
+            instrument_id="acme/shared-notes",
+            tenant_id=TENANT,
+            version_id=VERSION,
+            effective_from=EFFECTIVE,
+            supersedes=None,
+            document_class=DocumentClass.EXTERNAL_UPLOAD,
+        )
+    assert (
+        await backend.clauses.get_clause(bobs.clause_id, tenant_id=TENANT, user_id="uid-bob")
+        == bobs
+    )

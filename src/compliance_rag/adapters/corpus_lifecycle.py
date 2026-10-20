@@ -432,13 +432,14 @@ class CorpusLifecycle:
             # The manifest names a held path's text even where its object isn't
             # written yet, or is another member's private clause, which reads as
             # absent (ADR-0036).
-            restated = sorted(
+            manifest_differs = sorted(
                 p for p, sha in held.items() if sha != canonical_sha256(given[p].canonical_text)
             )
-            if restated:
+            if manifest_differs:
                 raise ValueError(
-                    f"{instrument_id}:{version_id}: the clause store holds {restated[0]} with "
-                    "different text: changing a stored clause is replace_in_place"
+                    f"{instrument_id}:{version_id}: the clause store's manifest lists "
+                    f"{manifest_differs[0]} with different text: changing a stored clause is "
+                    "replace_in_place"
                 )
             metadata = await self._clauses.get_manifest_metadata(
                 instrument_id, version_id, tenant_id=tenant_id
@@ -453,13 +454,24 @@ class CorpusLifecycle:
                     "another canonicalisation: a different document is a new version_id"
                 )
             stored = await self._read_clauses(clauses)
-            changed = sorted(c.clause_id for c, s in stored if s is not None and s != c)
-            if changed:
+            object_differs = sorted(c.clause_id for c, s in stored if s is not None and s != c)
+            if object_differs:
                 raise ValueError(
-                    f"the clause store holds {changed[0]} differently from the clause given: "
-                    "changing a stored clause is replace_in_place"
+                    f"the clause store holds {object_differs[0]} differently from the clause "
+                    "given: changing a stored clause is replace_in_place"
                 )
             missing = tuple(c for c, s in stored if s is None)
+            unreadable = sorted(
+                c.clause_id for c in missing if c.scope is Scope.USER and c.clause_path in held
+            )
+            if unreadable:
+                # Owner-only reads (ADR-0036) can't tell this owner's unwritten
+                # object from another member's private clause on the same path,
+                # so a private clause is never written onto a listed path.
+                raise ValueError(
+                    f"{unreadable[0]} is listed for this version but its owner can't read it: "
+                    "publish the private addition under a new version_id"
+                )
             if missing and metadata is not None:
                 raise ValueError(
                     f"{instrument_id}:{version_id} is complete in the clause store without "

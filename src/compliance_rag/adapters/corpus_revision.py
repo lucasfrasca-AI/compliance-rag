@@ -624,15 +624,17 @@ class CorpusRevision:
                     effective=effective,
                     supersedes=old,
                 )
-            # 3. Qdrant and the ledger: publish the new version, retire the old.
+            # 3. Qdrant and the ledger: publish the new version, retire the old,
+            # against the anchored source ingest stored in step 1.
+            stored_source = await read_version_source(
+                self._clauses,
+                instrument_id=plan.instrument_id,
+                version_id=plan.version_id,
+                tenant_id=PUBLIC_TENANT_ID,
+            )
             load = await load_version_vectors(
                 planned.clauses,
-                source_html=await read_version_source(
-                    self._clauses,
-                    instrument_id=plan.instrument_id,
-                    version_id=plan.version_id,
-                    tenant_id=PUBLIC_TENANT_ID,
-                ),
+                source_html=stored_source,
                 count_tokens=self._count_tokens,
                 lifecycle=lifecycle,
                 retrieval=self._retrieval,

@@ -139,14 +139,20 @@ the one module the allowlist already names for the write path
   The lifecycle contract asserts the clause store's contents and now also
   runs against `GCSClauseStore`.
 - **Mutant check.** With the clause write removed, 22 tests fail.
-- **What it can't tell apart.** `get_clause` is owner-only, so a path whose
-  object belongs to another member reads as absent. If its manifest hash is
-  the same text, it would be written over, with the same words and a new
-  owner. That needs two members publishing one `version_id` of one
-  instrument. ADR-0036's version-owner follow-up closes it, along with the
-  manifest and `source.html`, which are keyed by tenant and not yet
-  owner-only. No confidential text crosses: the overwriting member supplied
-  those exact words.
+- **What it can't tell apart, so refuses.** `get_clause` is owner-only, so a
+  path the manifest lists whose object belongs to another member reads as
+  absent, exactly as this owner's own unwritten object does. A user-scoped
+  clause is therefore never written onto a listed path it can't read: the
+  publish is refused, and the private addition goes under a new
+  `version_id`. The cost is that a private addition whose Cloud Storage write
+  died between the manifest and its object can't be resumed under the same
+  id. A refusal still says a path exists. Both go with ADR-0036's
+  version-owner follow-up, along with the manifest and `source.html`, which
+  are keyed by tenant and not yet owner-only.
+- **`load_version_vectors` completes before it records.** When retrieval
+  holds every chunk but the ledger has no record, it calls `complete_version`
+  first, which writes any clause text a pre-#233 publish never wrote and
+  writes nothing otherwise, so the record's new refusal can't strand a load.
 - **Reads.** Each publish reads every given clause back once, 16 at a time.
   For a policy this is a handful. For the 779-clause compilation it is 779
   Class B operations per vector load, a fraction of a cent.
