@@ -88,17 +88,22 @@ class FakeGraphStore(GraphStore):
         mappings: MappingSet,
         *,
         clause_validity: Mapping[str, tuple[dt.date, dt.date]],
+        incomplete: Mapping[str, Incomplete] | None = None,
         sources: LoadedSources | None = None,
     ) -> None:
         self._mappings = mappings
         self._clauses = clause_validity
+        # Which of those clauses are incomplete, as the stored corpus says (ADR-0047).
+        self._incomplete = dict(incomplete or {})
         self.sources = sources or LoadedSources()
 
     async def loaded_sources(self) -> LoadedSources:
         return self.sources
 
     async def coverage(self, facts: Facts, *, tenant_id: str, as_of: dt.date) -> Coverage:
-        snapshot = snapshot_of_mappings(self._mappings, as_of, clause_validity=self._clauses)
+        snapshot = snapshot_of_mappings(
+            self._mappings, as_of, clause_validity=self._clauses, incomplete=self._incomplete
+        )
         return evaluate(snapshot, facts, tenant_id=tenant_id)
 
     async def crosswalks(

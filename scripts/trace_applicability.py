@@ -19,6 +19,7 @@ from compliance_rag.assessment.coverage_report import render
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.corpus.display_form import NO_TITLES, cite
 from compliance_rag.eval.applicability import load_applicability_set
+from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.graph.mappings import load_mapping_set
 
 MAPPINGS = Path(__file__).resolve().parents[1] / "corpus" / "mappings"
@@ -47,7 +48,8 @@ async def run(case_id: str, *, aura: bool, obligation: str) -> Coverage:
             )
     mappings = load_mapping_set(sorted(MAPPINGS.glob("*.yaml")))
     validity = labels.clause_validity(set(mappings.clause_ids))
-    store: GraphStore = FakeGraphStore(mappings, clause_validity=validity)
+    incomplete = {c.clause_id: c.incomplete for c in load_compilation_clauses().clauses}
+    store: GraphStore = FakeGraphStore(mappings, clause_validity=validity, incomplete=incomplete)
     return await store.coverage(facts, tenant_id=case.tenant_id, as_of=case.as_of)
 
 

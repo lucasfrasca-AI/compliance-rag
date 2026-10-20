@@ -25,10 +25,11 @@ from opentelemetry.trace import Span
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.graph_query import Direction, GraphQuery
-from compliance_rag.adapters.graph_schema import GraphRow
+from compliance_rag.adapters.graph_schema import GraphRow, incomplete_of_properties
 from compliance_rag.adapters.interfaces import GraphReader, GraphStore, LoadedSources
 from compliance_rag.assessment.coverage import Coverage, Outcome
 from compliance_rag.assessment.evidence import Facts
+from compliance_rag.corpus.models import Incomplete
 from compliance_rag.graph.applicability import (
     ActorSpec,
     ConditionSpec,
@@ -98,7 +99,14 @@ async def read_snapshot(reader: GraphReader, as_of: dt.date) -> Snapshot:
         label: {str(r.node["stable_id"]): r.node for r in rows}
         for label, rows in zip(labels, results[: len(labels)], strict=True)
     }
-    hops = {hop: _targets(rows) for hop, rows in zip(_HOPS, results[len(labels) :], strict=True)}
+    by_hop = dict(zip(_HOPS, results[len(labels) :], strict=True))
+    hops = {hop: _targets(rows) for hop, rows in by_hop.items()}
+    # The clauses conditions rest on, as stored: incomplete ones say so (ADR-0047).
+    incomplete = {
+        str(row.node["stable_id"]): found
+        for row in by_hop[("Condition", "DERIVED_FROM", "Clause")]
+        if (found := incomplete_of_properties(row.node))
+    }
 
     def edges(source: str, edge: str, to: str) -> Mapping[str, tuple[str, ...]]:
         return hops[(source, edge, to)]
@@ -142,7 +150,13 @@ async def read_snapshot(reader: GraphReader, as_of: dt.date) -> Snapshot:
         )
         for oid, node in nodes["Obligation"].items()
     }
-    return Snapshot(as_of=as_of, obligations=obligations, actors=actors, conditions=conditions)
+    return Snapshot(
+        as_of=as_of,
+        obligations=obligations,
+        actors=actors,
+        conditions=conditions,
+        incomplete=incomplete,
+    )
 
 
 def snapshot_of_mappings(
@@ -150,11 +164,12 @@ def snapshot_of_mappings(
     as_of: dt.date,
     *,
     clause_validity: Mapping[str, tuple[dt.date, dt.date]],
+    incomplete: Mapping[str, Incomplete],
 ) -> Snapshot:
     """The snapshot `read_snapshot` would return had `mappings` been loaded
-    into a graph whose clauses have `clause_validity`. As the loader does,
-    an exception or qualifier brings the clauses inside it among those
-    (ADR-0044)."""
+    into a graph whose clauses have `clause_validity`, and are incomplete as
+    `incomplete` says (ADR-0047). As the loader does, an exception or
+    qualifier brings the clauses inside it among those (ADR-0044)."""
 
     def live(start: dt.date, end: dt.date) -> bool:
         return start <= as_of < end
@@ -222,7 +237,14 @@ def snapshot_of_mappings(
         for o in mappings.obligations
         if live(o.valid_from, o.valid_until)
     }
-    return Snapshot(as_of=as_of, obligations=obligations, actors=actors, conditions=conditions)
+    cited = {c for spec in conditions.values() for c in spec.clause_ids}
+    return Snapshot(
+        as_of=as_of,
+        obligations=obligations,
+        actors=actors,
+        conditions=conditions,
+        incomplete={c: i for c, i in incomplete.items() if c in cited and i},
+    )
 
 
 def _record(span: Span, coverage: Coverage) -> None:
@@ -239,6 +261,18 @@ def _record(span: Span, coverage: Coverage) -> None:
     span.set_attribute(
         "track_a.qualifiers",
         [f"{p.clause} read with {p.qualifier}" for p in sorted(coverage.track_a_qualifiers)],
+    )
+    # Each unassessable obligation an incomplete clause leaves unsettled, by
+    # clause id only (ADR-0047): the reader-facing words are in the reason.
+    span.set_attribute(
+        "track_a.incomplete",
+        sorted(
+            {
+                f"{o.obligation_id} rests on {clause_id}"
+                for o in coverage.with_outcome(Outcome.UNASSESSABLE)
+                for clause_id, _ in o.explanation.incompleteness()
+            }
+        ),
     )
 
 
