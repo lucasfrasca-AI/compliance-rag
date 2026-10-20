@@ -3,7 +3,8 @@
 - Status: accepted. The coordinator chose option (a) of the #239 comment
   (2026-10-20). The details below are the model's calls, made within that.
 - Date: 2026-10-20
-- Issue: #239 (gap 6 and I2 of `docs/research/phase3-product-options.md`)
+- Issue: #239 (gap 6 and I2 of `docs/research/phase3-product-options.md`);
+  #243 amended section 5
 - Amends: `CONTEXT.md`'s Display form entry ("a pure function of the path"
   now holds for library law only)
 - Touches: ADR-0003 (blocked citations), ADR-0019 (anchors: unchanged),

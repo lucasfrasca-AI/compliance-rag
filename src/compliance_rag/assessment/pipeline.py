@@ -326,9 +326,10 @@ class AssessmentPipeline:
             # The context is what this request showed the model: the retrieved
             # set (with the exceptions and qualifiers delivered beside it)
             # plus the cached policy set. Nothing else is citable.
-            context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
-            # What each clause was shown as, so a repair marks it identically.
+            # What each clause was shown as, so a repair marks it identically;
+            # its keys are the context, so a repairable citation always has one.
             shown = {c.clause_id: c for c in (*policies, *retrieved)}
+            context = frozenset(shown)
             checked = await self.verifier.check_all(
                 draft.citations, context=context, as_of=as_of, user_id=user_id
             )
@@ -437,7 +438,7 @@ class AssessmentPipeline:
         canonical text the verifier read."""
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
-        # Repairable only if in context, and context is exactly `shown`.
+        # Repairable only if in context, and the context is the keys of `shown`.
         clause = replace(shown[failed.clause.clause_id], text=failed.clause.canonical_text)
         if failed.clause.scope is not Scope.PUBLIC:
             # Read from the bucket, which the generator's store gate never

@@ -183,6 +183,7 @@ async def test_an_exception_and_a_qualifier_are_marked_in_the_repair_as_in_the_a
 POLICY = "acme/privacy-policy:v1:3/1"
 POLICY_TITLE = "Acme Pty Ltd — Privacy Policy"
 POLICY_TEXT = "Acme protects personal information it holds."
+STALE_PREFIX_TEXT = "Acme protects personal information."
 LAW = "test-act:v1:s9/1"
 LAW_TEXT = "A formula works out the amount: see the figure below."
 LAW_QUESTION = "How is the amount worked out by the formula?"
@@ -247,7 +248,9 @@ async def policy_and_incomplete_law(
         ledger,
         tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
     )
-    return pipeline, generator, (SourceClause(POLICY, policy.canonical_text),)
+    # The prefix holds an older copy of the text than the store (a policy
+    # amended since it was cached), so which text a repair fences is visible.
+    return pipeline, generator, (SourceClause(POLICY, STALE_PREFIX_TEXT),)
 
 
 async def test_a_title_and_an_incomplete_flag_are_marked_in_the_repair_as_in_the_answer() -> None:
@@ -270,4 +273,6 @@ async def test_a_title_and_an_incomplete_flag_are_marked_in_the_repair_as_in_the
     for call, clause_id in zip(generator.calls[1:], (POLICY, LAW), strict=True):
         assert call["cached_prefix"] is None  # the repair has no prefix; the form is in its fence
         assert markers(str(call["user"])) == {clause_id: sent[clause_id]}
+        # ...but the text is the verifier's canonical text, not the prefix's.
         assert (POLICY_TEXT if clause_id == POLICY else LAW_TEXT) in str(call["user"])
+        assert STALE_PREFIX_TEXT not in str(call["user"])
