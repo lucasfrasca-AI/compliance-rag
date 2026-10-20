@@ -97,6 +97,7 @@ from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices, current_member
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.assessment.prompt import REPAIR_SYSTEM_PROMPT
+from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     VERSION_ID_RE,
@@ -113,6 +114,7 @@ from compliance_rag.eval.golden_corpus import (
     POLICY_TENANT_ID,
     gate_chunks,
     gate_clauses,
+    gate_law_clauses,
 )
 from compliance_rag.eval.harness import golden_ledger
 from compliance_rag.graph.mappings import load_mapping_set
@@ -473,15 +475,19 @@ async def demo_ledger() -> FakeLedgerStore:
 
 
 def demo_graph() -> FakeGraphStore:
-    """Track A in process over every signed mapping file. A file still
-    awaiting review is refused, as `scripts/load_mappings.py` refuses it
-    (D-01)."""
+    """Track A in process over every signed mapping file, knowing which
+    clauses the stored corpus marks incomplete (ADR-0047), as the graph does.
+    A mapping file still awaiting review is refused, as
+    `scripts/load_mappings.py` refuses it, and an unsigned `incomplete.yaml`
+    as `api/main.py` refuses it (D-01)."""
+    committed_incomplete_readings()
     mappings = load_mapping_set(sorted(MAPPINGS.glob("*.yaml")))
     pending = [f.reviewed_by for f in mappings.files if f.reviewed_by.startswith("PENDING")]
     if pending:
         raise RefusedToStart(f"{len(pending)} mapping file(s) await review (D-01)")
     validity = load_applicability_set().clause_validity(set(mappings.clause_ids))
-    return FakeGraphStore(mappings, clause_validity=validity)
+    incomplete = {c.clause_id: c.incomplete for c in gate_law_clauses() if c.incomplete}
+    return FakeGraphStore(mappings, clause_validity=validity, incomplete=incomplete)
 
 
 async def clause_store(clauses: Sequence[ClauseRecord]) -> FakeClauseStore:

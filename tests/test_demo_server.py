@@ -40,7 +40,9 @@ from compliance_rag.adapters.fakes import (
 from compliance_rag.adapters.interfaces import Embedder, Generation, Generator
 from compliance_rag.api import deps
 from compliance_rag.api.app import create_app
+from compliance_rag.assessment.evidence import Facts
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, parse_stable_id
+from compliance_rag.eval.applicability import compare
 from compliance_rag.eval.embedding_cache import EmbeddingCache, text_key
 from compliance_rag.eval.golden_corpus import (
     LAW_INSTRUMENT_ID,
@@ -343,3 +345,14 @@ async def test_the_demo_ledger_holds_acme_subscribed_with_its_profiles_facts() -
     assert await ledger.subscribed_instruments(DEMO_TENANT) == {LAW_INSTRUMENT_ID}
     facts = {(e.field, e.value) for e in await ledger.evidence(DEMO_TENANT)}
     assert facts == {(f.field, f.value) for f in demo_server.demo_profile().facts}
+
+
+async def test_the_demo_graph_gives_its_profile_the_signed_outcomes() -> None:
+    """Track A in the demo is the gate's: its profile's coverage matches the
+    signed applicability labels, incomplete clauses included (ADR-0047)."""
+    case = demo_server.demo_profile()
+    ledger = await demo_ledger()
+    coverage = await demo_graph().coverage(
+        Facts.of(await ledger.evidence(DEMO_TENANT)), tenant_id=DEMO_TENANT, as_of=case.as_of
+    )
+    assert compare(case, coverage) == ()
