@@ -265,7 +265,11 @@ The human's decision (#211, 2026-10-20, decision 3):
   reader is shown, and optionally `part_year_only` (Decision 6). This one's
   `author` and `reviewed_by` are both Lucas Frasca, dated 2026-10-20: the
   wording is his, verbatim, and `part_year_only` records his decision 2; the
-  model transcribed both and drafted nothing in it.
+  model transcribed both and drafted nothing in it. *Amended by ADR-0051
+  (#254):* that was true of `shown` only. The model shaped `part_year_only`,
+  so it moves to `part_year.yaml` beside this file: authored by
+  `model:claude-opus-5-5`, used once Lucas Frasca signs it. `incomplete.yaml`
+  then holds `shown` alone.
 - **Refused while pending** (`compliance_rag.corpus.incomplete_reading`): a
   file whose `reviewed_by` or `date` starts `PENDING` raises
   `UnsignedIncompleteReading` and is never used, as `load_mappings.py`

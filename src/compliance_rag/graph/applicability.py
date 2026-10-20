@@ -112,9 +112,10 @@ class Snapshot:
     """The clauses conditions cite that are incomplete, with why (ADR-0047):
     read off the stored corpus, never from the mapping."""
     readings: IncompleteReadings = field(default_factory=committed_incomplete_readings)
-    """How a person read those clauses (`incomplete.yaml`, signed): the words a
-    reader is shown, and whether the missing content governs only a part
-    year. Joined here, at read time, on the fake and on the graph alike."""
+    """How those clauses were read, signed: the words a reader is shown
+    (`incomplete.yaml`), and whether the missing content governs only a part
+    year (`part_year.yaml`, ADR-0051). Joined here, at read time, on the fake
+    and on the graph alike."""
 
 
 class _YearIs(Enum):
