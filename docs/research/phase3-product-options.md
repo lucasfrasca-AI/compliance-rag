@@ -88,7 +88,7 @@ Two corpus questions only the human can answer, independent of the rest:
 4. **A proposal has no document class.**
    - CONTEXT.md has three classes: library law, external upload and internal policy. A proposal under check is none of them. `handoffs/0000-setup.md` flagged the missing document term.
    - D-14 and ADR-0018 already say an uploaded document gets no graph node at all. See U1.
-5. **Publishing stores no clause text.**
+5. **Publishing stores no clause text (#233, fixed: ADR-0048; `publish_version` now takes clauses and writes the clause store first).**
    - `CorpusLifecycle.publish_version` writes chunks and the ledger row, but no clause text or manifest to `ClauseStore`. Only `replace_in_place` (a correction in place), compilation ingest (library law) and operator scripts write clause text.
    - The verifier and the CAG prefix both read clause text from `ClauseStore`. So an upload API over today's lifecycle would publish a policy whose citations can never verify.
    - The CI writer allowlist (`test_synthetic_registry.py`) would catch a handler that wrote directly instead. See U5.

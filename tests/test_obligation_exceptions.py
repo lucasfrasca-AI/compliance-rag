@@ -387,6 +387,7 @@ async def answering(
         valid_from=OPEN[0],
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     await ledger.subscribe(tenant_id="acme", instrument_id="test-act", subscribed_by="test")
     clauses = FakeClauseStore()
@@ -427,11 +428,13 @@ async def test_an_answer_given_an_obligations_clause_is_given_its_exception() ->
     ranked = {c.clause_id for c in answer.retrieval.ranked_candidates()}
     assert KEEP in ranked and KEEP_EXCEPTION not in ranked  # the ranking left it out
     assert store.looked_up == [KEEP_EXCEPTION]  # so it was fetched, by id
-    assert answer.exceptions == (SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,)),)
+    assert answer.exceptions == (
+        SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,), cited_as="s 1(2)"),
+    )
     sent = str(generator.calls[0]["user"])
     assert (
-        f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]\n{TEXTS['s1/2']}\n"
-        in sent
+        f' clause {KEEP_EXCEPTION} cited as "s 1(2)" excepts {KEEP} (when it does not apply)]\n'
+        f"{TEXTS['s1/2']}\n" in sent
     )
     assert answer.verified
     assert [c.clause.clause_id for c in answer.citations if c.clause] == [KEEP_EXCEPTION]
@@ -458,9 +461,12 @@ async def test_an_exception_the_ranking_returned_is_marked_not_fetched_again() -
     )
     assert KEEP_EXCEPTION in {c.clause_id for c in answer.retrieval.ranked_candidates()}
     assert store.looked_up == []
-    assert answer.exceptions == (SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,)),)
-    assert f" clause {KEEP_EXCEPTION} excepts {KEEP} (when it does not apply)]" in str(
-        generator.calls[0]["user"]
+    assert answer.exceptions == (
+        SourceClause(KEEP_EXCEPTION, TEXTS["s1/2"], excepts=(KEEP,), cited_as="s 1(2)"),
+    )
+    assert (
+        f' clause {KEEP_EXCEPTION} cited as "s 1(2)" excepts {KEEP} (when it does not apply)]'
+        in str(generator.calls[0]["user"])
     )
 
 

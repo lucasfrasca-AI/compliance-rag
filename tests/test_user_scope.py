@@ -151,34 +151,50 @@ def _lifecycle() -> tuple[CorpusLifecycle, FakeRetrievalStore, FakeLedgerStore, 
 
 async def _publish(
     lifecycle: CorpusLifecycle,
-    *chunks: Chunk,
+    *clauses: ClauseRecord,
     document_class: DocumentClass = DocumentClass.EXTERNAL_UPLOAD,
 ) -> None:
     await lifecycle.publish_version(
-        chunks,
+        clauses,
+        count_tokens=lambda text: len(text.split()),
+        source_html="<p>alice's notes</p>",
         instrument_id=NOTES,
         tenant_id="acme",
         version_id="v1",
         effective_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=document_class,
+        title="The document's title",
     )
 
 
-async def test_a_private_chunk_with_no_owner_is_refused_before_any_store_is_touched() -> None:
+async def test_a_private_clause_with_no_owner_is_refused_before_any_store_is_touched() -> None:
     """The models refuse to build one, but `model_copy` skips validation, so
-    the write path checks again where a store is about to hold the chunk."""
-    lifecycle, store, ledger, _ = _lifecycle()
-    ownerless = _chunk_of(_private(ALICE)).model_copy(update={"user_id": None})
+    the write path checks again where a store is about to hold the clause and
+    the chunk derived from it."""
+    lifecycle, store, ledger, clauses = _lifecycle()
+    ownerless = _private(ALICE).model_copy(update={"user_id": None})
     with pytest.raises(ValueError, match="needs a user_id"):
         await _publish(lifecycle, ownerless)
     assert store.stored_chunk_ids == frozenset()
+    assert not await clauses.get_manifest(NOTES, "v1", tenant_id="acme")
     assert await ledger.document_class(tenant_id="acme", instrument_id=NOTES) is None
 
 
-async def test_an_owner_on_a_chunk_of_another_scope_is_refused_too() -> None:
+async def test_a_published_private_clause_is_stored_for_its_owner_alone() -> None:
+    """#233: publishing writes the clause text, carrying its owner, so the
+    verifier reads it for her and for no one else (ADR-0036)."""
+    lifecycle, _, _, clauses = _lifecycle()
+    mine = _private(ALICE)
+    await _publish(lifecycle, mine)
+    assert await clauses.get_clause(mine.clause_id, tenant_id="acme", user_id=ALICE) == mine
+    assert await clauses.get_clause(mine.clause_id, tenant_id="acme", user_id=BOB) is None
+    assert await clauses.get_clause(mine.clause_id, tenant_id="acme") is None
+
+
+async def test_an_owner_on_a_clause_of_another_scope_is_refused_too() -> None:
     lifecycle, store, _, _ = _lifecycle()
-    stray = _chunk_of(_private(ALICE)).model_copy(update={"scope": Scope.TENANT})
+    stray = _private(ALICE).model_copy(update={"scope": Scope.TENANT})
     with pytest.raises(ValueError, match="belongs to user scope only"):
         await _publish(lifecycle, stray)
     assert store.stored_chunk_ids == frozenset()
@@ -189,9 +205,9 @@ async def test_a_version_is_one_document_with_one_owner() -> None:
     instrument: one spanning two people's private additions would let either
     one's removal reach the other's."""
     lifecycle, store, _, _ = _lifecycle()
-    bobs = _chunk_of(_private(BOB, BOB_TEXT).model_copy(update={"clause_path": "2/1"}))
+    bobs = _private(BOB, BOB_TEXT).model_copy(update={"clause_path": "2/1"})
     with pytest.raises(ValueError, match="more than one scope or owner"):
-        await _publish(lifecycle, _chunk_of(_private(ALICE)), bobs)
+        await _publish(lifecycle, _private(ALICE), bobs)
     assert store.stored_chunk_ids == frozenset()
 
 
@@ -202,7 +218,7 @@ async def test_an_internal_policy_cannot_hold_private_text() -> None:
     with pytest.raises(ValueError, match="can't hold user-scoped"):
         await _publish(
             lifecycle,
-            _chunk_of(_private(ALICE)),
+            _private(ALICE),
             document_class=DocumentClass.INTERNAL_POLICY,
         )
     assert store.stored_chunk_ids == frozenset()
@@ -218,7 +234,7 @@ async def test_replacing_a_policy_in_place_cannot_make_it_private_text() -> None
         scope=Scope.TENANT,
         tenant_id="acme",
     )
-    await _publish(lifecycle, _chunk_of(policy), document_class=DocumentClass.INTERNAL_POLICY)
+    await _publish(lifecycle, policy, document_class=DocumentClass.INTERNAL_POLICY)
     private = _private(ALICE)
     with pytest.raises(ValueError, match="can't hold user-scoped"):
         await lifecycle.replace_in_place(
@@ -296,6 +312,7 @@ async def test_a_private_clause_listed_in_a_policy_never_reaches_the_prefix() ->
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     await clauses.put_clause(_private(ALICE))
     with pytest.raises(LookupError) as raised:
@@ -337,6 +354,7 @@ async def _pipeline(
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.EXTERNAL_UPLOAD,
+        title="The document's title",
     )
     mine = _private(ALICE)
     await clauses.put_clause(mine)

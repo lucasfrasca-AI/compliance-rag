@@ -29,7 +29,13 @@ from compliance_rag.adapters.generation_residency import (
 )
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.assessment.prompt import SourceClause
-from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
+from compliance_rag.corpus.models import (
+    Chunk,
+    ClauseRecord,
+    DocumentClass,
+    Scope,
+    parse_stable_id,
+)
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.golden_corpus import golden_chunks, golden_clauses
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
@@ -70,8 +76,22 @@ def _lifecycle(region: str) -> tuple[CorpusLifecycle, FakeRetrievalStore]:
 
 
 async def _publish(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
+    """Publish the clause `chunk` was made from: the lifecycle takes clauses
+    and derives their chunks (#233), so this chunk's own flag never reaches it."""
+    instrument_id, version_id, clause_path = parse_stable_id(chunk.clause_id)
+    clause = ClauseRecord.build(
+        instrument_id=instrument_id,
+        version_id=version_id,
+        clause_path=clause_path,
+        text=chunk.text,
+        scope=chunk.scope,
+        tenant_id=chunk.tenant_id,
+        user_id=chunk.user_id,
+    )
     await lifecycle.publish_version(
-        (chunk,),
+        (clause,),
+        count_tokens=lambda text: len(text.split()),
+        source_html="<p>retention policy</p>",
         instrument_id=POLICY,
         tenant_id="acme",
         version_id="v1",
@@ -84,6 +104,7 @@ async def _publish(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
             if chunk.scope is Scope.USER
             else DocumentClass.INTERNAL_POLICY
         ),
+        title="The document's title",
     )
 
 

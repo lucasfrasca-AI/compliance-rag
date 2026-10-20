@@ -43,16 +43,18 @@ _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 # _TENANT_PREFIX can't express as a character class (`_public` reserved) are
 # enforced by validate_tenant_id() in validate_instrument_id() below.
 _TENANT_PREFIX = r"[^/:]+"
-INSTRUMENT_ID_RE = re.compile(rf"^(?:(?P<tenant>{_TENANT_PREFIX})/)?(?P<instrument>{_SEGMENT})$")
+# These four end in `\Z`, not `$`: `$` also matches before a trailing newline,
+# so `"…:s6da/2\n"` was a stable id (#234). `\Z` is the end of the string only.
+INSTRUMENT_ID_RE = re.compile(rf"^(?:(?P<tenant>{_TENANT_PREFIX})/)?(?P<instrument>{_SEGMENT})\Z")
 _INSTRUMENT_ID_BODY = rf"(?:{_TENANT_PREFIX}/)?{_SEGMENT}"
-VERSION_ID_RE = re.compile(rf"^{_SEGMENT}$")
+VERSION_ID_RE = re.compile(rf"^{_SEGMENT}\Z")
 # A clause path is slash-separated, hierarchical and lowercase (CONTEXT.md):
 # "sch1/app11/1", "s6c/1/a", "art9/2/b". The dot is still accepted inside a
 # segment for ids that genuinely contain one, e.g. an instrument id.
-CLAUSE_PATH_RE = re.compile(rf"^{_SEGMENT}(?:[./]{_SEGMENT})*$")
+CLAUSE_PATH_RE = re.compile(rf"^{_SEGMENT}(?:[./]{_SEGMENT})*\Z")
 STABLE_ID_RE = re.compile(
     rf"^(?P<instrument_id>{_INSTRUMENT_ID_BODY}):(?P<version_id>{_SEGMENT}):"
-    rf"(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)$"
+    rf"(?P<clause_path>{_SEGMENT}(?:[./]{_SEGMENT})*)\Z"
 )
 
 
@@ -218,6 +220,27 @@ def instrument_owner(instrument_id: str) -> str:
     return instrument_tenant_prefix(instrument_id) or PUBLIC_TENANT_ID
 
 
+def validate_title(title: str) -> str:
+    """A document's title as the ledger records it (ADR-0049): what a policy
+    citation names the document by. Supplied by whoever publishes the
+    version, never derived from the instrument id, so an empty one is
+    refused rather than defaulted. One line of text: no control, format or
+    line-separator characters, so it can't reshape the prompt marker that
+    carries it (`assessment/prompt.py`)."""
+    if not title.strip():
+        raise ValueError("a version is recorded with its document's title, not an empty one")
+    bad = sorted(
+        {
+            f"U+{ord(c):04X}"
+            for c in title
+            if unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp")
+        }
+    )
+    if bad:
+        raise ValueError(f"a title is one line of text, not one with {', '.join(bad)}")
+    return title
+
+
 class Scope(StrEnum):
     """Which corpus partition a record belongs to (`CONTEXT.md`, D-14)."""
 
@@ -369,7 +392,7 @@ def clause_ancestors(clause_id: str) -> tuple[str, ...]:
     )
 
 
-PARAGRAPH_SEGMENT_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+[a-z]?)$")
+PARAGRAPH_SEGMENT_RE = re.compile(r"^(\d+[a-z]*|[a-z]{1,2}|[ivx]+[a-z]?)\Z")
 """A subsection, paragraph or subparagraph segment of a clause path: `1`,
 `1a`, `a`, `ca`, `iii`, `iia`. Anything else under a section is a defined
 term's slug (`CONTEXT.md`: Definition) — every one in C2026C00227 has three or
@@ -536,7 +559,9 @@ class IncompleteReason(StrEnum):
     A parse correction that takes it in is what completes the clause."""
 
 
-_DETAIL_RE = re.compile(r"^[a-z][a-z ]*[a-z]$")
+# `\Z`, not `$`: `$` also matches before a trailing newline, and a detail is
+# placed in the prompt's fence marker (#236).
+_DETAIL_RE = re.compile(r"^[a-z][a-z ]*[a-z]\Z")
 
 
 class Incompleteness(BaseModel):

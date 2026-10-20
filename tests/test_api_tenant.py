@@ -765,6 +765,7 @@ async def test_evidence_and_subscriptions_round_trip_on_postgres() -> None:
             valid_from=dt.date(2026, 6, 4),
             supersedes=None,
             document_class=DocumentClass.LIBRARY_LAW,
+            title="The document's title",
         )
         async with await _client_for(postgres) as c:
             for fact in GA05.facts:

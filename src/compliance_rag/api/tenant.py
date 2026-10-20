@@ -56,7 +56,6 @@ from compliance_rag.assessment.coverage import (
     Question,
     question_json,
 )
-from compliance_rag.assessment.coverage_report import cite
 from compliance_rag.assessment.evidence import (
     Evidence,
     EvidenceProvenance,
@@ -64,6 +63,7 @@ from compliance_rag.assessment.evidence import (
     FactValue,
     Period,
 )
+from compliance_rag.corpus.display_form import NO_TITLES, cite
 from compliance_rag.corpus.models import NO_END_DATE
 from compliance_rag.telemetry import current_trace_id
 
@@ -174,7 +174,7 @@ def _evidence_json(e: Evidence, *, current: bool) -> dict[str, object]:
 
 
 def _question_json(q: Question) -> dict[str, object]:
-    return {**question_json(q), "cites": [cite(c) for c in q.clause_ids]}
+    return {**question_json(q), "cites": [cite(c, NO_TITLES) for c in q.clause_ids]}
 
 
 def _row_json(row: CoverageRow) -> dict[str, object]:
@@ -184,7 +184,7 @@ def _row_json(row: CoverageRow) -> dict[str, object]:
         "obligation_id": row.obligation_id,
         "outcome": row.outcome.value,
         "reason": row.reason,
-        "citations": [{"clause_id": c, "cite": cite(c)} for c in row.citations],
+        "citations": [{"clause_id": c, "cite": cite(c, NO_TITLES)} for c in row.citations],
         "questions": [_question_json(q) for q in row.questions],
     }
 

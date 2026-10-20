@@ -204,8 +204,45 @@ shows the clause was incomplete and who completed it, when and why.
   without reading the alt text, so the detail is "the formula is not
   available in text form", and Track A's reason names the clause
   ("s 6DA(2) is incomplete: the formula is not available in text form").
-- **A chat read back** (#162) re-displays citations by id and shows no flag:
-  #228.
+- **A chat read back** (#162) shows the flag the member was shown (#228). The
+  turn records it with each citation, taken from the clause the verifier
+  checked the quote against, in the citation's own element of the `chat`
+  table's `citations` JSONB: `incomplete` is the same list of reasons as every
+  other store, present only when there is any, so a row written before it
+  reads back complete (those answers were shown without a flag). No
+  structural migration, since the column's constraints test the array and not
+  its elements; `db/ledger/0016_chat_citation_incomplete.sql` only re-sets the
+  column's comment, which 0014 (applied, so not edited) left describing the
+  old element shape. Read-back reads the ledger and never the corpus: a clause marked
+  or completed after the answer doesn't change what the chat shows.
+- **A citation that can't be read back is marked, not fatal** (#232, the
+  human's decision: "a corrupt row shouldn't make a member's chat history
+  inaccessible"). A malformed element of `citations` reads back as an
+  `UnreadableCitation` in its place, so nothing is dropped, and the chat is a
+  200. The API shows `{"unreadable": true, "reason": …}` with `clause_id`,
+  `cite` and `version_id` only when the stored id is well-formed. The model's
+  calls: the reason is one of four fixed words (`not_an_object`, `no_clause`,
+  `wrong_version`, `bad_incomplete`), never an exception message, because
+  pydantic's quotes the input; an unreadable citation carries no `incomplete`
+  (what the member was shown with it is lost, and the turn's `incomplete`
+  list is built from the readable ones, so it can understate); the corruption
+  is reported on the request's span (`chat.citation_unreadable`, ids and
+  reason) and in the log, which is how an operator learns of it. The answer
+  event and a chat build a citation with one function, `citation_json`.
+- **The same for a `blocked` element** (#234). A stored element of `blocked`
+  that isn't a stable clause id (prose, a number, null, an object, an id with a
+  line break) reads back as an `UnreadableCitation` with reason `no_clause` in
+  its place, and the API returns `{"unreadable": true, "reason": "no_clause"}`
+  there; the withheld turn and the rest of the chat are intact (200). It never
+  carries a clause id: a well-formed one is a readable entry. It is reported
+  as `chat.blocked_unreadable` on the span and a warning log, ids, position and
+  the fixed word only. No schema change (the column's constraints test the
+  array, not its elements). `STABLE_ID_RE`, `INSTRUMENT_ID_RE`, `VERSION_ID_RE`
+  and `CLAUSE_PATH_RE` now end in `\Z`, not `$`, which matched before a trailing
+  newline, so `parse_stable_id` rejects an id ending in one. The read path keeps
+  `isprintable()`: a tenant-prefixed id's tenant part (`[^/:]+`) still admits a
+  line break, and a citation's kept id reaches a span attribute and the
+  response.
 - **Every clause the parse marks is reported**, in the test that pins the
   whole compilation; a selection that grows to s16A or Part IIIA ingests those
   clauses already marked.

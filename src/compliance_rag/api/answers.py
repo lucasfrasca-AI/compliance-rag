@@ -64,7 +64,7 @@ import datetime as dt
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -96,11 +96,11 @@ from compliance_rag.api.deps import (
     services_of,
     today,
 )
-from compliance_rag.assessment.coverage_report import cite
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
-from compliance_rag.corpus.models import ClauseRecord, incomplete_json
+from compliance_rag.corpus.display_form import Titles, cite
+from compliance_rag.corpus.models import ClauseRecord, Incomplete, incomplete_json
 from compliance_rag.retrieval.pipeline import RetrievalTrace
 from compliance_rag.telemetry import current_trace_id
 
@@ -172,7 +172,11 @@ def _shown(answer: Answer) -> ChatAnswer:
             TurnOutcome.VERIFIED,
             text=answer.unverified_draft.answer,
             citations=tuple(
-                ChatCitation(c.clause_id, c.version_id) for c in _verified_clauses(answer)
+                # With the incompleteness of the clause the verifier checked
+                # the quote against: what the member is shown beside it, kept
+                # so a chat read back shows it too (ADR-0047, #228).
+                ChatCitation(c.clause_id, c.version_id, c.incomplete)
+                for c in _verified_clauses(answer)
             ),
         )
     return ChatAnswer(
@@ -203,26 +207,56 @@ def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
         "text": shown.text,
         "citations": [
             {
-                "clause_id": c.clause_id,
-                "cite": cite(c.clause_id),
-                "version_id": c.version_id,
+                **citation_json(c.clause_id, c.version_id, c.incomplete, answer.titles),
                 "canonical_text": c.canonical_text,
-                # Whether this clause is all the law sets there (ADR-0047).
-                "incomplete": incomplete_json(c.incomplete),
             }
             for c in _verified_clauses(answer)
         ],
         # Every cited clause that isn't, once each, with why: the field a
         # reader checks first, so the flag can't be missed (ADR-0047).
-        "incomplete": [
-            {
-                "clause_id": i.clause_id,
-                "cite": cite(i.clause_id),
-                "reasons": incomplete_json(i.incomplete),
-            }
-            for i in answer.incomplete
-        ],
+        "incomplete": incomplete_clauses_json(
+            ((i.clause_id, i.incomplete) for i in answer.incomplete), answer.titles
+        ),
     }
+
+
+def citation_json(
+    clause_id: str, version_id: str, incomplete: Incomplete, titles: Titles
+) -> dict[str, object]:
+    """A citation as a member is shown it. One builder for the answer event
+    (which adds the clause's text) and for a chat read back (#232), so the two
+    can't drift apart: a citation is the same object in both. `cite` is the
+    form the model's fence gave the clause (ADR-0049), from `titles`, the
+    policy titles the request read once."""
+    return {
+        "clause_id": clause_id,
+        "cite": cite(clause_id, titles),
+        "version_id": version_id,
+        # Whether this clause is all the law sets there (ADR-0047). On a chat
+        # read back, as recorded with the turn, not the clause's state in
+        # today's corpus (#162, #228).
+        "incomplete": incomplete_json(incomplete),
+    }
+
+
+def incomplete_clauses_json(
+    cited: Iterable[tuple[str, Incomplete]], titles: Titles
+) -> list[dict[str, object]]:
+    """The top-level `incomplete` list: each cited clause that is incomplete,
+    once, with why. One builder for the answer event and for a chat read back
+    (#228), so the two can't word it differently."""
+    found: dict[str, Incomplete] = {}
+    for clause_id, incomplete in cited:
+        if incomplete:
+            found.setdefault(clause_id, incomplete)
+    return [
+        {
+            "clause_id": clause_id,
+            "cite": cite(clause_id, titles),
+            "reasons": incomplete_json(incomplete),
+        }
+        for clause_id, incomplete in found.items()
+    ]
 
 
 def _failure(error: Exception) -> TurnOutcome:

@@ -26,13 +26,17 @@
       "Bash(jq *)",
       "Read(*)",
       "Edit(*)",
-      "Write(*)"
-    ],
-    "ask": [
+      "Write(*)",
       "Bash(git push *)",
       "Bash(gh pr create*)",
-      "Bash(gh pr merge*)"
+      "Bash(gh pr merge*)",
+      "Bash(gh pr *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)"
     ],
+    "ask": [],
     "deny": [
       "Edit(.claude/billable-approvals.txt)",
       "Write(.claude/billable-approvals.txt)",

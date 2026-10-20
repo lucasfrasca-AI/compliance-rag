@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 
 from opentelemetry import trace
@@ -66,6 +66,7 @@ from compliance_rag.corpus.models import (
     sha256_hex,
     validate_library_instrument_id,
     validate_tenant_id,
+    validate_title,
 )
 from compliance_rag.corpus.revision import RevisionDrift, RevisionRecord, check_revision_write
 from compliance_rag.graph.applicability import evaluate
@@ -426,6 +427,11 @@ class FakeLedgerStore(LedgerStore):
         self._usage: list[UsageRecord] = []
         self._versions: dict[tuple[str, str, str], tuple[dt.date, dt.date | None]] = {}
         self._classes: dict[tuple[str, str], DocumentClass] = {}  # (tenant, instrument)
+        self._titles: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version)
+        self.instrument_titles: dict[tuple[str, str], str] = {}  # (tenant, instrument): latest
+        self.title_reads = 0
+        """How many `version_titles` reads were made: a request makes one,
+        whatever it cites (ADR-0049)."""
         self.purged: dict[tuple[str, str, str | None], tuple[str, str]] = {}  # -> (by, reason)
         self._audit: list[RemovalAuditEntry] = []
         self._evidence: list[Evidence] = []
@@ -575,8 +581,10 @@ class FakeLedgerStore(LedgerStore):
         valid_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         check_document_class(tenant_id, document_class)
+        validate_title(title)
         key = (tenant_id, instrument_id, version_id)
         if key in self._versions:
             # Re-recording would reset valid_to and silently un-retire it.
@@ -585,6 +593,18 @@ class FakeLedgerStore(LedgerStore):
         if known is not document_class:
             raise ValueError(f"{instrument_id} is {known.value}, not {document_class.value}")
         self._versions[key] = (valid_from, None)
+        self._titles[key] = title
+        self.instrument_titles[(tenant_id, instrument_id)] = title
+
+    async def version_titles(
+        self, tenant_id: str, versions: Iterable[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        self.title_reads += 1
+        return {
+            (i, v): self._titles[(tenant_id, i, v)]
+            for i, v in versions
+            if (tenant_id, i, v) in self._titles
+        }
 
     async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:
         return tuple(

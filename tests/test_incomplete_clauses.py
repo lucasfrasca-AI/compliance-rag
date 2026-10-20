@@ -59,8 +59,11 @@ from compliance_rag.corpus.selection_manifest import SelectionManifest
 from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.eval.golden_corpus import gate_chunks, gate_clauses, gate_law_clauses
 from tests.test_api_answers import (
+    AS_OF,
     QUESTION,
     _ask,  # pyright: ignore[reportPrivateUsage] — the API tests' own request helpers
+    _client,  # pyright: ignore[reportPrivateUsage]
+    _events,  # pyright: ignore[reportPrivateUsage]
     _ledger,  # pyright: ignore[reportPrivateUsage]
     _reply,  # pyright: ignore[reportPrivateUsage]
 )
@@ -703,7 +706,10 @@ async def test_an_answer_citing_s6da_2_carries_the_flag_to_the_model_and_the_cli
     assert answer["incomplete"] == [{"clause_id": S6DA_2, "cite": "s 6DA(2)", "reasons": reasons}]
     # The model was told, in the fence, beside the clause.
     user = str(generator.calls[0]["user"])
-    assert f"clause {S6DA_2} incomplete (the formula is not available in text form)]" in user
+    assert (
+        f'clause {S6DA_2} cited as "s 6DA(2)" '
+        "incomplete (the formula is not available in text form)]" in user
+    )
     assert ALT not in user
 
 
@@ -776,3 +782,70 @@ async def test_a_small_business_whose_exemption_rests_on_s6da_2_is_unassessable(
     assert app11.outcome is Outcome.UNASSESSABLE
     assert app11.reason == f"Unassessable: {REASON}"
     assert coverage.questions == ()
+
+
+# ---- a chat read back shows the flag the member was shown (#228) ---------------------
+
+
+async def _gate_clause_store(*, complete: bool = False) -> FakeClauseStore:
+    """The gate corpus's clause store: s6da/2 as the parser marks it, or, with
+    `complete`, as a later corpus revision would leave it."""
+    clauses = FakeClauseStore()
+    for clause in gate_clauses():
+        await clauses.put_clause(
+            clause.model_copy(update={"incomplete": ()}) if complete else clause
+        )
+    return clauses
+
+
+async def test_a_chat_read_back_shows_an_incomplete_clauses_flag_as_the_answer_did() -> None:
+    """The member asks, is shown s6da/2 with its flag, and reopens the chat:
+    the same flag, with its reason, on the citation and at the top, as the
+    answer event carried it. Then the corpus moves on (s6da/2 is completed by
+    a revision) and a fresh app over the same ledger reads the chat back: the
+    flag is what they were shown, not what the corpus says today."""
+    text = next(c.canonical_text for c in gate_law_clauses() if c.clause_id == S6DA_2)
+    generator = FakeGenerator(_reply((S6DA_2, text[:60]), answer="It is worked out by formula."))
+    ledger = await _ledger()
+    store = FakeRetrievalStore(gate_chunks(), ledger=ledger)
+    async with await _client(generator, ledger, await _gate_clause_store(), store) as c:
+        response = await c.post("/v1/answers", json={"question": TURNOVER, "as_of": AS_OF})
+        shown = dict(_events(response.text))["answer"]
+        read = (await c.get(f"/v1/chats/{shown['chat_id']}")).json()
+    reasons = [{"reason": "image_not_text", "detail": "the formula is not available in text form"}]
+    assert shown["incomplete"] == [{"clause_id": S6DA_2, "cite": "s 6DA(2)", "reasons": reasons}]
+    answer = read["turns"][1]
+    assert answer["verified"] is True and answer["text"] == shown["text"]
+    [citation] = answer["citations"]
+    assert citation["clause_id"] == S6DA_2 and citation["incomplete"] == reasons
+    assert [c["incomplete"] for c in shown["citations"]] == [citation["incomplete"]]
+    # One builder makes the citation for both (#232): a flagged one too.
+    assert [{k: v for k, v in c.items() if k != "canonical_text"} for c in shown["citations"]] == [
+        citation
+    ]
+    assert answer["incomplete"] == shown["incomplete"]
+    # The question turn has none; it is the member's own words.
+    assert "incomplete" not in read["turns"][0]
+
+    # Later, the corpus holds s6da/2 complete. The chat still says what it said.
+    async with await _client(
+        FakeGenerator(_reply()), ledger, await _gate_clause_store(complete=True), store
+    ) as c:
+        again = (await c.get(f"/v1/chats/{shown['chat_id']}")).json()
+    assert again == read
+
+
+async def test_a_chat_read_back_shows_no_flag_for_an_answer_that_had_none() -> None:
+    app11 = "privacy-act-1988:C2026C00227:sch1/app11/1"
+    text = next(c.canonical_text for c in gate_law_clauses() if c.clause_id == app11)
+    ledger = await _ledger()
+    store = FakeRetrievalStore(gate_chunks(), ledger=ledger)
+    # s6da/2 is incomplete in the store; this answer never cites it.
+    async with await _client(
+        FakeGenerator(_reply((app11, text[:60]))), ledger, await _gate_clause_store(), store
+    ) as c:
+        response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
+        chat_id = dict(_events(response.text))["answer"]["chat_id"]
+        answer = (await c.get(f"/v1/chats/{chat_id}")).json()["turns"][1]
+    assert answer["verified"] is True and answer["incomplete"] == []
+    assert [c["incomplete"] for c in answer["citations"]] == [[]]

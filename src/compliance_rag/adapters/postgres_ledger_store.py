@@ -18,21 +18,25 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from collections.abc import AsyncGenerator
+import logging
+from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
-from typing import Any, LiteralString, cast
+from typing import Any, Literal, LiteralString, cast
 from urllib.parse import urlparse
 
 import psycopg
+from opentelemetry import trace
 from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
+    BlockedClause,
     ChatCitation,
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    Citation,
     LedgerStore,
     PolicyVersion,
     Profile,
@@ -43,6 +47,8 @@ from compliance_rag.adapters.interfaces import (
     SourceVersion,
     TurnOutcome,
     TurnRole,
+    UnreadableCitation,
+    UnreadableReason,
     UsageRecord,
     check_assessment_write,
     check_chat_exchange,
@@ -64,11 +70,16 @@ from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     DocumentClass,
     check_document_class,
+    incomplete_json,
+    incomplete_of_json,
+    parse_stable_id,
     validate_library_instrument_id,
     validate_tenant_id,
+    validate_title,
 )
 from compliance_rag.settings import Settings
 
+log = logging.getLogger(__name__)
 _PROFILE_LISTS = ("jurisdictions", "sectors", "actor_roles", "data_categories", "regulators")
 
 
@@ -77,6 +88,110 @@ def _refuse_library(tenant_id: str, what: str) -> None:
     the database's CHECK would refuse it too, as a raw constraint error."""
     if tenant_id == PUBLIC_TENANT_ID:
         raise ValueError(f"library law is never {what} (ADR-0021)")
+
+
+def _citation_row(c: Citation) -> dict[str, object]:
+    """A chat turn's citation as its JSONB element. The incompleteness the
+    member was shown rides in the element, only when there is any, as it does
+    in every other store (ADR-0047): absent is complete. The column is JSONB
+    and its constraints look at the array, not the elements, so this is not a
+    schema change (#228)."""
+    if isinstance(c, UnreadableCitation):  # read back from a corrupt row, never recorded
+        raise ValueError("an unreadable citation isn't written back")
+    row: dict[str, object] = {"clause_id": c.clause_id, "version_id": c.version_id}
+    if c.incomplete:
+        row["incomplete"] = incomplete_json(c.incomplete)
+    return row
+
+
+def _blocked_row(b: BlockedClause) -> str:
+    """A blocked clause id as its JSONB element."""
+    if isinstance(b, UnreadableCitation):  # read back from a corrupt row, never recorded
+        raise ValueError("an unreadable blocked entry isn't written back")
+    return b
+
+
+def _stored_clause_id(raw: object) -> tuple[str, str] | None:
+    """A stored clause id and the version it is of, or None when it isn't a
+    stable id. `isprintable` as well as the grammar: a tenant-prefixed id's
+    tenant part (`[^/:]+`) admits a line break, and a citation's id is kept and
+    reaches a span attribute and the response."""
+    if not isinstance(raw, str) or not raw.isprintable():
+        return None
+    try:
+        _, version_id, _ = parse_stable_id(raw)
+    except ValueError:
+        return None
+    return raw, version_id
+
+
+def _blocked_of_row(raw: object) -> BlockedClause:
+    """A stored `blocked` element back to its clause id, or to an
+    `UnreadableCitation` in its place when it isn't a stable id (#234): a
+    corrupt row must not make the member's history unreachable. Nothing of the
+    element is kept, so a corrupt row's content never reaches a response or a
+    log; the reason is the fixed word `no_clause`."""
+    named = _stored_clause_id(raw)
+    return UnreadableCitation(UnreadableReason.NO_CLAUSE) if named is None else named[0]
+
+
+def _citation_of_row(raw: object) -> Citation:
+    """A stored element back to its citation, or to an `UnreadableCitation` when
+    it can't be: a corrupt row must not make the member's history unreachable
+    (#232). The reason is a fixed word and the only parts of the element kept
+    are a well-formed clause id and the version that agrees with it."""
+    if not isinstance(raw, dict):
+        return UnreadableCitation(UnreadableReason.NOT_AN_OBJECT)
+    element = cast("dict[str, object]", raw)
+    version_id = element.get("version_id")
+    named = _stored_clause_id(element.get("clause_id"))
+    if named is None:
+        return UnreadableCitation(UnreadableReason.NO_CLAUSE)
+    clause_id, clause_version = named
+    if version_id != clause_version:
+        return UnreadableCitation(UnreadableReason.WRONG_VERSION, clause_id)
+    try:
+        incomplete = incomplete_of_json(element.get("incomplete"))
+    except ValueError:  # pydantic's ValidationError is one; its message quotes the input
+        return UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, clause_id, clause_version)
+    return ChatCitation(clause_id, clause_version, incomplete)
+
+
+def _flag_unreadable(
+    tenant_id: str,
+    chat_id: str,
+    turn_index: int,
+    entries: tuple[Citation, ...] | tuple[BlockedClause, ...],
+    kind: Literal["citation", "blocked"],
+) -> None:
+    """Says on the request's span, and in the log, that a stored element of a
+    turn's `kind` (`citation` or `blocked`) was unreadable: where it is (ids and
+    position) and the fixed reason, never any of the row. An operator learns of
+    the corruption; the member still gets their chat."""
+    span = trace.get_current_span()
+    for position, c in enumerate(entries):
+        if not isinstance(c, UnreadableCitation):
+            continue
+        attributes: dict[str, str | int] = {
+            "chat.tenant_id": tenant_id,
+            "chat.id": chat_id,
+            "chat.turn_index": turn_index,
+            f"chat.{kind}_index": position,
+            f"chat.{kind}_unreadable_reason": c.reason.value,
+        }
+        if c.clause_id is not None:
+            attributes[f"chat.{kind}_clause_id"] = c.clause_id
+        span.add_event(f"chat.{kind}_unreadable", attributes)
+        log.warning(
+            "a stored chat %s is unreadable: tenant=%s chat=%s turn=%d %s=%d reason=%s",
+            kind,
+            tenant_id,
+            chat_id,
+            turn_index,
+            kind,
+            position,
+            c.reason.value,
+        )
 
 
 class LedgerUnreachable(ConnectionError):
@@ -365,13 +480,8 @@ class PostgresLedgerStore(LedgerStore):
                                 turn.role.value,
                                 turn.content,
                                 None if turn.outcome is None else turn.outcome.value,
-                                Jsonb(
-                                    [
-                                        {"clause_id": c.clause_id, "version_id": c.version_id}
-                                        for c in turn.citations
-                                    ]
-                                ),
-                                Jsonb(list(turn.blocked)),
+                                Jsonb([_citation_row(c) for c in turn.citations]),
+                                Jsonb([_blocked_row(b) for b in turn.blocked]),
                                 turn.as_of,
                                 turn.trace_id,
                             )
@@ -395,26 +505,29 @@ class PostgresLedgerStore(LedgerStore):
             "ORDER BY turn_index",
             (tenant_id, user_id, chat_id),
         )
-        return tuple(
-            ChatTurn(
-                tenant_id=tenant_id,
-                chat_id=chat_id,
-                turn_index=int(r[0]),
-                user_id=user_id,
-                role=TurnRole(str(r[1])),
-                content=None if r[2] is None else str(r[2]),
-                outcome=None if r[3] is None else TurnOutcome(str(r[3])),
-                citations=tuple(
-                    ChatCitation(clause_id=str(c["clause_id"]), version_id=str(c["version_id"]))
-                    for c in cast("list[dict[str, object]]", r[4])
-                ),
-                blocked=tuple(str(b) for b in cast("list[object]", r[5])),
-                as_of=r[6],
-                trace_id=str(r[7]),
-                created_at=r[8],
+        turns: list[ChatTurn] = []
+        for r in rows:
+            citations = tuple(_citation_of_row(c) for c in cast("list[object]", r[4]))
+            blocked = tuple(_blocked_of_row(b) for b in cast("list[object]", r[5]))
+            _flag_unreadable(tenant_id, chat_id, int(r[0]), citations, "citation")
+            _flag_unreadable(tenant_id, chat_id, int(r[0]), blocked, "blocked")
+            turns.append(
+                ChatTurn(
+                    tenant_id=tenant_id,
+                    chat_id=chat_id,
+                    turn_index=int(r[0]),
+                    user_id=user_id,
+                    role=TurnRole(str(r[1])),
+                    content=None if r[2] is None else str(r[2]),
+                    outcome=None if r[3] is None else TurnOutcome(str(r[3])),
+                    citations=citations,
+                    blocked=blocked,
+                    as_of=r[6],
+                    trace_id=str(r[7]),
+                    created_at=r[8],
+                )
             )
-            for r in rows
-        )
+        return tuple(turns)
 
     async def chats(self, tenant_id: str, user_id: str) -> tuple[ChatSummary, ...]:
         rows = await self._fetchall(
@@ -529,17 +642,21 @@ class PostgresLedgerStore(LedgerStore):
         valid_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         check_document_class(tenant_id, document_class)
+        validate_title(title)
         scope = "public" if tenant_id == PUBLIC_TENANT_ID else "tenant"
         try:
             async with self._connection() as conn:
+                # The instrument's title is its latest recorded version's
+                # (ADR-0049); each version keeps its own below.
                 await conn.execute(
                     "INSERT INTO instrument "
                     "(tenant_id, instrument_id, title, jurisdiction, scope, document_class) "
                     "VALUES (%s, %s, %s, 'AU', %s, %s) "
-                    "ON CONFLICT (tenant_id, instrument_id) DO NOTHING",
-                    (tenant_id, instrument_id, instrument_id, scope, document_class.value),
+                    "ON CONFLICT (tenant_id, instrument_id) DO UPDATE SET title = EXCLUDED.title",
+                    (tenant_id, instrument_id, title, scope, document_class.value),
                 )
                 # An instrument recorded before 0011 has no class: this
                 # version states it. One already classified must agree.
@@ -555,7 +672,7 @@ class PostgresLedgerStore(LedgerStore):
                     "INSERT INTO instrument_version "
                     "(tenant_id, instrument_id, version_id, title, valid_from, supersedes) "
                     "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (tenant_id, instrument_id, version_id, instrument_id, valid_from, supersedes),
+                    (tenant_id, instrument_id, version_id, title, valid_from, supersedes),
                 )
         except psycopg.errors.UniqueViolation as exc:
             # Re-recording would reset valid_to and silently un-retire it.
@@ -606,6 +723,20 @@ class PostgresLedgerStore(LedgerStore):
                 "0011): record the next version with its class, never a guessed one"
             )
         return tuple(PolicyVersion(str(r[0]), str(r[1])) for r in rows)
+
+    async def version_titles(
+        self, tenant_id: str, versions: Iterable[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        wanted = sorted(set(versions))
+        if not wanted:
+            return {}
+        rows = await self._fetchall(
+            "SELECT v.instrument_id, v.version_id, v.title FROM instrument_version v "
+            "JOIN unnest(%s::text[], %s::text[]) AS w(instrument_id, version_id) "
+            "USING (instrument_id, version_id) WHERE v.tenant_id = %s",
+            ([i for i, _ in wanted], [v for _, v in wanted], tenant_id),
+        )
+        return {(str(r[0]), str(r[1])): str(r[2]) for r in rows}
 
     async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
         row = await self._fetchone(

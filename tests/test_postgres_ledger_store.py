@@ -12,25 +12,33 @@ local Docker Postgres, never anything shared.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import logging
 import os
 import traceback
 import uuid
 from collections.abc import AsyncIterator
+from typing import cast
 from urllib.parse import urlparse
 
 import psycopg
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan
 
 from compliance_rag.adapters import postgres_ledger_store
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
 from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
     ChatAnswer,
+    ChatCitation,
     PolicyVersion,
     Profile,
     SourceKind,
     SourceVersion,
     TurnOutcome,
+    UnreadableCitation,
+    UnreadableReason,
 )
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
@@ -43,8 +51,10 @@ from tests.contracts.test_interfaces import (
 )
 from tests.contracts.test_ledger import (
     APP11,
+    FORMULA_GAP,
     MODEL_PROSE,
     POLICY_CLAUSE,
+    S6DA_2,
     an_exchange,
     assert_chat_contract,
     assert_ledger_contract,
@@ -177,6 +187,48 @@ async def test_a_chat_row_holds_the_uid_and_the_structured_citations(
     )
 
 
+async def test_a_citations_incompleteness_is_in_its_jsonb_element_and_absent_means_complete(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """#228: no schema change, the state rides in the citation's element, only
+    when there is any (so every row written before it reads back complete)."""
+    await ledger.put_profile(Profile("acme"))
+    flagged = ChatAnswer(
+        TurnOutcome.VERIFIED,
+        text="Annual turnover is worked out by formula.",
+        citations=(
+            ChatCitation(APP11, "C2026C00227"),
+            ChatCitation(S6DA_2, "C2026C00227", (FORMULA_GAP,)),
+        ),
+    )
+    await ledger.record_chat_exchange(an_exchange("c1", answer=flagged))
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        cursor = await conn.execute("SELECT citations FROM chat WHERE turn_index = 1")
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == [
+            {"clause_id": APP11, "version_id": "C2026C00227"},
+            {
+                "clause_id": S6DA_2,
+                "version_id": "C2026C00227",
+                "incomplete": [
+                    {
+                        "reason": "image_not_text",
+                        "detail": "the formula is not available in text form",
+                    }
+                ],
+            },
+        ]
+        # A row recorded before the state existed, with the element as it was.
+        await conn.execute(
+            "UPDATE chat SET citations = %s WHERE turn_index = 1",
+            (json.dumps([{"clause_id": S6DA_2, "version_id": "C2026C00227"}]),),
+        )
+        await conn.commit()
+    (_, answer) = await ledger.chat_turns("acme", "uid-1", "c1")
+    assert answer.citations == (ChatCitation(S6DA_2, "C2026C00227"),)
+
+
 async def test_postgres_satisfies_the_corpus_lifecycle_contract(
     ledger: PostgresLedgerStore,
 ) -> None:
@@ -203,6 +255,7 @@ async def test_postgres_satisfies_the_retrieval_store_contract(
         valid_from=dt.date(2000, 1, 1),
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     await assert_retrieval_store_contract(
         FakeRetrievalStore(contract_chunks(), ledger=ledger), ledger
@@ -227,6 +280,7 @@ async def test_a_version_needs_its_tenant_registered(ledger: PostgresLedgerStore
             valid_from=dt.date(2026, 1, 1),
             supersedes=None,
             document_class=DocumentClass.INTERNAL_POLICY,
+            title="The document's title",
         )
 
 
@@ -257,10 +311,57 @@ async def test_a_policy_recorded_before_document_class_is_refused_until_classifi
         valid_from=jun,
         supersedes="v1",
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     assert await ledger.policy_versions("acme", as_of=mar) == (
         PolicyVersion("acme/old-policy", "v1"),
     )
+
+
+async def test_the_title_columns_hold_the_documents_title_never_its_id(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """Before #239 `record_version` wrote the instrument id into both title
+    columns. Now each version keeps the title it was published with, the
+    instrument holds its latest, and the database refuses a blank one
+    whatever writes it (0017, ADR-0049)."""
+    await ledger.put_profile(Profile("acme"))
+    for version_id, title, valid_from in (
+        ("v1", "Acme Pty Ltd — Privacy Policy", dt.date(2026, 1, 1)),
+        ("v2", "Acme Pty Ltd — Privacy Statement", dt.date(2026, 6, 1)),
+    ):
+        await ledger.record_version(
+            tenant_id="acme",
+            instrument_id="acme/privacy-policy",
+            version_id=version_id,
+            valid_from=valid_from,
+            supersedes=None if version_id == "v1" else "v1",
+            document_class=DocumentClass.INTERNAL_POLICY,
+            title=title,
+        )
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        instrument = await (
+            await conn.execute(
+                "SELECT title FROM instrument WHERE instrument_id = %s", ("acme/privacy-policy",)
+            )
+        ).fetchall()
+        versions = await (
+            await conn.execute(
+                "SELECT version_id, title FROM instrument_version WHERE instrument_id = %s "
+                "ORDER BY version_id",
+                ("acme/privacy-policy",),
+            )
+        ).fetchall()
+        assert instrument == [("Acme Pty Ltd — Privacy Statement",)]
+        assert versions == [
+            ("v1", "Acme Pty Ltd — Privacy Policy"),
+            ("v2", "Acme Pty Ltd — Privacy Statement"),
+        ]
+        with pytest.raises(psycopg.errors.CheckViolation, match="title_nonblank"):
+            await conn.execute(
+                "UPDATE instrument_version SET title = '  ' WHERE instrument_id = %s",
+                ("acme/privacy-policy",),
+            )
 
 
 @pytest.mark.parametrize(
@@ -302,3 +403,162 @@ async def test_a_coverage_row_the_database_refuses_takes_the_assessment_with_it(
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         cursor = await conn.execute("SELECT count(*) FROM assessment")
         assert await cursor.fetchone() == (0,)
+
+
+CORRUPT = [
+    pytest.param("just a string", UnreadableCitation(UnreadableReason.NOT_AN_OBJECT), id="string"),
+    pytest.param(
+        {"version_id": "C2026C00227"}, UnreadableCitation(UnreadableReason.NO_CLAUSE), id="no-id"
+    ),
+    pytest.param(
+        {"clause_id": 7, "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="id-not-a-string",
+    ),
+    pytest.param(
+        {"clause_id": "SECRET not a clause id", "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="malformed-id",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2 + "\nINJECTED", "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="id-with-a-line-break",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2 + "\n", "version_id": "C2026C00227"},
+        UnreadableCitation(UnreadableReason.NO_CLAUSE),
+        id="id-with-a-trailing-newline",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2, "version_id": "v9"},
+        UnreadableCitation(UnreadableReason.WRONG_VERSION, S6DA_2),
+        id="wrong-version",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2},
+        UnreadableCitation(UnreadableReason.WRONG_VERSION, S6DA_2),
+        id="no-version",
+    ),
+    pytest.param(
+        {
+            "clause_id": S6DA_2,
+            "version_id": "C2026C00227",
+            "incomplete": [{"reason": "SECRET", "detail": "SECRET words"}],
+        },
+        UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, S6DA_2, "C2026C00227"),
+        id="bad-reason",
+    ),
+    pytest.param(
+        {"clause_id": S6DA_2, "version_id": "C2026C00227", "incomplete": "SECRET"},
+        UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, S6DA_2, "C2026C00227"),
+        id="incomplete-not-a-list",
+    ),
+]
+
+
+@pytest.mark.parametrize(("element", "unreadable"), CORRUPT)
+async def test_a_corrupt_stored_citation_reads_back_unreadable_in_its_place_and_the_chat_reads(
+    ledger: PostgresLedgerStore,
+    caplog: pytest.LogCaptureFixture,
+    element: object,
+    unreadable: UnreadableCitation,
+) -> None:
+    """#232: a malformed element of the `citations` JSONB must not make the
+    chat unreachable. It reads back as an `UnreadableCitation` where it was,
+    its neighbours intact; nothing is dropped; and the span and the log say
+    where, by ids and a fixed reason, never by the row."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_chat_exchange(an_exchange("c1"))
+    good = {"clause_id": APP11, "version_id": "C2026C00227"}
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute(
+            "UPDATE chat SET citations = %s WHERE turn_index = 1",
+            (json.dumps([good, element, good]),),
+        )
+        await conn.commit()
+    with (
+        caplog.at_level(logging.WARNING, logger=postgres_ledger_store.__name__),
+        trace.get_tracer("test").start_as_current_span("request") as span,
+    ):
+        question, answer = await ledger.chat_turns("acme", "uid-1", "c1")
+    assert question.citations == ()
+    readable = ChatCitation(APP11, "C2026C00227")
+    assert answer.citations == (readable, unreadable, readable)
+    assert answer.content is not None and answer.outcome is TurnOutcome.VERIFIED
+
+    (event,) = [e for e in cast(ReadableSpan, span).events if e.name == "chat.citation_unreadable"]
+    assert dict(event.attributes or {}) == {
+        "chat.tenant_id": "acme",
+        "chat.id": "c1",
+        "chat.turn_index": 1,
+        "chat.citation_index": 1,
+        "chat.citation_unreadable_reason": unreadable.reason.value,
+        **({"chat.citation_clause_id": unreadable.clause_id} if unreadable.clause_id else {}),
+    }
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert f"reason={unreadable.reason.value}" in warning.getMessage()
+    # Ids and a fixed word, nothing the row held.
+    assert "SECRET" not in caplog.text + str(event.attributes)
+
+
+NO_CLAUSE = UnreadableCitation(UnreadableReason.NO_CLAUSE)
+CORRUPT_BLOCKED = [
+    pytest.param("SECRET not a clause id", id="prose"),
+    pytest.param(7, id="number"),
+    pytest.param(None, id="null"),
+    pytest.param({"clause_id": S6DA_2}, id="object"),
+    pytest.param(["SECRET"], id="array"),
+    pytest.param("", id="empty-string"),
+    pytest.param(S6DA_2 + "\n", id="trailing-newline"),
+    pytest.param(S6DA_2 + "\nINJECTED", id="line-break"),
+    pytest.param("acme\nINJECTED/policy:v1:s1", id="line-break-in-the-tenant-part"),
+]
+
+
+@pytest.mark.parametrize("element", CORRUPT_BLOCKED)
+async def test_a_corrupt_stored_blocked_element_reads_back_unreadable_in_its_place(
+    ledger: PostgresLedgerStore, caplog: pytest.LogCaptureFixture, element: object
+) -> None:
+    """#234: a malformed element of the `blocked` JSONB must not make the chat
+    unreachable. It reads back as an `UnreadableCitation` where it was, with no
+    clause id (a readable one would be a readable entry), its neighbours
+    intact; and the span and the log say where, by ids and a fixed reason,
+    never by the row."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_chat_exchange(
+        an_exchange("c1", answer=ChatAnswer(TurnOutcome.BLOCKED, blocked=(S6DA_2,)))
+    )
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute(
+            "UPDATE chat SET blocked = %s WHERE turn_index = 1",
+            (json.dumps([S6DA_2, element, APP11]),),
+        )
+        await conn.commit()
+    with (
+        caplog.at_level(logging.WARNING, logger=postgres_ledger_store.__name__),
+        trace.get_tracer("test").start_as_current_span("request") as span,
+    ):
+        question, answer = await ledger.chat_turns("acme", "uid-1", "c1")
+    assert question.blocked == () and question.content is not None
+    assert answer.blocked == (S6DA_2, NO_CLAUSE, APP11)
+    assert answer.outcome is TurnOutcome.BLOCKED and answer.content is None
+
+    (event,) = [e for e in cast(ReadableSpan, span).events if e.name == "chat.blocked_unreadable"]
+    assert dict(event.attributes or {}) == {
+        "chat.tenant_id": "acme",
+        "chat.id": "c1",
+        "chat.turn_index": 1,
+        "chat.blocked_index": 1,
+        "chat.blocked_unreadable_reason": "no_clause",
+    }
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "reason=no_clause" in warning.getMessage()
+    assert "blocked=1" in warning.getMessage()
+    assert "SECRET" not in caplog.text + str(event.attributes)
+    assert "INJECTED" not in caplog.text + str(event.attributes)
+
+
+def test_an_unreadable_blocked_entry_is_never_written_back() -> None:
+    with pytest.raises(ValueError, match="isn't written back"):
+        postgres_ledger_store._blocked_row(NO_CLAUSE)  # pyright: ignore[reportPrivateUsage]

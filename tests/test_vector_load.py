@@ -12,19 +12,28 @@ import pytest
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.postgres_ledger_store import LedgerUnreachable, PostgresLedgerStore
-from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, ClauseRecord, DocumentClass
+from compliance_rag.corpus.models import (
+    CANONICALISATION_VERSION,
+    PUBLIC_TENANT_ID,
+    Chunk,
+    ClauseRecord,
+    DocumentClass,
+)
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.corpus.vector_load import (
     DifferentClauseSet,
     VectorLoad,
     load_version_vectors,
     read_version_clauses,
+    read_version_source,
 )
 from compliance_rag.eval.golden_corpus import LAW_INSTRUMENT_ID, LAW_VERSION_ID, golden_clauses
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
 
 EFFECTIVE = dt.date(2026, 6, 4)
 LAW = tuple(c for c in golden_clauses() if c.tenant_id == PUBLIC_TENANT_ID)[:6]
+SOURCE = "<p>the excerpt, anchored</p>"
+"""What ingest stored as the version's `source.html`."""
 
 
 def _words(text: str) -> int:
@@ -41,18 +50,60 @@ class CountingStore(FakeRetrievalStore):
         await super().upsert_chunks(chunks)
 
 
-async def _clause_store(clauses: tuple[ClauseRecord, ...] = LAW) -> FakeClauseStore:
-    store = FakeClauseStore()
+class CountingClauseStore(FakeClauseStore):
+    """The bucket, counting what is written to it after ingest filled it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.written: list[str] = []
+
+    async def put_clause(self, clause: ClauseRecord) -> None:
+        self.written.append(clause.clause_id)
+        await super().put_clause(clause)
+
+    async def put_manifest(
+        self,
+        instrument_id: str,
+        version_id: str,
+        *,
+        tenant_id: str,
+        canonicalisation_version: int,
+        source_html: str,
+    ) -> None:
+        self.written.append(f"{instrument_id}:{version_id} manifest")
+        await super().put_manifest(
+            instrument_id,
+            version_id,
+            tenant_id=tenant_id,
+            canonicalisation_version=canonicalisation_version,
+            source_html=source_html,
+        )
+
+
+async def _clause_store(clauses: tuple[ClauseRecord, ...] = LAW) -> CountingClauseStore:
+    """The clause store as ingest leaves it: the version's clauses and its
+    manifest (`corpus/ingest.py`), nothing written since."""
+    store = CountingClauseStore()
     for clause in clauses:
         await store.put_clause(clause)
+    await store.put_manifest(
+        LAW_INSTRUMENT_ID,
+        LAW_VERSION_ID,
+        tenant_id=PUBLIC_TENANT_ID,
+        canonicalisation_version=CANONICALISATION_VERSION,
+        source_html=SOURCE,
+    )
+    store.written.clear()
     return store
 
 
-def _lifecycle(store: CountingStore, ledger: FakeLedgerStore) -> CorpusLifecycle:
+def _lifecycle(
+    store: CountingStore, ledger: FakeLedgerStore, clause_store: FakeClauseStore
+) -> CorpusLifecycle:
     return CorpusLifecycle(
         ledger=ledger,
         retrieval=store,
-        clauses=FakeClauseStore(),
+        clauses=clause_store,
         generation_region=BUILD_PHASE_OFFSHORE_REGION,
         synthetic_registry=SyntheticRegistry(keys=frozenset(), source="none: public law only"),
     )
@@ -63,11 +114,14 @@ async def _load(
     ledger: FakeLedgerStore,
     clauses: tuple[ClauseRecord, ...] = LAW,
     document_class: DocumentClass = DocumentClass.LIBRARY_LAW,
+    *,
+    clause_store: FakeClauseStore,
 ) -> VectorLoad:
     return await load_version_vectors(
         clauses,
+        source_html=SOURCE,
         count_tokens=_words,
-        lifecycle=_lifecycle(store, ledger),
+        lifecycle=_lifecycle(store, ledger, clause_store),
         retrieval=store,
         ledger=ledger,
         instrument_id=LAW_INSTRUMENT_ID,
@@ -75,6 +129,7 @@ async def _load(
         tenant_id=PUBLIC_TENANT_ID,
         effective_from=EFFECTIVE,
         document_class=document_class,
+        title="The document's title",
     )
 
 
@@ -92,31 +147,84 @@ async def _validity(ledger: FakeLedgerStore) -> tuple[dt.date, dt.date | None] |
 
 async def test_a_first_load_publishes_every_chunk_and_records_the_version() -> None:
     ledger = FakeLedgerStore()
+    bucket = await _clause_store()
     store = CountingStore(ledger=ledger)
-    load = await _load(store, ledger)
+    load = await _load(store, ledger, clause_store=bucket)
     assert load == VectorLoad(len(LAW), 0, written=len(LAW), recorded_in_ledger=True)
     assert await _stored(store) == {c.clause_id for c in LAW}
     assert await _validity(ledger) == (EFFECTIVE, None)
+    # The lifecycle checked the clause store ingest filled, and wrote nothing
+    # to it (#233): a versioned bucket keeps a generation of every rewrite.
+    assert bucket.written == []
+
+
+async def test_a_load_whose_clauses_disagree_with_the_clause_store_is_refused() -> None:
+    """The lifecycle publishes the version the clause store holds, or nothing:
+    a clause that reads differently there, or a different source, is refused
+    before retrieval or the ledger is written."""
+    ledger = FakeLedgerStore()
+    bucket = await _clause_store()
+    store = CountingStore(ledger=ledger)
+    retyped = (*LAW[:5], LAW[5].model_copy(update={"canonical_text": "something else"}))
+    with pytest.raises(ValueError, match="different text"):
+        await _load(store, ledger, retyped, clause_store=bucket)
+    with pytest.raises(ValueError, match="different source"):
+        await load_version_vectors(
+            LAW,
+            source_html="<p>another source</p>",
+            count_tokens=_words,
+            lifecycle=_lifecycle(store, ledger, bucket),
+            retrieval=store,
+            ledger=ledger,
+            instrument_id=LAW_INSTRUMENT_ID,
+            version_id=LAW_VERSION_ID,
+            tenant_id=PUBLIC_TENANT_ID,
+            effective_from=EFFECTIVE,
+            document_class=DocumentClass.LIBRARY_LAW,
+            title="The document's title",
+        )
+    assert store.upserted == [] and bucket.written == []
+    assert await _validity(ledger) is None
+
+
+async def test_the_source_is_read_back_and_a_version_without_one_is_an_error() -> None:
+    bucket = await _clause_store()
+    source = await read_version_source(
+        bucket,
+        instrument_id=LAW_INSTRUMENT_ID,
+        version_id=LAW_VERSION_ID,
+        tenant_id=PUBLIC_TENANT_ID,
+    )
+    assert source == SOURCE
+    with pytest.raises(LookupError, match="ingest didn't finish"):
+        await read_version_source(
+            FakeClauseStore(),
+            instrument_id=LAW_INSTRUMENT_ID,
+            version_id=LAW_VERSION_ID,
+            tenant_id=PUBLIC_TENANT_ID,
+        )
 
 
 async def test_a_rerun_changes_nothing() -> None:
     ledger = FakeLedgerStore()
+    bucket = await _clause_store()
     store = CountingStore(ledger=ledger)
-    await _load(store, ledger)
-    again = await _load(store, ledger)
+    await _load(store, ledger, clause_store=bucket)
+    again = await _load(store, ledger, clause_store=bucket)
     assert again == VectorLoad(len(LAW), len(LAW), written=0, recorded_in_ledger=False)
     assert len(store.upserted) == len(LAW)
 
 
 async def test_a_load_that_stopped_part_way_is_finished_without_rewriting_what_is_stored() -> None:
     ledger = FakeLedgerStore()
+    bucket = await _clause_store()
     store = CountingStore(ledger=ledger)
     first_four = tuple(
         Chunk(chunk_id=c.clause_id, clause_id=c.clause_id, text=c.text) for c in LAW[:4]
     )
     await store.upsert_chunks(first_four)
     store.upserted.clear()
-    load = await _load(store, ledger)
+    load = await _load(store, ledger, clause_store=bucket)
     assert load == VectorLoad(len(LAW), 4, written=2, recorded_in_ledger=True)
     assert store.upserted == [c.clause_id for c in LAW[4:]]
     assert await _stored(store) == {c.clause_id for c in LAW}
@@ -125,20 +233,22 @@ async def test_a_load_that_stopped_part_way_is_finished_without_rewriting_what_i
 
 async def test_a_stored_chunk_the_clause_store_lacks_is_refused_and_nothing_is_written() -> None:
     ledger = FakeLedgerStore()
+    bucket = await _clause_store(LAW[:4])
     store = CountingStore(ledger=ledger)
-    await _load(store, ledger, LAW[:4])
+    await _load(store, ledger, LAW[:4], clause_store=bucket)
     with pytest.raises(DifferentClauseSet, match="holds 2 chunks the clause store doesn't"):
-        await _load(store, ledger, LAW[2:])
+        await _load(store, ledger, LAW[2:], clause_store=bucket)
     assert len(store.upserted) == 4
 
 
 async def test_vectors_loaded_before_the_ledger_existed_are_recorded_in_it_only() -> None:
     """The deferred-ledger run, then a run against the real ledger (Phase 3's
     Cloud SQL, #174): the version is recorded, nothing is embedded."""
+    bucket = await _clause_store()
     store = CountingStore(ledger=FakeLedgerStore())
-    await _load(store, FakeLedgerStore())  # a ledger discarded afterwards
+    await _load(store, FakeLedgerStore(), clause_store=bucket)  # a ledger discarded afterwards
     later = FakeLedgerStore()
-    load = await _load(store, later)
+    load = await _load(store, later, clause_store=bucket)
     assert load == VectorLoad(len(LAW), len(LAW), written=0, recorded_in_ledger=True)
     assert len(store.upserted) == len(LAW)
     assert await _validity(later) == (EFFECTIVE, None)
@@ -147,18 +257,20 @@ async def test_vectors_loaded_before_the_ledger_existed_are_recorded_in_it_only(
 async def test_the_ledger_only_record_keeps_the_lifecycle_class_check() -> None:
     """Recorded through `CorpusLifecycle`, not the ledger directly: library
     law can't be recorded under another class."""
+    bucket = await _clause_store()
     store = CountingStore(ledger=FakeLedgerStore())
-    await _load(store, FakeLedgerStore())
+    await _load(store, FakeLedgerStore(), clause_store=bucket)
     later = FakeLedgerStore()
     with pytest.raises(ValueError, match="internal_policy"):
-        await _load(store, later, document_class=DocumentClass.INTERNAL_POLICY)
+        await _load(store, later, document_class=DocumentClass.INTERNAL_POLICY, clause_store=bucket)
     assert await _validity(later) is None
 
 
 async def test_a_ledger_that_disagrees_on_the_start_date_is_refused() -> None:
     ledger = FakeLedgerStore()
+    bucket = await _clause_store()
     store = CountingStore(ledger=ledger)
-    await _load(store, FakeLedgerStore())
+    await _load(store, FakeLedgerStore(), clause_store=bucket)
     await ledger.record_version(
         tenant_id=PUBLIC_TENANT_ID,
         instrument_id=LAW_INSTRUMENT_ID,
@@ -166,9 +278,10 @@ async def test_a_ledger_that_disagrees_on_the_start_date_is_refused() -> None:
         valid_from=dt.date(2026, 1, 1),
         supersedes=None,
         document_class=DocumentClass.LIBRARY_LAW,
+        title="The document's title",
     )
     with pytest.raises(ValueError, match="in force from 2026-01-01, not 2026-06-04"):
-        await _load(store, ledger)
+        await _load(store, ledger, clause_store=bucket)
 
 
 async def test_the_clause_store_is_read_back_in_full() -> None:
@@ -220,3 +333,25 @@ async def test_an_unreachable_ledger_is_named_by_where_it_is_never_by_who() -> N
     assert "127.0.0.1:1/ledger" in str(refused.value)
     assert "hunter2" not in str(refused.value) and "someone" not in str(refused.value)
     assert refused.value.__cause__ is None
+
+
+async def test_vectors_published_without_clause_text_are_completed_before_the_record() -> None:
+    """Every chunk stored by a publish that wrote no clause text (before #233),
+    and no ledger record: the load writes the clause text through
+    `complete_version` first, then records the version, instead of stopping
+    at the record's refusal."""
+    ledger = FakeLedgerStore()
+    bucket = CountingClauseStore()  # nothing ingested into it
+    store = CountingStore(ledger=ledger)
+    await store.upsert_chunks(
+        tuple(Chunk(chunk_id=c.clause_id, clause_id=c.clause_id, text=c.text) for c in LAW)
+    )
+    store.upserted.clear()
+    load = await _load(store, ledger, clause_store=bucket)
+    assert load == VectorLoad(len(LAW), len(LAW), written=0, recorded_in_ledger=True)
+    assert store.upserted == []
+    assert sorted(bucket.written[:-1]) == sorted(c.clause_id for c in LAW)
+    assert await bucket.get_manifest_metadata(
+        LAW_INSTRUMENT_ID, LAW_VERSION_ID, tenant_id=PUBLIC_TENANT_ID
+    )
+    assert await _validity(ledger) == (EFFECTIVE, None)

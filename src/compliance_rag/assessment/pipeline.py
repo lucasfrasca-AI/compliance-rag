@@ -16,6 +16,13 @@ the context is delivered with it, fetched by id if need be, and marked as
 what it is. An exception says when the obligation doesn't apply; a qualifier
 says how it is satisfied. The marker and the system prompt keep them apart.
 
+Every clause in the fences carries the form a reader cites it by
+(`display_form.cite`, ADR-0049), so the model names a clause as the member is
+shown it. A policy's form names its document by the title the ledger records
+with the version: read once per answer, for every policy version in the
+context, never once per clause or per citation. The answer carries what was
+read, so the API shows the same form.
+
 An incomplete clause (ADR-0047) is marked so in its fence, and an answer that
 cites one carries it (`Answer.incomplete`): the verifier still checks the
 quote against the stored text, and the flag says that text isn't all the
@@ -26,7 +33,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from compliance_rag.adapters.generation_residency import TenantTextGate
@@ -53,6 +60,7 @@ from compliance_rag.assessment.prompt import (
     repair_prompt,
     user_prompt,
 )
+from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite, cited_policy_versions
 from compliance_rag.corpus.models import Incomplete, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.telemetry import current_trace_id, span
@@ -124,6 +132,10 @@ class Answer:
     naming the clauses it qualifies, delivered the same way (#182,
     ADR-0044). Kept apart from `exceptions`, so a client can tell "when it
     doesn't apply" from "how it is satisfied"."""
+    titles: Titles = NO_TITLES
+    """The recorded title of every policy version the model was given, read
+    once for this answer (ADR-0049): what the API cites a policy clause by,
+    so the member is shown the form the model was."""
 
     @property
     def incomplete(self) -> tuple[IncompleteCitation, ...]:
@@ -258,6 +270,18 @@ class AssessmentPipeline:
             retrieved, fetched = await self._with_owed(
                 retrieved, tenant_id, as_of, law=law, policy_corpus=sent
             )
+            # One read for every policy version in the context, prefix and
+            # retrieved alike (ADR-0049): each clause is then marked with the
+            # form the member is shown for it.
+            titles = await self.ledger.version_titles(
+                tenant_id,
+                cited_policy_versions(
+                    [*(p.clause_id for p in policies), *(c.clause_id for c in retrieved)]
+                ),
+            )
+            policies = [replace(p, cited_as=cite(p.clause_id, titles)) for p in policies]
+            retrieved = [replace(c, cited_as=cite(c.clause_id, titles)) for c in retrieved]
+            current.set_attribute("answer.titles_read", len(titles))
             exceptions = tuple(c for c in retrieved if c.excepts)
             qualifiers = tuple(c for c in retrieved if c.qualifies)
             current.set_attribute(
@@ -302,7 +326,10 @@ class AssessmentPipeline:
             # The context is what this request showed the model: the retrieved
             # set (with the exceptions and qualifiers delivered beside it)
             # plus the cached policy set. Nothing else is citable.
-            context = frozenset(c.clause_id for c in retrieved) | sent.clause_ids
+            # What each clause was shown as, so a repair marks it identically;
+            # its keys are the context, so a repairable citation always has one.
+            shown = {c.clause_id: c for c in (*policies, *retrieved)}
+            context = frozenset(shown)
             checked = await self.verifier.check_all(
                 draft.citations, context=context, as_of=as_of, user_id=user_id
             )
@@ -311,7 +338,7 @@ class AssessmentPipeline:
             for check in checked:
                 if check.outcome.repairable and check.clause is not None:
                     check, repair = await self._repair(
-                        check, context=context, as_of=as_of, user_id=user_id
+                        check, shown=shown, context=context, as_of=as_of, user_id=user_id
                     )
                     await self._record_usage(tenant_id, repair)
                     repairs.append(repair)
@@ -327,6 +354,7 @@ class AssessmentPipeline:
                 trace_id=current_trace_id(),
                 exceptions=exceptions,
                 qualifiers=qualifiers,
+                titles=titles,
             )
             current.set_attribute("verifier.result", result.verified)
             current.set_attribute(
@@ -396,20 +424,22 @@ class AssessmentPipeline:
         self,
         failed: CheckedCitation,
         *,
+        shown: Mapping[str, SourceClause],
         context: frozenset[str],
         as_of: dt.date,
         user_id: str | None,
     ) -> tuple[CheckedCitation, Generation]:
         """One targeted regeneration of one citation, re-verified. A repair
         that changes the clause id, or isn't valid JSON, leaves the original
-        failure standing."""
+        failure standing. The clause is fenced as the answer prompt fenced it:
+        the very `SourceClause` the model was shown, so its marker (how it is
+        cited, what it excepts or qualifies, that it is incomplete) is the
+        same one, built by the same property (#243). Only its text is the
+        canonical text the verifier read."""
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
-        clause = SourceClause(
-            failed.clause.clause_id,
-            failed.clause.canonical_text,
-            incomplete=failed.clause.incomplete,
-        )
+        # Repairable only if in context, and the context is the keys of `shown`.
+        clause = replace(shown[failed.clause.clause_id], text=failed.clause.canonical_text)
         if failed.clause.scope is not Scope.PUBLIC:
             # Read from the bucket, which the generator's store gate never
             # asks (ADR-0032).

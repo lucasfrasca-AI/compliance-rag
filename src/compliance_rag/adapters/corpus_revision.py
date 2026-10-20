@@ -89,7 +89,7 @@ from compliance_rag.corpus.revision import (
     record_of,
 )
 from compliance_rag.corpus.selection_manifest import SelectionManifest
-from compliance_rag.corpus.vector_load import load_version_vectors
+from compliance_rag.corpus.vector_load import load_version_vectors, read_version_source
 from compliance_rag.graph.loader import (
     CheckedVersion,
     check_instrument_version,
@@ -550,6 +550,7 @@ class CorpusRevision:
         lifecycle: CorpusLifecycle,
         instrument_since: dt.date,
         effective: dt.date,
+        title: str,
     ) -> RevisionReport:
         """Publish the plan's new version and retire the stored one from
         `effective` (ADR-0021), through the existing paths: `ingest_compilation`
@@ -558,7 +559,8 @@ class CorpusRevision:
         recorded load, and `load_version_vectors` through `lifecycle`, which
         retires the old version's chunks and ends it in the ledger. Every
         step is idempotent, so re-running the same call finishes one that
-        stopped part-way; a record already on the new version is reused."""
+        stopped part-way; a record already on the new version is reused.
+        `title` is the new compilation's, recorded with it (ADR-0049)."""
         plan = planned.plan
         old = plan.stored_version_id
         with telemetry.span(
@@ -624,9 +626,17 @@ class CorpusRevision:
                     effective=effective,
                     supersedes=old,
                 )
-            # 3. Qdrant and the ledger: publish the new version, retire the old.
+            # 3. Qdrant and the ledger: publish the new version, retire the old,
+            # against the anchored source ingest stored in step 1.
+            stored_source = await read_version_source(
+                self._clauses,
+                instrument_id=plan.instrument_id,
+                version_id=plan.version_id,
+                tenant_id=PUBLIC_TENANT_ID,
+            )
             load = await load_version_vectors(
                 planned.clauses,
+                source_html=stored_source,
                 count_tokens=self._count_tokens,
                 lifecycle=lifecycle,
                 retrieval=self._retrieval,
@@ -636,6 +646,7 @@ class CorpusRevision:
                 tenant_id=PUBLIC_TENANT_ID,
                 effective_from=effective,
                 document_class=DocumentClass.LIBRARY_LAW,
+                title=title,
                 supersedes=old,
             )
             return RevisionReport(record, 0, True, load.written)

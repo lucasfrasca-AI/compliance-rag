@@ -2,9 +2,11 @@
 
 The build-phase residency gate (ADR-0023) trusts the flag, so an upload must
 not be able to set it. Through the real write path (`CorpusLifecycle`), with
-generation offshore as in the build phase: a chunk claiming synthetic without
-being in the operator's registry is refused before anything is written, and a
-chunk's flag is whatever the registry says, whatever the caller sent.
+generation offshore as in the build phase: publishing takes clauses, which
+carry no flag at all, and derives the chunks (#233); replace-in-place takes
+chunks, and one claiming synthetic without being in the operator's registry is
+refused before anything is written. A chunk's flag is whatever the registry
+says, whatever the caller sent.
 """
 
 from __future__ import annotations
@@ -44,37 +46,61 @@ def _chunk(text: str, *, synthetic: bool, tenant_id: str = "acme") -> Chunk:
     )
 
 
-def _lifecycle() -> tuple[CorpusLifecycle, FakeRetrievalStore]:
+def _lifecycle(
+    clauses: FakeClauseStore | None = None,
+) -> tuple[CorpusLifecycle, FakeRetrievalStore]:
     ledger = FakeLedgerStore()
     store = FakeRetrievalStore(ledger=ledger)
     lifecycle = CorpusLifecycle(
         ledger=ledger,
         retrieval=store,
-        clauses=FakeClauseStore(),
+        clauses=clauses or FakeClauseStore(),
         generation_region=BUILD_PHASE_OFFSHORE_REGION,
         synthetic_registry=SyntheticRegistry.load(),
     )
     return lifecycle, store
 
 
+def _clause_of(chunk: Chunk) -> ClauseRecord:
+    instrument_id, version_id, clause_path = parse_stable_id(chunk.clause_id)
+    return ClauseRecord.build(
+        instrument_id=instrument_id,
+        version_id=version_id,
+        clause_path=clause_path,
+        text=chunk.text,
+        scope=chunk.scope,
+        tenant_id=chunk.tenant_id,
+    )
+
+
 async def _upload(lifecycle: CorpusLifecycle, chunk: Chunk) -> None:
+    """Publish the clause `chunk` stands for: publishing takes clauses (#233)."""
     await lifecycle.publish_version(
-        (chunk,),
+        (_clause_of(chunk),),
+        count_tokens=lambda text: len(text.split()),
+        source_html="<p>privacy policy</p>",
         instrument_id=parse_stable_id(chunk.clause_id)[0],
         tenant_id=chunk.tenant_id,
         version_id="v2",
         effective_from=dt.date(2026, 10, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
 
 
 async def test_an_upload_cannot_mark_its_own_content_synthetic() -> None:
-    lifecycle, store = _lifecycle()
+    """Publishing takes clauses, and a clause has no synthetic flag to set:
+    the chunks' flags come from the registry alone, so unregistered text is
+    real, and refused offshore before either store is written."""
+    assert "synthetic" not in ClauseRecord.model_fields
+    clause_store = FakeClauseStore()
+    lifecycle, store = _lifecycle(clause_store)
     real = _chunk("Acme sells customer lists to partners each quarter.", synthetic=True)
-    with pytest.raises(SyntheticClaimRefused, match="cannot mark its own content synthetic"):
+    with pytest.raises(GenerationResidencyError, match="of real customer data"):
         await _upload(lifecycle, real)
     assert store.stored_chunk_ids == frozenset()  # refused before any write
+    assert not await clause_store.get_manifest("acme/privacy-policy", "v2", tenant_id="acme")
     assert not await store.holds_real_customer_data()
 
 
@@ -120,8 +146,6 @@ async def test_registered_text_under_another_tenant_is_real() -> None:
     fixture = synthetic_fixture_chunks()[0]
     with pytest.raises(GenerationResidencyError, match="of real customer data"):
         await _upload(lifecycle, _chunk(fixture.text, synthetic=False, tenant_id="beta"))
-    with pytest.raises(SyntheticClaimRefused):
-        await _upload(lifecycle, _chunk(fixture.text, synthetic=True, tenant_id="beta"))
 
 
 async def test_an_unclaimed_unregistered_upload_is_real_and_closes_the_gate() -> None:
@@ -188,13 +212,16 @@ async def test_registered_clauses_pass_replace_in_place() -> None:
     chunk = next(c for c in synthetic_fixture_chunks() if c.clause_id == clause.clause_id)
     instrument, version, _ = parse_stable_id(clause.clause_id)
     await lifecycle.publish_version(
-        (chunk,),
+        (clause,),
+        count_tokens=lambda text: len(text.split()),
+        source_html="<p/>",
         instrument_id=instrument,
         tenant_id="acme",
         version_id=version,
         effective_from=dt.date(2026, 10, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     await lifecycle.replace_in_place(
         (chunk,),

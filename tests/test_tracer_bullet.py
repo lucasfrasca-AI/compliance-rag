@@ -74,6 +74,7 @@ async def assessment(clause: ClauseRecord) -> AssessmentPipeline:
         valid_from=dt.date(2025, 1, 1),
         supersedes=None,
         document_class=DocumentClass.INTERNAL_POLICY,
+        title="The document's title",
     )
     reply = json.dumps(
         {

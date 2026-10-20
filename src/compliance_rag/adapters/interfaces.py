@@ -514,14 +514,65 @@ class ChatCitation:
     """A citation an answer was shown with: the clause and the version of the
     instrument it is of, so it stays clickable after the clause is superseded
     (ADR-0021). Never the model's quote: what the member was shown is the
-    clause's canonical text, which the clause store holds under this id."""
+    clause's canonical text, which the clause store holds under this id.
+
+    `incomplete` is the clause's incompleteness as the member was shown it
+    (ADR-0047, #228): recorded with the turn, so a chat read back shows the
+    flag the original answer carried. It is never recomputed from the corpus
+    as it is today, and it is the verified clause's, never the model's."""
 
     clause_id: str
     version_id: str
+    incomplete: Incomplete = ()
+    """Empty for a complete clause, and for every turn recorded before the
+    state existed: those answers were shown without a flag."""
 
     def __post_init__(self) -> None:
         if parse_stable_id(self.clause_id)[1] != self.version_id:
             raise ValueError(f"{self.clause_id} is not a clause of version {self.version_id}")
+
+
+class UnreadableReason(StrEnum):
+    """Why a stored citation couldn't be read back. A closed set of fixed
+    words, so naming one never carries any of the row (#232)."""
+
+    NOT_AN_OBJECT = "not_an_object"
+    """The element isn't a JSON object."""
+    NO_CLAUSE = "no_clause"
+    """It names no clause, or not as a stable clause id. A `blocked` element
+    that isn't a stable id is this too (#234)."""
+    WRONG_VERSION = "wrong_version"
+    """Its version isn't the version its clause id is of."""
+    BAD_INCOMPLETE = "bad_incomplete"
+    """Its recorded incompleteness isn't a list of valid reasons."""
+
+
+@dataclass(frozen=True, slots=True)
+class UnreadableCitation:
+    """A stored citation that couldn't be read back: a corrupt row (#232). It
+    holds its place in the turn's citations, so nothing is silently dropped and
+    the member's history stays reachable, but it asserts nothing about the
+    clause: it is never shown as verified text, and the incompleteness the
+    member was shown with it is lost with it.
+
+    `clause_id` is kept when the stored one is a well-formed stable id (the
+    grammar admits nothing like prose), so the citation can still be named and
+    clicked through to its clause; `version_id` only when it agrees with it.
+    Nothing else of the element is kept, so a corrupt row's content never
+    reaches a response or a log."""
+
+    reason: UnreadableReason
+    clause_id: str | None = None
+    version_id: str | None = None
+
+
+Citation = ChatCitation | UnreadableCitation
+"""A citation as a chat reads back: whole, or marked unreadable."""
+
+BlockedClause = str | UnreadableCitation
+"""A blocked citation's clause id as a chat reads it back: the stable id, or an
+`UnreadableCitation` in its place when the stored element isn't one (#234). An
+unreadable one has no `clause_id`: a well-formed id is a readable entry."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,8 +629,12 @@ class ChatTurn:
     failed answer."""
     outcome: TurnOutcome | None
     """None for a question."""
-    citations: tuple[ChatCitation, ...]
-    blocked: tuple[str, ...]
+    citations: tuple[Citation, ...]
+    """As recorded; a corrupt stored one reads back as an `UnreadableCitation`
+    in its place (#232). A turn about to be written holds none."""
+    blocked: tuple[BlockedClause, ...]
+    """As recorded; a corrupt stored element reads back as an
+    `UnreadableCitation` in its place (#234)."""
     as_of: dt.date
     """The date the request read the law on."""
     trace_id: str
@@ -1115,12 +1170,28 @@ class LedgerStore(ABC):
         valid_from: dt.date,
         supersedes: str | None,
         document_class: DocumentClass,
+        title: str,
     ) -> None:
         """A version comes into force (ledger `instrument_version`). The
         record the verifier checks a cited version against, independently of
         what retrieval returned (ADR-0021 mechanism 3). `document_class` is
         the instrument's (#148): the same for every version, and library law
-        if and only if the tenant is `_public` (`check_document_class`)."""
+        if and only if the tenant is `_public` (`check_document_class`).
+
+        `title` is the document's title as its publisher gives it, recorded
+        on the version and as the instrument's latest (ADR-0049): what a
+        policy citation names the document by. Never the instrument id by
+        default; an empty or multi-line one is refused (`validate_title`)."""
+
+    @abstractmethod
+    async def version_titles(
+        self, tenant_id: str, versions: Iterable[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        """The recorded title of each `(instrument_id, version_id)` this
+        tenant's ledger holds, in one read, however many are asked for: what
+        a request reads once for every policy citation it shows (ADR-0049),
+        never once per citation. A version not recorded for this tenant
+        (another tenant's, or none at all) is left out, not an error."""
 
     @abstractmethod
     async def policy_versions(self, tenant_id: str, *, as_of: dt.date) -> tuple[PolicyVersion, ...]:
