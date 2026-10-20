@@ -80,4 +80,12 @@ Never an edge in `MEANING` (`APPLIES_TO`, `REQUIRES`, `QUALIFIED_BY`,
 - The mapping version moves (ADR-0034): the loader changed, and so did the
   YAML.
 - An erratum is for an edge that was never true. A reading that was right
-  until the law changed is still a supersession.
+  until the law changed is still a new id with `supersedes`.
+- **"Never given again" is the model's call**, not the human's decision. It
+  means restoring 12.6 to 12.5, were that ever right, would take a new
+  obligation id, or a decision that amends this ADR.
+- **The dry run checks, it doesn't hold the kind.** It runs outside
+  `recorded_load`, so it can pass while another mapping load is open and
+  `--apply` is then refused. And like every load it resolves the mapping
+  version first, so the trimmed file must be committed before it can be
+  dry-run.

@@ -89,14 +89,18 @@ def erratum(*named: ErratumEdge) -> ErratumAcknowledgement:
     return ErratumAcknowledgement(frozenset(named), by=BY, reason=WHY)
 
 
-def without_keeps_qualifier(tmp_path: Path) -> MappingSet:
+def trimmed_document() -> dict[str, Any]:  # Any: YAML
     """The qualifiers fixture with OB-T-KEEP's entry trimmed."""
     document = qualifiers_document()
     document["qualifiers"] = [
         q for q in document["qualifiers"] if q["obligation_id"] != "OB-T-KEEP"
     ]
     document["source_clause_ids"].remove(QUALIFIER)
-    return load_mapping_set([FIXTURE, EXCEPTIONS, write_yaml(tmp_path, document)])
+    return document
+
+
+def without_keeps_qualifier(tmp_path: Path) -> MappingSet:
+    return load_mapping_set([FIXTURE, EXCEPTIONS, write_yaml(tmp_path, trimmed_document())])
 
 
 async def trail(graph: Neo4jGraph, stable_id: str) -> list[dict[str, Any]]:  # Any: JSON
@@ -352,11 +356,7 @@ async def test_the_script_dry_runs_an_erratum_then_applies_it(
     module, directory = script
     await load_corpus(graph)
     await module.main(AS_OF, None)  # the qualifiers as signed
-    document = qualifiers_document()
-    document["qualifiers"] = [
-        q for q in document["qualifiers"] if q["obligation_id"] != "OB-T-KEEP"
-    ]
-    document["source_clause_ids"].remove(QUALIFIER)
+    document = trimmed_document()
     (directory / QUALIFIERS.name).write_text(yaml.safe_dump(document), encoding="utf-8")
     loads = "MATCH (l:Load) RETURN count(l) AS n"
     (recorded,) = await cypher(graph, loads)
@@ -387,11 +387,7 @@ async def test_the_script_dry_run_prints_a_refusal(
     module, directory = script
     await load_corpus(graph)
     await module.main(AS_OF, None)
-    document = qualifiers_document()
-    document["qualifiers"] = [
-        q for q in document["qualifiers"] if q["obligation_id"] != "OB-T-KEEP"
-    ]
-    document["source_clause_ids"].remove(QUALIFIER)
+    document = trimmed_document()
     (directory / QUALIFIERS.name).write_text(yaml.safe_dump(document), encoding="utf-8")
     with pytest.raises(SystemExit, match=r"refused: .*s1/3/a"):
         await module.main(AS_OF, None, erratum(KEEP_QUALIFIER[0]))

@@ -93,7 +93,9 @@ async def main(
 ) -> None:
     """Load the mappings. With `errata` and without `apply`, a dry run: the
     checks only, against the graph, printing what the erratum would remove;
-    nothing is written and no load is recorded."""
+    nothing is written and no load is recorded. It doesn't take the hold on
+    the kind, so it can pass while another mapping load is open, and `--apply`
+    is then refused until that load finishes or is abandoned."""
     paths = sorted(MAPPINGS.glob("*.yaml"))
     waiting = unreviewed(paths)
     if waiting:
@@ -116,7 +118,7 @@ async def main(
             corrections=corrections,
             errata=errata,
         )
-        if errata is not None and not apply:
+        if dry_run and errata is not None:
             try:
                 found = await check()
             except MappingError as refused:
