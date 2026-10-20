@@ -572,6 +572,31 @@ def test_a_clause_newly_marked_incomplete_is_one_change_with_its_text_unchanged(
     assert change.old_text == change.new_text and plan.unchanged == len(fresh) - 1
 
 
+def test_a_clause_the_parse_completes_is_unmarked_by_the_same_path() -> None:
+    """What un-marks a clause (ADR-0047): a parse of the same pinned source
+    that no longer finds content missing — the human's signed transcription,
+    say, or a PDF extraction the parser takes in — is a correction like any
+    other, acknowledged and recorded."""
+    stored = S6DA.select(_parsed_constructs())
+    completed = tuple(c.model_copy(update={"incomplete": ()}) for c in stored)
+    plan = plan_revision(
+        completed,
+        source_html=_fixture("constructs"),
+        annotated_html="a",
+        stored_version_id=VERSION,
+        stored_manifest={c.clause_path: canonical_sha256(c.canonical_text) for c in stored},
+        stored_texts={},
+        stored_source_html_sha256="a",
+        stored_incomplete={"s6da/2": (FORMULA_NOT_TEXT,)},
+    )
+    [change] = plan.changed
+    assert (change.clause_path, change.old_incomplete, change.new_incomplete) == (
+        "s6da/2",
+        (FORMULA_NOT_TEXT,),
+        (),
+    )
+
+
 def _state_record() -> RevisionRecord:
     sha = canonical_sha256(_parse(_fixture("constructs"))["s6da/2"].canonical_text)
     return RevisionRecord(
