@@ -35,6 +35,17 @@ Never: configure any telemetry, log or error endpoint outside `australia-southea
 - Every ticket PR's body uses a closing keyword (`Closes #N`) for the ticket it completes — a merge that doesn't close its issue leaves the tracker lying about what's done, and a future session can waste real time re-planning already-finished work. This includes a ticket whose acceptance criteria a PR satisfies incidentally, not just the one the PR is titled for (#24's routing logic shipped inside #5's PR, referencing only #5 — `Closes #N` goes on both when that happens, not just the one in the title). At each phase gate, reconcile the open-issue list against what's actually merged into `main` (`gh issue list --state open` cross-checked against merged PRs, not either one trusted alone) — this has now hidden fully completed work twice (nine tickets in one audit, #24 separately).
 - When something in the plan turns out wrong, say so in chat and open an issue; don't silently route around it.
 
+### Context management (effective 2026-10-21)
+
+Keep the working context under roughly 200k tokens. When it approaches that:
+1. Write or update a handoff in `docs/handoffs/` covering current state, open decisions waiting on the human, open issues with their blockers, and anything learned that isn't already in `BUILD_LOG.md` or an ADR.
+2. Tell the human you're about to compact and what the handoff covers.
+3. Run the equivalent of `/compact` yourself if you can; otherwise ask the human to.
+
+Compact at natural boundaries — after a phase closes, after a batch of PRs merges, after a design session resolves — not mid-ticket.
+
+The principle: the repo is the memory, not the conversation. `CLAUDE.md`, `CONTEXT.md`, `DECISIONS.md`, `PHASES.md`, `BUILD_LOG.md`, the ADRs and the handoffs should contain everything a fresh session needs. If compacting would lose something important, that's a signal it should have been written down, so write it down first.
+
 ### Merge protocol (effective 2026-10-10 — replaces the 2026-09-30 risk-class rules)
 
 Claude opens, reviews and merges its own PR for every ticket. There are no risk classes and no human merge step: branch protection requires `ci` on `main`, so the gate is mechanical. Open the PR, run the two-axis review, wait for every check to go green, merge it (`gh pr merge N --merge`) and continue straight to the next ticket. Batch the summaries and report at the end of a run, not a running narration per PR.
