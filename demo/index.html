@@ -53,6 +53,7 @@
   .verdict { font-weight: 700; }
   .verdict.ok { color: var(--ok); } .verdict.bad { color: var(--bad); } .verdict.warn { color: var(--warn); }
   .withheld { border-left: 6px solid var(--bad); }
+  .not-in-env { border-left: 6px solid var(--warn); }
   .error { border-left: 6px solid var(--bad); }
   .notice { border-left: 6px solid var(--warn); }
   .notice h2 { color: var(--warn); font-size: 1.1rem; }
@@ -103,6 +104,13 @@
       <h2 id="notice-title"></h2>
       <div id="notice-body"></div>
       <p class="meta" id="notice-meta"></p>
+    </section>
+
+    <section class="card not-in-env" id="not-in-env-card" role="alert" hidden>
+      <h2>Not in your environment</h2>
+      <p class="note">The question names an instrument this tenant's environment doesn't hold (ADR-0051).
+        Nothing below is that instrument's law: any answer cites only what the environment holds.</p>
+      <ul id="not-in-env"></ul>
     </section>
 
     <section class="card" id="answer-card" hidden>
@@ -157,8 +165,8 @@ function seconds(ms) {
 
 function reset() {
   settle();
-  for (const id of ["stages", "answer-body", "citations", "incomplete", "notice-body"]) $(id).replaceChildren();
-  for (const id of ["answer-card", "citations-card", "incomplete-card", "notice-card", "panel"]) $(id).hidden = true;
+  for (const id of ["stages", "answer-body", "citations", "incomplete", "notice-body", "not-in-env"]) $(id).replaceChildren();
+  for (const id of ["answer-card", "citations-card", "incomplete-card", "notice-card", "panel", "not-in-env-card"]) $(id).hidden = true;
   $("verdict").textContent = ""; $("verdict").className = "verdict"; $("answer-meta").textContent = "";
   $("answer-card").classList.remove("withheld", "error");
 }
@@ -295,6 +303,14 @@ async function citationItem(citation) {
 
 async function showAnswer(data, traceId) {
   const body = $("answer-body");
+  if (data.not_in_environment && data.not_in_environment.length) {
+    $("not-in-env-card").hidden = false;
+    for (const n of data.not_in_environment) {
+      const name = n.known_as || n.named;
+      const part = n.part_of ? ` (part of ${n.part_of}, not in this environment's selection)` : "";
+      $("not-in-env").append(el("li", `${name}${part}`));
+    }
+  }
   if (data.verified) {
     verdict("verified", "ok");
     body.append(el("div", data.text, "answer-text"));

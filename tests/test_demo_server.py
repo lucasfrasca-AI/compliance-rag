@@ -271,6 +271,23 @@ async def test_a_question_streams_to_citations_that_open_at_their_clause() -> No
         assert BANNER_DIV in (await c.get("/")).text
 
 
+async def test_an_instrument_outside_the_environment_is_flagged_on_the_page() -> None:
+    """The human's own demo question (2026-10-21): the Spam Act isn't held, so
+    the answer carries the flag (ADR-0051) and the page has the card that
+    shows it above the answer, whether verified or withheld."""
+    app = await _demo_app()
+    _, events = await _ask(
+        app,
+        "under the spam act, can i send emails to customers without consent "
+        "from a personal email instead of business one",
+    )
+    answer = events[-1][1]
+    assert [n["named"] for n in answer["not_in_environment"]] == ["spam act"]
+    page = (ROOT / "demo" / "index.html").read_text(encoding="utf-8")
+    assert page.index('id="not-in-env-card"') < page.index('id="answer-card"')
+    assert "data.not_in_environment" in page
+
+
 async def test_a_withheld_answer_is_shown_as_withheld() -> None:
     _, events = await _ask(await _demo_app(), f"{QUESTION} (withhold)")
     answer = events[-1][1]
