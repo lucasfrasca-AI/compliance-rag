@@ -681,3 +681,54 @@ async def test_leftover_throwaway_collections_are_dropped_and_nothing_else() -> 
         for name in leftovers | kept:
             await client.delete_collection(name)
         await client.close()
+
+
+_SERVE_UNTIL_SIGINT = """
+import asyncio, sys
+import uvicorn
+from fastapi import FastAPI
+from compliance_rag.adapters.fakes import FakeEmbedder, FakeLedgerStore
+from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
+
+async def main() -> None:
+    async with QdrantRetrievalStore.ephemeral(
+        sys.argv[1],
+        embedder=FakeEmbedder(dimensions=8),
+        ledger=FakeLedgerStore(),
+        prefix=sys.argv[2],
+    ):
+        print("READY", flush=True)
+        config = uvicorn.Config(FastAPI(), host="127.0.0.1", port=0, log_level="warning")
+        await uvicorn.Server(config).serve()
+
+asyncio.run(main())
+"""
+
+
+async def test_one_ctrl_c_to_a_server_inside_an_ephemeral_store_leaves_no_collection() -> None:
+    """#256 as it was seen: `asyncio.run` around a uvicorn server inside
+    `ephemeral`, and one SIGINT. Before the fix the drop was cancelled and
+    the collection stayed."""
+    import signal
+    import subprocess
+    import sys
+
+    prefix = f"sigint{uuid.uuid4().hex[:6]}"
+    child = subprocess.Popen(
+        [sys.executable, "-c", _SERVE_UNTIL_SIGINT, _QDRANT_URL, prefix],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert child.stdout is not None
+    assert child.stdout.readline().strip() == "READY"
+    await asyncio.sleep(1.0)  # the server is up and serving
+    child.send_signal(signal.SIGINT)
+    _, stderr = child.communicate(timeout=60)
+    assert child.returncode != 0 and "KeyboardInterrupt" in stderr  # -2, or 130 under `uv run`
+    assert not {n for n in await _collection_names() if n.startswith(prefix)}
+
+
+async def test_a_throwaway_sweep_needs_a_prefix() -> None:
+    with pytest.raises(ValueError, match="prefix"):
+        await QdrantRetrievalStore.drop_leftover_ephemerals(_QDRANT_URL, prefix="")

@@ -291,18 +291,32 @@ async def _finish_despite_cancellation(cleanup: Coroutine[object, object, None])
     then let the cancellation through (#256). A Ctrl+C to a uvicorn server
     becomes a cancellation of the main task, delivered at its next await,
     which is the throwaway collection's drop."""
-    task = asyncio.ensure_future(cleanup)
-    cancelled = False
+    task = asyncio.create_task(cleanup)
+    cancelled: asyncio.CancelledError | None = None
     while True:
         try:
             await asyncio.shield(task)
             break
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
             if task.done():
                 raise
-            cancelled = True
-    if cancelled:
-        raise asyncio.CancelledError
+            cancelled = cancellation
+    if cancelled is not None:
+        raise cancelled
+
+
+_EPHEMERAL_SUFFIX = 8  # hex digits of a uuid4
+
+
+def _ephemeral_name(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:_EPHEMERAL_SUFFIX]}"
+
+
+def _ephemeral_pattern(prefix: str) -> re.Pattern[str]:
+    """Exactly the names `_ephemeral_name` gives `prefix`."""
+    if not prefix:
+        raise ValueError("a throwaway collection's prefix can't be empty")
+    return re.compile(rf"{re.escape(prefix)}-[0-9a-f]{{{_EPHEMERAL_SUFFIX}}}")
 
 
 def _client(settings: Settings) -> AsyncQdrantClient:
@@ -427,7 +441,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         client = _qdrant_client(url, key)
         store = cls(
             client,
-            collection_name=f"{prefix}-{uuid.uuid4().hex[:8]}",
+            collection_name=_ephemeral_name(prefix),
             embedder=embedder,
             ledger=ledger,
         )
@@ -445,7 +459,7 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
         reaches only a server that needs none, never the deployed cluster.
         A run still open on the same prefix loses its collection, so a caller
         sweeps only where it is the prefix's one user."""
-        pattern = re.compile(rf"{re.escape(prefix)}-[0-9a-f]{{8}}")
+        pattern = _ephemeral_pattern(prefix)
         client = _qdrant_client(url, "")
         try:
             names = [c.name for c in (await client.get_collections()).collections]

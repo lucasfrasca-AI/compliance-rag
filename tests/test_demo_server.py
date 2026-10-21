@@ -143,6 +143,25 @@ async def test_what_a_killed_demo_left_is_dropped_on_a_local_qdrant_only(
     assert calls == [("http://127.0.0.1:6333", "demo")]
 
 
+async def test_the_demo_sweeps_before_it_loads_anything(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#256: `local_services` drops what a killed run left before it reads
+    the bucket or loads the corpus."""
+
+    class Swept(Exception):
+        pass
+
+    async def sweep(url: str) -> list[str]:
+        raise Swept(url)
+
+    monkeypatch.setattr(demo_server, "drop_leftover_collections", sweep)
+    settings = demo_server.demo_settings(qdrant_url="http://127.0.0.1:6333", fake_generator=True)
+    with pytest.raises(Swept, match=r"127\.0\.0\.1"):
+        async with demo_server.local_services(
+            settings, fake_generator=True, onnx_path=None, failures=demo_server.FailureLog()
+        ):
+            pass
+
+
 def test_the_fake_generator_is_never_the_default() -> None:
     assert demo_server._parser().parse_args([]).fake_generator is False  # pyright: ignore[reportPrivateUsage]
     real = demo_server.demo_settings(qdrant_url="http://127.0.0.1:6333", fake_generator=False)
