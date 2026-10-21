@@ -3,7 +3,8 @@
 - Status: accepted. The human decided the state and refused the alt text
   (quoted below), then narrowed Track A to a part year and signed the words a
   reader is shown (Decision 9); the model made the other calls, each named as
-  such.
+  such. Decision 9 amended by ADR-0052 (#254): `part_year_only`, which the
+  model shaped, moves to a model-authored `part_year.yaml`.
 - Date: 2026-10-20
 - Issue: #211 (from the #206 audit)
 - Extends: ADR-0042 (a corpus revision now compares, writes and records a
@@ -265,7 +266,11 @@ The human's decision (#211, 2026-10-20, decision 3):
   reader is shown, and optionally `part_year_only` (Decision 6). This one's
   `author` and `reviewed_by` are both Lucas Frasca, dated 2026-10-20: the
   wording is his, verbatim, and `part_year_only` records his decision 2; the
-  model transcribed both and drafted nothing in it.
+  model transcribed both and drafted nothing in it. *Amended by ADR-0052
+  (#254):* that was true of `shown` only. The model shaped `part_year_only`,
+  so it moves to `part_year.yaml` beside this file: authored by
+  `model:claude-opus-5-5`, used once Lucas Frasca signs it. `incomplete.yaml`
+  then holds `shown` alone.
 - **Refused while pending** (`compliance_rag.corpus.incomplete_reading`): a
   file whose `reviewed_by` or `date` starts `PENDING` raises
   `UnsignedIncompleteReading` and is never used, as `load_mappings.py`
