@@ -200,6 +200,18 @@ gate). The model's call:
   injection probe (3), with the committed register and without, names no
   instrument at all; no synthetic policy title (6), nor the Act's, is flagged
   for a tenant that holds the Act or one that holds nothing.
+- **The register flags known instruments; it does not detect unknown ones**
+  (the human's wording, 2026-10-21). Measured with the register empty: the
+  "<Name> Act [year]" pattern flags the Fair Work Act, the Corporations Act,
+  the My Health Records Act 2012, the NSW Privacy and Personal Information
+  Protection Act 1998 and the Victorian Information Privacy Act 2014; it does
+  not flag APRA CPS 234, the Privacy (Credit Reporting) Code 2014, the CDR
+  rules or the Spam Regulations 2021, and the GDPR only through the register.
+  So the gap is an unknown instrument that isn't named as an Act, plus an Act
+  whose title starts with a common word, which is reported shortened ("My
+  Health Records Act 2012" as "Health Records Act 2012"). The general case,
+  statute-shaped references beyond Acts, is #261. GE-02 keeps the gap visible
+  in the answer eval.
 - **Known limits, the model's:**
   - The pattern misses a lowercase name in a context it can't read as a
     statute's ("is spam act ok?"); the register catches it once signed.
