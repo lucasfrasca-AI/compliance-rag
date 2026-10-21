@@ -16,6 +16,14 @@
 # GE-01's question is the human's own, verbatim, as asked of the demo on
 # 2026-10-21. The expectations and the label were drafted by the model and
 # signed by Lucas Frasca in the chat on 2026-10-21.
+#
+# GE-02 and GE-03 were drafted by the model at the human's request (2026-10-21)
+# and signed by Lucas Frasca in the chat the same day, as drafted:
+#   - GE-02 names an instrument neither the register nor the Act pattern knows,
+#     so the gap in #261 is visible in the eval instead of invisible: it is
+#     expected to fail the flag check until #261 lands.
+#   - GE-03 exercises `part_of`: a part of a held instrument (the Privacy Act's
+#     Part IIIC) that the selection doesn't include.
 
 author: "model: Claude Opus 5.5 — expectations and label drafted for #252; GE-01's question is Lucas Frasca's"
 reviewed_by: "Lucas Frasca"
@@ -39,3 +47,28 @@ cases:
       environment", or an answer from APP 7 on direct marketing that is
       explicit it cites the Privacy Act. Never a confident answer about the
       Spam Act built from APP 7 text.
+
+  - id: GE-02
+    query: "Does the Privacy (Credit Reporting) Code 2014 let us share a customer's repayment history with a debt collector?"
+    tenant_id: acme
+    subscribes: [privacy-act-1988]
+    as_of: 2026-10-21
+    not_in_environment: ["Privacy (Credit Reporting) Code 2014"]
+    cites_instead: "Privacy Act 1988"
+    notes: >
+      An instrument neither the register nor the Act pattern knows (#261).
+      Expected to FAIL the flag check until #261 lands: the eval shows the gap
+      instead of hiding it. On 2026-10-21 the answer cited APP 6.2 with no flag.
+
+  - id: GE-03
+    query: "Do we have to notify the Commissioner under the Notifiable Data Breaches scheme if a laptop with customer records is stolen?"
+    tenant_id: acme
+    subscribes: [privacy-act-1988]
+    as_of: 2026-10-21
+    not_in_environment: ["Notifiable Data Breaches scheme (Part IIIC of the Privacy Act 1988)"]
+    cites_instead: "Privacy Act 1988"
+    notes: >
+      Exercises part_of: Acme holds the Privacy Act, but its selection doesn't
+      include Part IIIC, so the scheme is flagged as a part of a held instrument
+      that isn't in this environment. The answer may cite APP 11 (security),
+      never the scheme's notification rules.
