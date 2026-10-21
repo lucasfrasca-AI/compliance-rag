@@ -1,11 +1,11 @@
 # How a reader is told what an incomplete clause of C2026C00227 is missing
-# (#211, ADR-0047), and which years that missing content governs.
+# (#211, ADR-0047).
 #
 # The parser marks s6DA(2) incomplete, reason `image_not_text`, with its generic
 # detail "the formula is not available in text form": that stays what every
 # store holds. This file is read beside it, at read time, by the answer, a chat
 # read back, the prompt's fence and Track A (src/compliance_rag/corpus/
-# incomplete_review.py). It never enters a clause's text and is never written
+# incomplete_reading.py). It never enters a clause's text and is never written
 # to a store.
 #
 # `shown` is Lucas Frasca's wording, verbatim (#211, 2026-10-20, decision 3):
@@ -14,17 +14,10 @@
 #   > compilation and has no text form in our corpus". That says what's wrong
 #   > and why, which the parser's generic phrasing doesn't.
 #
-# `part_year_only` records his decision 2 (#211, 2026-10-20):
-#
-#   > Mark them unassessable only when the facts leave open that the business
-#   > ran for part of a year, not whenever the formula is cited.
-#
-# and s6DA(2)'s own stored words: "However, if a business has been carried on
-# for only part of a financial year, its annual turnover for the financial year
-# is the amount worked out using the formula:". `started` is the profile fact
-# the signed mapping reads for when the business started (`business_started_on`,
-# COND-PA-CARRIED-ON-LAST-YEAR and COND-PA-S6D4A-EVER-OVER-THRESHOLD). The
-# model transcribed both decisions into this file and drafted nothing in it.
+# This file holds his words and nothing else, so his name is on it as author
+# (ADR-0052). Which years s6DA(2)'s missing formula governs, a field the model
+# shaped, is in `part_year.yaml` beside it, authored by the model and signed
+# separately (#254).
 #
 # Corpus content under D-01: a file still pending review is refused, not used.
 
@@ -38,5 +31,3 @@ clauses:
   - clause_id: privacy-act-1988:C2026C00227:s6da/2
     reason: image_not_text
     shown: "the turnover formula in s 6DA(2) is published as an image in the compilation and has no text form in our corpus"
-    part_year_only:
-      started: business_started_on
