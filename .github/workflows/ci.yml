@@ -10,6 +10,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides whether the two heavy jobs (reranker-fidelity, trace-check) need to
+  # run. On a pull request whose every changed file is documentation (any
+  # *.md, docs/, demo/, prompts/), they are skipped: nothing they verify can
+  # change. A push to main always runs them, so main is always fully verified
+  # and keeps the reranker artifact cache warm. Reads the PR's file list with
+  # the read-only token; no third-party action, no checkout of PR code.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      heavy: ${{ steps.decide.outputs.heavy }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "heavy=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" -q '.[].filename')
+          heavy=false
+          while IFS= read -r f; do
+            case "$f" in
+              *.md|docs/*|demo/*|prompts/*) ;;
+              *) heavy=true; echo "needs the heavy jobs: $f"; break ;;
+            esac
+          done <<< "$files"
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+          echo "heavy=$heavy"
+
   ci:
     name: ci
     runs-on: ubuntu-latest
@@ -142,6 +179,7 @@ jobs:
     name: reranker-fidelity
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: changes
 
     # Converting BAAI/bge-reranker-v2-m3 to ONNX in this job was tried and
     # abandoned (BUILD_LOG.md 2026-09-28): the fp32 download (2.27GB) plus
@@ -158,7 +196,7 @@ jobs:
     # re-checks its fidelity — no torch, no optimum, no 2.27GB download.
     #
     # A fork PR gets no GCP token, same reasoning as the `trace` job below.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: needs.changes.outputs.heavy == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
 
     permissions:
       id-token: write # mint the OIDC token for Workload Identity Federation
@@ -256,13 +294,13 @@ jobs:
   trace:
     name: trace-check
     runs-on: ubuntu-latest
-    needs: ci
+    needs: [ci, changes]
     timeout-minutes: 10
 
     # A fork PR gets no GCP token: the OIDC provider's attribute condition pins
     # repository and owner, so requesting one would fail anyway. Skipping is
     # honest about that rather than failing on something a contributor cannot fix.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: needs.changes.outputs.heavy == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
 
     permissions:
       id-token: write # mint the OIDC token for Workload Identity Federation
