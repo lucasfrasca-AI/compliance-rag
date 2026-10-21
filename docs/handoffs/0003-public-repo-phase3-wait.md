@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-21.
 - **Phase line in `PHASES.md`:** still **1**, deliberately. Phases exit in order. Phase 1's last criteria wait on one console step (the US quota), so the line can't move. Phase 2's work is complete, but its exit commit can't come first.
-- **`main`:** at the merge of this handoff's PR. No PR is open.
+- **`main`:** 0022ced when this was written; this handoff arrives in #267, with nothing else open.
 - **Why this exists:** this is the first handoff under CLAUDE.md's *Context management* rule (added in the same PR). Everything a fresh session needs, beyond the repo's standing documents, is here or linked from here.
 
 ## Read first
@@ -17,7 +17,7 @@
 | **2 — Graph and Track A** | **Complete.** Two `as_of` dates give different obligation sets (#134). The coverage report lists every unassessable obligation with its reason (#115, ADR-0047's incomplete clauses). Aura counts are logged at 0.4% of nodes and 0.2% of relationships (BUILD_LOG 2026-10-13) | Nothing of its own. Its exit commit waits on Phase 1's |
 | **3 — The product** | **Scaffolded** (#145, closed): the API skeleton, profile, coverage, `POST /v1/answers` with chat recording, and the not-in-environment flag. A throwaway local demo UI (`demo/index.html`, `scripts/demo_server.py`; never deployed) | **The design session.** Its agenda is `docs/research/phase3-product-options.md`, *An agenda for the session*: 12 decisions in dependency order (findings taxonomy, upload API, UI) plus two corpus questions. None is taken. Nothing in Phase 3 beyond the scaffolding is built until it is |
 
-**When the quota arrives,** follow handoff 0002, *The one blocker*. Add `scripts/run_answer_eval.py --environment` for GE-01..03 (ADR-0051, decision 7). GE-02 is expected to fail its flag check until #261. Then close #29 and #31, record the numbers in `PHASES.md`, and move the phase line to 2, then 3, each with its own exit commit and handoff.
+**When the quota arrives,** follow handoff 0002, *The one blocker*. Also run `scripts/run_answer_eval.py --environment` for GE-01..03 (ADR-0051, decision 7). GE-02 is expected to fail its flag check until #261. Then close #29 and #31, record the numbers in `PHASES.md`, and move the phase line to 2, then 3, each with its own exit commit and handoff.
 
 **Running the demo against Claude:**
 ```
@@ -32,10 +32,10 @@ uv run python scripts/demo_server.py --member <the same email>
 
 The human made the repo public for free Actions minutes, after GitHub stopped starting jobs on a failed payment or spending limit. The audit is in BUILD_LOG, 2026-10-21, and #266. In short:
 - **No credential is exposed** in history, commit messages, issues, PRs, fixtures or logs. Nothing was rotated.
-- **Exposed, not secret:** the GCP project id and number, the bucket name, the service-account emails, the WIF provider path, and the Aura instance id (on Aura Free it is both hostname and username, so the password alone protects it). Also the human's personal Gmail address, as the author of 21 early commits.
+- **Exposed, not secret:** the GCP project id and number, the bucket name, the service-account emails, the WIF provider path, and the Aura instance id (on Aura Free it is both hostname and username, so the password alone protects it). Also both commit author email addresses: the account's main address (most commits) and a personal Gmail address (21 early commits).
 - **The new risk** is that anyone can now open an issue or comment, and an agent here reads issues as specs.
 
-**Hardening: none applied yet.** The human's message of 2026-10-21 refers to "four applied hardening measures". Checked live on 2026-10-21, none of the recommended measures is in place:
+**Hardening: none applied as of the check (2026-10-21).** The human's message of 2026-10-21 refers to "four applied hardening measures". Checked live the same day, none of the recommended measures is in place. The table has six agent-side rows and one row for the human, so it doesn't map one-to-one onto those four; the human's answer settles which four were meant:
 
 | Recommendation (the model's) | Live state, 2026-10-21 | Who acts |
 |---|---|---|
