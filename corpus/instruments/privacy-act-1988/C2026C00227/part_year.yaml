@@ -20,13 +20,12 @@
 # was a part year (the business started during it). Without this entry, every
 # such leaf is unassessable whatever year it reads.
 #
-# Corpus content under D-01: while `reviewed_by` is PENDING this file is
-# refused, and nothing reads any reading (src/compliance_rag/corpus/
-# incomplete_reading.py). To sign it, set `reviewed_by` to the reviewer's name
-# and `date` to the day of review (#254).
+# Corpus content under D-01: drafted by the model, reviewed and signed by
+# Lucas Frasca on 2026-10-21 in the chat (#254). A file still pending review is
+# refused (src/compliance_rag/corpus/incomplete_reading.py).
 
 author: "model:claude-opus-5-5"
-reviewed_by: "PENDING — Lucas Frasca"
+reviewed_by: "Lucas Frasca"
 date: 2026-10-21
 source_clause_ids:
   - privacy-act-1988:C2026C00227:s6da/2
