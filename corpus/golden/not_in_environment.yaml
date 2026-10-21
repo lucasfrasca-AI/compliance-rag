@@ -14,11 +14,12 @@
 # checked-in vector snapshot, which holds no vector for this question.
 #
 # GE-01's question is the human's own, verbatim, as asked of the demo on
-# 2026-10-21. The expectations and the label were drafted by the model.
+# 2026-10-21. The expectations and the label were drafted by the model and
+# signed by Lucas Frasca in the chat on 2026-10-21.
 
 author: "model: Claude Opus 5.5 — expectations and label drafted for #252; GE-01's question is Lucas Frasca's"
-reviewed_by: "PENDING — Lucas Frasca"
-date: "PENDING"
+reviewed_by: "Lucas Frasca"
+date: "2026-10-21"
 
 cases:
   - id: GE-01

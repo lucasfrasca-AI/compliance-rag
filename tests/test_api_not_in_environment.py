@@ -39,7 +39,9 @@ SPAM_QUESTION = (
 )
 AS_OF = "2026-10-12"
 MARKETING = "acme/marketing-policy:v1:1/1"
-FLAG = {"named": "spam act", "known_as": None, "part_of": None}
+FLAG = {"named": "spam act", "known_as": "Spam Act 2003", "part_of": None}
+"""With the register signed (2026-10-21), the flag names the instrument by its
+register name."""
 
 
 def _reply(quote: str) -> str:
@@ -114,7 +116,7 @@ async def test_a_verified_confident_spam_act_answer_reaches_the_reader_flagged()
     assert answer["not_in_environment"] == [FLAG]
     # Recorded with the turn, and read back as the member was shown it.
     _, recorded = await ledger.chat_turns(POLICY_TENANT_ID, "uid-123", answer["chat_id"])
-    assert recorded.not_in_environment == (NotInEnvironment("spam act"),)
+    assert recorded.not_in_environment == (NotInEnvironment("spam act", "Spam Act 2003"),)
     question, shown = chat["turns"]
     assert "not_in_environment" not in question
     assert shown["verified"] is True and shown["not_in_environment"] == [FLAG]

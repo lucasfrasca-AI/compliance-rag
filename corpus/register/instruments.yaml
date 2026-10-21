@@ -20,11 +20,14 @@
 # `;` or `[`, because a name reaches the model's fenced note.
 #
 # Drafted by the model at the human's request (#252); every entry is the
-# model's, for Lucas Frasca to check and sign.
+# model's. Reviewed and signed by Lucas Frasca in the chat on 2026-10-21, who
+# kept the Interactive Gambling Act (APP 7.8(aa) names it) and dropped the bare
+# "Part IIIC" alias: it appears in ordinary discussion of the Privacy Act
+# itself, so flagging a question that merely mentions it would be noise.
 
 author: "model: Claude Opus 5.5 — drafted for #252 at Lucas Frasca's request"
-reviewed_by: "PENDING — Lucas Frasca"
-date: "PENDING"
+reviewed_by: "Lucas Frasca"
+date: "2026-10-21"
 
 instruments:
   - known_as: "Privacy Act 1988"
@@ -57,4 +60,3 @@ instruments:
       - "Notifiable Data Breach scheme"
       - "NDB scheme"
       - "notifiable data breaches"
-      - "Part IIIC"
