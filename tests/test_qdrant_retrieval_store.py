@@ -24,6 +24,7 @@ Self-skips when `QDRANT_URL` isn't set or isn't reachable, same pattern
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import math
 import os
@@ -617,3 +618,66 @@ async def test_the_user_id_index_is_added_to_a_collection_that_lacks_only_it() -
         info = await client.get_collection(collection)
         await client.close()
     assert "user_id" in info.payload_schema and info.points_count == 1
+
+
+async def _collection_names() -> set[str]:
+    from qdrant_client import AsyncQdrantClient
+
+    client = AsyncQdrantClient(url=_QDRANT_URL)
+    names = {c.name for c in (await client.get_collections()).collections}
+    await client.close()
+    return names
+
+
+async def test_an_ephemeral_collection_is_dropped_when_its_exit_is_cancelled() -> None:
+    """#256: a demo's Ctrl+C reaches uvicorn, which re-raises it once it
+    stops, and asyncio cancels the main task. The cancellation lands on the
+    first await after the server returns, the drop. The drop finishes anyway,
+    and the cancellation still propagates."""
+    prefix = f"cancelled{uuid.uuid4().hex[:6]}"
+
+    async def run() -> None:
+        async with QdrantRetrievalStore.ephemeral(
+            _QDRANT_URL,
+            embedder=FakeEmbedder(dimensions=8),
+            ledger=FakeLedgerStore(),
+            prefix=prefix,
+        ):
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel()  # pending: delivered at the drop's first await
+
+    task = asyncio.create_task(run())
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not {n for n in await _collection_names() if n.startswith(prefix)}
+
+
+async def test_leftover_throwaway_collections_are_dropped_and_nothing_else() -> None:
+    """#256: a collection a killed run left behind is `{prefix}-` and eight
+    hex digits, as `ephemeral` names it. Only those are dropped: not another
+    prefix's, not a name that merely starts with the prefix."""
+    from qdrant_client import AsyncQdrantClient, models
+
+    prefix = f"sweep{uuid.uuid4().hex[:6]}"
+    leftovers = {f"{prefix}-0a1b2c3d", f"{prefix}-deadbeef"}
+    kept = {
+        f"{prefix}-notahex1",
+        f"{prefix}-0a1b2c3",
+        f"{prefix}x-0a1b2c3d",
+        f"{prefix}-0a1b2c3d-x",
+    }
+    client = AsyncQdrantClient(url=_QDRANT_URL)
+    for name in leftovers | kept:
+        await client.create_collection(
+            name, vectors_config=models.VectorParams(size=4, distance=models.Distance.COSINE)
+        )
+    try:
+        dropped = await QdrantRetrievalStore.drop_leftover_ephemerals(_QDRANT_URL, prefix=prefix)
+        names = await _collection_names()
+        assert set(dropped) == leftovers
+        assert not leftovers & names and kept <= names
+    finally:
+        for name in leftovers | kept:
+            await client.delete_collection(name)
+        await client.close()

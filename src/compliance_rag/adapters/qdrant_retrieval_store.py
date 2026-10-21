@@ -63,8 +63,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import re
 import uuid
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Coroutine, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -278,6 +279,32 @@ def _qdrant_client(url: str, api_key: str) -> AsyncQdrantClient:
     return AsyncQdrantClient(url=url or None, api_key=api_key or None, limits=_HTTP_LIMITS)
 
 
+async def _drop_and_close(client: AsyncQdrantClient, collection_name: str) -> None:
+    try:
+        await client.delete_collection(collection_name)
+    finally:
+        await client.close()
+
+
+async def _finish_despite_cancellation(cleanup: Coroutine[object, object, None]) -> None:
+    """Run `cleanup` to the end even if this task is cancelled while it runs,
+    then let the cancellation through (#256). A Ctrl+C to a uvicorn server
+    becomes a cancellation of the main task, delivered at its next await,
+    which is the throwaway collection's drop."""
+    task = asyncio.ensure_future(cleanup)
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            if task.done():
+                raise
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 def _client(settings: Settings) -> AsyncQdrantClient:
     return _qdrant_client(settings.qdrant_url, settings.qdrant_api_key.get_secret_value())
 
@@ -408,8 +435,26 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             await store.ensure_ready()
             yield store
         finally:
-            await client.delete_collection(store._collection_name)
+            await _finish_despite_cancellation(_drop_and_close(client, store._collection_name))
+
+    @staticmethod
+    async def drop_leftover_ephemerals(url: str, *, prefix: str) -> list[str]:
+        """Drop every collection on `url` named as `ephemeral` names one for
+        `prefix` (`{prefix}-` and eight hex digits): what a killed run left
+        behind (#256). Nothing else is touched. It takes no API key, so it
+        reaches only a server that needs none, never the deployed cluster.
+        A run still open on the same prefix loses its collection, so a caller
+        sweeps only where it is the prefix's one user."""
+        pattern = re.compile(rf"{re.escape(prefix)}-[0-9a-f]{{8}}")
+        client = _qdrant_client(url, "")
+        try:
+            names = [c.name for c in (await client.get_collections()).collections]
+            leftovers = sorted(n for n in names if pattern.fullmatch(n))
+            for name in leftovers:
+                await client.delete_collection(name)
+        finally:
             await client.close()
+        return leftovers
 
     async def ensure_ready(self) -> None:
         await ensure_collection(

@@ -121,6 +121,28 @@ def test_the_demo_loads_its_corpus_into_a_local_qdrant_only() -> None:
             refuse_unless_local_qdrant(remote)
 
 
+async def test_what_a_killed_demo_left_is_dropped_on_a_local_qdrant_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#256: the sweep names the demo's own prefix, and a remote Qdrant is
+    refused before anything is asked of it. The adapter's sweep is proven on
+    a real Qdrant in `test_qdrant_retrieval_store.py`; here it is recorded, so
+    a demo running on this machine keeps its collection."""
+    from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
+
+    calls: list[tuple[str, str]] = []
+
+    async def record(url: str, *, prefix: str) -> list[str]:
+        calls.append((url, prefix))
+        return [f"{prefix}-0a1b2c3d"]
+
+    monkeypatch.setattr(QdrantRetrievalStore, "drop_leftover_ephemerals", record)
+    assert await demo_server.drop_leftover_collections("http://127.0.0.1:6333") == ["demo-0a1b2c3d"]
+    with pytest.raises(RefusedToStart, match="local Qdrant only"):
+        await demo_server.drop_leftover_collections("http://10.0.0.5")
+    assert calls == [("http://127.0.0.1:6333", "demo")]
+
+
 def test_the_fake_generator_is_never_the_default() -> None:
     assert demo_server._parser().parse_args([]).fake_generator is False  # pyright: ignore[reportPrivateUsage]
     real = demo_server.demo_settings(qdrant_url="http://127.0.0.1:6333", fake_generator=False)
