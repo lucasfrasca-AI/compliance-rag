@@ -129,8 +129,16 @@ async def pipeline(
         tenant_id=PUBLIC_TENANT_ID,
         scope=Scope.PUBLIC,
     ).clauses
-    await store.upsert_chunks(chunk_clauses(clauses, count_tokens=count_reranker_tokens))
-    yield built
+    try:
+        await store.upsert_chunks(chunk_clauses(clauses, count_tokens=count_reranker_tokens))
+        yield built
+    finally:
+        # Built from `Settings` on purpose, so not `ephemeral`: dropped here (#269).
+        from qdrant_client import AsyncQdrantClient
+
+        client = AsyncQdrantClient(url=_QDRANT_URL)
+        await client.delete_collection(settings.qdrant_collection)
+        await client.close()
 
 
 async def test_retrieve_runs_both_channels_fusion_and_the_real_cross_encoder(

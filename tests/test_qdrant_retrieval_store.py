@@ -29,6 +29,7 @@ import datetime as dt
 import math
 import os
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
@@ -72,41 +73,39 @@ def ledger() -> FakeLedgerStore:
 
 
 @pytest.fixture
-async def store(ledger: FakeLedgerStore) -> QdrantRetrievalStore:
+async def store(ledger: FakeLedgerStore) -> AsyncIterator[QdrantRetrievalStore]:
     """A fresh, uniquely-named collection per test run — never reused, so
     tests can't see each other's data and there is nothing to reset between
-    runs."""
-    from qdrant_client import AsyncQdrantClient
-
-    client = AsyncQdrantClient(url=_QDRANT_URL)
-    collection_name = f"clauses-contract-test-{uuid.uuid4().hex[:8]}"
-    embedder = FakeEmbedder(dimensions=8)
-    retrieval_store = QdrantRetrievalStore(
-        client, collection_name=collection_name, embedder=embedder, ledger=ledger
-    )
-    await retrieval_store.ensure_ready()
-    await retrieval_store.upsert_chunks(
-        (
-            Chunk(
-                chunk_id="c1",
-                clause_id=APP11,
-                text="An APP entity must take reasonable steps to protect the information.",
-            ),
-            Chunk(
-                chunk_id="c2",
-                clause_id=APP12,
-                text="An APP entity must give the individual access to the information.",
-            ),
-            Chunk(
-                chunk_id="c3",
-                clause_id="acme-policy:v3:sec2/1",
-                text="Acme retains customer records for seven years to protect the information.",
-                scope=Scope.TENANT,
-                tenant_id="acme",
-            ),
+    runs — and dropped after it (#269)."""
+    async with QdrantRetrievalStore.ephemeral(
+        _QDRANT_URL,
+        embedder=FakeEmbedder(dimensions=8),
+        ledger=ledger,
+        prefix="clauses-contract-test",
+    ) as retrieval_store:
+        await retrieval_store.upsert_chunks(
+            (
+                Chunk(
+                    chunk_id="c1",
+                    clause_id=APP11,
+                    text="An APP entity must take reasonable steps to protect the information.",
+                ),
+                Chunk(
+                    chunk_id="c2",
+                    clause_id=APP12,
+                    text="An APP entity must give the individual access to the information.",
+                ),
+                Chunk(
+                    chunk_id="c3",
+                    clause_id="acme-policy:v3:sec2/1",
+                    text="Acme retains customer records for seven years to protect the "
+                    "information.",
+                    scope=Scope.TENANT,
+                    tenant_id="acme",
+                ),
+            )
         )
-    )
-    return retrieval_store
+        yield retrieval_store
 
 
 async def test_qdrant_satisfies_the_revise_chunks_contract(store: QdrantRetrievalStore) -> None:
@@ -369,9 +368,13 @@ async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedger
     async def seed(tenant_id: str, clause_id: str) -> None:
         ledger.seed_finding(tenant_id, clause_id)
 
-    await assert_corpus_lifecycle_contract(
-        store, store, ledger, FakeClauseStore(), stored_chunk_ids, seed
-    )
+    try:
+        await assert_corpus_lifecycle_contract(
+            store, store, ledger, FakeClauseStore(), stored_chunk_ids, seed
+        )
+    finally:
+        await client.delete_collection(name)
+        await client.close()
 
 
 async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
@@ -388,15 +391,19 @@ async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
         vectors_config={"dense": models.VectorParams(size=8, distance=models.Distance.COSINE)},
         sparse_vectors_config={"sparse": models.SparseVectorParams()},
     )
-    await client.upsert(
-        name,
-        points=[models.PointStruct(id=1, vector={"dense": [0.1] * 8}, payload={"keep": True})],
-    )
-    store = QdrantRetrievalStore(
-        client, collection_name=name, embedder=FakeEmbedder(dimensions=8), ledger=ledger
-    )
-    await store.ensure_ready()
-    info = await client.get_collection(name)
+    try:
+        await client.upsert(
+            name,
+            points=[models.PointStruct(id=1, vector={"dense": [0.1] * 8}, payload={"keep": True})],
+        )
+        store = QdrantRetrievalStore(
+            client, collection_name=name, embedder=FakeEmbedder(dimensions=8), ledger=ledger
+        )
+        await store.ensure_ready()
+        info = await client.get_collection(name)
+    finally:
+        await client.delete_collection(name)
+        await client.close()
     # ADR-0020, ADR-0035, ADR-0036
     assert {"instrument_id", "ancestors", "user_id"} <= set(info.payload_schema)
     assert info.points_count == 1
