@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-21.
 - **Phase line in `PHASES.md`:** still **1**, deliberately. Phases exit in order. Phase 1's last criteria wait on one console step (the US quota), so the line can't move. Phase 2's work is complete, but its exit commit can't come first.
-- **`main`:** 0022ced when this was written; this handoff arrives in #267, with nothing else open.
+- **`main`:** 0022ced when this was written; this handoff arrives in #267, with nothing else open. Updated 2026-10-23 after #268 and #270.
 - **Why this exists:** this is the first handoff under CLAUDE.md's *Context management* rule (added in the same PR). Everything a fresh session needs, beyond the repo's standing documents, is here or linked from here.
 
 ## Read first
@@ -87,7 +87,7 @@ As of 2026-10-21 the repo has no forks, and every issue, PR and comment since it
 | #123, #176 (`later`) | Phase 3 design / user scope |
 | #174 | a deployed ledger, which comes with Phase 3's Cloud SQL (a billable unlock) |
 | #12, #136, #138, #196, #198 | Phase 4 |
-| #256 | nothing: ready for an agent (demo collection left behind on Ctrl+C) |
+| ~~#256~~, ~~#269~~ | closed 2026-10-23 (#268, #270): a Ctrl+C no longer leaves the demo's collection, the demo sweeps leftovers at start, and the suite drops every collection it creates |
 | #200, #206, #221 | open retrieval targets (ADR-0043): strict xfails, not exit blockers |
 | #194, #205, #223 | needs-triage: a parser connector case, a flaky Qdrant ordering test, BM25 float drift between collections |
 | #8 | Phase 1's parent; closes with Phase 1 |
@@ -100,11 +100,13 @@ As of 2026-10-21 the repo has no forks, and every issue, PR and comment since it
 - **Signed YAML `date:` fields must be quoted strings** (`date: "2026-10-21"`). An unquoted date loads as a `datetime.date`, and the pydantic models refuse it.
 - **Authorship of shaped content (ADR-0052).** A field the model shaped, even to carry the human's decision, is `author: "model:…"` and pending until the human signs it. Present it as the literal text to sign, not as a link to a PR.
 - **Long test runs from an agent go in the background**, and at most two heavy Opus agents run at once. A stalled agent resumes through SendMessage, not a new spawn.
-- **The demo server dies when its background time limit expires.** The human now runs it in their own terminal. Ctrl+C during startup can leave `demo-*` Qdrant collections behind (#256); drop them by hand.
+- **The demo server dies when its background time limit expires.** The human now runs it in their own terminal. Since #268 it drops what a killed run left at its next start, so run one demo at a time on a Qdrant.
+- **Local Qdrant containers must be created with `QDRANT__TELEMETRY_DISABLED=true`.** CI and the demo's instructions set it (#172). Older local containers (`crag-test-qdrant`, `crag-main-qdrant`, created before #172) try to report usage to `telemetry.qdrant.io` when started. Don't start them; create a fresh one with the flag. Docker Desktop has to be running, and the CLI is `/usr/local/bin/docker`.
+- **A shell variable holding several paths isn't split by zsh** (`pytest $T` runs nothing). Write the paths inline.
 
 ## Suggested skills for the next session
 
 - `mattpocock-skills:grill-with-docs` to run the Phase 3 design session over `docs/research/phase3-product-options.md`.
-- `mattpocock-skills:implement` with `tdd`, for #256 and for whatever the session decides.
+- `mattpocock-skills:implement` with `tdd`, for whatever the session decides.
 - `mattpocock-skills:code-review` before every PR.
 - `mattpocock-skills:handoff` at each phase exit, into `docs/handoffs/`.
