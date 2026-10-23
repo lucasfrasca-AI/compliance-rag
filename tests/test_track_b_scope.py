@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import uuid
 from pathlib import Path
 
 import pytest
@@ -105,20 +104,14 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "")
 
 @pytest.mark.skipif(not qdrant_reachable(QDRANT_URL), reason="needs a real Qdrant (QDRANT_URL)")
 async def test_qdrant_keeps_the_scope() -> None:
-    from qdrant_client import AsyncQdrantClient
-
     from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 
     ledger = FakeLedgerStore()
-    store = QdrantRetrievalStore(
-        AsyncQdrantClient(url=QDRANT_URL),
-        collection_name=f"track-b-scope-{uuid.uuid4().hex[:8]}",
-        embedder=FakeEmbedder(dimensions=8),
-        ledger=ledger,
-    )
-    await store.ensure_ready()
-    await store.upsert_chunks(CHUNKS)
-    await assert_track_b_scope_contract(store, ledger)
+    async with QdrantRetrievalStore.ephemeral(
+        QDRANT_URL, embedder=FakeEmbedder(dimensions=8), ledger=ledger, prefix="track-b-scope"
+    ) as store:
+        await store.upsert_chunks(CHUNKS)
+        await assert_track_b_scope_contract(store, ledger)
 
 
 async def test_track_a_coverage_becomes_the_scope() -> None:

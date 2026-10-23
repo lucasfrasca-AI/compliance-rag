@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import socket
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import pytest
@@ -21,6 +22,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.interfaces import LawScope
+
+if TYPE_CHECKING:
+    from qdrant_client import AsyncQdrantClient
 from compliance_rag.corpus.models import Scope
 
 SPAN_EXPORTER = InMemorySpanExporter()
@@ -66,3 +70,12 @@ def qdrant_reachable(url: str) -> bool:
             return True
     except OSError:
         return False
+
+
+async def drop_collection_and_close(client: AsyncQdrantClient, name: str) -> None:
+    """A test's own collection, dropped, and its client closed even if the
+    drop fails (#269)."""
+    try:
+        await client.delete_collection(name)
+    finally:
+        await client.close()
