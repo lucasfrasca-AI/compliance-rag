@@ -34,9 +34,11 @@ is deployed (`refuse_unless_local`).
 
 **What it runs on:**
 - **Retrieval:** a throwaway collection on a *local* Qdrant (a remote URL is
-  refused), loaded at start with the gate corpus and dropped on exit. That is
-  the whole compilation's selected clauses and Acme's six synthetic policies,
-  marked synthetic from the registry. Chunk vectors come from the checked-in
+  refused), loaded at start with the gate corpus and dropped on exit. The
+  gate corpus is the whole compilation's selected clauses and Acme's six
+  synthetic policies, marked synthetic from the registry. A collection a
+  killed run left behind is dropped at the next start (#256), so run one demo
+  at a time on a Qdrant. Chunk vectors come from the checked-in
   `gemini-embedding-001` snapshot. The question, which no snapshot holds, is
   embedded by `VertexEmbedder` in australia-southeast1. The reranker is the
   int8 cross-encoder, in process.
@@ -208,6 +210,19 @@ def refuse_unless_local_qdrant(url: str) -> None:
     cluster."""
     if urlparse(url).hostname not in _LOOPBACK:
         raise RefusedToStart(f"the demo loads its corpus into a local Qdrant only, not {url!r}")
+
+
+DEMO_PREFIX = "demo"
+
+
+async def drop_leftover_collections(url: str) -> list[str]:
+    """The throwaway collections a killed demo left on the local Qdrant
+    (#256), dropped by name and nothing else. Local only, as the load is. A
+    second demo running on the same Qdrant loses its collection."""
+    from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
+
+    refuse_unless_local_qdrant(url)
+    return await QdrantRetrievalStore.drop_leftover_ephemerals(url, prefix=DEMO_PREFIX)
 
 
 # --- What a request's failure was, for the page -----------------------------
@@ -565,7 +580,8 @@ async def local_services(
     from compliance_rag.eval.harness import in_process_reranker
     from compliance_rag.reranker_service.model import RerankerModel
 
-    refuse_unless_local_qdrant(settings.qdrant_url)
+    if dropped := await drop_leftover_collections(settings.qdrant_url):
+        print(f"Dropped what an earlier run left behind: {', '.join(dropped)}", flush=True)
     if not settings.corpus_bucket:
         raise RefusedToStart(
             "no corpus bucket (--bucket or CORPUS_BUCKET): law source HTML is read from it"
@@ -581,7 +597,7 @@ async def local_services(
     model = RerankerModel(onnx_path) if onnx_path is not None else RerankerModel()
     async with (
         QdrantRetrievalStore.ephemeral(
-            settings.qdrant_url, embedder=embedder, ledger=ledger, prefix="demo"
+            settings.qdrant_url, embedder=embedder, ledger=ledger, prefix=DEMO_PREFIX
         ) as store,
         in_process_reranker(model) as reranker,
     ):
