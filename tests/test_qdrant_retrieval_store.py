@@ -44,7 +44,7 @@ from compliance_rag.adapters.qdrant_retrieval_store import (
     _encode_query,  # pyright: ignore[reportPrivateUsage] — the question's sparse vector, for native RRF
 )
 from compliance_rag.corpus.models import Chunk, Scope
-from tests.conftest import ALL_LAW, qdrant_reachable
+from tests.conftest import ALL_LAW, drop_collection_and_close, qdrant_reachable
 
 TODAY = dt.date(2026, 1, 1)
 LATER = dt.date(2027, 6, 1)
@@ -235,8 +235,7 @@ async def test_fusion_scores_as_qdrants_native_rrf_does() -> None:
             with_payload=["chunk_id"],
         )
     finally:
-        await client.delete_collection(name)
-        await client.close()
+        await drop_collection_and_close(client, name)
     native_scores = {str((p.payload or {})["chunk_id"]): p.score for p in native.points}
     assert {c.chunk_id for c in ours.fused} == set(native_scores)
     for candidate in ours.fused:
@@ -359,7 +358,6 @@ async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedger
     store = QdrantRetrievalStore(
         client, collection_name=name, embedder=FakeEmbedder(dimensions=8), ledger=ledger
     )
-    await store.ensure_ready()
 
     async def stored_chunk_ids() -> frozenset[str]:
         points, _ = await client.scroll(name, limit=1000, with_payload=True)
@@ -369,12 +367,12 @@ async def test_qdrant_satisfies_the_corpus_lifecycle_contract(ledger: FakeLedger
         ledger.seed_finding(tenant_id, clause_id)
 
     try:
+        await store.ensure_ready()
         await assert_corpus_lifecycle_contract(
             store, store, ledger, FakeClauseStore(), stored_chunk_ids, seed
         )
     finally:
-        await client.delete_collection(name)
-        await client.close()
+        await drop_collection_and_close(client, name)
 
 
 async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
@@ -402,8 +400,7 @@ async def test_instrument_id_index_is_added_to_a_collection_created_before_it(
         await store.ensure_ready()
         info = await client.get_collection(name)
     finally:
-        await client.delete_collection(name)
-        await client.close()
+        await drop_collection_and_close(client, name)
     # ADR-0020, ADR-0035, ADR-0036
     assert {"instrument_id", "ancestors", "user_id"} <= set(info.payload_schema)
     assert info.points_count == 1
