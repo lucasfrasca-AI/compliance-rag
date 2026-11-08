@@ -40,7 +40,7 @@ import json
 import re
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import cast
 
@@ -136,6 +136,13 @@ def _key_id(token: str) -> str:
     return kid
 
 
+def is_member(email: str, members: Iterable[str]) -> bool:
+    """Whether `email` is on the member list, compared case-insensitively. The
+    one membership rule: the verifier applies it to a token's email, and the
+    session cookie's reader to the cookie's (#280), so the two can't drift."""
+    return email.lower() in {m.strip().lower() for m in members}
+
+
 class FirebaseTokenVerifier(TokenVerifier):
     def __init__(
         self,
@@ -217,10 +224,15 @@ class FirebaseTokenVerifier(TokenVerifier):
             details.get("sign_in_provider") not in self._providers
             or not isinstance(email, str)
             or claims.get("email_verified") is not True
-            or email.lower() not in self._members
+            or not is_member(email, self._members)
         ):
             raise NotAMember("not a member of this tenant")
-        return Member(uid=uid, email=email.lower())
+        expires = claims.get("exp")
+        return Member(
+            uid=uid,
+            email=email.lower(),
+            expires_at=int(expires) if isinstance(expires, int | float) else None,
+        )
 
     async def aclose(self) -> None:
         await self._source.aclose()

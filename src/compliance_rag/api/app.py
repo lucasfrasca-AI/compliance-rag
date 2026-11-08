@@ -2,7 +2,7 @@
 `create_app` from its services (`deps.ApiServices`), so tests pass fakes and
 `api/main.py` passes the real adapters.
 
-Every route but `/health` needs a signed-in member of the tenant
+Every route but `/health`, the sign-in page and its assets needs a signed-in member of the tenant
 (`TokenVerifier`, #146), and acts on `Settings.tenant_id` (`deps.py`). Every
 request runs in one span, from the first byte to the last, a streamed response
 included (D-16), so ledger rows written while handling it carry its
@@ -22,8 +22,9 @@ from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from compliance_rag.api import answers, chats, sources, tenant
+from compliance_rag.api import answers, chats, sign_in, sources, tenant
 from compliance_rag.api.deps import ApiServices, Caller, current_caller
+from compliance_rag.api.session import OriginGuard, codec_for
 from compliance_rag.telemetry import current_trace_id, span
 
 
@@ -71,6 +72,8 @@ def create_app(services: ApiServices) -> FastAPI:
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.services = services
+    app.state.session = codec_for(services.settings.session_secret.get_secret_value())
+    app.add_middleware(OriginGuard, extra_origins=services.settings.allowed_origins)
     app.add_middleware(RequestSpan)
 
     @app.exception_handler(RequestValidationError)
@@ -88,6 +91,8 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(answers.router)
     app.include_router(chats.router)
     app.include_router(sources.router)
+    app.include_router(sign_in.router)
+    app.mount("/static", sign_in.Assets(directory=sign_in.STATIC_DIR), name="static")
 
     # Not /healthz: Cloud Run reserves paths ending in "z".
     @app.get("/health")

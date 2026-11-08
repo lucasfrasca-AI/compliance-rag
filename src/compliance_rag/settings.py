@@ -23,6 +23,10 @@ Sydney or Singapore endpoint). Allowed for generation only, and only while
 the corpus is public law plus synthetic data —
 `adapters/generation_residency.py` enforces that (ADR-0023)."""
 
+MIN_SESSION_SECRET_CHARS = 32
+"""A session secret shorter than this is refused: the cookie's signature is
+only as strong as the key (#280)."""
+
 GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 
 
@@ -34,6 +38,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         frozen=True,
+        hide_input_in_errors=True,  # a refused secret never echoes into the error (#280)
     )
 
     env: Literal["local", "ci", "cloud"] = "local"
@@ -100,6 +105,20 @@ class Settings(BaseSettings):
     """Firebase sign-in providers whose verified email is trusted. Google and
     email/password prove ownership; an arbitrary OIDC or SAML provider can
     assert any address (#145)."""
+    firebase_web_api_key: str = ""
+    """The Firebase project's web API key, which the sign-in page hands the web
+    SDK (#280). It identifies the project and is not a secret (Firebase's own
+    guidance), so it is a plain string. Empty: the sign-in page isn't served."""
+    firebase_auth_domain: str = ""
+    """The web SDK's `authDomain`. Empty: `<firebase_project_id>.firebaseapp.com`."""
+    session_secret: SecretStr = SecretStr("")
+    """Signs the session cookie (#280): Secret Manager in Cloud Run, `.env`
+    locally. At least `MIN_SESSION_SECRET_CHARS` random characters. Empty:
+    cookie sessions are off, and only the Bearer header signs anyone in."""
+    api_allowed_origins: str = ""
+    """Comma-separated origins (`https://host`) besides the request's own whose
+    state-changing requests may carry the session cookie (#280). Empty: only
+    the request's own origin."""
     api_docs: bool = False
     """Serve the OpenAPI schema and /docs. Off unless asked for, so a
     deployment missing `ENV` doesn't publish it."""
@@ -138,6 +157,16 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator("session_secret")
+    @classmethod
+    def _session_secret_is_long_enough(cls, v: SecretStr) -> SecretStr:
+        # The length only: the message never carries the value.
+        if v.get_secret_value() and len(v.get_secret_value()) < MIN_SESSION_SECRET_CHARS:
+            raise ValueError(
+                f"session_secret must be at least {MIN_SESSION_SECRET_CHARS} characters"
+            )
+        return v
+
     @field_validator("vertex_embedding_dims")
     @classmethod
     def _dims(cls, v: int) -> int:
@@ -158,6 +187,16 @@ class Settings(BaseSettings):
     @property
     def sign_in_providers(self) -> frozenset[str]:
         return frozenset(p.strip() for p in self.api_sign_in_providers.split(",") if p.strip())
+
+    @property
+    def allowed_origins(self) -> frozenset[str]:
+        return frozenset(
+            o.strip().rstrip("/").lower() for o in self.api_allowed_origins.split(",") if o.strip()
+        )
+
+    @property
+    def web_auth_domain(self) -> str:
+        return self.firebase_auth_domain or f"{self.firebase_project_id}.firebaseapp.com"
 
     @property
     def offshore_testers(self) -> frozenset[str]:

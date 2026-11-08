@@ -23,6 +23,10 @@ with the version: read once per answer, for every policy version in the
 context, never once per clause or per citation. The answer carries what was
 read, so the API shows the same form.
 
+The prefix (the system prompt and the tenant's policies) is capped at about
+30k tokens, counted locally (`prefix_cap`, ADR-0054): a larger one raises
+`PolicyCorpusTooLarge` before the generator is called.
+
 An incomplete clause (ADR-0047) is marked so in its fence, and an answer that
 cites one carries it (`Answer.incomplete`): the verifier still checks the
 quote against the stored text, and the flag says that text isn't all the
@@ -69,6 +73,8 @@ from compliance_rag.assessment.environment import (
     committed_instrument_register,
     not_in_environment,
 )
+from compliance_rag.assessment.history import MAX_EXCHANGES, PriorExchange, retrieval_query
+from compliance_rag.assessment.prefix_cap import check_prefix_cap
 from compliance_rag.assessment.prompt import (
     REPAIR_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -239,16 +245,18 @@ class AssessmentPipeline:
         max_tokens: int = 1024,
         on_retrieved: Callable[[RetrievalTrace], Awaitable[None]] | None = None,
         user_id: str | None = None,
+        history: Sequence[PriorExchange] = (),
     ) -> Answer:
         """`law` is Track B's scope (D-03, ADR-0030): `LawScope.of(coverage)`
         for an assessment, `LIBRARY_QUESTION` for a question about the library
         with no tenant profile — required, so no call skips Track A unseen.
         `policies` is the tenant's policy corpus, sent as the cached prefix
         (D-11) and never retrieved as well (ADR-0033). The retriever's query
-        is `query` and only `query`: it is fixed here, before any text is
-        retrieved, and nothing retrieved or generated
-        flows back into it (#29's injection control) — repair included, which
-        re-reads one clause and never retrieves. The system prompt is fixed
+        is `query`, led by the previous member question when the chat has
+        `history` (`history.retrieval_query`, #278): member-typed words only. It
+        is fixed here, before any text is retrieved, and nothing retrieved or
+        generated flows back into it (#29's injection control) — repair
+        included, which re-reads one clause and never retrieves. The system prompt is fixed
         (`assessment/prompt.SYSTEM_PROMPT`), not a parameter: it carries the
         rule that fenced text is data, which no caller gets to drop.
         `on_retrieved` is told what retrieval found before generation starts
@@ -260,7 +268,15 @@ class AssessmentPipeline:
         yields nothing. Then every exception and qualifier `law` names for a
         clause in it, and every clause inside one, is added, fetched by id if
         the ranking left it out (#164, #182, ADR-0037, ADR-0044): the ids come
-        from Track A, never from retrieved text."""
+        from Track A, never from retrieved text. `history` is the chat's earlier
+        exchanges (`history.prior_exchanges`), at most `MAX_EXCHANGES`, oldest
+        first. It is member-typed text and verified answers the member was
+        shown, and it goes to the model with the question, so the caller passes
+        it only after the residency gate has cleared the asker (ADR-0032). It
+        reaches the model fenced as data (`prompt.history_note`) and the
+        retriever as the previous question alone; the not-in-environment check
+        reads `query` alone (ADR-0051), and with no history every byte of the
+        prompt is as it was."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             # Before anything is retrieved or generated: offshore, the prefix
             # must be registered synthetic (ADR-0032).
@@ -273,6 +289,14 @@ class AssessmentPipeline:
             # record of the environment alone: which instruments the question
             # names that the tenant doesn't hold (#252, ADR-0051).
             absent = await self._not_in_environment(query, tenant_id, as_of, current)
+            history = tuple(history[-MAX_EXCHANGES:])
+            searched = retrieval_query(query, history)
+            current.set_attribute("answer.history_exchanges", len(history))
+            current.set_attribute(
+                "answer.history_turns",
+                sum(1 + (e.answer is not None) for e in history),
+            )
+            current.set_attribute("answer.retrieval_query", searched)
             # The prefix is the policies' authoritative copy, so retrieval
             # leaves them out and their slots go to law (ADR-0033).
             sent = PolicyCorpus(frozenset(p.clause_id for p in policies))
@@ -280,7 +304,7 @@ class AssessmentPipeline:
             # is an exact lookup that skips the reranker; anything else runs
             # the full retrieve().
             trace = await self.retrieval.route(
-                query,
+                searched,
                 tenant_id,
                 as_of,
                 law=law,
@@ -331,10 +355,15 @@ class AssessmentPipeline:
                 "answer.qualifiers_fetched",
                 [c.clause_id for c in qualifiers if c.clause_id in fetched],
             )
+            # The prefix is built once and its size checked locally before any
+            # generator call: over the cap it is refused, never truncated
+            # (ADR-0054). The span records the estimate and the cap either way.
+            prefix = policy_prefix(policies)
+            check_prefix_cap(SYSTEM_PROMPT, prefix, current=current)
             generation = await self.generator.generate(
                 system=SYSTEM_PROMPT,
-                cached_prefix=policy_prefix(policies),
-                user=user_prompt(query, retrieved, absent),
+                cached_prefix=prefix,
+                user=user_prompt(query, retrieved, absent, history),
                 max_tokens=max_tokens,
             )
             await self._record_usage(tenant_id, generation)

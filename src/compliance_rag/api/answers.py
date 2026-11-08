@@ -7,9 +7,16 @@ The pipeline:
 3. `answer()` runs with that scope, and with the tenant's in-force internal
    policies as the cached prefix (D-11, #148).
 
-The question is the retriever's query and nothing else (#29); nothing in it
-names the tenant, the scope or the date. Earlier turns of a chat do not reach
-the model: the prompt and retrieval are as they were without a chat.
+The retriever's query is the question, led by the chat's previous member
+question when it has one (#278, ADR-0053 decision 17): member-typed words, never
+anything retrieved or generated (#29); nothing in it names the tenant, the scope
+or the date. The last three exchanges of a chat reach the model as fenced data
+(`assessment/history.py`): the member's questions and the verified answers they
+were shown, never a draft, withheld prose or an error. They are the member's own
+turns, read only after the residency gate below has cleared the asker, so a
+non-tester's chat is refused before anything is retrieved or generated, history
+included. A request with no `chat_id` has no history and its prompt is as it
+was.
 
 While generation runs outside Australia (the build phase, ADR-0023), the
 request is checked before anything is retrieved or generated (ADR-0032): the
@@ -62,7 +69,10 @@ is checked, retrieved, generated or written.
   request for quota (`GenerationUnavailable`) is sent as
   `generation_unavailable`, with a fixed reason and the trace id and none of
   its SDK's words, so a client can say so plainly (#251). It is recorded as
-  `internal`: the answer couldn't be completed. Never the model's text,
+  `internal`: the answer couldn't be completed. A policy corpus over the
+  prefix cap (ADR-0054) is sent as `policy_corpus_too_large`, with the measured
+  estimate and the cap, before any generator call, and recorded the same way.
+  Never the model's text,
   and not the message, which can name clauses: the marker is the whole record.
   The question is the member's own words and stays in the ledger, in Sydney
   (SERVICES.md); a residency refusal exists so that it never leaves Australia,
@@ -94,6 +104,7 @@ from compliance_rag.adapters.interfaces import (
     ChatAnswer,
     ChatCitation,
     ChatExchange,
+    ChatTurn,
     GenerationUnavailable,
     LawScope,
     LedgerStore,
@@ -112,8 +123,10 @@ from compliance_rag.api.deps import (
 )
 from compliance_rag.api.sources import source_href
 from compliance_rag.assessment.draft import MalformedGeneration
+from compliance_rag.assessment.history import prior_exchanges
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
+from compliance_rag.assessment.prefix_cap import PolicyCorpusTooLarge
 from compliance_rag.corpus.display_form import Titles, cite
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import ClauseRecord, Incomplete
@@ -298,6 +311,15 @@ def _failure(error: Exception) -> TurnOutcome:
 def _error_json(outcome: TurnOutcome, error: Exception) -> dict[str, object]:
     if isinstance(error, GenerationUnavailable):
         return {**UNAVAILABLE, "reason": error.reason.value, "trace_id": current_trace_id()}
+    if isinstance(error, PolicyCorpusTooLarge):
+        # A measurement, never the policies' words (ADR-0054).
+        return {
+            "error": "policy_corpus_too_large",
+            "message": str(error),
+            "estimated_tokens": error.estimated_tokens,
+            "cap_tokens": error.cap_tokens,
+            "trace_id": current_trace_id(),
+        }
     if outcome is TurnOutcome.RESIDENCY:
         return {"error": "residency", "message": str(error)}
     return MALFORMED if outcome is TurnOutcome.MALFORMED_GENERATION else FAILED
@@ -357,12 +379,14 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
     # Before anything else, and before the response is started: a chat that
     # isn't this member's, in this tenant, is not found, whoever's it is, so
     # nothing is checked, retrieved, generated or written for it (#162).
+    earlier: tuple[ChatTurn, ...] = ()
     if body.chat_id is None:
         chat_id = uuid.uuid4().hex
-    elif await services.ledger.chat_turns(who.tenant_id, who.member.uid, body.chat_id):
-        chat_id = body.chat_id
     else:
-        raise HTTPException(404, "no such chat")
+        earlier = await services.ledger.chat_turns(who.tenant_id, who.member.uid, body.chat_id)
+        if not earlier:
+            raise HTTPException(404, "no such chat")
+        chat_id = body.chat_id
     chat = _ChatRecorder(services.ledger, who, chat_id, body.question, day)
 
     def staged(name: str, data: dict[str, object]) -> str:
@@ -404,6 +428,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
                         # Their own private additions are theirs alone: the
                         # stable sign-in uid, not the email (ADR-0036).
                         user_id=who.member.uid,
+                        # After the residency gate above: this is the member's
+                        # own typed text, and sent only with their question.
+                        history=prior_exchanges(earlier),
                     )
                     shown = _shown(answer)
                 except Exception as failed:
@@ -438,6 +465,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
             if outcome is TurnOutcome.RESIDENCY:
                 log.warning("an answer was refused by the residency gate: %s", failed)
                 trace.get_current_span().set_attribute("answer.refused", "residency")
+            elif isinstance(failed, PolicyCorpusTooLarge):
+                log.warning("an answer was refused: %s", failed)
+                trace.get_current_span().set_attribute("answer.refused", "policy_corpus_too_large")
             elif outcome is TurnOutcome.INTERNAL:
                 log.exception("answering failed")
             yield staged("error", _error_json(outcome, failed))
