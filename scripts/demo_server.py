@@ -117,7 +117,8 @@ from compliance_rag.corpus.models import (
     parse_stable_id,
     validate_library_instrument_id,
 )
-from compliance_rag.eval.applicability import ApplicabilityCase, load_applicability_set
+from compliance_rag.eval.acme_seed import demo_profile
+from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.eval.embedding_cache import EmbeddingCache, text_key
 from compliance_rag.eval.golden_corpus import (
     LAW_INSTRUMENT_ID,
@@ -167,9 +168,6 @@ def _member_arg(value: str) -> Member:
         raise argparse.ArgumentTypeError(str(refused)) from None
 
 
-DEMO_PROFILE = "GA-01"
-"""The applicability set's base Acme profile: every APP applies but the two
-that bind only agencies."""
 _SETUP_TRACE = "de30" + "0" * 28
 """The trace id the demo's own setup records Acme's facts under."""
 
@@ -500,10 +498,6 @@ def create_demo_app(
 
 
 # --- What it runs on -----------------------------------------------------------
-
-
-def demo_profile() -> ApplicabilityCase:
-    return next(c for c in load_applicability_set().cases if c.id == DEMO_PROFILE)
 
 
 async def demo_ledger() -> FakeLedgerStore:

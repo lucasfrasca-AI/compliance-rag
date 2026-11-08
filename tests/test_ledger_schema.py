@@ -1,8 +1,8 @@
 """Ledger schema DDL, proven against a real Postgres (issues #3, #2).
 
 `db/ledger/*.sql` is applied once, in filename order, before this test runs —
-by CI's own step (`.github/workflows/ci.yml`), or by docker-compose's
-`initdb.d` mount on a container's first start. This file only ever proves
+by `scripts/migrate_ledger.py` (CI's own step, `.github/workflows/ci.yml`, and a
+developer's after `docker compose up postgres`). This file only ever proves
 what the DDL does; it never applies it, so the same migration path is
 exercised whichever way a developer or CI got there.
 

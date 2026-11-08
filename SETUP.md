@@ -46,6 +46,24 @@ Region for everything: **`australia-southeast1`**. Pick a project ID you can typ
 - [ ] Local auth: `gcloud auth login`, then `gcloud auth application-default login`, then `gcloud config set project <id>` and `gcloud config set run/region australia-southeast1`.
 - [ ] Create a service account `compliance-rag-runtime@<project>.iam.gserviceaccount.com`. Grant: Vertex AI User, Cloud SQL Client, Secret Manager Secret Accessor, Storage Object Admin (scoped to the corpus bucket later), Cloud Trace Agent, Logs Writer. **Do not create or download a key** — Cloud Run uses it directly; your laptop uses ADC.
 
+## 2a. The ledger, by script (#293)
+
+A ledger is brought up and given what an Acme member's question needs by three scripts, never by hand. Each is safe to run again, and each reads its stores from the environment (`DATABASE_URL`, `QDRANT_URL`/`QDRANT_API_KEY`/`QDRANT_COLLECTION`, `GCP_PROJECT_ID`, `CORPUS_BUCKET`), as every script does.
+
+1. `uv run python -m scripts.migrate_ledger` applies each `db/ledger/*.sql` not yet recorded in `schema_migration`, in filename order, each in its own transaction. An applied file that was edited or removed refuses the run with nothing applied: add a new migration instead.
+2. `uv run python -m scripts.load_compilation_vectors --bucket <bucket>` loads the Privacy Act's vectors and records its version in the ledger. It comes before the seed, because the ledger refuses a subscription to law it doesn't hold.
+3. `uv run python -m scripts.seed_tenant --tenant acme --bucket <bucket>` gives Acme its profile, its subscription to `privacy-act-1988`, the GA-01 evidence and its six synthetic policies (clause bucket, Qdrant and ledger, through `CorpusLifecycle`). `--dry-run` reads and reports without writing. A tenant that already holds exactly this seed is left alone; one that holds anything it would contradict is refused, naming each reason, with nothing written.
+
+**Local Postgres.** `docker compose up -d postgres` starts an empty ledger (the schema is no longer mounted in), then step 1 with `DATABASE_URL=postgresql://compliance:compliance@localhost:5432/compliance_rag`. A database built before the runner existed (a volume made by the old `initdb.d` mount, `crag-test-pg`) already has the files; record them without running them: `uv run python -m scripts.migrate_ledger --baseline-through 0019` (use the highest number the database really has; the rest are then applied).
+
+**Cloud SQL, from a laptop, through the Cloud SQL Auth Proxy** (once the instance exists, which waits on its approval line in `SERVICES.md`; nothing here creates it):
+
+- [ ] `gcloud auth application-default login` once. Your account needs Cloud SQL Client on the project.
+- [ ] In one terminal, leave running: `cloud-sql-proxy --port 5433 <project>:australia-southeast1:<instance>` (Auth Proxy v2; it listens on 127.0.0.1 only).
+- [ ] In another, point the scripts at it, with the database user's password from Secret Manager (not typed into the command line, so not in shell history): `export DATABASE_URL='postgresql://<user>:<password>@127.0.0.1:5433/<database>'`. An exported variable wins over `.env`. `QDRANT_*`, `GCP_PROJECT_ID` and `CORPUS_BUCKET` are as in `.env`.
+- [ ] `uv run python -m scripts.migrate_ledger`, then `uv run python -m scripts.load_compilation_vectors --bucket <bucket>`, then `uv run python -m scripts.seed_tenant --tenant acme --bucket <bucket> --dry-run` and, if it reports what you expect, again without `--dry-run`.
+- [ ] Check: `uv run python -m scripts.migrate_ledger --expect-up-to-date` and a second `seed_tenant` each report that they changed nothing.
+
 ## 3. Neo4j AuraDB Free
 
 - [x] Sign in at console.neo4j.io → New instance → **AuraDB Free**. *(done)*
