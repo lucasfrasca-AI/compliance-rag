@@ -1,0 +1,44 @@
+name: Set up uv
+description: >-
+  Installs uv at one pinned version (the default of `version` below, the only
+  place it is written down). The primary is astral-sh/setup-uv, which downloads
+  from GitHub releases and restores the uv cache. If that step fails (issue
+  #312: the release download returned HTTP 504 three times on 2026-11-08 and
+  failed three runs that had nothing wrong with them), the same version is
+  installed from PyPI instead. The fallback step is skipped when the primary
+  works, so the normal case costs nothing extra. The fallback restores no uv
+  cache: a slower run beats a red one.
+
+inputs:
+  version:
+    description: The uv version, for both sources. Bump it here and nowhere else.
+    required: false
+    default: "0.13.7"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv (GitHub releases, with the uv cache)
+      id: primary
+      # An outage of the release download is not a code failure. The step's
+      # outcome is still `failure`, which the fallback below reads.
+      continue-on-error: true
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: ${{ inputs.version }}
+        enable-cache: true
+
+    - name: Install uv (fallback, PyPI)
+      if: steps.primary.outcome == 'failure'
+      shell: bash
+      env:
+        UV_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        echo "::warning::setup-uv failed; installing uv==${UV_VERSION} from PyPI (no uv cache restored)"
+        # A venv rather than `pip install --user`: the runner's system Python
+        # is externally managed (PEP 668) and refuses a user install.
+        python3 -m venv "$RUNNER_TEMP/uv-fallback"
+        "$RUNNER_TEMP/uv-fallback/bin/pip" install --disable-pip-version-check "uv==${UV_VERSION}"
+        echo "$RUNNER_TEMP/uv-fallback/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/uv-fallback/bin/uv" --version
