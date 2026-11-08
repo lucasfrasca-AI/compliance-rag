@@ -23,9 +23,11 @@ with the version: read once per answer, for every policy version in the
 context, never once per clause or per citation. The answer carries what was
 read, so the API shows the same form.
 
-The prefix (the system prompt and the tenant's policies) is capped at about
-30k tokens, counted locally (`prefix_cap`, ADR-0054): a larger one raises
-`PolicyCorpusTooLarge` before the generator is called.
+The prefix (the system prompt, the tenant's policies and, for a document
+check, the obligation digest after them) is capped at about 30k tokens, counted
+locally (`prefix_cap`, ADR-0054): a larger one raises `PolicyCorpusTooLarge`
+before the generator is called. A question (Ask) passes no digest and sends the
+prefix it always did.
 
 An incomplete clause (ADR-0047) is marked so in its fence, and an answer that
 cites one carries it (`Answer.incomplete`): the verifier still checks the
@@ -74,11 +76,13 @@ from compliance_rag.assessment.environment import (
     not_in_environment,
 )
 from compliance_rag.assessment.history import MAX_EXCHANGES, PriorExchange, retrieval_query
+from compliance_rag.assessment.obligation_digest import ObligationDigest
 from compliance_rag.assessment.prefix_cap import check_prefix_cap
 from compliance_rag.assessment.prompt import (
     REPAIR_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     SourceClause,
+    cag_prefix,
     policy_prefix,
     repair_prompt,
     user_prompt,
@@ -246,6 +250,7 @@ class AssessmentPipeline:
         on_retrieved: Callable[[RetrievalTrace], Awaitable[None]] | None = None,
         user_id: str | None = None,
         history: Sequence[PriorExchange] = (),
+        digest: ObligationDigest | None = None,
     ) -> Answer:
         """`law` is Track B's scope (D-03, ADR-0030): `LawScope.of(coverage)`
         for an assessment, `LIBRARY_QUESTION` for a question about the library
@@ -276,7 +281,11 @@ class AssessmentPipeline:
         reaches the model fenced as data (`prompt.history_note`) and the
         retriever as the previous question alone; the not-in-environment check
         reads `query` alone (ADR-0051), and with no history every byte of the
-        prompt is as it was."""
+        prompt is as it was. `digest` is the obligation digest of a document
+        check (#295): built from Track A's coverage alone, it follows the
+        policies in the cached prefix and counts toward the cap, and it adds no
+        clause to the context, since it is not a source. A question passes none,
+        and with none the prefix is the policies' alone, byte for byte."""
         with span("answer", query=query, tenant_id=tenant_id, as_of=as_of.isoformat()) as current:
             # Before anything is retrieved or generated: offshore, the prefix
             # must be registered synthetic (ADR-0032).
@@ -358,8 +367,15 @@ class AssessmentPipeline:
             # The prefix is built once and its size checked locally before any
             # generator call: over the cap it is refused, never truncated
             # (ADR-0054). The span records the estimate and the cap either way.
-            prefix = policy_prefix(policies)
-            check_prefix_cap(SYSTEM_PROMPT, prefix, current=current)
+            digest_text = None if digest is None else digest.text
+            if digest is not None:
+                current.set_attribute(
+                    "answer.digest_obligations", [e.obligation_id for e in digest.entries]
+                )
+            prefix = cag_prefix(policies, digest_text)
+            check_prefix_cap(
+                SYSTEM_PROMPT, policy_prefix(policies), digest=digest_text, current=current
+            )
             generation = await self.generator.generate(
                 system=SYSTEM_PROMPT,
                 cached_prefix=prefix,

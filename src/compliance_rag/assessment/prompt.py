@@ -38,6 +38,7 @@ from typing import Literal
 
 from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.history import PriorExchange
+from compliance_rag.assessment.prefix_cap import PREFIX_PART_SEPARATOR
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import Incomplete, parse_stable_id
 
@@ -206,6 +207,16 @@ def policy_prefix(policies: Sequence[SourceClause]) -> str | None:
     """The tenant policy corpus as a cacheable prefix (D-11), or `None` for a
     tenant with no policies. Law never goes here — it is retrieved (D-11)."""
     return fence("tenant_policies", policies) if policies else None
+
+
+def cag_prefix(policies: Sequence[SourceClause], digest_text: str | None = None) -> str | None:
+    """The whole cached prefix after the system prompt (D-11): the fenced
+    policies, then, when a document check passes one, the obligation digest
+    (`obligation_digest`, #295), joined by `PREFIX_PART_SEPARATOR`. With no
+    digest it is `policy_prefix` exactly, so a question that has none (Ask)
+    sends the bytes it always did. `None` for neither."""
+    parts = [p for p in (policy_prefix(policies), digest_text) if p is not None]
+    return PREFIX_PART_SEPARATOR.join(parts) if parts else None
 
 
 def _absent_marker(absent: NotInEnvironment) -> str:

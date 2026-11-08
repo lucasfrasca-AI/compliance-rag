@@ -1,7 +1,8 @@
 """The CAG prefix's size cap (ADR-0054, amending D-11 / ADR-0012).
 
-The prefix is the system prompt and the tenant's policy corpus (and, once a
-document check builds one, the obligation digest), read in full on every call.
+The prefix is the system prompt, the tenant's policy corpus and, when a
+document check passes one, the obligation digest that follows the policies
+(#295), read in full on every call.
 It is capped at `PREFIX_CAP_TOKENS`, and a prefix over the cap is refused,
 loudly, before any generator call: never truncated, and never quietly replaced
 by a subset of the policies (`PolicyCorpusTooLarge`). A real customer with a
@@ -37,6 +38,11 @@ a proxy, not a guarantee about Claude's own count; it should be re-checked
 against a real count when one is available (ADR-0054: the cap is revisited
 once a real tenant's corpus is measured).
 
+**The digest counts.** `check_prefix_cap` measures the system prompt, the
+policies and the digest together, with the blank line that joins the last two
+(`PREFIX_PART_SEPARATOR`): the prefix as it is sent, so a digest that tips an
+otherwise-fitting corpus over the cap is refused exactly as a large corpus is.
+
 The cap is a constant with its ADR named, not a setting, so it can't be raised
 quietly: raising it is a new ADR.
 """
@@ -58,6 +64,9 @@ CHARS_PER_TOKEN: Final = 2.5
 SYMBOL_TOKENS: Final = 1.25
 """What a punctuation or symbol character, or a newline, counts. Above one,
 because the proxy gives one token to each and a symbol is never worth less."""
+PREFIX_PART_SEPARATOR: Final = "\n\n"
+"""What joins the policies and the digest in the prefix (`prompt.cag_prefix`),
+counted with them."""
 HEX_RUN_MIN: Final = 8
 """A run of this many hex digits or more is counted a token per character."""
 
@@ -104,14 +113,25 @@ class PolicyCorpusTooLarge(RuntimeError):
         )
 
 
-def check_prefix_cap(system: str, policy_corpus: str | None, *, current: Span) -> int:
+def check_prefix_cap(
+    system: str,
+    policy_corpus: str | None,
+    *,
+    current: Span,
+    digest: str | None = None,
+) -> int:
     """The prefix's estimated size, if it is within the cap; otherwise
-    `PolicyCorpusTooLarge`. `system` is the system prompt and `policy_corpus`
-    the fenced policies. The estimate and the cap are recorded on `current`,
-    the request's span, whether the prefix passes or not."""
-    estimated = estimate_tokens(system, policy_corpus)
+    `PolicyCorpusTooLarge`. `system` is the system prompt, `policy_corpus` the
+    fenced policies and `digest` the obligation digest that follows them (#295):
+    all three are counted, with the separator between the last two. The
+    estimate and the cap are recorded on `current`, the request's span, whether
+    the prefix passes or not."""
+    separator = PREFIX_PART_SEPARATOR if policy_corpus is not None and digest is not None else None
+    estimated = estimate_tokens(system, policy_corpus, separator, digest)
     current.set_attribute("prefix.estimated_tokens", estimated)
     current.set_attribute("prefix.cap_tokens", PREFIX_CAP_TOKENS)
+    if digest is not None:
+        current.set_attribute("prefix.digest_tokens", estimate_tokens(digest))
     if estimated > PREFIX_CAP_TOKENS:
         raise PolicyCorpusTooLarge(estimated)
     return estimated
