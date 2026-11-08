@@ -48,6 +48,9 @@ SETTLES = frozenset({EvidenceProvenance.PARSED, EvidenceProvenance.ASSERTED})
 assert (CONTEXT.md)."""
 
 
+_FY_LABEL = re.compile(r"FY(\d{4})-(\d{2})")
+
+
 @dataclass(frozen=True, slots=True)
 class Period:
     """`[start, end)`: the dates a fact is true for. An open-ended state (a
@@ -78,6 +81,17 @@ class Period:
 
     def previous_financial_year(self) -> Period:
         return Period.financial_year(self.start.year - 1)
+
+    @classmethod
+    def of_financial_year_label(cls, label: str) -> Period | None:
+        """The financial year a `label` names (`FY2025-26`), or `None` for
+        anything else — including a label whose two-digit end isn't the
+        year after its start, which names no financial year."""
+        match = _FY_LABEL.fullmatch(label)
+        if match is None:
+            return None
+        start = int(match.group(1))
+        return cls.financial_year(start) if int(match.group(2)) == (start + 1) % 100 else None
 
     @property
     def label(self) -> str:
@@ -181,8 +195,7 @@ class Facts:
     ) -> Reading:
         if not found:
             return Reading(None)
-        values = {_comparable(e.value) for e in found}
-        if len(values) > 1 or not exact:
+        if values_differ(found) or not exact:
             return Reading(None, found, conflict=True)
         return Reading(exact[0].value, found)
 
@@ -199,6 +212,12 @@ class Facts:
         found = tuple(e for e in self.current if e.field == field and e.period.overlaps(period))
         exact = tuple(e for e in found if e.period == period)
         return self._read(field, found, exact)
+
+
+def values_differ(evidence: Iterable[Evidence]) -> bool:
+    """Whether `evidence` holds more than one answer: the disagreement a
+    reading reports as a conflict (compared by type as well as value)."""
+    return len({_comparable(e.value) for e in evidence}) > 1
 
 
 def _comparable(value: FactValue) -> object:

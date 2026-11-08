@@ -49,6 +49,19 @@ class Outcome(StrEnum):
         }[truth]
 
 
+class AnswerKind(StrEnum):
+    """The shape of the fact a question asks for, as the leaf reads it: the
+    questionnaire (#304) draws the right input from it and the API validates
+    the answer against it. Evidence holds no such label; its value's own type
+    says (`FactValue`)."""
+
+    BOOLEAN = "boolean"
+    NUMBER = "number"
+    DATE = "date"
+    TEXT = "text"
+    LIST = "list"
+
+
 @dataclass(frozen=True, slots=True)
 class Question:
     """What would settle an unknown leaf: the fact to ask for, for which
@@ -68,6 +81,12 @@ class Question:
     also_needs: tuple[str, ...] = ()
     """Other fields that would narrow the question (a start date that
     decides which years count)."""
+    answer_kind: AnswerKind | None = None
+    """What `field` holds. `None` for a question recorded before it was
+    carried (the ledger keeps the rows it was given)."""
+    options: tuple[str, ...] = ()
+    """For a text fact the leaf tests against a closed list (`legal_form`
+    `in` [...]): the values it knows. The reviewed mapping's own words."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +102,12 @@ class Explanation:
     question: Question | None = None
     evidence_ids: tuple[str, ...] = ()
     """For a leaf: the evidence it read — what an assessment can show later."""
+    field: str | None = None
+    """For a leaf: the profile fact it reads."""
+    options: tuple[str, ...] = ()
+    """For a leaf testing a text fact against a closed list (`legal_form`
+    `in` [...]): the values its test names, so a correction of an answer the
+    tree has since settled is offered the same list (#304)."""
     absent: bool = False
     """Not in force on `as_of`: the provision doesn't exist, so it is false."""
     incomplete: tuple[tuple[str, str], ...] = ()
@@ -304,6 +329,8 @@ def question_json(question: Question) -> dict[str, object]:
         "evidence_ids": list(question.evidence_ids),
         "missing_periods": list(question.missing_periods),
         "also_needs": list(question.also_needs),
+        "answer_kind": question.answer_kind.value if question.answer_kind else None,
+        "options": list(question.options),
     }
 
 
@@ -322,6 +349,8 @@ def question_of_json(raw: Mapping[str, object]) -> Question:
         evidence_ids=strings("evidence_ids"),
         missing_periods=strings("missing_periods"),
         also_needs=strings("also_needs"),
+        answer_kind=AnswerKind(str(kind)) if (kind := raw.get("answer_kind")) else None,
+        options=strings("options"),
     )
 
 

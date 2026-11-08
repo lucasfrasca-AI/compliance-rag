@@ -39,7 +39,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -60,6 +60,8 @@ from compliance_rag.api.deps import (
     services_of,
 )
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY
+from compliance_rag.assessment.questionnaire import answer_kind_of
+from compliance_rag.corpus.display_form import NO_TITLES, cite
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -119,6 +121,28 @@ def _sydney(value: dt.datetime) -> str:
     return value.astimezone(SYDNEY).strftime("%-d %b %Y, %H:%M")
 
 
+def _clause(clause_id: str) -> str:
+    """A library clause as a reader cites it (`s 6D(4)(a)`). An obligation, and
+    a question, rests on library law (ADR-0028), so no title is read."""
+    return cite(clause_id, NO_TITLES)
+
+
+def fact_in_words(value: object) -> str:
+    """A recorded fact in words: yes or no, a figure with its thousands, a date,
+    a list."""
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    if isinstance(value, tuple):
+        return ", ".join(str(v) for v in cast("tuple[object, ...]", value))
+    return str(value)
+
+
 def _environment() -> Environment:
     env = Environment(
         loader=FileSystemLoader(TEMPLATE_DIR),
@@ -130,6 +154,9 @@ def _environment() -> Environment:
         lstrip_blocks=True,
     )
     env.filters["sydney"] = _sydney  # pyright: ignore[reportUnknownMemberType] — Jinja's filter table is untyped
+    env.filters["clause"] = _clause  # pyright: ignore[reportUnknownMemberType] — Jinja's filter table is untyped
+    env.filters["answer_kind"] = lambda value: answer_kind_of(value).value  # pyright: ignore[reportUnknownMemberType, reportUnknownLambdaType] — Jinja's filter table is untyped
+    env.filters["fact"] = fact_in_words  # pyright: ignore[reportUnknownMemberType] — Jinja's filter table is untyped
     return env
 
 

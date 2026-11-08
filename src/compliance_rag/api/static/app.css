@@ -128,6 +128,33 @@ button.link {
 .sub-list form { margin: 0; }
 button.secondary { background: none; color: var(--accent); }
 
+/* The questionnaire (#304). */
+.questionnaire .route { margin: 1.25rem 0 0; }
+.questionnaire .q-item h3 { text-transform: none; }
+.questionnaire .q-text { margin: 0.4rem 0; }
+.questionnaire .slot { border-top: 1px solid var(--line); margin-top: 0.75rem; padding-top: 0.5rem; }
+.questionnaire form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.4rem 0; }
+.questionnaire input[type="text"], .questionnaire input[type="date"], .questionnaire select {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  max-width: 100%;
+}
+.questionnaire label.inline { display: inline-flex; gap: 0.4rem; align-items: center; }
+.questionnaire .answers { list-style: none; margin: 0.4rem 0; padding: 0; display: grid; gap: 0.4rem; }
+.questionnaire .answers li { padding: 0.4rem 0.6rem; background: var(--paper); border-radius: 6px; }
+.questionnaire .answers li[data-current="false"] { color: var(--muted); text-decoration: line-through; }
+.questionnaire .answers li[data-current="false"] .meta { text-decoration: none; }
+.questionnaire .plain { padding-left: 1.1rem; }
+.questionnaire .moved { margin: 0.25rem 0; padding-left: 1.1rem; }
+.questionnaire .counts { color: var(--muted); }
+.card.ok { border-left-color: var(--ok); }
+.flag-conflict { background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad); }
+.flag-line { margin: 0.3rem 0; }
+
 /* The chat: one column; the panel is a sheet until there is room beside it. */
 .chat { display: block; }
 .conversation { padding: 1rem; max-width: 52rem; margin: 0 auto; min-width: 0; }

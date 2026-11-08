@@ -1,0 +1,169 @@
+{% macro answer_input(kind, options) %}
+{% if kind == "boolean" %}
+<select name="value" required aria-label="Answer">
+<option value="" selected disabled>Choose</option>
+<option value="true">Yes</option>
+<option value="false">No</option>
+</select>
+{% elif kind == "number" %}
+<input type="text" inputmode="decimal" name="value" required aria-label="Answer, a number" placeholder="2500000" autocomplete="off">
+{% elif kind == "date" %}
+<input type="date" name="value" required aria-label="Answer, a date">
+{% elif kind == "list" %}
+<input type="text" name="value" required aria-label="Answer, a list separated by commas" placeholder="AU, AU-NSW" autocomplete="off">
+{% elif options %}
+<select name="value" required aria-label="Answer">
+<option value="" selected disabled>Choose</option>
+{% for option in options %}
+<option value="{{ option }}">{{ option | replace("_", " ") }}</option>
+{% endfor %}
+</select>
+{% else %}
+<input type="text" name="value" required maxlength="2000" aria-label="Answer" autocomplete="off">
+{% endif %}
+{% endmacro %}
+
+{% macro line(ev) %}
+<strong>{{ ev.value | fact }}</strong> · {{ ev.period.label }} · {{ ev.asserted_by or ev.provenance.value }} · {{ ev.source }}{% if ev.recorded_at %} · {{ ev.recorded_at | sydney }}{% endif %}
+{% endmacro %}
+
+{% macro correction(ev, options) %}
+<form class="correct" method="post" action="/admin/questionnaire/correct" hx-post="/admin/questionnaire/correct" hx-target="#questionnaire" hx-swap="outerHTML" data-supersedes="{{ ev.evidence_id }}">
+<input type="hidden" name="supersedes" value="{{ ev.evidence_id }}">
+<span class="meta">Correct this answer:</span>
+{{ answer_input(ev.value | answer_kind, options) }}
+<input type="text" name="source" required maxlength="500" aria-label="Source of the correction" placeholder="Source of the correction" autocomplete="off">
+<button type="submit" class="secondary">Supersede</button>
+</form>
+{% endmacro %}
+
+<div id="questionnaire" class="questionnaire" aria-live="polite">
+{% if notice %}
+<div class="card {{ 'ok' if notice.ok else 'notice' }}" role="{{ 'status' if notice.ok else 'alert' }}" data-notice="{{ 'ok' if notice.ok else 'refused' }}">
+<p>{{ notice.text }}</p>
+{% if moved %}
+<p><strong>Moved by this answer:</strong></p>
+<ul class="moved">
+{% for m in moved %}
+<li data-obligation="{{ m.obligation_id }}" data-before="{{ m.before.value }}" data-after="{{ m.after.value }}"><code>{{ m.obligation_id }}</code>: {{ m.before.label }} to <strong>{{ m.after.label }}</strong>. {{ m.summary }}</li>
+{% endfor %}
+</ul>
+{% elif notice.ok %}
+<p class="meta">No obligation changed outcome yet; the answer may open further questions below.</p>
+{% endif %}
+</div>
+{% endif %}
+
+<p class="counts" data-counts>
+{% for outcome, n in q.counts %}
+<span data-outcome="{{ outcome.value }}"><strong>{{ n }}</strong> {{ outcome.label }}</span>{% if not loop.last %} · {% endif %}
+{% endfor %}
+ · as of {{ q.as_of }}
+</p>
+
+{% if q.routes %}
+{% for route in q.routes %}
+<section class="route" data-route="{{ route.label }}">
+<h2>{{ route.label }}</h2>
+{% for item in route.items %}
+<article class="card q-item" data-field="{{ item.field }}">
+<h3>{{ item.field | replace("_", " ") | capitalize }}</h3>
+{% for asked in item.asked %}
+<p class="q-text">{{ asked.question }}</p>
+<p class="meta">Why it is asked: {{ asked.reason }}{% if asked.clause_ids %} Clauses: {% for c in asked.clause_ids %}{{ c | clause }}{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}</p>
+{% endfor %}
+<details class="decides"><summary>Decides {{ item.obligation_ids | length }} unassessable obligation{{ "" if item.obligation_ids | length == 1 else "s" }}</summary>
+<p class="meta">{% for o in item.obligation_ids %}<code>{{ o }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+</details>
+{% for slot in item.slots %}
+<div class="slot" data-slot="{{ slot.key }}" data-status="{{ slot.status.value }}">
+<h4>{{ slot.label }}</h4>
+{% if slot.status.value == "open" %}
+<form class="answer" method="post" action="/admin/questionnaire/answer" hx-post="/admin/questionnaire/answer" hx-target="#questionnaire" hx-swap="outerHTML">
+<input type="hidden" name="field" value="{{ item.field }}">
+<input type="hidden" name="slot" value="{{ slot.key }}">
+{{ answer_input(item.answer_kind.value, item.options) }}
+{% if slot.period is none and item.answer_kind.value != "date" %}
+<label class="inline">Holds from <input type="date" name="holds_from" value="{{ q.as_of }}" max="{{ q.as_of }}" required></label>
+{% endif %}
+<input type="text" name="source" required maxlength="500" aria-label="Source" placeholder="Source: a document, or who said so" autocomplete="off">
+<button type="submit" id="answer-{{ item.field }}-{{ slot.key }}">Record answer</button>
+</form>
+{% else %}
+<p class="flag-line" role="note">
+{% if slot.status.value == "disagree" %}<span class="flag flag-conflict">Answers disagree</span> Two current answers hold different values. Nothing has chosen between them: correct one so they agree.
+{% elif slot.status.value == "partial" %}<span class="flag flag-conflict">Covers part of the period</span> The current answers cover only part of {{ slot.label }}. Correct one to cover it.
+{% else %}<span class="flag flag-unreadable">Can't be read</span> An answer is recorded but Track A cannot compare it with what the law asks. Correct it.
+{% endif %}
+</p>
+{% endif %}
+{% if slot.current %}
+<ul class="answers">
+{% for ev in slot.current %}
+<li data-evidence="{{ ev.evidence_id }}" data-current="true">{{ line(ev) }}
+{% if slot.status.value != "open" %}{{ correction(ev, item.options) }}{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if slot.superseded %}
+<details class="history"><summary>Earlier answers ({{ slot.superseded | length }})</summary>
+<ul class="answers">
+{% for ev in slot.superseded %}
+<li data-evidence="{{ ev.evidence_id }}" data-current="false">{{ line(ev) }} <span class="meta">superseded</span></li>
+{% endfor %}
+</ul>
+</details>
+{% endif %}
+</div>
+{% endfor %}
+</article>
+{% endfor %}
+</section>
+{% endfor %}
+{% else %}
+<p class="empty" data-empty>Nothing is asked: Track A has no unassessable obligation that a fact about this workspace would settle.</p>
+{% endif %}
+
+{% if q.unanswerable %}
+<section class="route" data-unanswerable>
+<h2>No answer settles these</h2>
+<p class="note">Track A cannot decide these however the questions are answered: the law they rest on is not all in the stored text, or no compilation of it is loaded.</p>
+<ul class="plain">
+{% for o in q.unanswerable %}
+<li data-obligation="{{ o.obligation_id }}"><code>{{ o.obligation_id }}</code>: {{ o.reason }}</li>
+{% endfor %}
+</ul>
+</section>
+{% endif %}
+
+<section class="route" data-record>
+<h2>Answers on record</h2>
+{% if records %}
+{% for r in records %}
+<article class="card record" data-field="{{ r.field }}" data-disagree="{{ 'true' if r.disagree else 'false' }}">
+<h3>{{ r.field | replace("_", " ") | capitalize }}</h3>
+{% if r.disagree %}
+<p class="flag-line" role="note"><span class="flag flag-conflict">Answers disagree</span> Current answers for overlapping periods hold different values. Nothing has chosen between them.</p>
+{% endif %}
+<ul class="answers">
+{% for ev in r.current %}
+<li data-evidence="{{ ev.evidence_id }}" data-current="true">{{ line(ev) }}
+{{ correction(ev, options.get(r.field, [])) }}</li>
+{% endfor %}
+</ul>
+{% if r.superseded %}
+<details class="history"><summary>Superseded ({{ r.superseded | length }})</summary>
+<ul class="answers">
+{% for ev in r.superseded %}
+<li data-evidence="{{ ev.evidence_id }}" data-current="false">{{ line(ev) }} <span class="meta">superseded</span></li>
+{% endfor %}
+</ul>
+</details>
+{% endif %}
+</article>
+{% endfor %}
+{% else %}
+<p class="empty">No answer is on record yet.</p>
+{% endif %}
+</section>
+</div>

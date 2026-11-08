@@ -133,3 +133,42 @@ carries it (`pages.PageHeaders`).
 - **A subscription the library no longer lists** is shown, marked, and can be removed.
 - `admin.js` is not exercised by CI (no browser there), like `ask.js`; the tests make the
   requests it causes.
+
+## The admin questionnaire (`questionnaire.py`, `templates/_questionnaire.html`)
+
+`GET /admin/questionnaire` (#304, #123, ADR-0053 I5) asks an admin for the facts Track A says
+are missing, and records each answer as dated evidence. It is the same page shell, htmx
+fragment, CSP and `PageAdmin` rule as the subscriptions panel.
+
+- **The questions are Track A's, and only Track A's.** `assessment/questionnaire.build` reads the
+  unknown leaves of the unassessable obligations (`ObligationCoverage.questions`). A leaf a decided
+  sibling short-circuited is not among them (`Explanation.questions` walks only the children that
+  decided), so it is never asked. A fact several conditions read is one item. Items are grouped by
+  the provision they decide (`s 6D(4)`, `s 6D(9)`, `s 6E(1)`, `s 6EA(1)`): the first non-definition
+  clause on the path from the leaf up, in the Act's order.
+- **Each fact is asked for the period the law reads** (the `Question`'s own period): a state on
+  the date, a financial year (s6D(1), s6D(2)), or each year a history leaf (s6D(4)(a)) still
+  lacks. `Question.answer_kind` and `options` say what the leaf reads (yes or no, a number, a
+  date, a list, a text from a closed list), so the form draws the right input; a recorded
+  answer's own type says it for a correction. A date-valued state holds from the date itself;
+  any other state holds from the date the admin gives, on or before today.
+- **Two writes, through the ledger's operation.** `POST /admin/questionnaire/answer` and
+  `.../correct` call `tenant.record_asserted_evidence`, the operation `POST /v1/profile/evidence`
+  calls, so the ledger's rules are the only rules (append-only; a `supersedes` it doesn't know, or
+  that something else already supersedes, is refused). Provenance is always `asserted`, the author
+  is the admin, the trace is the request's; the form names none of them.
+- **The server re-derives the open questions on every write.** An answer names a field and a slot,
+  never a question. One Track A is no longer asking (answered meanwhile, short-circuited since,
+  never asked) is refused and records nothing. A slot that already has an answer, or disagreeing
+  ones, takes a correction, not a second answer.
+- **A correction supersedes.** It is new evidence for the same field and period naming the old
+  row; the old row stays (it is what an earlier assessment read) and is shown struck through. Only
+  a current answer can be corrected.
+- **Disagreement is flagged, never resolved.** Two current answers with different values, or
+  answers covering only part of a year, or an answer Track A can't compare, are flagged on the
+  question and on the answers on record. Nothing picks between them; a person corrects one.
+- **After a write the page says what moved**, from Track A before and after: each obligation that
+  changed outcome (unassessable to applicable or not applicable). An answer that decides nothing
+  says so, and the next questions it opens are on the page.
+- **The body is a urlencoded form,** parsed here (`urllib.parse`, bounded to 16 KB, no repeated
+  name): no multipart parser is installed, and a one-line form needs none.
