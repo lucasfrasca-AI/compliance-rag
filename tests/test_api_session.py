@@ -487,11 +487,19 @@ async def test_the_shared_csp_is_unchanged_and_every_other_response_still_carrie
     assert [p.status_code for p in pages][-1] == 403
     for page in pages:
         assert page.headers["content-security-policy"] == SHARED_CSP
-    # the sign-in page's own refusal is not a page of its own policy
+    # the sign-in page's own refusals (unconfigured, and a malformed auth domain)
+    # are not pages of the wider policy
     async with _client(_app(firebase_web_api_key="")) as unconfigured:
-        refusal = await unconfigured.get("/signin")
-    assert refusal.status_code == 503
-    assert refusal.headers.get("content-security-policy") in (None, SHARED_CSP)
+        refusals = [await unconfigured.get("/signin")]
+    async with _client(_app(firebase_auth_domain="a.example; script-src *")) as malformed:
+        refusals.append(await malformed.get("/signin"))
+    assert [r.status_code for r in refusals] == [503, 503]
+    # Nothing but the 200 sign-in page ever names Google's script host or the
+    # auth domain, in any header, whichever routes were hit.
+    for response in [*pages, *refusals]:
+        assert response.headers.get("content-security-policy") in (None, SHARED_CSP)
+        for value in response.headers.values():
+            assert "apis.google.com" not in value and "firebaseapp.com" not in value
 
 
 async def test_the_sign_in_pages_csp_is_the_shared_policy_plus_exactly_the_named_additions(
@@ -527,6 +535,10 @@ async def test_the_sign_in_pages_frame_is_the_configured_auth_domain() -> None:
         "a.example\r\nSet-Cookie: x=1",
         "*.example",
         "",
+        "a.example:٣",  # an Arabic-Indic digit: \d would pass it, latin-1 would not
+        "a.example:80٣",
+        "éxample.com",  # a non-ASCII letter
+        "a.ex" + chr(0x430) + "mple.com",  # a Cyrillic look-alike of "a"
     ],
 )
 def test_an_auth_domain_that_is_not_a_hostname_cannot_widen_the_policy(domain: str) -> None:
@@ -559,8 +571,13 @@ async def test_the_pages_script_uses_the_google_popup_and_one_hand_over_to_the_s
     # one hand-over for both methods: the token goes to /session in a header
     assert script.count('fetch("/session"') == 1
     assert "Authorization" in script
-    # the Firebase user is still never kept by the browser
+    # the Firebase user is still never kept by the browser, and the SDK is signed
+    # out in a `finally` so a failed hand-over cannot leave it signed in
     assert "inMemoryPersistence" in script
+    assert re.search(r"finally\s*\{\s*await signOut\(auth\)", script)
+    # the popup resolver is configured once (on the auth instance), not per call
+    assert script.count("browserPopupRedirectResolver") == 2  # the import and initializeAuth
+    assert "signInWithPopup(auth, provider)" in script
 
 
 async def test_the_vendored_sdk_has_the_popup_resolver_and_the_google_provider() -> None:
@@ -591,7 +608,8 @@ async def test_a_members_token_from_either_provider_sets_the_same_cookie(
         header = response.headers["set-cookie"]
         flags = {part.strip().lower() for part in header.split(";")[1:]}
         assert {"httponly", "secure", "samesite=strict", "path=/"} <= flags
-        assert header.startswith(f"{COOKIE_NAME}=")
+        assert header.startswith("__Host-session=")  # the literal: the prefix is the guarantee
+        assert COOKIE_NAME == "__Host-session"
         member = SessionCodec(SECRET).open(c.cookies[COOKIE_NAME])
         assert (member.uid, member.email) == ("uid-123", MEMBER)
 

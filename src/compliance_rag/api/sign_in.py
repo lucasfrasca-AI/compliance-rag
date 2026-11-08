@@ -60,8 +60,11 @@ allow it (#291)."""
 
 _HOSTNAME = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
-    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::\d{1,5})?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::[0-9]{1,5})?"
 )
+"""ASCII only, port digits included (`[0-9]`, since the digit shorthand matches
+non-ASCII digits, which would pass here and then fail the header's latin-1
+encoding)."""
 
 
 def sign_in_content_security_policy(auth_domain: str) -> str:

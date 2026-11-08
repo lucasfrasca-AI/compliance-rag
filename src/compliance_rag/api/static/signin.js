@@ -31,6 +31,10 @@ const auth = initializeAuth(
     authDomain: root.dataset.authDomain,
     projectId: root.dataset.projectId,
   }),
+  // The popup resolver is given once, here, and signInWithPopup uses it by default.
+  // Here rather than per call because the SDK then starts loading the gapi frame at
+  // page load on Safari and mobile browsers, which is what stops them blocking the
+  // popup (it must open inside the click, before any awaited load).
   { persistence: inMemoryPersistence, popupRedirectResolver: browserPopupRedirectResolver },
 );
 
@@ -54,15 +58,23 @@ function show(text) {
 
 // Swap the signed-in user's ID token for the session cookie. The token goes in
 // the Authorization header, never a URL or a body, and the Firebase user is
-// signed out of the SDK straight after: the cookie is the only thing kept.
+// signed out of the SDK straight after, whether or not the hand-over worked (a
+// network error included): the cookie is the only thing kept.
 async function startSession(user) {
-  const token = await user.getIdToken();
-  const response = await fetch("/session", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    credentials: "same-origin",
-  });
-  await signOut(auth);
+  let response;
+  try {
+    const token = await user.getIdToken();
+    response = await fetch("/session", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      credentials: "same-origin",
+    });
+  } catch {
+    show(REFUSALS[503]);
+    return;
+  } finally {
+    await signOut(auth).catch(() => {});
+  }
   if (!response.ok) {
     show(REFUSALS[response.status] ?? "Sign-in failed.");
     return;
@@ -79,16 +91,18 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   show("Signing in...");
   const data = new FormData(form);
+  let user;
   try {
-    const { user } = await signInWithEmailAndPassword(
+    ({ user } = await signInWithEmailAndPassword(
       auth,
       String(data.get("email")),
       String(data.get("password")),
-    );
-    await startSession(user);
+    ));
   } catch {
     show("That email and password were not accepted.");
+    return;
   }
+  await startSession(user);
 });
 
 googleButton.addEventListener("click", async () => {
@@ -97,16 +111,12 @@ googleButton.addEventListener("click", async () => {
   provider.setCustomParameters({ prompt: "select_account" });
   let user;
   try {
-    ({ user } = await signInWithPopup(auth, provider, browserPopupRedirectResolver));
+    ({ user } = await signInWithPopup(auth, provider));
   } catch (error) {
     show(GOOGLE_FAILURES[error?.code] ?? "Google sign-in did not complete.");
     return;
   }
-  try {
-    await startSession(user);
-  } catch {
-    show("Sign-in failed.");
-  }
+  await startSession(user);
 });
 
 document.getElementById("sign-out").addEventListener("click", async () => {
