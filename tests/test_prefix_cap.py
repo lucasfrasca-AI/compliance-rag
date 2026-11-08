@@ -108,26 +108,70 @@ def test_the_estimate_holds_the_bound_on_the_whole_acme_prefix_and_its_system_pr
     assert LOWER_BOUND * real <= estimated <= UPPER_BOUND * real
 
 
+def _fenced(clauses: list[tuple[str, str]]) -> str:
+    """Clauses as the prefix fences them, ids and 24-hex boundary included."""
+    prefix = policy_prefix(
+        [SourceClause(f"acme/big-policy:v1:{path}", text, cited_as=path) for path, text in clauses]
+    )
+    assert prefix is not None
+    return prefix
+
+
+ADVERSARIAL = {
+    "many short clauses": _fenced([(f"1/{n}", "Staff must lock screens.") for n in range(1, 301)]),
+    "numeric clauses": _fenced(
+        [
+            (f"{n}/{m}", f"Keep records {n * m} for {m + 7} years, ref 2026-{n:04d}.")
+            for n in range(1, 21)
+            for m in range(1, 16)
+        ]
+    ),
+    "hex-heavy markers": _fenced(
+        [(f"{n}/1", "deadbeefcafe0123456789abcdef" * 4) for n in range(1, 101)]
+    ),
+    "all-letter hex": "deadbeef" * 400 + " " + "abcdefabcdef" * 300,
+    "punctuation-heavy": _fenced(
+        [("1/1", "(a)[b]{c}; <d>, !e? #f* @g% &h| ~i^ -j_ +k= /l\\ " * 300)]
+    ),
+    "newline-heavy": _fenced([(f"1/{n}", "a\n\n\nb") for n in range(1, 301)]),
+    "non-ascii": _fenced([("1/1", "法律に従う義務 — “quoted” é ü ñ 🙂 " * 300)]),
+}
+"""Shapes the six prose-heavy Acme fixtures can't show: each is a prefix the
+pipeline could really build (a policy of many short clauses, of numbers, of
+ids), measured against the same proxy."""
+
+
+@pytest.mark.parametrize("shape", ADVERSARIAL)
+def test_the_estimate_never_under_counts_a_structure_heavy_prefix(shape: str) -> None:
+    prefix = ADVERSARIAL[shape]
+    real = count_reranker_tokens(prefix)
+    estimated = estimate_tokens(prefix)
+    assert estimated >= LOWER_BOUND * real, (shape, estimated, real)
+    assert estimated <= 6 * real, (shape, estimated, real)  # still a measurement
+
+
 @pytest.mark.parametrize(
-    "text",
+    ("text", "tokens"),
     [
-        "a" * 1000,
-        "0123456789" * 100,
-        "c0ffee" * 200,  # hex, as the fences' boundaries are
-        "—" * 300 + "é" * 300,  # a token is at least a byte
-        "法律に従う義務" * 100,
+        ("", 0),
+        ("   \t ", 0),
+        ("g" * 25, 10),  # letters only: ceil(25 / 2.5)
+        ("g", 1),
+        ("0123456789", 10),  # a run with a digit: a token a character
+        ("c0ffee", 6),
+        ("deadbeef", 8),  # hex with no digit, long enough
+        ("deadbee", 3),  # too short to be taken for hex: an ordinary word
+        ("(a);", 5),  # three symbols at 1.25 and a letter at 1, rounded up
+        ("a\nb", 4),  # a newline counts as a symbol: 1.25
+        ("—é", 5),  # a token per UTF-8 byte
     ],
 )
-def test_the_estimate_is_never_below_a_token_per_three_ascii_characters_or_per_other_byte(
-    text: str,
-) -> None:
-    ascii_characters = sum(1 for c in text if ord(c) < 128)
-    other_bytes = sum(len(c.encode()) for c in text if ord(c) >= 128)
-    assert estimate_tokens(text) >= ascii_characters / 3 + other_bytes
+def test_the_estimate_counts_each_character_class(text: str, tokens: int) -> None:
+    assert estimate_tokens(text) == tokens
 
 
-def test_the_estimate_counts_the_parts_together_and_ignores_an_absent_one() -> None:
-    assert estimate_tokens("a" * 25, None, "b" * 25) == estimate_tokens("a" * 50) == 20
+def test_the_estimate_sums_the_parts_and_ignores_an_absent_one() -> None:
+    assert estimate_tokens("g" * 25, None, "h" * 25) == 20
     assert estimate_tokens(None) == 0
     assert CHARS_PER_TOKEN == 2.5
 
@@ -223,7 +267,9 @@ async def test_acmes_corpus_passes_with_room_to_spare(
     assert answer_span.attributes is not None
     estimate = answer_span.attributes["prefix.estimated_tokens"]
     assert isinstance(estimate, int)
-    assert 3_200 < estimate < PREFIX_CAP_TOKENS / 3  # about 3.2k real tokens, over-counted
+    assert (
+        3_200 < estimate < PREFIX_CAP_TOKENS * 0.4
+    )  # about 3.2k by word count, over-counted but far under
 
 
 # ---- the API: the stream and the chat record ----------------------------------------------
