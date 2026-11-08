@@ -30,6 +30,12 @@ only as strong as the key (#280)."""
 GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 
 
+def _addresses(raw: str) -> frozenset[str]:
+    """A comma-separated list of emails: the one parser for `API_MEMBERS` and
+    `API_ADMINS`."""
+    return frozenset(e.strip() for e in raw.split(",") if e.strip())
+
+
 class Settings(BaseSettings):
     """Environment configuration, validated once at startup."""
 
@@ -101,6 +107,12 @@ class Settings(BaseSettings):
     api_members: str = ""
     """Comma-separated verified emails admitted to `tenant_id`. A Firebase
     account alone isn't membership (#145, default 1). Empty admits no one."""
+    api_admins: str = ""
+    """Comma-separated emails of the members who are also admins (ADR-0053 U6):
+    they alone write subscriptions and record profile evidence. An admin is a
+    member first, so an address here that `api_members` lacks is refused. Read
+    on every request, so removing one ends their admin access at once. Empty
+    makes no one an admin."""
     api_sign_in_providers: str = "google.com,password"
     """Firebase sign-in providers whose verified email is trusted. Google and
     email/password prove ownership; an arbitrary OIDC or SAML provider can
@@ -182,7 +194,14 @@ class Settings(BaseSettings):
     @property
     def members(self) -> frozenset[str]:
         """`api_members` as a set (the verifier compares case-insensitively)."""
-        return frozenset(e.strip() for e in self.api_members.split(",") if e.strip())
+        return _addresses(self.api_members)
+
+    @property
+    def admins(self) -> frozenset[str]:
+        """`api_admins` as a set, parsed as `members` is and compared by
+        `firebase_auth.is_member`; being listed is not enough without being a
+        member as well."""
+        return _addresses(self.api_admins)
 
     @property
     def sign_in_providers(self) -> frozenset[str]:
