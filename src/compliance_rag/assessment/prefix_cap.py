@@ -1,7 +1,8 @@
 """The CAG prefix's size cap (ADR-0054, amending D-11 / ADR-0012).
 
-The prefix is the system prompt and the tenant's policy corpus (and, once a
-document check builds one, the obligation digest), read in full on every call.
+The prefix is the system prompt, then, when a document check passes one, the
+obligation digest (#295), then the tenant's policy corpus (ADR-0012), read in
+full on every call.
 It is capped at `PREFIX_CAP_TOKENS`, and a prefix over the cap is refused,
 loudly, before any generator call: never truncated, and never quietly replaced
 by a subset of the policies (`PolicyCorpusTooLarge`). A real customer with a
@@ -36,6 +37,11 @@ at most three times it on the Acme policies. That is a measured bound against
 a proxy, not a guarantee about Claude's own count; it should be re-checked
 against a real count when one is available (ADR-0054: the cap is revisited
 once a real tenant's corpus is measured).
+
+**What is measured is what is sent.** `check_prefix_cap` takes the system prompt
+and the built prefix exactly as the generator is given them (`prompt.cag_prefix`
+builds it, digest and joining included), so the digest counts like the policies
+do and no caller reconstructs the bytes to measure them.
 
 The cap is a constant with its ADR named, not a setting, so it can't be raised
 quietly: raising it is a new ADR.
@@ -104,12 +110,14 @@ class PolicyCorpusTooLarge(RuntimeError):
         )
 
 
-def check_prefix_cap(system: str, policy_corpus: str | None, *, current: Span) -> int:
+def check_prefix_cap(system: str, prefix: str | None, *, current: Span) -> int:
     """The prefix's estimated size, if it is within the cap; otherwise
-    `PolicyCorpusTooLarge`. `system` is the system prompt and `policy_corpus`
-    the fenced policies. The estimate and the cap are recorded on `current`,
-    the request's span, whether the prefix passes or not."""
-    estimated = estimate_tokens(system, policy_corpus)
+    `PolicyCorpusTooLarge`. `system` is the system prompt and `prefix` the
+    cached prefix as the generator receives it (`prompt.cag_prefix`: the
+    obligation digest, if any, then the fenced policies), or `None` for none.
+    The estimate and the cap are recorded on `current`, the request's span,
+    whether the prefix passes or not."""
+    estimated = estimate_tokens(system, prefix)
     current.set_attribute("prefix.estimated_tokens", estimated)
     current.set_attribute("prefix.cap_tokens", PREFIX_CAP_TOKENS)
     if estimated > PREFIX_CAP_TOKENS:

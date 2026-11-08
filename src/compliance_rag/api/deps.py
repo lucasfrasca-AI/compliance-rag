@@ -142,17 +142,21 @@ CurrentCaller = Annotated[Caller, Depends(current_caller)]
 """An endpoint's caller: a signed-in member, on the configured tenant."""
 
 
+def is_admin(settings: Settings, email: str) -> bool:
+    """Whether `email` is an admin: a member who is also in `API_ADMINS`. Both
+    lists go through `is_member`, the one comparison the verifier and the cookie
+    reader use. Read from configuration at every call, never from a credential."""
+    return is_member(email, settings.members) and is_member(email, settings.admins)
+
+
 async def current_admin(request: Request, caller: CurrentCaller) -> Caller:
     """The caller, if they are an admin (ADR-0053 U6, #294); 403 otherwise.
 
     Admins are configuration. Neither the Bearer token nor the cookie holds a
     role, so `API_ADMINS` is read afresh on every request and removing an
     address ends its admin access on the next one. An admin is a member first:
-    an address in `API_ADMINS` alone is refused. Both lists go through
-    `is_member`, the one comparison the verifier and the cookie reader use."""
-    settings = services_of(request).settings
-    email = caller.member.email
-    if not (is_member(email, settings.members) and is_member(email, settings.admins)):
+    an address in `API_ADMINS` alone is refused (`is_admin`)."""
+    if not is_admin(services_of(request).settings, caller.member.email):
         raise HTTPException(403, "admin only")
     return caller
 

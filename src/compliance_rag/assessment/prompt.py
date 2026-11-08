@@ -208,6 +208,21 @@ def policy_prefix(policies: Sequence[SourceClause]) -> str | None:
     return fence("tenant_policies", policies) if policies else None
 
 
+PREFIX_PART_SEPARATOR = "\n\n"
+"""What joins the digest and the policies in the cached prefix."""
+
+
+def cag_prefix(policies: Sequence[SourceClause], digest_text: str | None = None) -> str | None:
+    """The whole cached prefix after the system prompt (D-11, ADR-0012): when a
+    document check passes one, the obligation digest (`obligation_digest`,
+    #295), then the fenced policies, joined by `PREFIX_PART_SEPARATOR`. The one
+    place that decides the order and the joining, and the bytes the prefix cap
+    measures. With no digest it is `policy_prefix` exactly, so a question (Ask)
+    sends the bytes it always did. `None` for neither."""
+    parts = [p for p in (digest_text, policy_prefix(policies)) if p is not None]
+    return PREFIX_PART_SEPARATOR.join(parts) if parts else None
+
+
 def _absent_marker(absent: NotInEnvironment) -> str:
     """One instrument's marker. Each value is a JSON string, so a quote in
     the question's words is escaped and can't close it early."""
