@@ -100,6 +100,8 @@ Deliverables
 - Egress audit script checked into `docs/research/` proving no request-path byte leaves AU
 - Trace UI decision point: if Logs Explorer has proven insufficient for a named debugging task, write the ADR and add Phoenix (planned) — otherwise stay on Logging
 
+Build order (ADR-0053, the design session of 2026-11-08): **Ask first and completely, then Check.** Ask is the thinner path over machinery that already works end to end; Check needs claim extraction, the findings taxonomy and the upload API. Admin follows in ADR-0053's order (subscriptions, policy versions, questionnaire, mapping queue). The CAG prefix is capped at about 30k tokens (ADR-0054, amends D-11).
+
 Exit criteria
 - A full document check end to end under 60 s p95, under $0.50 (known risk: one warm rerank is up to 22.3 s since #207; the lever is the candidate count. Handoff 0002, *Known risk*)
 - Every citation in the UI opens the source at the clause
