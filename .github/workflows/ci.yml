@@ -121,6 +121,10 @@ jobs:
       # The applicability labels are checked in: a missing file fails the
       # gate instead of skipping it (tests/test_applicability_gate.py).
       REQUIRE_APPLICABILITY_GATE: "1"
+      # The migration runner's and the tenant seed's tests build scratch
+      # databases on the Postgres service above: a missing DATABASE_URL fails
+      # them here instead of skipping (tests/ledger_db.py).
+      REQUIRE_LEDGER_DB: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -157,20 +161,18 @@ jobs:
       - name: Type check
         run: uv run pyright
 
-      - name: Install postgresql client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
-
-      # Every file in db/ledger/, in filename order, against a fresh database.
-      # This is what docker-compose's initdb.d mount does on a container's
-      # first start; CI does it explicitly so a broken migration fails here,
-      # not on someone's laptop.
+      # Every file in db/ledger/, in filename order, against a fresh database,
+      # by the same runner an operator runs against Cloud SQL (#293): each file
+      # in its own transaction, recorded in schema_migration. Then the runner
+      # again, which must apply nothing: that is what makes it safe to run
+      # against a database that already has the schema. A broken migration, or
+      # an edited one, fails here and not on someone's laptop. (The psql loop
+      # this replaces is gone, and with it the postgresql-client install.)
       - name: Apply ledger migrations
-        run: |
-          set -e
-          for f in db/ledger/*.sql; do
-            echo "applying $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
-          done
+        run: uv run python -m scripts.migrate_ledger
+
+      - name: Ledger migrations are a no-op on a second run
+        run: uv run python -m scripts.migrate_ledger --expect-up-to-date
 
       - name: Tests
         run: uv run pytest
