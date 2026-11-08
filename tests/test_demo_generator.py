@@ -14,7 +14,10 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import sys
+import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -31,17 +34,24 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
-from compliance_rag.adapters.interfaces import LedgerStore
+from compliance_rag.adapters.interfaces import ChatAnswer, ChatExchange, LedgerStore, TurnOutcome
 from compliance_rag.api import main as api_main
 from compliance_rag.api.app import create_app
+from compliance_rag.api.banner import TEMPLATE_DIR
+from compliance_rag.api.sign_in import STATIC_DIR
+from compliance_rag.api.sources import source_href
 from compliance_rag.assessment.prompt import REPAIR_SYSTEM_PROMPT
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION, REGION, Settings
 from tests.api_support import api_settings, fake_api_services
 from tests.test_api_answers import AS_OF, QUESTION
 from tests.test_api_answers import _events as events_of  # pyright: ignore[reportPrivateUsage]
+from tests.test_api_answers import _ledger as acme_ledger  # pyright: ignore[reportPrivateUsage]
 from tests.test_api_pages import (
+    APP11,
     ORIGIN,
+    TENANT,
+    UID,
     Exploding,
     client_for,
     outcomes,
@@ -296,11 +306,123 @@ async def test_no_page_says_fake_while_a_model_is_answering(
 
 
 def test_the_banner_is_written_by_the_server_not_by_the_script() -> None:
-    from compliance_rag.api.sign_in import STATIC_DIR
-
     script = (STATIC_DIR / "ask.js").read_text(encoding="utf-8")
     signin = (STATIC_DIR / "signin.js").read_text(encoding="utf-8")
     assert "FAKE GENERATOR" not in script + signin and "fake-banner" not in script + signin
+
+
+# ---- the banner follows the turn, not the setting ---------------------------------------------
+
+
+async def test_a_turn_the_demo_wrote_keeps_its_banner_when_the_deployment_runs_claude() -> None:
+    """The ledger records which generator wrote an answer turn (0020): after a
+    switch to a model, the stand-in's answers are still labelled, and a page's
+    own banner is gone."""
+    ledger = await acme_ledger()
+    async with await client_for(FakeDemoGenerator(), ledger=ledger, settings=demo_settings()) as c:
+        await sign_in(c)
+        response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
+        chat = events_of(response.text)[0][1]["chat_id"]
+    async with await client_for(
+        FakeGenerator(), ledger=ledger, settings=page_settings(generator="claude")
+    ) as c:
+        await sign_in(c)
+        fragment = (await c.get(f"/chats/{chat}/turns")).text
+        page = (await c.get(f"/chats/{chat}")).text
+        chats = (await c.get("/chats")).text
+        read_back = (await c.get(f"/v1/chats/{chat}")).json()
+    assert FAKE_BANNER in text_of(fragment) and len(banners(fragment)) == 1
+    assert len(banners(page)) == 1  # the turn's own: the page has none, the deployment is claude
+    assert banners(chats) == []
+    assert [t.get("generator") for t in read_back["turns"]] == [None, "demo"]
+
+
+async def test_a_claude_turn_under_claude_carries_no_banner() -> None:
+    async with await client_for(FakeGenerator(), settings=page_settings(generator="claude")) as c:
+        await sign_in(c)
+        response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
+        chat = events_of(response.text)[0][1]["chat_id"]
+        fragment = (await c.get(f"/chats/{chat}/turns")).text
+        read_back = (await c.get(f"/v1/chats/{chat}")).json()
+    assert outcomes(fragment) and banners(fragment) == [] and "FAKE" not in fragment
+    assert [t.get("generator") for t in read_back["turns"]] == [None, "claude"]
+
+
+async def test_a_claude_turn_read_back_under_the_demo_is_not_labelled_fake() -> None:
+    ledger = await acme_ledger()
+    async with await client_for(FakeGenerator(), ledger=ledger, settings=page_settings()) as c:
+        await sign_in(c)
+        response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
+        chat = events_of(response.text)[0][1]["chat_id"]
+    async with await client_for(FakeDemoGenerator(), ledger=ledger, settings=demo_settings()) as c:
+        await sign_in(c)
+        fragment = (await c.get(f"/chats/{chat}/turns")).text
+        page = (await c.get(f"/chats/{chat}")).text
+    assert banners(fragment) == []  # a model wrote that turn
+    assert len(banners(page)) == 1  # the page's own: the deployment runs the demo now
+
+
+async def test_a_turn_written_before_the_column_has_no_generator_and_no_banner() -> None:
+    ledger = await acme_ledger()
+    chat = uuid.uuid4().hex
+    await ledger.record_chat_exchange(
+        ChatExchange(
+            tenant_id=TENANT,
+            chat_id=chat,
+            user_id=UID,
+            question=QUESTION,
+            answer=ChatAnswer(TurnOutcome.UNCITED),
+            as_of=dt.date.fromisoformat(AS_OF),
+            trace_id="a" * 32,
+        )
+    )
+    async with await client_for(FakeGenerator(), ledger=ledger, settings=page_settings()) as c:
+        await sign_in(c)
+        fragment = (await c.get(f"/chats/{chat}/turns")).text
+        read_back = (await c.get(f"/v1/chats/{chat}")).json()
+    assert outcomes(fragment) == ["withheld"] and banners(fragment) == []
+    assert read_back["turns"][1]["generator"] is None
+
+
+async def test_the_banner_is_one_partial_and_one_stylesheet() -> None:
+    """Every page that carries it renders `_banner.html` and links `banner.css`;
+    no other template or stylesheet holds its markup or its rules."""
+    for template in TEMPLATE_DIR.glob("*.html"):
+        text = template.read_text(encoding="utf-8")
+        if template.name == "_banner.html":
+            assert 'class="fake-banner"' in text and 'role="note"' in text
+        else:
+            assert "fake-banner" not in text, template.name
+    for sheet in STATIC_DIR.glob("*.css"):
+        text = sheet.read_text(encoding="utf-8")
+        assert ("fake-banner" in text) == (sheet.name == "banner.css"), sheet.name
+    async with await client_for(FakeGenerator(), settings=demo_settings()) as c:
+        signin = (await c.get("/signin")).text
+        await sign_in(c)
+        chats = (await c.get("/chats")).text
+        css = await c.get("/static/banner.css")
+    assert css.status_code == 200 and ".fake-banner" in css.text
+    for page in (signin, chats):
+        assert scan(page).where("link", href="/static/banner.css")
+        (banner,) = banners(page)
+        assert banner["role"] == "note"  # not an alert: it is always there, not news
+
+
+# ---- what carries no banner ---------------------------------------------------------------------
+
+
+async def test_a_source_page_is_exempt_because_it_holds_no_generated_text() -> None:
+    """`/v1/sources/...` serves stored law and policy text, never generated text,
+    so it carries no banner even while the demo is on. Pinned here, and stated in
+    the API's README."""
+    async with await client_for(FakeDemoGenerator(), settings=demo_settings()) as c:
+        await sign_in(c)
+        path = source_href(APP11).split("#", 1)[0]
+        source = await c.get(path)
+    assert source.status_code == 200
+    assert "FAKE GENERATOR" not in source.text and "fake-banner" not in source.text
+    readme = (Path(api_main.__file__).parent / "README.md").read_text(encoding="utf-8")
+    assert "source pages" in readme.lower() and "exempt" in readme.lower()
 
 
 # ---- the JSON API -------------------------------------------------------------------------------

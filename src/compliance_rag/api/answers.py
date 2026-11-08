@@ -138,6 +138,7 @@ from compliance_rag.corpus.display_form import Titles, cite
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import ClauseRecord, Incomplete
 from compliance_rag.retrieval.pipeline import RetrievalTrace
+from compliance_rag.settings import GeneratorName
 from compliance_rag.telemetry import current_trace_id
 
 router = APIRouter(prefix="/v1")
@@ -227,7 +228,9 @@ def _shown(answer: Answer) -> ChatAnswer:
     )
 
 
-def _answer_json(answer: Answer, shown: ChatAnswer, *, generator: str) -> dict[str, object]:
+def _answer_json(
+    answer: Answer, shown: ChatAnswer, *, generator: GeneratorName
+) -> dict[str, object]:
     common: dict[str, object] = {
         # `claude` or `demo`: a client can tell a stand-in's answer from a
         # model's, withheld or verified (#292).
@@ -361,6 +364,8 @@ class _ChatRecorder:
     chat_id: str
     question: str
     as_of: dt.date
+    generator: GeneratorName
+    """What wrote the answer turn, from `Settings` (ledger 0020)."""
 
     async def record(self, shown: ChatAnswer) -> None:
         await self.ledger.record_chat_exchange(
@@ -375,6 +380,7 @@ class _ChatRecorder:
                 answer=shown,
                 as_of=self.as_of,
                 trace_id=current_trace_id(),
+                generator=self.generator,
             )
         )
         current = trace.get_current_span()
@@ -413,7 +419,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
         if not earlier:
             raise HTTPException(404, "no such chat")
         chat_id = body.chat_id
-    chat = _ChatRecorder(services.ledger, who, chat_id, body.question, day)
+    chat = _ChatRecorder(
+        services.ledger, who, chat_id, body.question, day, services.settings.generator
+    )
 
     def staged(name: str, data: dict[str, object]) -> str:
         return event(name, {"chat_id": chat_id, **data})

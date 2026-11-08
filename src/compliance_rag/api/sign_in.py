@@ -22,7 +22,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
 from compliance_rag.adapters.interfaces import Member
-from compliance_rag.api.banner import banner_text
+from compliance_rag.api.banner import banner_text, render_banner
 from compliance_rag.api.deps import bearer_member, services_of
 from compliance_rag.api.session import COOKIE_NAME, SessionCodec
 
@@ -154,8 +154,7 @@ async def sign_in_page(request: Request) -> HTMLResponse:
     except ValueError:
         raise HTTPException(503, "the sign-in page is not configured") from None
     attributes = " ".join(f'data-{k}="{html.escape(v, quote=True)}"' for k, v in config.items())
-    words = banner_text(settings)  # while the demo generator is on (#292)
-    banner = f'<div class="fake-banner" role="alert">{html.escape(words)}</div>\n' if words else ""
+    banner = render_banner(banner_text(settings))  # while the demo generator is on (#292)
     page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -163,9 +162,11 @@ async def sign_in_page(request: Request) -> HTMLResponse:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in</title>
 <link rel="stylesheet" href="/static/signin.css">
+<link rel="stylesheet" href="/static/banner.css">
 </head>
 <body>
-{banner}<main id="signin" {attributes}>
+{banner}
+<main id="signin" {attributes}>
 <h1>Sign in</h1>
 <form id="signin-form" autocomplete="on">
 <label>Email <input name="email" type="email" autocomplete="username" required></label>

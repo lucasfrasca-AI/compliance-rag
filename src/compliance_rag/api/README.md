@@ -114,13 +114,26 @@ same retrieval, the same verifier, the same ledger):
   Sydney, so `Settings` refuses `VERTEX_CLAUDE_REGION` anything but `australia-southeast1`
   with it.
 
-While it is `demo`, **every** server-rendered page says so, by the server and not by
-`ask.js`: a "FAKE GENERATOR — not a real answer" banner on the sign-in page, the chat list,
-the new-chat and chat pages, the error page, and each answer turn of the turns fragment,
-whatever its outcome (verified, withheld, or failed). Every `answer` event reports
-`"generator": "demo"` (`"claude"` otherwise). The ledger does not record which generator wrote
-a turn, so a chat read back later (`GET /v1/chats/{id}`) does not say; its pages carry the
-banner for as long as the deployment is `demo`.
+**The banner** ("FAKE GENERATOR — not a real answer") is written by the server, never by
+`ask.js`, from one partial (`templates/_banner.html`) and one stylesheet (`static/banner.css`);
+the sign-in page, which is not a template, renders the same partial (`banner.render_banner`).
+It is a `role="note"`, not an alert. Two rules decide where it shows:
+
+- **A page** carries it while the deployment runs `demo`: the sign-in page, the chat list, the
+  new-chat and chat pages, and the error page.
+- **An answer turn** carries it when the ledger says the demo wrote that turn
+  (`chat.generator`, ledger 0020), **whatever the deployment runs now**, whether the turn is
+  verified, withheld or failed. So a chat read back after a switch to Claude still labels the
+  stand-in's answers, and a Claude turn is never labelled, even on a page that is itself
+  bannered because the deployment is back on `demo`. A turn written before the column holds
+  NULL and shows none.
+
+Every `answer` event reports `"generator"` (`"demo"` or `"claude"`), and each answer turn of
+`GET /v1/chats/{id}` reports the one recorded with it (`null` for an old turn).
+
+**Exempt: the source pages** (`/v1/sources/{instrument_id}/{version_id}`, the citation panel's
+iframe). They show stored law and policy text, never generated text, so they carry no banner
+even while the deployment is `demo`; `tests/test_demo_generator.py` pins that.
 
 ## The container (`docker/api.Dockerfile`)
 

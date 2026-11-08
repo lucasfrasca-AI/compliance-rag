@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -48,7 +47,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from compliance_rag.api.banner import banner_text
+from compliance_rag.adapters.demo_generator import FAKE_BANNER
+from compliance_rag.api.banner import TEMPLATE_DIR, banner_text
 from compliance_rag.api.chats import read_chat
 from compliance_rag.api.deps import (
     SYDNEY,
@@ -60,8 +60,6 @@ from compliance_rag.api.deps import (
     services_of,
 )
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY
-
-TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 PAGE_HEADERS = {
     "Content-Security-Policy": CONTENT_SECURITY_POLICY,
@@ -150,10 +148,12 @@ class PageError(Exception):
 
 def render(request: Request, name: str, *, status: int = 200, **context: object) -> HTMLResponse:
     """A template, with the banner the demo generator calls for (#292): the one
-    place every page and fragment is made, so none can lack it."""
+    place every page and fragment is made, so none can lack it. `banner` is the
+    page's (the deployment runs the demo); `fake_banner` is the words, for a
+    turn the ledger records the demo as having written."""
     banner = banner_text(services_of(request).settings)
     return HTMLResponse(
-        ENV.get_template(name).render(banner=banner, **context),
+        ENV.get_template(name).render(banner=banner, fake_banner=FAKE_BANNER, **context),
         status_code=status,
         headers=PAGE_HEADERS,
     )

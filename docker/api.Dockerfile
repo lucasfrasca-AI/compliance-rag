@@ -32,8 +32,11 @@
 
 FROM python:3.12-slim
 
+# Bytecode is compiled at build time (and the user that serves can't write it
+# at run time), so a scale-to-zero cold start doesn't compile the dependencies
+# and the package again.
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+    UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
 WORKDIR /app
@@ -57,6 +60,8 @@ COPY vendor/bge-reranker-v2-m3-tokenizer ./vendor/bge-reranker-v2-m3-tokenizer
 
 # Now that the source is present, install the project itself.
 RUN uv sync --frozen --no-dev --no-group export
+# The project is installed editable, so uv leaves its own source uncompiled.
+RUN /app/.venv/bin/python -m compileall -q /app/src/compliance_rag
 
 # Never root. The cache is owned by the user because fastembed opens it for
 # writing even when the model is already there.

@@ -64,6 +64,11 @@ def test_it_follows_the_reranker_image() -> None:
     assert _instructions("FROM") == ["python:3.12-slim"]
     sync = [i for i in _instructions("RUN") if i.startswith("uv sync")]
     assert sync and all("--frozen" in s and "--no-dev" in s for s in sync)
+    # Bytecode compiled at build: a scale-to-zero cold start doesn't compile it again.
+    env = " ".join(_instructions("ENV"))
+    assert "UV_COMPILE_BYTECODE=1" in env and "PYTHONDONTWRITEBYTECODE" not in env
+    # uv installs the project editable and leaves its source uncompiled.
+    assert any("compileall" in i and "/app/src/compliance_rag" in i for i in _instructions("RUN"))
 
 
 def test_it_runs_as_a_non_root_user() -> None:
@@ -167,25 +172,38 @@ def test_a_cached_bm25_snapshot_is_found_only_when_whole(tmp_path: Path) -> None
     assert find(str(tmp_path / "other")) == str(whole)
 
 
-def test_loading_by_path_gives_the_same_vectors_with_no_network(
+def test_the_store_loads_the_cached_bm25_model_with_no_network_and_the_same_vectors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """What the image relies on: with `HF_HUB_OFFLINE=1`, fastembed's own cache
-    lookup can't load `Qdrant/bm25` (its `model_file` is a placeholder that
-    exists in no snapshot); loading the baked snapshot by path can, and scores
-    exactly as loading it by name does."""
+    """What the image relies on, through the store's own loader: with the
+    snapshot in the cache, `_sparse_encoder` opens no socket at all (every
+    connect is refused here, not merely discouraged by a setting) and scores
+    exactly as loading the model by name does. fastembed's own cache lookup can't
+    do this for `Qdrant/bm25`: its `model_file` is a placeholder that exists in no
+    snapshot, so it asks Hugging Face."""
+    import socket
+
     from fastembed import SparseTextEmbedding
 
     cache = qdrant_retrieval_store._SPARSE_CACHE_DIR  # pyright: ignore[reportPrivateUsage]
-    snapshot = qdrant_retrieval_store._cached_sparse_model(cache)  # pyright: ignore[reportPrivateUsage]
-    if snapshot is None:
+    if qdrant_retrieval_store._cached_sparse_model(cache) is None:  # pyright: ignore[reportPrivateUsage]
         pytest.skip("no local .fastembed_cache: the sparse tests download it, this one doesn't")
     text = "Acme must take reasonable steps to protect personal information it holds"
     by_name = next(iter(SparseTextEmbedding("Qdrant/bm25", cache_dir=cache).embed([text])))
-    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    with pytest.raises(ValueError, match="from any source"):
-        SparseTextEmbedding("Qdrant/bm25", cache_dir=cache)  # the failure the image would have had
-    loaded = SparseTextEmbedding("Qdrant/bm25", cache_dir=cache, specific_model_path=snapshot)
-    by_path = next(iter(loaded.embed([text])))
+
+    attempts: list[object] = []
+
+    def refused(_self: socket.socket, address: object) -> None:
+        attempts.append(address)
+        raise OSError("the network is off in this test")
+
+    encoder = qdrant_retrieval_store._sparse_encoder  # pyright: ignore[reportPrivateUsage]
+    encoder.cache_clear()  # the loader itself, not an instance an earlier test made
+    monkeypatch.setattr(socket.socket, "connect", refused)
+    try:
+        by_path = next(iter(encoder().embed([text])))
+    finally:
+        encoder.cache_clear()
+    assert attempts == []
     assert by_path.indices.tolist() == by_name.indices.tolist()
     assert by_path.values.tolist() == by_name.values.tolist()

@@ -227,22 +227,3 @@ button.link {
   }
   .panel-open .conversation { padding-bottom: 1rem; }
 }
-
-/* While the demo generator is on (#292): fixed colours, so the white text reads
-   in both colour schemes. */
-.fake-banner {
-  margin: 0;
-  padding: 0.75rem 1rem;
-  background: #a52019;
-  color: #fff;
-  border-bottom: 4px solid #6e130e;
-  font-size: 1.1rem;
-  font-weight: 700;
-  text-align: center;
-}
-.turn .fake-banner {
-  margin-bottom: 0.5rem;
-  border: 2px solid #6e130e;
-  border-radius: 6px;
-  font-size: 0.95rem;
-}

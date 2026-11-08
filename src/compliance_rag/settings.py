@@ -29,6 +29,10 @@ only as strong as the key (#280)."""
 
 GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 
+GeneratorName = Literal["claude", "demo"]
+"""What `GENERATOR` can name, and what the ledger records with an answer turn
+(ledger 0020, #292)."""
+
 
 def _addresses(raw: str) -> frozenset[str]:
     """A comma-separated list of emails: the one parser for `API_MEMBERS` and
@@ -58,7 +62,7 @@ class Settings(BaseSettings):
     gcp_log_bucket: str = "compliance-rag-logs"
 
     # --- Vertex ------------------------------------------------------------
-    generator: Literal["claude", "demo"] = "claude"
+    generator: GeneratorName = "claude"
     """`GENERATOR`: which `Generator` the API builds (#292). `claude` is Claude
     on Vertex (`VERTEX_CLAUDE_MODEL` required, built through the residency
     gate); `demo` is the in-process stand-in that calls no model

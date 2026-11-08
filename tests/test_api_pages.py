@@ -932,7 +932,10 @@ async def test_no_page_has_an_inline_script_handler_style_or_a_foreign_asset(quo
         "/static/ask.js",
         "/static/vendor/htmx/htmx.min.js",
     ]
-    assert [a["href"] for a in chat.where("link")] == ["/static/app.css"]
+    assert [a["href"] for a in chat.where("link")] == [
+        "/static/app.css",
+        "/static/banner.css",
+    ]
 
 
 def test_no_template_marks_anything_safe_or_turns_escaping_off() -> None:
@@ -988,6 +991,7 @@ async def test_the_scripts_and_styles_are_served_by_the_api_itself() -> None:
             ("/static/ask.js", "javascript"),
             ("/static/vendor/htmx/htmx.min.js", "javascript"),
             ("/static/app.css", "css"),
+            ("/static/banner.css", "css"),
         ):
             response = await client.get(path)
             assert response.status_code == 200, path
