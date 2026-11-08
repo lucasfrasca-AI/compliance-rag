@@ -16,9 +16,7 @@ from scripts import demo_server
 from scripts.demo_server import (
     DEMO_MEMBER,
     DEMO_TENANT,
-    FAKE_BANNER,
     FailureLog,
-    FakeDemoGenerator,
     RecordingGenerator,
     RefusedToStart,
     SnapshotThenSydney,
@@ -32,6 +30,7 @@ from scripts.demo_server import (
     render_page,
 )
 
+from compliance_rag.adapters.demo_generator import FAKE_BANNER, FakeDemoGenerator
 from compliance_rag.adapters.fakes import (
     FakeClauseStore,
     FakeLedgerStore,
@@ -170,6 +169,8 @@ def test_the_fake_generator_is_never_the_default() -> None:
     # The fake runs in process: the gates are told so. The real one keeps
     # whatever region is configured, offshore included.
     assert fake.vertex_claude_region == REGION
+    # and the production pages the demo mounts say so, as the deployed API's do (#292)
+    assert (fake.generator, real.generator) == ("demo", "claude")
     assert real.vertex_claude_region == Settings().vertex_claude_region
 
 
@@ -201,8 +202,9 @@ async def test_the_production_app_still_requires_sign_in() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://api") as client:
         asked = await client.post("/v1/answers", json={"question": QUESTION})
         me = await client.get("/v1/me")
-        assert (await client.get("/")).status_code == 404  # no page in production
+        root = await client.get("/")  # production's `/` is only a redirect to the chats
     assert asked.status_code == me.status_code == 401
+    assert (root.status_code, root.headers["location"]) == (303, "/chats")
 
 
 def test_nothing_in_the_package_imports_the_demo() -> None:

@@ -137,6 +137,10 @@
 {% else %}
 <article class="turn turn-answer" data-turn="{{ t.turn_index }}">
 <h2 class="label">Answer</h2>
+{#- On every answer turn, so the fragment says it whichever outcome it shows. -#}
+{% if banner %}
+<p class="fake-banner" role="note" data-fake-banner>{{ banner }}</p>
+{% endif %}
 {% if t.error %}
 {{ error_card(t) }}
 {% else %}

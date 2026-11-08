@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REGION = "australia-southeast1"
@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     gcp_log_bucket: str = "compliance-rag-logs"
 
     # --- Vertex ------------------------------------------------------------
+    generator: Literal["claude", "demo"] = "claude"
+    """`GENERATOR`: which `Generator` the API builds (#292). `claude` is Claude
+    on Vertex (`VERTEX_CLAUDE_MODEL` required, built through the residency
+    gate); `demo` is the in-process stand-in that calls no model
+    (`adapters/demo_generator.py`), which runs in Sydney and so requires
+    `VERTEX_CLAUDE_REGION=australia-southeast1`. While it is `demo`, every
+    page the API serves carries a banner saying so, and every answer event
+    reports it."""
     vertex_claude_model: str = ""
     vertex_claude_region: str = REGION
     """Sydney by default — fail closed. The build phase opts into the US
@@ -156,6 +164,19 @@ class Settings(BaseSettings):
                 f"`global` or any other region (ADR-0023); got {v!r}"
             )
         return v
+
+    @model_validator(mode="after")
+    def _demo_generator_runs_in_sydney(self) -> Settings:
+        # The residency gates ask where generation runs. The demo generator
+        # runs in this process, so they must be told Sydney: an offshore
+        # region beside it would say the question leaves Australia when it
+        # doesn't, and would let a tester list decide what it must not (#292).
+        if self.generator == "demo" and self.vertex_claude_region != REGION:
+            raise ValueError(
+                f"GENERATOR=demo runs in this process, so vertex_claude_region must be "
+                f"{REGION}; got {self.vertex_claude_region!r}"
+            )
+        return self
 
     @field_validator("session_secret")
     @classmethod

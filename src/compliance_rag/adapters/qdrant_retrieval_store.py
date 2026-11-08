@@ -25,7 +25,9 @@ the PR, not silently made. `Qdrant/bm25` is a ~10MB, model-free (pure
 hashing-trick BM25, no neural network) artifact fetched from Hugging Face on
 first use; CI caches `.fastembed_cache/` across runs the same way it caches
 the reranker artifact, rather than a network call inside a gate that must
-be deterministic (issue #21's own standard).
+be deterministic (issue #21's own standard). The API's container image bakes
+it in (`docker/api.Dockerfile`, #292) and, like any process whose cache holds
+it, loads it by path (`_cached_sparse_model`), so a request never downloads it.
 
 The `Qdrant/bm25` values are BM25's term-frequency part only. The
 inverse-document-frequency part is Qdrant's, applied at query time to a sparse
@@ -69,6 +71,7 @@ from collections.abc import AsyncGenerator, Coroutine, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import cast
 
 import httpx
@@ -135,11 +138,37 @@ whole compilation in one request (779 clauses, #144) would be ~20 MB, close to
 Qdrant's default 32 MB request limit; 64 keeps each request under 2 MB."""
 
 
+def _cached_sparse_model(cache_dir: str = _SPARSE_CACHE_DIR) -> str | None:
+    """The `Qdrant/bm25` snapshot already in `cache_dir`, whole, or `None`.
+
+    Loaded by path, so a process that has the model (the API image bakes it,
+    #292; a laptop or a CI runner after the first run) touches no network:
+    fastembed's own cache lookup can't do that for this model. It looks for
+    the description's `model_file`, which for BM25 is the placeholder
+    `mock.file` and exists in no snapshot, so it falls through to a Hugging
+    Face metadata call, and with `HF_HUB_OFFLINE=1` to "could not load model".
+    "Whole" means the English stopword list is there: without it fastembed
+    quietly uses none, which would change every score.
+    """
+    snapshots = Path(cache_dir) / "models--Qdrant--bm25" / "snapshots"
+    if not snapshots.is_dir():
+        return None
+    for snapshot in sorted(snapshots.iterdir()):
+        if (snapshot / "english.txt").is_file():
+            return str(snapshot)
+    return None
+
+
 @lru_cache(maxsize=1)
 def _sparse_encoder() -> SparseTextEmbedding:
     """One `fastembed` model instance per process — loading it is not free,
-    matching `RerankerModel`'s own one-instance-per-process reasoning."""
-    return SparseTextEmbedding(_SPARSE_MODEL_NAME, cache_dir=_SPARSE_CACHE_DIR)
+    matching `RerankerModel`'s own one-instance-per-process reasoning. From the
+    cache when it holds the model (no network); downloaded otherwise."""
+    return SparseTextEmbedding(
+        _SPARSE_MODEL_NAME,
+        cache_dir=_SPARSE_CACHE_DIR,
+        specific_model_path=_cached_sparse_model(),
+    )
 
 
 def _sparse_vector(embedding: SparseEmbedding) -> models.SparseVector:

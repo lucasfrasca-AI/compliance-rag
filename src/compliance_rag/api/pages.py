@@ -2,9 +2,9 @@
 this service with Jinja2 and htmx, every asset served from `/static`, under the
 one CSP (`sign_in.CONTENT_SECURITY_POLICY`).
 
-- `GET /chats`: where a member lands (the sign-in page links to it; the root
-  `/` is deliberately no page, the throwaway demo owns it): the member's chats,
-  newest first, and a link to a new one.
+- `GET /chats`: where a member lands (the sign-in page links to it, and `GET /`
+  redirects to it, `app.py`): the member's chats, newest first, and a link to
+  a new one.
 - `GET /chats/new` and `GET /chats/{id}`: a chat. Its turns are read back from
   the ledger exactly as `GET /v1/chats/{id}` serves them (`chats.read_chat`),
   and the question form streams `POST /v1/answers` from the one served script
@@ -48,6 +48,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from compliance_rag.api.banner import banner_text
 from compliance_rag.api.chats import read_chat
 from compliance_rag.api.deps import (
     SYDNEY,
@@ -147,9 +148,14 @@ class PageError(Exception):
         self.message = message
 
 
-def render(name: str, *, status: int = 200, **context: object) -> HTMLResponse:
+def render(request: Request, name: str, *, status: int = 200, **context: object) -> HTMLResponse:
+    """A template, with the banner the demo generator calls for (#292): the one
+    place every page and fragment is made, so none can lack it."""
+    banner = banner_text(services_of(request).settings)
     return HTMLResponse(
-        ENV.get_template(name).render(**context), status_code=status, headers=PAGE_HEADERS
+        ENV.get_template(name).render(banner=banner, **context),
+        status_code=status,
+        headers=PAGE_HEADERS,
     )
 
 
@@ -157,10 +163,12 @@ def sign_in_required(_: Request, __: Exception) -> Response:
     return RedirectResponse("/signin", status_code=303, headers=PAGE_HEADERS)
 
 
-def page_error(_: Request, error: Exception) -> Response:
+def page_error(request: Request, error: Exception) -> Response:
     if not isinstance(error, PageError):  # registered for PageError alone
         raise error
-    return render("message.html", status=error.status, title=error.title, message=error.message)
+    return render(
+        request, "message.html", status=error.status, title=error.title, message=error.message
+    )
 
 
 async def page_caller(
@@ -199,12 +207,12 @@ def _heading(turns: list[dict[str, object]]) -> str:
 @router.get("/chats", response_class=HTMLResponse)
 async def chats_page(request: Request, who: PageCaller) -> HTMLResponse:
     chats = await services_of(request).ledger.chats(who.tenant_id, who.member.uid)
-    return render("chats.html", chats=chats, email=who.member.email)
+    return render(request, "chats.html", chats=chats, email=who.member.email)
 
 
 @router.get("/chats/new", response_class=HTMLResponse)
-async def new_chat_page(_: PageCaller) -> HTMLResponse:
-    return render("chat.html", chat_id=None, heading="New chat", turns=[])
+async def new_chat_page(request: Request, _: PageCaller) -> HTMLResponse:
+    return render(request, "chat.html", chat_id=None, heading="New chat", turns=[])
 
 
 @router.get("/chats/{chat_id}", response_class=HTMLResponse)
@@ -216,7 +224,7 @@ async def chat_page(request: Request, who: PageCaller, chat_id: str) -> HTMLResp
     )
     if turns is None:
         raise _no_such_chat()
-    return render("chat.html", chat_id=chat_id, heading=_heading(turns), turns=turns)
+    return render(request, "chat.html", chat_id=chat_id, heading=_heading(turns), turns=turns)
 
 
 @router.get("/chats/{chat_id}/turns", response_class=HTMLResponse)
@@ -232,4 +240,4 @@ async def turns_fragment(
     )
     if turns is None:
         raise HTTPException(404, "no such chat")
-    return render("_turns.html", turns=turns)
+    return render(request, "_turns.html", turns=turns)

@@ -9,6 +9,9 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+{% if banner %}
+<div class="fake-banner" role="alert" data-fake-banner>{{ banner }}</div>
+{% endif %}
 <header class="bar">
 <a class="brand" href="/chats">Compliance Ask</a>
 <nav aria-label="Main">

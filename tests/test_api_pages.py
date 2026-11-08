@@ -726,7 +726,10 @@ def test_a_chat_id_is_all_of_its_form_not_just_a_line_of_it() -> None:
 def test_the_page_error_handler_handles_only_a_page_error() -> None:
     """Not an `assert`, which `python -O` removes: any other exception handed
     to it is raised again, never shown as a page."""
-    request = Request({"type": "http", "method": "GET", "path": "/chats", "headers": []})
+    app = create_app(fake_api_services())  # the error page reads the settings off the app
+    request = Request(
+        {"type": "http", "method": "GET", "path": "/chats", "headers": [], "app": app}
+    )
     assert page_error(request, PageError(404, "No such chat", "x")).status_code == 404
     with pytest.raises(ValueError, match="not mine"):
         page_error(request, ValueError("not mine"))

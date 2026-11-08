@@ -31,6 +31,10 @@ The stream carries stages and a verified result, never unverified text
 - `answer`;
 - or `error`.
 
+Each `answer` event names the generator that wrote it (`"generator": "claude"`
+or `"demo"`, #292): the demo generator is an in-process stand-in that calls no
+model, and every page says so while it is on (`api/banner.py`).
+
 An answer that cites an incomplete clause (ADR-0047) says so: each citation
 carries its clause's `incomplete` reasons, and `incomplete` lists every such
 clause with its display form, so a client shows it beside the answer. Each
@@ -223,8 +227,11 @@ def _shown(answer: Answer) -> ChatAnswer:
     )
 
 
-def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
+def _answer_json(answer: Answer, shown: ChatAnswer, *, generator: str) -> dict[str, object]:
     common: dict[str, object] = {
+        # `claude` or `demo`: a client can tell a stand-in's answer from a
+        # model's, withheld or verified (#292).
+        "generator": generator,
         "verified": shown.outcome is TurnOutcome.VERIFIED,
         "blocked": [
             {"clause_id": c.citation.clause_id, "outcome": c.outcome.value} for c in answer.blocked
@@ -476,7 +483,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
             if retrieved.done():
                 yield retrieved.result()
             answer, shown = await asyncio.shield(answering)
-            yield staged("answer", _answer_json(answer, shown))
+            yield staged(
+                "answer", _answer_json(answer, shown, generator=services.settings.generator)
+            )
         except Exception as failed:
             outcome = _failure(failed)
             if answering is None:  # not yet started, so nothing has recorded this request
