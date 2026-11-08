@@ -25,16 +25,27 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from compliance_rag.adapters.interfaces import ChatTurn, TurnOutcome, TurnRole
+from compliance_rag.corpus.chunker import RESERVED_FOR_QUERY_AND_SPECIALS
+from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.retrieval.router import is_clause_id_query
 
 MAX_EXCHANGES = 3
 """How many earlier exchanges reach the model; the oldest drops first."""
 
-PREVIOUS_QUESTION_QUERY_CHARS = 250
-"""How much of the previous question joins the retrieval query. The reranker
-rejects a query and chunk that together overflow its window, and a chunk may
-fill all but 92 tokens of it (`chunker.RESERVED_FOR_QUERY_AND_SPECIALS`), so
-the extra words are bounded. A question runs to 2,000 characters."""
+PAIR_SPECIAL_TOKENS = 4
+"""The special tokens the reranker's tokenizer adds around a query and a chunk
+(`<s> query </s></s> chunk </s>`): inside `RESERVED_FOR_QUERY_AND_SPECIALS`."""
+
+QUERY_TOKEN_BUDGET = RESERVED_FOR_QUERY_AND_SPECIALS - PAIR_SPECIAL_TOKENS
+"""How many of the reranker tokenizer's tokens a whole retrieval query may take.
+The reranker rejects a query and chunk that together overflow its window
+(`reranker_service/app.py`), and a chunk may fill all but the 92 tokens
+`chunker.RESERVED_FOR_QUERY_AND_SPECIALS` keeps for the query and the special
+tokens. The previous question joins the current one only up to this budget,
+counted by the reranker's own tokenizer (`count_reranker_tokens`), never in
+characters: a digit-heavy id, an unbroken string or non-Latin text costs far
+more tokens per character than prose. A question that alone fills the budget
+is searched alone, as it was before there was history."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,14 +79,33 @@ def prior_exchanges(turns: Sequence[ChatTurn]) -> tuple[PriorExchange, ...]:
     return tuple(exchanges[-MAX_EXCHANGES:])
 
 
+def _within(previous: str, question: str, budget: int) -> str:
+    """The longest leading part of `previous` that, joined to `question`, fits
+    `budget` tokens, cut at a word where it can be: empty if none fits."""
+    if count_reranker_tokens(f"{previous} {question}") <= budget:
+        return previous
+    low, high = 0, len(previous)  # the largest prefix length that fits
+    while low < high:
+        middle = (low + high + 1) // 2
+        if count_reranker_tokens(f"{previous[:middle]} {question}") <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    prefix = previous[:low]
+    if low < len(previous) and not previous[low].isspace() and len(prefix.split()) > 1:
+        prefix = prefix.rsplit(None, 1)[0]  # not mid-word, if there is a word to drop
+    return prefix.strip()
+
+
 def retrieval_query(question: str, history: Sequence[PriorExchange]) -> str:
     """What the retriever is sent: the current question, led by the previous
-    member question when the chat has one, so a follow-up ("and for agencies?")
-    is searched with the words it refers to. A question that is itself a clause
-    id stays an exact lookup."""
+    *member question* when the chat has one, so a follow-up ("and for agencies?")
+    is searched with the words it refers to. That question is the member's own
+    typed text, which ADR-0053 decision 17 allows into the query; an answer, a
+    clause or anything the model wrote never is. The previous question is cut so
+    the whole query fits `QUERY_TOKEN_BUDGET` reranker tokens. A question that is
+    itself a clause id stays an exact lookup."""
     if not history or is_clause_id_query(question):
         return question
-    previous = history[-1].question.strip()
-    if len(previous) > PREVIOUS_QUESTION_QUERY_CHARS:
-        previous = previous[:PREVIOUS_QUESTION_QUERY_CHARS].rsplit(None, 1)[0]
-    return f"{previous} {question}"
+    previous = _within(history[-1].question.strip(), question, QUERY_TOKEN_BUDGET)
+    return f"{previous} {question}" if previous else question

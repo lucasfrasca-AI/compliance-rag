@@ -12,7 +12,9 @@ Three layers, each against the real code:
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -29,7 +31,8 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.assessment import prompt
 from compliance_rag.assessment.history import (
     MAX_EXCHANGES,
-    PREVIOUS_QUESTION_QUERY_CHARS,
+    PAIR_SPECIAL_TOKENS,
+    QUERY_TOKEN_BUDGET,
     PriorExchange,
     prior_exchanges,
     retrieval_query,
@@ -44,6 +47,8 @@ from compliance_rag.assessment.prompt import (
     history_note,
     user_prompt,
 )
+from compliance_rag.corpus.chunker import RESERVED_FOR_QUERY_AND_SPECIALS
+from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.eval.harness import golden_clause_store
 from tests.api_support import MEMBER, TENANT, api_settings
 from tests.test_api_answers import (
@@ -177,11 +182,56 @@ def test_a_question_that_is_a_clause_id_stays_an_exact_lookup() -> None:
     assert retrieval_query(APP11, (PriorExchange("anything"),)) == APP11
 
 
-def test_a_long_previous_question_adds_a_bounded_number_of_words() -> None:
-    long = "protect " * 300
-    query = retrieval_query("and agencies?", (PriorExchange(long),))
-    assert len(query) <= PREVIOUS_QUESTION_QUERY_CHARS + len(" and agencies?")
-    assert query.endswith(" and agencies?")
+@pytest.mark.parametrize(
+    "previous",
+    [
+        pytest.param("protect" * 43, id="300-characters-and-no-spaces"),
+        pytest.param("1234567890 " * 40, id="digit-heavy"),
+        pytest.param("3a9f-77c0-41d2-b8e5-" * 20, id="id-like"),
+        pytest.param("個人情報を保護するために必要な措置は何ですか。" * 12, id="non-latin"),
+        pytest.param("protect personal information " * 100, id="prose-far-over"),
+    ],
+)
+def test_the_previous_question_is_cut_by_reranker_tokens_so_the_query_fits_its_budget(
+    previous: str,
+) -> None:
+    """Counted by the reranker's own tokenizer, not characters: whatever the
+    characters are, the whole query stays inside `QUERY_TOKEN_BUDGET`, inside
+    the room the chunker reserves for it, and the question is always kept whole."""
+    current = "and agencies?"
+    query = retrieval_query(current, (PriorExchange(previous),))
+    assert count_reranker_tokens(query) <= QUERY_TOKEN_BUDGET
+    assert query.endswith(f" {current}") or query == current
+    assert QUERY_TOKEN_BUDGET + PAIR_SPECIAL_TOKENS == RESERVED_FOR_QUERY_AND_SPECIALS
+    kept = query.removesuffix(current).strip()
+    assert previous.startswith(kept)  # a leading part of what the member typed
+    assert kept  # something of it survived: these all fit in part
+
+
+def test_a_300_character_string_with_no_spaces_would_overflow_a_character_cap() -> None:
+    """Why the cap counts tokens: the old 250-character cap let this through
+    well over the budget."""
+    previous = "3a9f77c041d2b8e5" * 19  # 304 characters, no spaces
+    assert len(previous) > 300 and " " not in previous
+    uncapped = f"{previous[:250]} and agencies?"
+    assert count_reranker_tokens(uncapped) > QUERY_TOKEN_BUDGET
+    assert count_reranker_tokens(retrieval_query("and agencies?", (PriorExchange(previous),))) <= (
+        QUERY_TOKEN_BUDGET
+    )
+
+
+def test_a_short_previous_question_is_kept_whole() -> None:
+    previous = "Who must notify a breach of personal information?"
+    assert count_reranker_tokens(previous) < QUERY_TOKEN_BUDGET // 2
+    assert retrieval_query("and agencies?", (PriorExchange(previous),)) == (
+        f"{previous} and agencies?"
+    )
+
+
+def test_a_question_that_alone_fills_the_budget_is_searched_alone() -> None:
+    long_question = "protect personal information held by the entity " * 20
+    assert count_reranker_tokens(long_question) > QUERY_TOKEN_BUDGET
+    assert retrieval_query(long_question, (PriorExchange("earlier?"),)) == long_question
 
 
 # ---- how the model is shown it: fenced, hashed, verbatim ------------------------------
@@ -263,9 +313,10 @@ def test_the_system_prompt_is_untouched_by_history() -> None:
 async def test_earlier_instructions_stay_in_the_fence_and_out_of_the_retrieval_query() -> None:
     """The model obeys whatever it is shown (`ObeyingGenerator`). An earlier
     answer and an older question both carry instructions and forged markers.
-    They reach the model only inside the history fence, and the retriever is
-    sent the previous member question and the current one: no answer, no older
-    question, nothing the instructions name."""
+    They reach the model only inside the history fence. The retriever is sent
+    the previous member question (member-typed text, allowed by ADR-0053
+    decision 17, so it is in the query as typed) and the current one: no answer,
+    no question older than the previous one, nothing the instructions name."""
     obeying = ObeyingGenerator()
     pipeline, store = await _pipeline(obeying)
     history = (
@@ -302,10 +353,12 @@ async def test_earlier_instructions_stay_in_the_fence_and_out_of_the_retrieval_q
     assert not any(bit in q for q in store.queries for bit in ("IGNORE", "salaries", "hijacked"))
 
 
-async def test_a_prior_question_is_the_only_earlier_text_in_a_query() -> None:
-    """The previous question is the member's own words and is searched as they
-    typed it, instruction or not: it is text to match, and reaches no query
-    construction. An answer never does."""
+async def test_the_previous_member_question_is_searched_as_typed_and_no_answer_is() -> None:
+    """This is allowed, not a leak: ADR-0053 decision 17 has retrieval use the
+    current question plus the previous *member* question, member-typed text only.
+    That question is searched exactly as the member typed it, instruction or not
+    (it is words to match, and reaches no query construction, #29). What is never
+    in a query is anything retrieved or generated: no answer, no older question."""
     generator = FakeGenerator()
     pipeline, store = await _pipeline(generator)
     history = (PriorExchange(INSTRUCTION, "an answer that must never be searched"),)
@@ -563,6 +616,34 @@ async def test_a_prompt_without_a_chat_id_is_the_prompt_it_always_was(quote: str
         user,
         re.S,
     )
+
+
+GOLDEN_PROMPTS = Path(__file__).parent / "fixtures" / "prompts" / "no_chat_id_origin_main.json"
+
+
+@pytest.mark.parametrize("which", ["question", "spam_question"])
+async def test_a_question_with_no_chat_id_sends_the_exact_bytes_origin_main_sent(
+    which: str, quote: str
+) -> None:
+    """The proof that no cache is missed: the system prompt, the cached prefix
+    and the user prompt of a question with no `chat_id` are compared with bytes
+    recorded from origin/main (a424a34) before #278, by running its code, not
+    with a formula rebuilt from this branch's. `spam_question` also carries the
+    not-in-environment note. If this fails, the prompt's bytes changed."""
+    golden = json.loads(GOLDEN_PROMPTS.read_text(encoding="utf-8"))[which]
+    generator = FakeGenerator(reply_of((APP11, quote)))
+    async with await answers_client(
+        generator, await acme_ledger(), await golden_clause_store()
+    ) as c:
+        response = await c.post(
+            "/v1/answers", json={"question": golden["question"], "as_of": AS_OF}
+        )
+        assert response.status_code == 200
+    (call,) = generator.calls
+    assert call["system"] == golden["system"]
+    assert call["cached_prefix"] == golden["cached_prefix"]
+    assert call["user"] == golden["user"]
+    assert "chat_history" not in golden["user"]  # the recording predates the feature
 
 
 async def test_a_chat_leaves_the_system_prompt_and_cached_prefix_as_they_were(quote: str) -> None:
