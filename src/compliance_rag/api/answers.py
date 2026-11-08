@@ -65,15 +65,17 @@ is checked, retrieved, generated or written.
   has left still finds it in the chat afterwards, as the tokens it spent are
   recorded either way.
 - **A refused or failed request** records the question and an error marker:
-  `residency`, `malformed_generation` or `internal`. A model that refused the
+  `residency`, `malformed_generation`, `generation_unavailable`,
+  `policy_corpus_too_large` or `internal` (#289). A model that refused the
   request for quota (`GenerationUnavailable`) is sent as
   `generation_unavailable`, with a fixed reason and the trace id and none of
   its SDK's words, so a client can say so plainly (#251). It is recorded as
-  `internal`: the answer couldn't be completed. A policy corpus over the
-  prefix cap (ADR-0054) is sent as `policy_corpus_too_large`, with the measured
-  estimate and the cap, before any generator call, and recorded the same way.
-  Never the model's text,
-  and not the message, which can name clauses: the marker is the whole record.
+  `generation_unavailable` with its reason and nothing the provider said
+  (#289). A policy corpus over the prefix cap (ADR-0054) is sent as
+  `policy_corpus_too_large`, with the measured estimate and the cap, before any
+  generator call, and recorded as that with both numbers. Never the model's
+  text, and not the message, which can name clauses: the marker and its one
+  reason or measure are the whole record.
   The question is the member's own words and stays in the ledger, in Sydney
   (SERVICES.md); a residency refusal exists so that it never leaves Australia,
   not so that it is forgotten. A request abandoned before anything was
@@ -108,6 +110,7 @@ from compliance_rag.adapters.interfaces import (
     GenerationUnavailable,
     LawScope,
     LedgerStore,
+    PrefixMeasure,
     TurnOutcome,
 )
 from compliance_rag.api.deps import (
@@ -305,7 +308,23 @@ def _failure(error: Exception) -> TurnOutcome:
         return TurnOutcome.RESIDENCY
     if isinstance(error, MalformedGeneration):
         return TurnOutcome.MALFORMED_GENERATION
+    if isinstance(error, GenerationUnavailable):
+        return TurnOutcome.GENERATION_UNAVAILABLE
+    if isinstance(error, PolicyCorpusTooLarge):
+        return TurnOutcome.POLICY_CORPUS_TOO_LARGE
     return TurnOutcome.INTERNAL
+
+
+def _failed_answer(error: Exception) -> ChatAnswer:
+    """What a request that ended in `error` records: a marker, with the reason a
+    refused generation names (our word for it) or the measure an over-cap
+    corpus was told, and nothing the provider or the policies said (#289)."""
+    outcome = _failure(error)
+    if isinstance(error, GenerationUnavailable):
+        return ChatAnswer(outcome, unavailable=error.reason)
+    if isinstance(error, PolicyCorpusTooLarge):
+        return ChatAnswer(outcome, prefix=PrefixMeasure(error.estimated_tokens, error.cap_tokens))
+    return ChatAnswer(outcome)
 
 
 def _error_json(outcome: TurnOutcome, error: Exception) -> dict[str, object]:
@@ -355,11 +374,11 @@ class _ChatRecorder:
         current.set_attribute("chat.id", self.chat_id)
         current.set_attribute("chat.outcome", shown.outcome.value)
 
-    async def record_failure(self, outcome: TurnOutcome) -> None:
+    async def record_failure(self, failure: ChatAnswer) -> None:
         """The question and an error marker. A ledger that can't take it
         doesn't hide the error that is already being reported."""
         try:
-            await self.record(ChatAnswer(outcome))
+            await self.record(failure)
         except Exception:
             log.exception("a failed request couldn't be recorded in its chat")
 
@@ -434,7 +453,7 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
                     )
                     shown = _shown(answer)
                 except Exception as failed:
-                    await chat.record_failure(_failure(failed))
+                    await chat.record_failure(_failed_answer(failed))
                     raise
                 # Before it is sent: nothing is shown that the history lacks,
                 # so a ledger that can't record it is an error, not an answer.
@@ -442,7 +461,7 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
                 try:
                     await chat.record(shown)
                 except Exception:
-                    await chat.record_failure(TurnOutcome.INTERNAL)
+                    await chat.record_failure(ChatAnswer(TurnOutcome.INTERNAL))
                     raise
                 return answer, shown
 
@@ -461,14 +480,16 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
         except Exception as failed:
             outcome = _failure(failed)
             if answering is None:  # not yet started, so nothing has recorded this request
-                await chat.record_failure(outcome)
+                await chat.record_failure(_failed_answer(failed))
             if outcome is TurnOutcome.RESIDENCY:
                 log.warning("an answer was refused by the residency gate: %s", failed)
                 trace.get_current_span().set_attribute("answer.refused", "residency")
             elif isinstance(failed, PolicyCorpusTooLarge):
                 log.warning("an answer was refused: %s", failed)
                 trace.get_current_span().set_attribute("answer.refused", "policy_corpus_too_large")
-            elif outcome is TurnOutcome.INTERNAL:
+            elif outcome in (TurnOutcome.INTERNAL, TurnOutcome.GENERATION_UNAVAILABLE):
+                # The SDK's error is the cause, kept here for whoever runs the
+                # server and never sent or recorded.
                 log.exception("answering failed")
             yield staged("error", _error_json(outcome, failed))
 

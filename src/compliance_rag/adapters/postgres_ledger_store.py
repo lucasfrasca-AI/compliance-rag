@@ -39,6 +39,7 @@ from compliance_rag.adapters.interfaces import (
     Citation,
     LedgerStore,
     PolicyVersion,
+    PrefixMeasure,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
@@ -48,6 +49,7 @@ from compliance_rag.adapters.interfaces import (
     StoredNotInEnvironment,
     TurnOutcome,
     TurnRole,
+    Unavailability,
     UnreadableCitation,
     UnreadableNotInEnvironment,
     UnreadableReason,
@@ -202,6 +204,41 @@ def _named_absent_row(n: StoredNotInEnvironment) -> dict[str, str | None]:
     if isinstance(n, UnreadableNotInEnvironment):  # read back from a corrupt row, never recorded
         raise ValueError("an unreadable flag isn't written back")
     return n.json()
+
+
+def _detail_row(turn: ChatTurn) -> Jsonb | None:
+    """A refusal's detail as its JSONB: the reason, or the measure, and
+    nothing else (#289). Our own words and two numbers, never the provider's
+    message. None on every other turn."""
+    if turn.unavailable is not None:
+        return Jsonb({"reason": turn.unavailable.value})
+    if turn.prefix is not None:
+        return Jsonb(
+            {
+                "estimated_tokens": turn.prefix.estimated_tokens,
+                "cap_tokens": turn.prefix.cap_tokens,
+            }
+        )
+    return None
+
+
+def _detail_of_row(raw: object) -> tuple[Unavailability | None, PrefixMeasure | None]:
+    """A stored detail back to its reason or measure. The database's constraint
+    admits nothing else, so a value that isn't one means the constraint was
+    dropped: the turn keeps its outcome and loses the detail, rather than
+    making the chat unreadable."""
+    if not isinstance(raw, dict):
+        return None, None
+    detail = cast("dict[str, object]", raw)
+    try:
+        if "reason" in detail:
+            return Unavailability(str(detail["reason"])), None
+        estimated, cap = detail["estimated_tokens"], detail["cap_tokens"]
+        if isinstance(estimated, int) and isinstance(cap, int):
+            return None, PrefixMeasure(estimated, cap)
+    except (KeyError, ValueError):
+        pass
+    return None, None
 
 
 def _named_absent_of_row(raw: object) -> StoredNotInEnvironment:
@@ -516,8 +553,8 @@ class PostgresLedgerStore(LedgerStore):
                         # a chat's latest turn could carry the earlier time.
                         "INSERT INTO chat (tenant_id, chat_id, turn_index, user_id, role, content, "
                         "outcome, citations, blocked, as_of, trace_id, not_in_environment, "
-                        "created_at) VALUES "
-                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
+                        "outcome_detail, created_at) VALUES "
+                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
                         [
                             (
                                 turn.tenant_id,
@@ -532,6 +569,7 @@ class PostgresLedgerStore(LedgerStore):
                                 turn.as_of,
                                 turn.trace_id,
                                 Jsonb([_named_absent_row(n) for n in turn.not_in_environment]),
+                                _detail_row(turn),
                             )
                             for turn in exchange.turns(0 if last is None else int(last[0]) + 1)
                         ],
@@ -549,7 +587,7 @@ class PostgresLedgerStore(LedgerStore):
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         rows = await self._fetchall(
             "SELECT turn_index, role, content, outcome, citations, blocked, as_of, trace_id, "
-            "created_at, not_in_environment FROM chat "
+            "created_at, not_in_environment, outcome_detail FROM chat "
             "WHERE tenant_id = %s AND user_id = %s AND chat_id = %s ORDER BY turn_index",
             (tenant_id, user_id, chat_id),
         )
@@ -561,6 +599,7 @@ class PostgresLedgerStore(LedgerStore):
             _flag_unreadable(tenant_id, chat_id, int(r[0]), citations, "citation")
             _flag_unreadable(tenant_id, chat_id, int(r[0]), blocked, "blocked")
             _flag_unreadable_absent(tenant_id, chat_id, int(r[0]), absent)
+            unavailable, prefix = _detail_of_row(r[10])
             turns.append(
                 ChatTurn(
                     tenant_id=tenant_id,
@@ -576,6 +615,8 @@ class PostgresLedgerStore(LedgerStore):
                     trace_id=str(r[7]),
                     created_at=r[8],
                     not_in_environment=absent,
+                    unavailable=unavailable,
+                    prefix=prefix,
                 )
             )
         return tuple(turns)
