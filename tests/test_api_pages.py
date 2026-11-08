@@ -731,7 +731,10 @@ def test_a_chat_id_is_all_of_its_form_not_just_a_line_of_it() -> None:
 def test_the_page_error_handler_handles_only_a_page_error() -> None:
     """Not an `assert`, which `python -O` removes: any other exception handed
     to it is raised again, never shown as a page."""
-    request = Request({"type": "http", "method": "GET", "path": "/chats", "headers": []})
+    app = create_app(fake_api_services())  # the error page reads the settings off the app
+    request = Request(
+        {"type": "http", "method": "GET", "path": "/chats", "headers": [], "app": app}
+    )
     assert page_error(request, PageError(404, "No such chat", "x")).status_code == 404
     with pytest.raises(ValueError, match="not mine"):
         page_error(request, ValueError("not mine"))
@@ -929,7 +932,10 @@ async def test_no_page_has_an_inline_script_handler_style_or_a_foreign_asset(quo
         "/static/ask.js",
         "/static/vendor/htmx/htmx.min.js",
     ]
-    assert [a["href"] for a in chat.where("link")] == ["/static/app.css"]
+    assert [a["href"] for a in chat.where("link")] == [
+        "/static/app.css",
+        "/static/banner.css",
+    ]
 
 
 def test_no_template_marks_anything_safe_or_turns_escaping_off() -> None:
@@ -985,6 +991,7 @@ async def test_the_scripts_and_styles_are_served_by_the_api_itself() -> None:
             ("/static/ask.js", "javascript"),
             ("/static/vendor/htmx/htmx.min.js", "javascript"),
             ("/static/app.css", "css"),
+            ("/static/banner.css", "css"),
         ):
             response = await client.get(path)
             assert response.status_code == 200, path

@@ -1,0 +1,29 @@
+/* The banner the demo generator calls for (#292), one rule set for every page
+   that carries it: the Ask pages, each answer turn, and the sign-in page.
+   Fixed colours, so the white text reads in both colour schemes. */
+.fake-banner {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: #a52019;
+  color: #fff;
+  border-bottom: 4px solid #6e130e;
+  font-size: 1.1rem;
+  font-weight: 700;
+  text-align: center;
+}
+/* At the top of a page, kept in view; in the sign-in page's centring grid it
+   spans the width and sits at the top. */
+body > .fake-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  align-self: start;
+  justify-self: stretch;
+}
+/* On an answer turn it labels that turn's answer. */
+.turn .fake-banner {
+  margin-bottom: 0.5rem;
+  border: 2px solid #6e130e;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}

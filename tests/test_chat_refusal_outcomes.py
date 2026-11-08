@@ -327,7 +327,8 @@ def test_0019_applies_to_a_ledger_at_0018_and_leaves_its_rows_as_they_were() -> 
             pytest.skip("this role can't create a scratch database")
         scratch = psycopg.connect(make_conninfo(DATABASE_URL, dbname=name), autocommit=True)
         try:
-            files = sorted(MIGRATIONS.glob("*.sql"))
+            # up to 0019: later migrations have their own tests
+            files = [f for f in sorted(MIGRATIONS.glob("*.sql")) if f.name < "0020"]
             before = [f for f in files if f.name < "0019"]
             assert files[-1].name.startswith("0019") and before[-1].name.startswith("0018")
             for migration in before:

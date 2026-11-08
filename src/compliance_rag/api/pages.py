@@ -2,9 +2,9 @@
 this service with Jinja2 and htmx, every asset served from `/static`, under the
 one CSP (`sign_in.CONTENT_SECURITY_POLICY`).
 
-- `GET /chats`: where a member lands (the sign-in page links to it; the root
-  `/` is deliberately no page, the throwaway demo owns it): the member's chats,
-  newest first, and a link to a new one.
+- `GET /chats`: where a member lands (the sign-in page links to it, and `GET /`
+  redirects to it, `app.py`): the member's chats, newest first, and a link to
+  a new one.
 - `GET /chats/new` and `GET /chats/{id}`: a chat. Its turns are read back from
   the ledger exactly as `GET /v1/chats/{id}` serves them (`chats.read_chat`),
   and the question form streams `POST /v1/answers` from the one served script
@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from pathlib import Path
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -48,6 +47,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from compliance_rag.adapters.demo_generator import FAKE_BANNER
+from compliance_rag.api.banner import TEMPLATE_DIR, banner_text
 from compliance_rag.api.chats import read_chat
 from compliance_rag.api.deps import (
     SYDNEY,
@@ -62,8 +63,6 @@ from compliance_rag.api.deps import (
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY
 from compliance_rag.assessment.questionnaire import answer_kind_of
 from compliance_rag.corpus.display_form import NO_TITLES, cite
-
-TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 PAGE_HEADERS = {
     "Content-Security-Policy": CONTENT_SECURITY_POLICY,
@@ -186,10 +185,18 @@ def render(request: Request, name: str, *, status: int = 200, **context: object)
     records the reader's role on the request once. A page cannot forget it, and an
     error page, drawn without a resolved reader, never shows the link. The flag
     shows or hides a link and nothing else: the panel's routes check the role on
-    every request."""
+    every request.
+
+    The demo generator's banner (#292) is set here too, for the same reason: the
+    one place every page and fragment is made, so none can lack it. `banner` is
+    the page's (the deployment runs the demo); `fake_banner` is the words, for a
+    turn the ledger records the demo as having written."""
     shown = bool(getattr(request.state, "is_admin", False))
+    banner = banner_text(services_of(request).settings)
     return HTMLResponse(
-        ENV.get_template(name).render(is_admin=shown, **context),
+        ENV.get_template(name).render(
+            is_admin=shown, banner=banner, fake_banner=FAKE_BANNER, **context
+        ),
         status_code=status,
         headers=PAGE_HEADERS,
     )

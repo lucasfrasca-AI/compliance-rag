@@ -88,7 +88,7 @@ the citation panel) and the vendored htmx (`static/vendor/htmx/README.md`: versi
 and the config that keeps it inside the CSP).
 
 - A page request without a session redirects to `/signin`; a signed-in non-member gets a
-  403 page. There is no page at `/`.
+  403 page. `GET /` redirects (303) to `/chats`.
 - The fragment takes no parameter and the page shows exactly what the ledger recorded, so
   every outcome (`generation_unavailable` with its reason, `policy_corpus_too_large` with
   the estimate and the cap, #289) is the same card live and after a reload. If the ledger
@@ -99,6 +99,66 @@ and the config that keeps it inside the CSP).
   against the app over fakes at 390px wide (ask, progress, panel, follow-up, withheld,
   failure, an unrecorded exchange, sign-out); the tests make the same requests in the same
   order.
+
+## The generator, and the demo (`GENERATOR`, #292)
+
+`GENERATOR` chooses what writes the answer, and nothing else about the pipeline changes (the
+same retrieval, the same verifier, the same ledger):
+
+- `claude` (the default): Claude on Vertex, built at startup through the residency gate
+  (ADR-0023, ADR-0032). Refuses to start with no `VERTEX_CLAUDE_MODEL`.
+- `demo`: `adapters/demo_generator.FakeDemoGenerator`, in process, no model called. It quotes
+  the top retrieved clause and Acme's first policy clause verbatim, so the citations, the
+  verifier and click-to-clause work; a question containing "withhold" makes it misquote, so
+  the answer is withheld. `build_app` never imports `VertexClaudeGenerator` for it. It runs in
+  Sydney, so `Settings` refuses `VERTEX_CLAUDE_REGION` anything but `australia-southeast1`
+  with it.
+
+**The banner** ("FAKE GENERATOR — not a real answer") is written by the server, never by
+`ask.js`, from one partial (`templates/_banner.html`) and one stylesheet (`static/banner.css`);
+the sign-in page, which is not a template, renders the same partial (`banner.render_banner`).
+It is a `role="note"`, not an alert. Two rules decide where it shows:
+
+- **A page** carries it while the deployment runs `demo`: the sign-in page, the chat list, the
+  new-chat and chat pages, and the error page.
+- **An answer turn** carries it when the ledger says the demo wrote that turn
+  (`chat.generator`, ledger 0020), **whatever the deployment runs now**, whether the turn is
+  verified, withheld or failed. So a chat read back after a switch to Claude still labels the
+  stand-in's answers, and a Claude turn is never labelled, even on a page that is itself
+  bannered because the deployment is back on `demo`. A turn written before the column holds
+  NULL and shows none.
+
+Every `answer` event reports `"generator"` (`"demo"` or `"claude"`), and each answer turn of
+`GET /v1/chats/{id}` reports the one recorded with it (`null` for an old turn).
+
+**Exempt: the source pages** (`/v1/sources/{instrument_id}/{version_id}`, the citation panel's
+iframe). They show stored law and policy text, never generated text, so they carry no banner
+even while the deployment is `demo`; `tests/test_demo_generator.py` pins that.
+
+## The container (`docker/api.Dockerfile`)
+
+`compliance-rag-api` on Cloud Run: `python:3.12-slim`, `uv sync --frozen --no-dev`, built for
+`linux/amd64`, running as the non-root user `app` under
+`uvicorn --factory compliance_rag.api.main:build_app --port ${PORT}`. CI does not build it
+(Actions minutes); build and run it by hand:
+
+    docker build --platform linux/amd64 -f docker/api.Dockerfile -t compliance-rag-api .
+
+It holds the package; the files the API reads through repo-relative paths (`corpus/instruments`,
+`corpus/register/instruments.yaml`, `corpus/synthetic/registry.json`,
+`vendor/bge-reranker-v2-m3-tokenizer`); and the fastembed `Qdrant/bm25` model, baked in at
+build time with `HF_HUB_OFFLINE=1`, so nothing is downloaded at request time. It does not hold
+`.env`, `.git`, `models/`, the tests, the docs, `corpus/golden` or `corpus/mappings`
+(`docker/api.Dockerfile.dockerignore`; the root `.dockerignore` is the same list without
+`models/`, which the reranker image copies from). `tests/test_api_image.py` pins the COPY list
+against the paths the code reads.
+
+Configuration is environment only. Names: `ENV`, `PORT` (Cloud Run injects it), `TENANT_ID`,
+`GENERATOR`, `GCP_PROJECT_ID`, `CORPUS_BUCKET`, `RERANKER_URL`, `QDRANT_URL`, `QDRANT_API_KEY`
+(secret), `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` (secret), `NEO4J_DATABASE`,
+`DATABASE_URL` (secret), `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, `API_MEMBERS`,
+`SESSION_SECRET` (secret), and for `claude`, `VERTEX_CLAUDE_MODEL`, `VERTEX_CLAUDE_REGION` and
+`OFFSHORE_GENERATION_TESTERS`.
 
 ## The admin panel (`admin.py`, `templates/subscriptions.html`, `static/admin.js`)
 

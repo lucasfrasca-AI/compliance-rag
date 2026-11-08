@@ -10,11 +10,17 @@ one sink, D-16):
 
 Tests build it with `create_app` and fakes instead.
 
+Which generator is `GENERATOR` (#292): `claude` (the default) or `demo`, the
+in-process stand-in that calls no model (`adapters/demo_generator.py`).
+`demo` never imports or constructs `VertexClaudeGenerator`, and needs
+`VERTEX_CLAUDE_REGION=australia-southeast1` (`Settings`); `claude` with no
+`VERTEX_CLAUDE_MODEL` refuses to start.
+
 Two things run at startup, before anything is served:
 - the graph's connectivity check;
-- the generator, built through `VertexClaudeGenerator.create`, so the
-  residency gate (ADR-0023) runs first. That gate asks whether the vector
-  store holds real tenant chunks.
+- with `claude`, the generator, built through `VertexClaudeGenerator.create`,
+  so the residency gate (ADR-0023) runs first. That gate asks whether the
+  vector store holds real tenant chunks.
 
 Before either, the signed `incomplete.yaml` and `part_year.yaml` files are
 read (#211, ADR-0047, ADR-0052):
@@ -29,9 +35,12 @@ registry (`TenantTextGate`, built in here).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from fastapi import FastAPI
 
 from compliance_rag import telemetry
+from compliance_rag.adapters.demo_generator import FakeDemoGenerator
 from compliance_rag.adapters.firebase_auth import FirebaseTokenVerifier, GoogleSigningKeys
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.generation_residency import TenantTextGate
@@ -72,6 +81,18 @@ class GeneratorAtStartup(Generator):
         )
 
 
+def generator_for(
+    settings: Settings, *, corpus: RetrievalAdmin
+) -> tuple[Generator, tuple[Callable[[], Awaitable[None]], ...]]:
+    """The generator `GENERATOR` names, and the startup checks it needs. `demo`
+    is built here and imports nothing of Vertex's; `claude` is built at startup
+    through the residency gate."""
+    if settings.generator == "demo":
+        return FakeDemoGenerator(), ()
+    started = GeneratorAtStartup(settings, corpus=corpus)
+    return started, (started.start,)
+
+
 def build_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     verifier = FirebaseTokenVerifier(
@@ -80,6 +101,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         sign_in_providers=settings.sign_in_providers,
         keys=GoogleSigningKeys(),
     )
+    if settings.generator == "claude" and not settings.vertex_claude_model:
+        # Before any store is opened: a deploy without a model fails now, not
+        # at the first question.
+        raise ValueError("GENERATOR=claude needs VERTEX_CLAUDE_MODEL, which is empty")
     telemetry.configure(settings)
     committed_incomplete_readings()  # refuses an unsigned reading file (D-01)
     graph = Neo4jGraph.open(settings)
@@ -89,7 +114,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     store = retrieval.retrieval_store
     if not isinstance(store, RetrievalAdmin):
         raise TypeError("the residency gate needs a store that can say what it holds")
-    generator = GeneratorAtStartup(settings, corpus=store)
+    generator, generator_checks = generator_for(settings, corpus=store)
     return create_app(
         ApiServices(
             settings=settings,
@@ -104,7 +129,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 ledger,
                 tenant_text=TenantTextGate.from_settings(settings),
             ),
-            checks=(graph.verify, generator.start),
+            checks=(graph.verify, *generator_checks),
             closers=(graph.aclose,),
         )
     )

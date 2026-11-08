@@ -247,6 +247,7 @@ async def test_a_withheld_answers_turn_holds_the_reason_and_the_blocked_ids_and_
         "withheld": answers.BLOCKED,
         "error": None,
         "not_in_environment": [],
+        "generator": "claude",
     }
     assert question.content == QUESTION
 
