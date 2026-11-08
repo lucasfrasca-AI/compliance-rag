@@ -26,7 +26,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from compliance_rag.adapters.interfaces import Member
 from compliance_rag.api.app import create_app
 from compliance_rag.api.session import COOKIE_NAME, MAX_SESSION_SECONDS, SessionCodec
-from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY, STATIC_DIR
+from compliance_rag.api.sign_in import (
+    CONTENT_SECURITY_POLICY,
+    STATIC_DIR,
+    sign_in_content_security_policy,
+)
+from compliance_rag.api.sources import SOURCE_CSP
 from compliance_rag.settings import MIN_SESSION_SECRET_CHARS, Settings
 from tests.api_support import (
     MEMBER,
@@ -36,6 +41,7 @@ from tests.api_support import (
     bearer,
     fake_api_services,
     mint,
+    verifier_for,
 )
 
 SECRET = "s3cr3t-" + "k" * 40
@@ -392,7 +398,7 @@ async def test_the_sign_in_page_is_one_origin_with_a_strict_csp(client: httpx.As
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     csp = response.headers["content-security-policy"]
-    assert csp == CONTENT_SECURITY_POLICY
+    assert csp == sign_in_content_security_policy(f"{PROJECT}.firebaseapp.com")
     assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
     assert "default-src 'none'" in csp and "script-src 'self'" in csp
     refs = _Refs()
@@ -447,6 +453,198 @@ async def test_only_the_auth_sdk_is_vendored() -> None:
         "firebase-app.js",
         "firebase-auth.js",
     }
+
+
+# ---- Google sign-in (#291): the sign-in page's CSP, and the provider path -----------------
+
+SHARED_CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+    "frame-src 'self'; connect-src 'self' https://identitytoolkit.googleapis.com "
+    "https://securetoken.googleapis.com; form-action 'self'; base-uri 'none'; "
+    "frame-ancestors 'none'"
+)
+"""The Ask pages' policy, byte for byte as it was before #291. Pinned as a literal
+so a change to it is a deliberate edit of this test."""
+
+
+def _directives(policy: str) -> dict[str, list[str]]:
+    return {d.split()[0]: d.split()[1:] for d in policy.split("; ")}
+
+
+async def test_the_shared_csp_is_unchanged_and_every_other_response_still_carries_it(
+    client: httpx.AsyncClient,
+) -> None:
+    assert CONTENT_SECURITY_POLICY == SHARED_CSP
+    assert SOURCE_CSP == "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+    pages = [
+        await client.get("/chats"),  # redirect to sign-in
+        await client.get(f"/chats/{'a' * 32}/turns"),  # a refusal from the fragment
+        await client.get("/chats/nope"),  # a refusal no page makes
+        await client.post("/chats"),  # a method the routes don't take
+    ]
+    outsider = sealed(email="outsider@elsewhere.example")
+    pages.append(await client.get("/chats", headers=with_cookie(outsider)))  # the 403 page
+    assert [p.status_code for p in pages][-1] == 403
+    for page in pages:
+        assert page.headers["content-security-policy"] == SHARED_CSP
+    # the sign-in page's own refusals (unconfigured, and a malformed auth domain)
+    # are not pages of the wider policy
+    async with _client(_app(firebase_web_api_key="")) as unconfigured:
+        refusals = [await unconfigured.get("/signin")]
+    async with _client(_app(firebase_auth_domain="a.example; script-src *")) as malformed:
+        refusals.append(await malformed.get("/signin"))
+    assert [r.status_code for r in refusals] == [503, 503]
+    # Nothing but the 200 sign-in page ever names Google's script host or the
+    # auth domain, in any header, whichever routes were hit.
+    for response in [*pages, *refusals]:
+        assert response.headers.get("content-security-policy") in (None, SHARED_CSP)
+        for value in response.headers.values():
+            assert "apis.google.com" not in value and "firebaseapp.com" not in value
+
+
+async def test_the_sign_in_pages_csp_is_the_shared_policy_plus_exactly_the_named_additions(
+    client: httpx.AsyncClient,
+) -> None:
+    csp = (await client.get("/signin")).headers["content-security-policy"]
+    shared, signin = _directives(SHARED_CSP), _directives(csp)
+    assert list(signin) == list(shared)  # the same directives, in the same order
+    assert signin["script-src"] == ["'self'", "https://apis.google.com"]
+    assert signin["frame-src"] == ["'self'", f"https://{PROJECT}.firebaseapp.com"]
+    unchanged = set(shared) - {"script-src", "frame-src"}
+    assert {d: signin[d] for d in unchanged} == {d: shared[d] for d in unchanged}
+    # nothing else is widened: no wildcard, no inline, no eval, no blanket https:
+    assert "*" not in csp and "unsafe-inline" not in csp and "unsafe-eval" not in csp
+    assert "https:" not in csp.replace("https://", "")
+    assert signin["default-src"] == ["'none'"]
+
+
+async def test_the_sign_in_pages_frame_is_the_configured_auth_domain() -> None:
+    async with _client(_app(firebase_auth_domain="login.acme.example")) as c:
+        csp = (await c.get("/signin")).headers["content-security-policy"]
+    assert _directives(csp)["frame-src"] == ["'self'", "https://login.acme.example"]
+    assert "firebaseapp.com" not in csp
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "evil.example; script-src *",
+        "a.example b.example",
+        "https://a.example",
+        "a.example/path",
+        "a.example\r\nSet-Cookie: x=1",
+        "*.example",
+        "",
+        "a.example:٣",  # an Arabic-Indic digit: \d would pass it, latin-1 would not
+        "a.example:80٣",
+        "éxample.com",  # a non-ASCII letter
+        "a.ex" + chr(0x430) + "mple.com",  # a Cyrillic look-alike of "a"
+    ],
+)
+def test_an_auth_domain_that_is_not_a_hostname_cannot_widen_the_policy(domain: str) -> None:
+    with pytest.raises(ValueError, match="auth domain"):
+        sign_in_content_security_policy(domain)
+
+
+async def test_a_malformed_auth_domain_turns_the_sign_in_page_off_rather_than_widening_it() -> None:
+    async with _client(_app(firebase_auth_domain="a.example; script-src *")) as c:
+        response = await c.get("/signin")
+    assert response.status_code == 503
+    assert "script-src *" not in response.headers.get("content-security-policy", "")
+
+
+async def test_the_sign_in_page_offers_google_beside_email_and_password(
+    client: httpx.AsyncClient,
+) -> None:
+    page = (await client.get("/signin")).text
+    assert 'id="google-sign-in"' in page and "Sign in with Google" in page
+    assert 'name="email"' in page and 'name="password"' in page
+    assert 'id="google-sign-in" type="button"' in page  # not a submit: it is not the form
+
+
+async def test_the_pages_script_uses_the_google_popup_and_one_hand_over_to_the_session_route(
+    client: httpx.AsyncClient,
+) -> None:
+    script = (await client.get("/static/signin.js")).text
+    assert "GoogleAuthProvider" in script and "signInWithPopup" in script
+    assert "browserPopupRedirectResolver" in script
+    # one hand-over for both methods: the token goes to /session in a header
+    assert script.count('fetch("/session"') == 1
+    assert "Authorization" in script
+    # the Firebase user is still never kept by the browser, and the SDK is signed
+    # out in a `finally` so a failed hand-over cannot leave it signed in
+    assert "inMemoryPersistence" in script
+    assert re.search(r"finally\s*\{\s*await signOut\(auth\)", script)
+    # the popup resolver is configured once (on the auth instance), not per call
+    assert script.count("browserPopupRedirectResolver") == 2  # the import and initializeAuth
+    assert "signInWithPopup(auth, provider)" in script
+
+
+async def test_the_vendored_sdk_has_the_popup_resolver_and_the_google_provider() -> None:
+    sdk = (VENDORED / "firebase-auth.js").read_text()
+    exported = sdk.rsplit("export{", 1)[1]
+    for name in ("GoogleAuthProvider", "signInWithPopup", "browserPopupRedirectResolver"):
+        assert name in exported, name
+    # what the CSP names is what the SDK loads: its gapi script and its auth iframe
+    assert "https://apis.google.com/js/api.js" in sdk
+    assert "/__/auth/iframe" in sdk
+
+
+GOOGLE: dict[str, Any] = {  # Any: JWT claim values
+    "firebase": {"sign_in_provider": "google.com", "identities": {}}
+}
+PASSWORD: dict[str, Any] = {  # Any: JWT claim values
+    "firebase": {"sign_in_provider": "password", "identities": {}}
+}
+
+
+@pytest.mark.parametrize("provider", [GOOGLE, PASSWORD], ids=["google", "password"])
+async def test_a_members_token_from_either_provider_sets_the_same_cookie(
+    provider: dict[str, Any],  # Any: JWT claim values
+) -> None:
+    async with _client() as c:
+        response = await sign_in(c, **provider)
+        assert response.status_code == 200
+        header = response.headers["set-cookie"]
+        flags = {part.strip().lower() for part in header.split(";")[1:]}
+        assert {"httponly", "secure", "samesite=strict", "path=/"} <= flags
+        assert header.startswith("__Host-session=")  # the literal: the prefix is the guarantee
+        assert COOKIE_NAME == "__Host-session"
+        member = SessionCodec(SECRET).open(c.cookies[COOKIE_NAME])
+        assert (member.uid, member.email) == ("uid-123", MEMBER)
+
+
+async def test_a_google_account_that_is_not_a_member_is_refused_like_a_password_one() -> None:
+    outsider = {"email": "outsider@elsewhere.example"}
+    async with _client() as c:
+        google = await sign_in(c, **GOOGLE, **outsider)
+        password = await sign_in(c, **PASSWORD, **outsider)
+    assert google.status_code == password.status_code == 403
+    assert google.json() == password.json()
+    assert "set-cookie" not in google.headers and "set-cookie" not in password.headers
+
+
+async def test_a_google_accounts_unverified_email_is_refused() -> None:
+    async with _client() as c:
+        response = await sign_in(c, **GOOGLE, email_verified=False)
+    assert response.status_code == 403 and "set-cookie" not in response.headers
+
+
+async def test_an_untrusted_provider_is_refused_and_google_can_be_switched_off() -> None:
+    async with _client() as c:
+        other = await sign_in(c, firebase={"sign_in_provider": "github.com"})
+    assert other.status_code == 403 and "set-cookie" not in other.headers
+    password_only = create_app(
+        fake_api_services(
+            settings=api_settings(session_secret=SECRET),
+            verifier=verifier_for(api_sign_in_providers="password"),
+        )
+    )
+    async with _client(password_only) as c:
+        google = await sign_in(c, **GOOGLE)
+        password = await sign_in(c, **PASSWORD)
+    assert google.status_code == 403 and "set-cookie" not in google.headers
+    assert password.status_code == 200
 
 
 # ---- the codec fails closed, shares one membership rule, and keeps time by its clock --

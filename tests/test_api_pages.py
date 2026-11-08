@@ -51,7 +51,11 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.api.app import create_app
 from compliance_rag.api.pages import ENV, TEMPLATE_DIR, PageError, is_chat_id, page_error
 from compliance_rag.api.session import COOKIE_NAME, SessionCodec
-from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY, STATIC_DIR
+from compliance_rag.api.sign_in import (
+    CONTENT_SECURITY_POLICY,
+    STATIC_DIR,
+    sign_in_content_security_policy,
+)
 from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.assessment.prefix_cap import PREFIX_CAP_TOKENS
@@ -65,6 +69,7 @@ from compliance_rag.settings import Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
 from tests.api_support import (
     MEMBER,
+    PROJECT,
     TENANT,
     api_settings,
     bearer,
@@ -828,7 +833,14 @@ async def test_one_strict_csp_is_on_every_page_response(quote: str) -> None:
         responses["POST /chats/new (405)"] = await other.post("/chats/new")
     assert [r.status_code for n, r in responses.items() if "(" in n] == [401, 404, 404, 405, 405]
     for name, response in responses.items():
-        assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY, name
+        # the sign-in page alone has the wider policy for Google sign-in (#291);
+        # tests/test_api_session.py pins what it adds
+        expected = (
+            sign_in_content_security_policy(f"{PROJECT}.firebaseapp.com")
+            if name == "/signin"
+            else CONTENT_SECURITY_POLICY
+        )
+        assert response.headers["content-security-policy"] == expected, name
         assert response.headers["x-content-type-options"] == "nosniff", name
     csp = {d.split()[0]: d.split()[1:] for d in CONTENT_SECURITY_POLICY.split("; ")}
     assert csp["script-src"] == ["'self'"] and csp["style-src"] == ["'self'"]
