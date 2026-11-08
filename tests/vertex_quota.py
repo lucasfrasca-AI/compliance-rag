@@ -31,7 +31,9 @@ SDK_WORDS = ("RESOURCE_EXHAUSTED", "Quota exceeded", "RateLimitError", "Error co
 PLACEHOLDER_TOKEN = "ya29.not-a-real-token"
 
 
-def quota_exhausted_client(requests: list[httpx.Request] | None = None) -> AsyncAnthropicVertex:
+def quota_exhausted_client(
+    requests: list[httpx.Request] | None = None, *, message: str = QUOTA_MESSAGE
+) -> AsyncAnthropicVertex:
     """The SDK's client, answered 429 `RESOURCE_EXHAUSTED` for every request.
     `max_retries=0`: the SDK retries a 429 twice by default and raises the
     same type when it gives up, so the test skips the back-off, not the path."""
@@ -39,7 +41,8 @@ def quota_exhausted_client(requests: list[httpx.Request] | None = None) -> Async
 
     def vertex(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(429, json=QUOTA_BODY)
+        body = {"error": {**QUOTA_BODY["error"], "message": message}}
+        return httpx.Response(429, json=body)
 
     return AsyncAnthropicVertex(
         region=BUILD_PHASE_OFFSHORE_REGION,
@@ -51,11 +54,14 @@ def quota_exhausted_client(requests: list[httpx.Request] | None = None) -> Async
 
 
 def quota_exhausted_generator(
-    corpus: RetrievalAdmin, requests: list[httpx.Request] | None = None
+    corpus: RetrievalAdmin,
+    requests: list[httpx.Request] | None = None,
+    *,
+    message: str = QUOTA_MESSAGE,
 ) -> VertexClaudeGenerator:
     """`VertexClaudeGenerator` as `create` builds it, over that client."""
     return VertexClaudeGenerator(
-        quota_exhausted_client(requests).messages,
+        quota_exhausted_client(requests, message=message).messages,
         model="claude-sonnet-5",
         region=BUILD_PHASE_OFFSHORE_REGION,
         corpus=corpus,

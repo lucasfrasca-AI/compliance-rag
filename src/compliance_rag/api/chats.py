@@ -30,6 +30,11 @@ was shown with it is lost, and the turn's `incomplete` list can't count it.
 A blocked clause id that can't be read is marked the same way, in its place in
 `blocked` (#234); it names no clause, since a readable id is a readable entry.
 
+A refused generation reads back as `error: "generation_unavailable"` with its
+`reason`, and an over-cap corpus as `error: "policy_corpus_too_large"` with
+`estimated_tokens` and `cap_tokens` (#289): the stream's own names. Rows
+recorded before #289 read `internal`.
+
 An answer turn reads back the `not_in_environment` flags it was shown with
 (#252): the instruments its question named that the environment didn't hold.
 A stored flag that can't be read is `{"unreadable": true}` in its place.
@@ -94,6 +99,21 @@ def _named(turns: Sequence[ChatTurn]) -> list[str]:
     return named
 
 
+def _refusal_json(turn: ChatTurn) -> dict[str, object]:
+    """What a refused generation or an over-cap corpus was recorded with, under
+    the names the stream's `error` event gives it (#289): the reason, or the
+    estimate and the cap. A measure that couldn't be read is `null`, the turn
+    keeping its outcome."""
+    if turn.outcome is TurnOutcome.GENERATION_UNAVAILABLE:
+        return {"reason": None if turn.unavailable is None else turn.unavailable.value}
+    if turn.outcome is TurnOutcome.POLICY_CORPUS_TOO_LARGE:
+        return {
+            "estimated_tokens": None if turn.prefix is None else turn.prefix.estimated_tokens,
+            "cap_tokens": None if turn.prefix is None else turn.prefix.cap_tokens,
+        }
+    return {}
+
+
 def _turn_json(turn: ChatTurn, titles: Titles) -> dict[str, object]:
     common: dict[str, object] = {
         "turn_index": turn.turn_index,
@@ -106,6 +126,7 @@ def _turn_json(turn: ChatTurn, titles: Titles) -> dict[str, object]:
         return {**common, "text": turn.content}
     return {
         **common,
+        **_refusal_json(turn),
         "verified": turn.outcome is TurnOutcome.VERIFIED,
         "text": turn.content,
         "citations": [_citation_json(c, titles) for c in turn.citations],
