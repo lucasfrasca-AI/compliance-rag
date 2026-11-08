@@ -30,6 +30,9 @@ CONTENT_SECURITY_POLICY = "; ".join(
         "script-src 'self'",
         "style-src 'self'",
         "img-src 'self'",
+        # The Ask pages' citation panel frames a source (`/v1/sources`, which
+        # is sandboxed by its own CSP); nothing else may be framed.
+        "frame-src 'self'",
         "connect-src 'self' https://identitytoolkit.googleapis.com "
         "https://securetoken.googleapis.com",
         "form-action 'self'",
@@ -118,6 +121,7 @@ async def sign_in_page(request: Request) -> HTMLResponse:
 </form>
 <p id="signin-status" role="status"></p>
 <p id="signed-in" hidden>Signed in as <strong id="signed-in-email"></strong>.
+<a href="/chats">Open your chats</a>
 <button id="sign-out" type="button">Sign out</button></p>
 </main>
 <script type="module" src="/static/signin.js"></script>

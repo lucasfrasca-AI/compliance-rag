@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }}{% endblock %}
+{% block body %}
+<div class="chat" id="chat" data-chat-id="{{ chat_id or '' }}">
+<main class="conversation">
+<h1>{{ heading }}</h1>
+<noscript><p class="card notice">Asking a question needs JavaScript. Chats you have already had can still be read.</p></noscript>
+<div id="turns" class="turns">
+{% include "_turns.html" %}
+</div>
+<p id="pending-question" class="turn turn-question pending" hidden></p>
+<ol id="progress" class="progress" aria-label="Progress" hidden>
+<li data-stage="coverage" data-state="waiting"><span class="stage-name">Checking which obligations apply to you</span> <span class="stage-detail" data-detail></span></li>
+<li data-stage="retrieval" data-state="waiting"><span class="stage-name">Finding the relevant clauses</span> <span class="stage-detail" data-detail></span></li>
+<li data-stage="answer" data-state="waiting"><span class="stage-name">Writing the answer and verifying every citation</span> <span class="stage-detail" data-detail></span></li>
+</ol>
+<p id="progress-note" class="note" hidden>Nothing is shown until every citation has been checked against its clause.</p>
+<div id="notice" class="card outcome notice" role="alert" hidden></div>
+{#- method="dialog" outside a dialog submits nothing, so without script the question goes nowhere (not into a URL). -#}
+<form id="ask-form" class="ask" method="dialog">
+<label for="question">Your question</label>
+<textarea id="question" name="question" rows="3" maxlength="2000" required></textarea>
+<div class="row">
+<button type="submit" id="ask-submit">Ask</button>
+<span class="note">Up to 2,000 characters.</span>
+</div>
+</form>
+</main>
+<aside id="panel" class="panel" aria-label="Source" hidden>
+<div class="panel-head">
+<h2 id="panel-title">Source</h2>
+<button type="button" id="panel-close">Close</button>
+</div>
+{#- Nothing in it can run: sandbox="" here, and the source route's own CSP. -#}
+<iframe id="panel-frame" title="The cited clause in its source" sandbox="" referrerpolicy="no-referrer"></iframe>
+</aside>
+</div>
+{% endblock %}

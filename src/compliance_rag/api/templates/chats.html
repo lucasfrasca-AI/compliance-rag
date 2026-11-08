@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Your chats{% endblock %}
+{% block body %}
+<main class="page narrow">
+<div class="title-row">
+<h1>Your chats</h1>
+<a class="button" href="/chats/new">New chat</a>
+</div>
+<p class="note">Only you can see these. Each is named by what you first asked.</p>
+{% if chats %}
+<ul class="chat-list">
+{% for c in chats %}
+<li>
+<a href="/chats/{{ c.chat_id }}">
+<span class="chat-name">{{ c.first_question | truncate(140, True) }}</span>
+<span class="meta">{{ c.turns }} {{ "turn" if c.turns == 1 else "turns" }} · last
+<time datetime="{{ c.updated_at.isoformat() }}">{{ c.updated_at | sydney }}</time></span>
+</a>
+</li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="empty">No chats yet. <a href="/chats/new">Ask your first question.</a></p>
+{% endif %}
+</main>
+{% endblock %}

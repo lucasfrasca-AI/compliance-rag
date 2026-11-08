@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{#- htmx's defaults insert an inline <style> and allow eval; the CSP forbids both. -#}
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyEnabled":false}'>
+<title>{% block title %}{% endblock %} - Compliance Ask</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="bar">
+<a class="brand" href="/chats">Compliance Ask</a>
+<nav aria-label="Main">
+<a href="/chats">Chats</a>
+<a href="/chats/new">New chat</a>
+<button type="button" class="link" data-sign-out>Sign out</button>
+</nav>
+</header>
+{% block body %}{% endblock %}
+<script src="/static/vendor/htmx/htmx.min.js" defer></script>
+<script type="module" src="/static/ask.js"></script>
+</body>
+</html>
