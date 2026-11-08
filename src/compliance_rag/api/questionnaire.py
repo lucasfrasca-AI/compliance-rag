@@ -34,9 +34,11 @@ htmx swaps; a 422 or 409 full page).
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import math
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from urllib.parse import parse_qs
 
@@ -241,6 +243,7 @@ async def _page(
         q=asked,
         records=on_record(evidence),
         options=dict(asked.options),
+        kinds={i.field: i.answer_kind.value for i in asked.items},
         notice=notice,
         moved=moved,
     )
@@ -295,39 +298,78 @@ def _asked_item(q: Questionnaire, field: str, slot_key: str) -> tuple[Item, str]
     return item, slot.label
 
 
+Change = Callable[[dict[str, str], Coverage, tuple[Evidence, ...]], Awaitable[str]]
+"""One write, as the questionnaire sees it: given the form and the world as it
+stands at write time, record it and say what was recorded, or raise `Refused`
+(or `ValueError`, which becomes one)."""
+
+
+def _lock_of(request: Request, tenant_id: str) -> asyncio.Lock:
+    """One lock per tenant, so the check that a slot is still open and the
+    write that fills it can't interleave with another request's: a double
+    submit, or two tabs, records one answer and the other is told the slot has
+    one. In-process: the ledger has no constraint for it, so two instances
+    could still both write, and then Track A flags the disagreement if the
+    answers differ (#304)."""
+    locks: dict[str, asyncio.Lock] | None = getattr(request.app.state, "questionnaire_locks", None)
+    if locks is None:
+        locks = {}
+        request.app.state.questionnaire_locks = locks
+    return locks.setdefault(tenant_id, asyncio.Lock())
+
+
+async def _write(request: Request, who: Caller, change: Change) -> Response:
+    """The scaffolding both writes share: read the form, then, under the
+    tenant's lock, read Track A and the evidence as they are now and make the
+    change. A refusal is said in words and records nothing."""
+    form = await _form(request)
+    refusal: Refused | None = None
+    text = ""
+    async with _lock_of(request, who.tenant_id):
+        before, evidence = await _world(request, who)
+        try:
+            try:
+                text = await change(form, before, evidence)
+            except ValueError as invalid:
+                raise Refused(f"Not recorded: {invalid}") from None
+        except Refused as refused:
+            refusal = refused
+    if refusal is not None:
+        return await _refused(request, who, refusal)
+    return await _answered(request, who, before, Notice(text, ok=True))
+
+
 @router.post("/questionnaire/answer")
 async def answer(request: Request, who: PageAdmin) -> Response:
-    form = await _form(request)
-    before, evidence = await _world(request, who)
-    try:
+    async def change(form: dict[str, str], before: Coverage, evidence: tuple[Evidence, ...]) -> str:
         q = build(before, evidence)
         item, label = _asked_item(q, form.get("field", ""), form.get("slot", ""))
-        try:
-            value = parse_value(item.answer_kind, item.options, form.get("value", ""))
-            slot_year = year_of_key(form.get("slot", ""))
-            period = answer_period(
-                item.answer_kind, value, year=slot_year, holds_from=_holds_from(form, q.as_of)
-            )
-            _readable_on(period, q.as_of)
-            recorded = await record_asserted_evidence(
-                request, who, field=item.field, value=value, period=period, source=_source(form)
-            )
-        except ValueError as invalid:
-            raise Refused(f"Not recorded: {invalid}") from None
-    except Refused as refusal:
-        return await _refused(request, who, refusal)
-    text = f"Recorded: {item.field.replace('_', ' ')}, {label}: {_said(recorded)}."
-    return await _answered(request, who, before, Notice(text, ok=True))
+        value = parse_value(item.answer_kind, item.options, form.get("value", ""))
+        period = answer_period(
+            item.answer_kind,
+            value,
+            year=year_of_key(form.get("slot", "")),
+            holds_from=_holds_from(form, q.as_of),
+        )
+        _readable_on(period, q.as_of)
+        recorded = await record_asserted_evidence(
+            request, who, field=item.field, value=value, period=period, source=_source(form)
+        )
+        return f"Recorded: {item.field.replace('_', ' ')}, {label}: {_said(recorded)}."
+
+    return await _write(request, who, change)
 
 
 @router.post("/questionnaire/correct")
 async def correct(request: Request, who: PageAdmin) -> Response:
-    """A new answer superseding a current one, for the same field. A date-valued
-    state is recorded with the period it holds from, the date itself, so a
-    corrected start date moves its period; any other keeps the old row's."""
-    form = await _form(request)
-    before, evidence = await _world(request, who)
-    try:
+    """A new answer superseding a current one, for the same field. The input is
+    the shape the question asks for when Track A is asking about the fact (an
+    answer it can't read, a number given as text, is corrected as a number); the
+    shape of the recorded answer when it isn't. A date-valued state is recorded
+    with the period it holds from, the date itself, so a corrected start date
+    moves its period; any other keeps the old row's."""
+
+    async def change(form: dict[str, str], before: Coverage, evidence: tuple[Evidence, ...]) -> str:
         old = next(
             (e for e in Facts.of(evidence).current if e.evidence_id == form.get("supersedes")),
             None,
@@ -338,31 +380,28 @@ async def correct(request: Request, who: PageAdmin) -> Response:
                 "Nothing was recorded.",
                 stale=True,
             )
-        kind = answer_kind_of(old.value)
-        options = build(before, evidence).options_of(old.field)
-        try:
-            value = parse_value(kind, options, form.get("value", ""))
-            moves = kind is AnswerKind.DATE and old.period.end == NO_END_DATE
-            period = Period(value) if moves and isinstance(value, dt.date) else old.period
-            _readable_on(period, before.as_of)
-            recorded = await record_asserted_evidence(
-                request,
-                who,
-                field=old.field,
-                value=value,
-                period=period,
-                source=_source(form),
-                supersedes=old.evidence_id,
-            )
-        except ValueError as invalid:
-            raise Refused(f"Not recorded: {invalid}") from None
-    except Refused as refusal:
-        return await _refused(request, who, refusal)
-    text = (
-        f"Corrected: {old.field.replace('_', ' ')}, {old.period.label}: "
-        f"{_said(old)} is superseded by {_said(recorded)}."
-    )
-    return await _answered(request, who, before, Notice(text, ok=True))
+        q = build(before, evidence)
+        asked = q.item(old.field)
+        kind = asked.answer_kind if asked else answer_kind_of(old.value)
+        value = parse_value(kind, q.options_of(old.field), form.get("value", ""))
+        moves = kind is AnswerKind.DATE and old.period.end == NO_END_DATE
+        period = Period(value) if moves and isinstance(value, dt.date) else old.period
+        _readable_on(period, before.as_of)
+        recorded = await record_asserted_evidence(
+            request,
+            who,
+            field=old.field,
+            value=value,
+            period=period,
+            source=_source(form),
+            supersedes=old.evidence_id,
+        )
+        return (
+            f"Corrected: {old.field.replace('_', ' ')}, {old.period.label}: "
+            f"{_said(old)} is superseded by {_said(recorded)}."
+        )
+
+    return await _write(request, who, change)
 
 
 def _said(evidence: Evidence) -> str:

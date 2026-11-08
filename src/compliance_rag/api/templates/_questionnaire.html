@@ -31,7 +31,7 @@
 <form class="correct" method="post" action="/admin/questionnaire/correct" hx-post="/admin/questionnaire/correct" hx-target="#questionnaire" hx-swap="outerHTML" data-supersedes="{{ ev.evidence_id }}">
 <input type="hidden" name="supersedes" value="{{ ev.evidence_id }}">
 <span class="meta">Correct this answer:</span>
-{{ answer_input(ev.value | answer_kind, options) }}
+{{ answer_input(kinds.get(ev.field) or (ev.value | answer_kind), options) }}
 <input type="text" name="source" required maxlength="500" aria-label="Source of the correction" placeholder="Source of the correction" autocomplete="off">
 <button type="submit" class="secondary">Supersede</button>
 </form>

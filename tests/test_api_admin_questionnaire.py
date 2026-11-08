@@ -22,6 +22,7 @@ rules the only rules, a refusal in words that records nothing.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import re
 from collections.abc import AsyncIterator
@@ -736,7 +737,9 @@ PROFILE: dict[str, str] = {
 """A body corporate over the threshold; every other yes or no is no."""
 
 
-async def _answer_everything_asked(world: World) -> list[httpx.Response]:
+async def _answer_everything_asked(
+    world: World, profile: dict[str, str] = PROFILE
+) -> list[httpx.Response]:
     """What an admin does: answer what the page asks, then read what it asks
     next, until nothing is asked."""
     responses: list[httpx.Response] = []
@@ -745,7 +748,7 @@ async def _answer_everything_asked(world: World) -> list[httpx.Response]:
         if not asked:
             return responses
         for field, slot in asked:
-            value = PROFILE.get(field, "false")
+            value = profile.get(field, "false")
             holds = (
                 None if field in {"business_started_on", "annual_turnover_aud"} else "2010-01-01"
             )
@@ -996,3 +999,105 @@ async def test_the_page_is_made_for_a_phone(admin: World) -> None:
 async def test_the_parsed_page_matches_the_subscriptions_panels_reader(admin: World) -> None:
     """The panel's own helper reads this page too: one shell, one set of rules."""
     assert parsed((await admin.app.get(PAGE)).text).where("main")
+
+
+async def outcomes(world: World) -> dict[str, str]:
+    coverage = (await world.app.get("/v1/coverage", params={"as_of": TODAY.isoformat()})).json()
+    return {o["obligation_id"]: o["outcome"] for o in coverage["obligations"]}
+
+
+# ---- an answer Track A can't read is corrected as the question asks it ---------------------
+
+
+async def test_a_number_recorded_as_text_is_corrected_as_a_number_and_the_obligation_moves(
+    admin: World,
+) -> None:
+    posted = await admin.app.post(
+        "/v1/profile/evidence",
+        json={
+            "field": "annual_turnover_aud",
+            "value": "plenty",
+            "period": {"financial_year": 2025},
+            "source": "a slip",
+        },
+    )
+    assert posted.status_code == 201
+    # every other year is under the threshold, so the unreadable year decides
+    await _answer_everything_asked(admin, {**PROFILE, "annual_turnover_aud": "1000000"})
+    page = await read(admin)
+    assert page.slots()[("annual_turnover_aud", "fy2025")] == "unreadable"
+    before = await outcomes(admin)
+    # the correction input is the number the question asks for, not the text it was given
+    (old,) = [e for e in await rows(admin, "annual_turnover_aud") if e.value == "plenty"]
+    forms = [f for f in page.forms if f.hidden.get("supersedes") == old.evidence_id]
+    assert len(forms) == 2  # on the question, and among the answers on record
+    for form in forms:
+        value = next(i for i in form.inputs if i.get("name") == "value")
+        assert value["inputmode"] == "decimal"
+    # and it is validated as one
+    refused = await correct(admin, old.evidence_id, "plenty")
+    assert "answer with a number" in words(refused.text)
+    response = await correct(admin, old.evidence_id, "5,000,000")
+    assert response.status_code == 200 and "Corrected:" in words(response.text)
+    new = [e for e in await rows(admin, "annual_turnover_aud") if e.supersedes == old.evidence_id]
+    assert [(e.value, e.period) for e in new] == [(5_000_000, Period.financial_year(2025))]
+    assert isinstance(new[0].value, int)
+    after = await outcomes(admin)
+    assert (before[APP11], after[APP11]) == ("unassessable", "applicable")
+    assert after != before
+
+
+# ---- one answer to a slot, however many times it is sent ------------------------------------
+
+
+def _interleaving(ledger: FakeLedgerStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real ledger yields to other requests on every read and write; the
+    in-memory one never does. Make it, so two requests really are between
+    their read and their write at the same time."""
+    read_evidence, write_evidence = ledger.evidence, ledger.record_evidence
+
+    async def evidence(tenant_id: str) -> tuple[Evidence, ...]:
+        found = await read_evidence(tenant_id)
+        await asyncio.sleep(0)
+        return found
+
+    async def record(item: Evidence) -> None:
+        await asyncio.sleep(0)
+        await write_evidence(item)
+
+    monkeypatch.setattr(ledger, "evidence", evidence)
+    monkeypatch.setattr(ledger, "record_evidence", record)
+
+
+async def test_a_double_submit_records_one_answer_and_tells_the_other_the_slot_has_one(
+    admin: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _interleaving(admin.ledger, monkeypatch)
+    sent = [
+        answer(admin, "legal_form", "state", "trust", source=f"tab {n}", holds_from="2010-01-01")
+        for n in (1, 2)
+    ]
+    first, second = await asyncio.gather(*sent)
+    assert first.status_code == second.status_code == 200
+    assert len(await rows(admin, "legal_form")) == 1
+    texts = sorted(
+        [
+            "already has an answer" in words(r.text) or "isn't open" in words(r.text)
+            for r in (first, second)
+        ]
+    )
+    assert texts == [False, True]
+    page = await read(admin)
+    assert ("legal_form", "state") not in page.slots()  # settled, not flagged
+
+
+async def test_many_at_once_still_record_one_answer(
+    admin: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _interleaving(admin.ledger, monkeypatch)
+    sent = [
+        answer(admin, "is_agency", "state", "false", source=f"tab {n}", holds_from="2010-01-01")
+        for n in range(6)
+    ]
+    await asyncio.gather(*sent)
+    assert len(await rows(admin, "is_agency")) == 1

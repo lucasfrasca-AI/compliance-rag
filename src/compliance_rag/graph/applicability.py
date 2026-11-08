@@ -196,6 +196,8 @@ class _Evaluator:
         self._facts = facts
         self._as_of = snapshot.as_of
         self._memo: dict[str, Explanation] = {}
+        self._asked: dict[str, tuple[AnswerKind, tuple[str, ...]]] = {}
+        """What each leaf evaluated asks for, worked out once, when it is first read."""
         self._successor = {
             earlier: c.id for c in snapshot.conditions.values() for earlier in c.lineage
         }
@@ -226,9 +228,8 @@ class _Evaluator:
 
     def _evaluate(self, spec: ConditionSpec) -> Explanation:
         if spec.operator is Operator.LEAF and spec.leaf is not None:
-            return replace(
-                self._leaf(spec, spec.leaf), field=spec.leaf.field, options=_asked(spec.leaf)[1]
-            )
+            options = self._asked.setdefault(spec.id, _asked(spec.leaf))[1]
+            return replace(self._leaf(spec, spec.leaf), field=spec.leaf.field, options=options)
         children = tuple(self.condition(o) for o in spec.operands)
         if spec.operator is Operator.NOT:
             (child,) = children
@@ -468,7 +469,7 @@ class _Evaluator:
         needs = () if since_known else (leaf.since_field,)
         if open_years:
             needs += _started_fields(gaps)
-        kind, options = _asked(leaf)
+        kind, options = self._asked[spec.id]
         question = Question(
             condition_id=spec.id,
             field=leaf.field,
@@ -502,7 +503,7 @@ class _Evaluator:
         conflict: bool = False,
     ) -> Explanation:
         evidence_ids = tuple(e.evidence_id for e in reading.evidence)
-        kind, options = _asked(leaf)
+        kind, options = self._asked[spec.id]
         question = Question(
             condition_id=spec.id,
             field=leaf.field,

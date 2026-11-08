@@ -415,6 +415,43 @@ async def test_a_question_whose_period_is_not_one_the_law_reads_is_not_offered()
 # ---- the small rules -----------------------------------------------------------------------
 
 
+def _legacy(field: str, period: str) -> ObligationCoverage:
+    """A question as the ledger kept it before questions carried `answer_kind`."""
+    old = Question(
+        condition_id="C",
+        field=field,
+        period=period,
+        question="?",
+        unassessable_reason="why",
+        clause_ids=(),
+    )
+    assert old.answer_kind is None
+    explanation = Explanation("OB-X", "leaf", Truth.UNKNOWN, "d", (), question=old)
+    return ObligationCoverage("OB-X", "x", "s", (), Outcome.UNASSESSABLE, explanation, "Depends on")
+
+
+def test_a_legacy_question_takes_its_kind_from_the_answers_already_recorded() -> None:
+    other_year = fact(1, "annual_turnover_aud", 1_000_000, Period.financial_year(2023))
+    obligation = _legacy("annual_turnover_aud", "FY2025-26")
+    q = build(Coverage(TENANT, AS_OF, (obligation,)), (other_year,))
+    item = q.item("annual_turnover_aud")
+    assert item is not None and item.answer_kind is AnswerKind.NUMBER
+
+
+def test_a_legacy_question_with_no_known_kind_is_not_drawn_as_text() -> None:
+    """No recorded answer, or recorded answers of two kinds: the shape isn't
+    known, so no input is offered and the obligation is listed as one no answer
+    here settles."""
+    obligation = _legacy("annual_turnover_aud", "FY2025-26")
+    mixed = (
+        fact(1, "annual_turnover_aud", "plenty", Period.financial_year(2023)),
+        fact(2, "annual_turnover_aud", 5, Period.financial_year(2024)),
+    )
+    for evidence in ((), mixed):
+        q = build(Coverage(TENANT, AS_OF, (obligation,)), evidence)
+        assert q.items == () and q.unanswerable == (obligation,)
+
+
 def test_a_financial_year_label_names_a_year_only_if_it_is_one() -> None:
     for start in (1901, 1999, 2000, 2025, 2099):
         year = Period.financial_year(start)

@@ -172,3 +172,13 @@ fragment, CSP and `PageAdmin` rule as the subscriptions panel.
   says so, and the next questions it opens are on the page.
 - **The body is a urlencoded form,** parsed here (`urllib.parse`, bounded to 16 KB, no repeated
   name): no multipart parser is installed, and a one-line form needs none.
+- **One answer per slot, however often it is sent.** Both writes run under a per-tenant
+  `asyncio.Lock` and read Track A and the evidence afresh inside it, so a double submit or two tabs
+  record one answer and the other is told the slot has one. The lock is in-process: the ledger has
+  no constraint for it, so two Cloud Run instances could still both write, and Track A then flags
+  the disagreement if the answers differ.
+- **A correction is drawn and checked as the question asks it.** When Track A is asking about the
+  fact, `Item.answer_kind`/`options` decide the input and the parse (a number given as text is
+  corrected as a number); the recorded value's own type is the fallback when it isn't. A question
+  stored before questions carried `answer_kind` takes it from the answers already recorded for the
+  field, and is not drawn at all if they disagree or there are none.

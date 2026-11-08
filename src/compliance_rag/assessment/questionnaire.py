@@ -56,7 +56,7 @@ from compliance_rag.assessment.evidence import (
     values_differ,
 )
 from compliance_rag.corpus.display_form import display_form
-from compliance_rag.corpus.models import NO_END_DATE, PARAGRAPH_SEGMENT_RE, parse_stable_id
+from compliance_rag.corpus.models import PARAGRAPH_SEGMENT_RE, parse_stable_id
 
 STATE = "state"
 """The slot key of a fact asked on a date (`Question.period` "on 2026-10-12")."""
@@ -200,6 +200,15 @@ def _provision_of(clause_id: str) -> str | None:
     return display_form("/".join(segments[:2]), instrument_id)
 
 
+def recorded_kind(evidence: Iterable[Evidence], field: str) -> AnswerKind | None:
+    """What a fact is, from the answers already recorded for it, when its
+    question doesn't say (one stored before questions carried it, #304): the
+    one kind they all share, else `None`, and no input is drawn for a fact
+    whose shape isn't known. Never a guess that it is text."""
+    kinds = {answer_kind_of(e.value) for e in evidence if e.field == field}
+    return next(iter(kinds)) if len(kinds) == 1 else None
+
+
 def route_of(clause_groups: Iterable[Sequence[str]]) -> str:
     """The provision a question decides: the first provision, among the leaf's
     own clauses and then those of the conditions above it, nearest first. The
@@ -295,13 +304,14 @@ def build(coverage: Coverage, evidence: Iterable[Evidence]) -> Questionnaire:
         routes = _routes_in(obligation.explanation)
         for question in obligation.questions:
             slots = _slots_of(question)
-            if slots is None:
+            kind = question.answer_kind or recorded_kind(settling, question.field)
+            if slots is None or kind is None:
                 continue
             placed = True
             route = routes.get(question.condition_id, NO_ROUTE)
             item = pending.setdefault(
                 question.field,
-                _Pending(question.field, route, question.answer_kind or AnswerKind.TEXT),
+                _Pending(question.field, route, kind),
             )
             if obligation.obligation_id not in item.obligations:
                 item.obligations.append(obligation.obligation_id)
@@ -459,8 +469,3 @@ def on_record(evidence: Iterable[Evidence]) -> tuple[Record, ...]:
             )
         )
     return tuple(records)
-
-
-def is_state(evidence: Evidence) -> bool:
-    """An open-ended answer: a state, not a year's figure."""
-    return evidence.period.end == NO_END_DATE
