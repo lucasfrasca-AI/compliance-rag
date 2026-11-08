@@ -110,6 +110,24 @@ button.link {
 .chat-list a:hover { border-color: var(--accent); }
 .chat-name { display: block; font-weight: 600; }
 
+/* The admin pages (#302). */
+.sub-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+.sub-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.sub-list li[data-state="subscribed"] { border-left: 6px solid var(--ok); }
+.sub-name { min-width: 0; }
+.sub-list form { margin: 0; }
+button.secondary { background: none; color: var(--accent); }
+
 /* The chat: one column; the panel is a sheet until there is room beside it. */
 .chat { display: block; }
 .conversation { padding: 1rem; max-width: 52rem; margin: 0 auto; min-width: 0; }

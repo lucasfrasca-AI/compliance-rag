@@ -57,6 +57,7 @@ from compliance_rag.api.deps import (
     CurrentCaller,
     current_caller,
     current_member,
+    is_admin,
     services_of,
 )
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY
@@ -68,8 +69,10 @@ PAGE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
-"""On every response under `/chats`, a redirect, an error page, the fragment and
-its JSON refusals included (`PageHeaders`)."""
+"""On every response under `/chats` and `/admin`, a redirect, an error page, a
+fragment and its JSON refusals included (`PageHeaders`)."""
+
+PAGE_PREFIXES = ("/chats", "/admin")
 
 HEADING_CHARS = 80
 _CHAT_ID = re.compile(UUID4_HEX)
@@ -82,7 +85,8 @@ def is_chat_id(text: str) -> bool:
 
 
 class PageHeaders:
-    """Adds `PAGE_HEADERS` to every response for a path under `/chats`, whatever
+    """Adds `PAGE_HEADERS` to every response for a path under `/chats` or
+    `/admin` (`PAGE_PREFIXES`), whatever
     made it: a page, a redirect, the fragment, or a refusal from a dependency
     or the validator (401, 404, 405, 422), which would otherwise carry none.
     Pure ASGI, so no route can forget it; a header a response already has is
@@ -93,7 +97,9 @@ class PageHeaders:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = str(scope.get("path", ""))
-        if scope["type"] != "http" or not (path == "/chats" or path.startswith("/chats/")):
+        if scope["type"] != "http" or not any(
+            path == prefix or path.startswith(f"{prefix}/") for prefix in PAGE_PREFIXES
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -147,25 +153,51 @@ class PageError(Exception):
 
 
 def render(request: Request, name: str, *, status: int = 200, **context: object) -> HTMLResponse:
-    """A template, with the banner the demo generator calls for (#292): the one
-    place every page and fragment is made, so none can lack it. `banner` is the
-    page's (the deployment runs the demo); `fake_banner` is the words, for a
+    """Every page is drawn here, and `is_admin` (whether the nav links the admin
+    panel) is set here, from the one place that decides it: `page_caller`, which
+    records the reader's role on the request once. A page cannot forget it, and an
+    error page, drawn without a resolved reader, never shows the link. The flag
+    shows or hides a link and nothing else: the panel's routes check the role on
+    every request.
+
+    The demo generator's banner (#292) is set here too, for the same reason: the
+    one place every page and fragment is made, so none can lack it. `banner` is
+    the page's (the deployment runs the demo); `fake_banner` is the words, for a
     turn the ledger records the demo as having written."""
+    shown = bool(getattr(request.state, "is_admin", False))
     banner = banner_text(services_of(request).settings)
     return HTMLResponse(
-        ENV.get_template(name).render(banner=banner, fake_banner=FAKE_BANNER, **context),
+        ENV.get_template(name).render(
+            is_admin=shown, banner=banner, fake_banner=FAKE_BANNER, **context
+        ),
         status_code=status,
         headers=PAGE_HEADERS,
     )
 
 
-def sign_in_required(_: Request, __: Exception) -> Response:
+def is_htmx(request: Request) -> bool:
+    return request.headers.get("hx-request") == "true"
+
+
+def sign_in_required(request: Request, __: Exception) -> Response:
+    """To sign in. htmx follows a 303 and would swap the whole sign-in page into
+    the fragment it targets, so an htmx request is told to leave instead:
+    `HX-Redirect` makes htmx load `/signin` itself, and the 401 (which htmx does
+    not swap) is what `admin.js` turns into the same redirect if it is ever
+    ignored."""
+    if is_htmx(request):
+        return Response(status_code=401, headers={**PAGE_HEADERS, "HX-Redirect": "/signin"})
     return RedirectResponse("/signin", status_code=303, headers=PAGE_HEADERS)
 
 
 def page_error(request: Request, error: Exception) -> Response:
     if not isinstance(error, PageError):  # registered for PageError alone
         raise error
+    if is_htmx(request):
+        # Only the refusal, never a whole page, for a fragment to show.
+        return render(
+            request, "_refusal.html", status=error.status, title=error.title, message=error.message
+        )
     return render(
         request, "message.html", status=error.status, title=error.title, message=error.message
     )
@@ -186,7 +218,9 @@ async def page_caller(
                 403, "Not a member", "This account is not a member of this workspace."
             ) from None
         raise PageError(503, "Try again shortly", "Sign-in can't be checked right now.") from None
-    return await current_caller(request, member)
+    caller = await current_caller(request, member)
+    request.state.is_admin = is_admin(services_of(request).settings, caller.member.email)
+    return caller
 
 
 PageCaller = Annotated[Caller, Depends(page_caller)]
