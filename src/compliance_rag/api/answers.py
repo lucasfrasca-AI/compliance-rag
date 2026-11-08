@@ -121,6 +121,7 @@ from compliance_rag.api.deps import (
     services_of,
     today,
 )
+from compliance_rag.api.sources import source_href
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.history import prior_exchanges
 from compliance_rag.assessment.pipeline import Answer
@@ -268,6 +269,8 @@ def citation_json(
         "clause_id": clause_id,
         "cite": cite(clause_id, titles),
         "version_id": version_id,
+        # Where it opens: the stored source at the clause (I2, `sources.py`).
+        "href": source_href(clause_id),
         # Whether this clause is all the law sets there (ADR-0047). On a chat
         # read back, as recorded with the turn, not the clause's state in
         # today's corpus (#162, #228). Each reason's `detail` is the words a

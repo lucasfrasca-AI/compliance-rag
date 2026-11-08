@@ -104,6 +104,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices, current_member
+from compliance_rag.api.sources import SOURCE_CSP
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.assessment.prompt import REPAIR_SYSTEM_PROMPT
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
@@ -178,9 +179,9 @@ POLICY_HAS_NO_ANCHOR = (
     "A policy has no anchor in a stored source: how policies are rendered is I2's "
     "open question. The demo shows the clause's canonical text instead."
 )
-_SOURCE_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
-"""The stored source is served as a document, never as a script: no script in
-it runs, and it loads nothing."""
+_SOURCE_CSP = SOURCE_CSP
+"""The stored source is served as a document, never as a script (the API's own
+CSP, `api/sources.py`)."""
 _TARGET_STYLE = (
     "<style>:target{background:#fff1b8;outline:3px solid #d4a017;scroll-margin-top:4rem}</style>"
 )

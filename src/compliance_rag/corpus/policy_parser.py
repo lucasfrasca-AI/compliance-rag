@@ -26,11 +26,11 @@ import pymupdf
 from compliance_rag.corpus.models import ClauseRecord, Scope
 
 _FRONT_MATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
-_HEADING_RE = re.compile(r"^##\s+(\d+)\.\s")
-_SUBSECTION_RE = re.compile(r"^(\d+)\.(\d+)\s+")
+HEADING_RE = re.compile(r"^##\s+(\d+)\.\s")
+SUBSECTION_RE = re.compile(r"^(\d+)\.(\d+)\s+")
 
 
-def _strip_front_matter(source: str) -> str:
+def strip_front_matter(source: str) -> str:
     return _FRONT_MATTER_RE.sub("", source, count=1)
 
 
@@ -49,7 +49,7 @@ def parse_policy_markdown(
     mismatch (issue #4) — this function relies on those checks rather than
     re-validating.
     """
-    lines = _strip_front_matter(source).splitlines()
+    lines = strip_front_matter(source).splitlines()
 
     clauses: list[ClauseRecord] = []
     current_section: str | None = None
@@ -75,13 +75,13 @@ def parse_policy_markdown(
         current_lines = []
 
     for line in lines:
-        heading_match = _HEADING_RE.match(line)
+        heading_match = HEADING_RE.match(line)
         if heading_match is not None:
             flush()
             current_section = heading_match.group(1)
             continue
 
-        subsection_match = _SUBSECTION_RE.match(line) if current_section is not None else None
+        subsection_match = SUBSECTION_RE.match(line) if current_section is not None else None
         if subsection_match is not None:
             line_section = subsection_match.group(1)
             if line_section != current_section:
