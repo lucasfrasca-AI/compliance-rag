@@ -5,9 +5,9 @@ themselves.
 
 - **Profile.** Every evidence row, and what the current settling evidence
   says for each field and period it covers. Disagreeing facts are reported as
-  a conflict, never resolved. A member records a fact as an *asserted* one in
-  their own name. Nothing here infers a fact or accepts another provenance:
-  the request body can't name one.
+  a conflict, never resolved. An admin records a fact as an *asserted* one in
+  their own name (recording is admin-only, #294). Nothing here infers a fact
+  or accepts another provenance: the request body can't name one.
 - **Coverage.** Track A over the tenant's evidence on `as_of`: every obligation
   applicable / not applicable / unassessable, each unassessable one with what
   would settle it. `GET /v1/coverage` computes it; nothing is recorded.
@@ -20,6 +20,9 @@ themselves.
   reads a recorded assessment back, row for row.
 - **Subscriptions.** Subscribe and unsubscribe; unsubscribing deletes the
   subscription row only (D-17).
+
+Reads are for any member. The writes (subscribe, unsubscribe, and recording
+evidence) are admin-only (`CurrentAdmin`, ADR-0053 U6, #294).
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ from compliance_rag.api.deps import (
     EARLIEST,
     LATEST,
     UUID4_HEX,
+    CurrentAdmin,
     CurrentCaller,
     counts,
     coverage_on,
@@ -249,8 +253,10 @@ async def get_profile(request: Request, who: CurrentCaller) -> dict[str, object]
 
 @router.post("/profile/evidence", status_code=201)
 async def record_evidence(
-    request: Request, who: CurrentCaller, body: EvidenceIn
+    request: Request, who: CurrentAdmin, body: EvidenceIn
 ) -> dict[str, object]:
+    """Admin only (ADR-0053 U6, #294): any member reads the profile, an admin
+    writes to it."""
     try:
         evidence = Evidence(
             tenant_id=who.tenant_id,
@@ -423,7 +429,7 @@ async def list_subscriptions(request: Request, who: CurrentCaller) -> dict[str, 
 
 
 @router.put("/subscriptions/{instrument_id}", status_code=204)
-async def subscribe(request: Request, who: CurrentCaller, instrument_id: str) -> Response:
+async def subscribe(request: Request, who: CurrentAdmin, instrument_id: str) -> Response:
     try:
         await services_of(request).ledger.subscribe(
             tenant_id=who.tenant_id,
@@ -437,7 +443,7 @@ async def subscribe(request: Request, who: CurrentCaller, instrument_id: str) ->
 
 
 @router.delete("/subscriptions/{instrument_id}", status_code=204)
-async def unsubscribe(request: Request, who: CurrentCaller, instrument_id: str) -> Response:
+async def unsubscribe(request: Request, who: CurrentAdmin, instrument_id: str) -> Response:
     """The subscription row only: nothing is deleted from any store (D-17)."""
     await services_of(request).ledger.unsubscribe(
         tenant_id=who.tenant_id, instrument_id=instrument_id

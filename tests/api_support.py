@@ -132,6 +132,7 @@ def api_settings(**overrides: Any) -> Settings:  # Any: settings field values
         "tenant_id": TENANT,
         "firebase_project_id": PROJECT,
         "api_members": f"{MEMBER}, Second@Acme.example",
+        "api_admins": MEMBER,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
