@@ -28,18 +28,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+from collections.abc import Callable
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import FakeLedgerStore
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
-from compliance_rag.adapters.interfaces import LedgerStore
+from compliance_rag.adapters.interfaces import ClauseStore, LedgerStore, RetrievalAdmin
 from compliance_rag.adapters.postgres_ledger_store import LedgerUnreachable, PostgresLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.adapters.vertex_embedder import VertexEmbedder
-from compliance_rag.corpus.models import PUBLIC_TENANT_ID, DocumentClass
+from compliance_rag.corpus.models import PUBLIC_TENANT_ID, ClauseRecord, DocumentClass
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.corpus.vector_load import (
+    VectorLoad,
     load_version_vectors,
     read_version_clauses,
     read_version_source,
@@ -70,15 +72,45 @@ async def _ledger(settings: Settings, *, defer: bool) -> tuple[LedgerStore, str]
     return ledger, ledger.location
 
 
-async def main(bucket: str, *, defer_ledger: bool) -> None:
-    settings = Settings()
-    clause_store = GCSClauseStore.for_bucket(bucket)
+async def load_law(
+    *,
+    clause_store: ClauseStore,
+    ledger: LedgerStore,
+    retrieval: RetrievalAdmin,
+    lifecycle: CorpusLifecycle,
+    count_tokens: Callable[[str], int] = count_reranker_tokens,
+) -> tuple[tuple[ClauseRecord, ...], VectorLoad]:
+    """The load itself, over the stores given: the compilation's clauses and
+    source as ingest left them in `clause_store`, published through
+    `lifecycle` (idempotent, `corpus/vector_load.py`). Returns the clauses and
+    what the load did. `main` wires the real stores around this; a test runs it
+    on local ones."""
     clauses = await read_version_clauses(
         clause_store, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID, tenant_id=PUBLIC_TENANT_ID
     )
     source_html = await read_version_source(
         clause_store, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID, tenant_id=PUBLIC_TENANT_ID
     )
+    load = await load_version_vectors(
+        clauses,
+        source_html=source_html,
+        count_tokens=count_tokens,
+        lifecycle=lifecycle,
+        retrieval=retrieval,
+        ledger=ledger,
+        instrument_id=INSTRUMENT_ID,
+        version_id=VERSION_ID,
+        tenant_id=PUBLIC_TENANT_ID,
+        effective_from=EFFECTIVE,
+        document_class=DocumentClass.LIBRARY_LAW,
+        title=TITLE,
+    )
+    return clauses, load
+
+
+async def main(bucket: str, *, defer_ledger: bool) -> None:
+    settings = Settings()
+    clause_store = GCSClauseStore.for_bucket(bucket)
     ledger, ledger_location = await _ledger(settings, defer=defer_ledger)
     embedder = VertexEmbedder.from_settings(settings)
     retrieval = QdrantRetrievalStore.from_settings(settings, embedder=embedder, ledger=ledger)
@@ -90,19 +122,8 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
         generation_region=settings.vertex_claude_region,
         synthetic_registry=SyntheticRegistry.load(),
     )
-    load = await load_version_vectors(
-        clauses,
-        source_html=source_html,
-        count_tokens=count_reranker_tokens,
-        lifecycle=lifecycle,
-        retrieval=retrieval,
-        ledger=ledger,
-        instrument_id=INSTRUMENT_ID,
-        version_id=VERSION_ID,
-        tenant_id=PUBLIC_TENANT_ID,
-        effective_from=EFFECTIVE,
-        document_class=DocumentClass.LIBRARY_LAW,
-        title=TITLE,
+    clauses, load = await load_law(
+        clause_store=clause_store, ledger=ledger, retrieval=retrieval, lifecycle=lifecycle
     )
     stored = len(
         await retrieval.version_chunk_ids(
