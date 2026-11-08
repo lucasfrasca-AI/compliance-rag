@@ -141,6 +141,25 @@ async def current_caller(
 CurrentCaller = Annotated[Caller, Depends(current_caller)]
 """An endpoint's caller: a signed-in member, on the configured tenant."""
 
+
+async def current_admin(request: Request, caller: CurrentCaller) -> Caller:
+    """The caller, if they are an admin (ADR-0053 U6, #294); 403 otherwise.
+
+    Admins are configuration. Neither the Bearer token nor the cookie holds a
+    role, so `API_ADMINS` is read afresh on every request and removing an
+    address ends its admin access on the next one. An admin is a member first:
+    an address in `API_ADMINS` alone is refused. Both lists go through
+    `is_member`, the one comparison the verifier and the cookie reader use."""
+    settings = services_of(request).settings
+    email = caller.member.email
+    if not (is_member(email, settings.members) and is_member(email, settings.admins)):
+        raise HTTPException(403, "admin only")
+    return caller
+
+
+CurrentAdmin = Annotated[Caller, Depends(current_admin)]
+"""An admin-only endpoint's caller: a member who is also in `API_ADMINS`."""
+
 UUID4_HEX = r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$"
 """What `uuid.uuid4().hex` makes: the form of an id the API makes (an
 assessment's, a chat's), so no other form names one."""
