@@ -148,7 +148,11 @@ Decision 4, the prefix cap, is ADR-0054.
     being detected and flagged is honest, and a whole instrument is Phase 4."
 22. **s 7A and s 16C join the selection** (#227): both change who an
     obligation covers. Same path as 20.
-23. **TIA s 187LA is held back** pending the human: see *Consequences*.
+23. **TIA s 187LA waits for Phase 4** (the human, later on 2026-11-08,
+    choosing route (b) of *Consequences*): "It matters for telco service
+    providers, which Acme isn't, and the register already flags questions
+    naming the TIA Act. Not worth widening the selection now." #227 stays
+    open for it, labelled `later`.
 
 ### Open items answered
 
@@ -163,7 +167,7 @@ Decision 4, the prefix cap, is ADR-0054.
   *Claim confirmation*, *Policy mapping*, *Coverage statement* and *Known
   parse limits*, and *Finding* gains the verdicts' boundaries.
 - **PHASES.md** Phase 3 records the build order: Ask, then Check.
-- **TIA s 187LA conflicts with ADR-0051 as built**, so it is held back for
+- **TIA s 187LA conflicts with ADR-0051 as built**, so it was held back for
   the human. It is a section of another Act (the Telecommunications
   (Interception and Access) Act 1979), so selecting it means ingesting a
   second instrument, which #227 itself filed as Phase 4. And ADR-0051
@@ -174,6 +178,6 @@ Decision 4, the prefix cap, is ADR-0054.
   a confident answer about the Spam Act built from APP 7 text"). The two
   routes are: register the TIA Act's held part with `part_of`-style
   semantics (a held instrument whose selection is one section, flagged for
-  anything else), or wait for Phase 4.
+  anything else), or wait for Phase 4. The human chose Phase 4 (item 23).
 - **Nothing here changes a stored clause or mapping** until the manifest
   change is signed.
