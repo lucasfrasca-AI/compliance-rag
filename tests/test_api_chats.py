@@ -488,7 +488,13 @@ async def test_a_chat_reads_back_turn_by_turn_as_the_member_was_shown(quote: str
     assert answer["text"] == ANSWER and answer["withheld"] is None and answer["error"] is None
     # The clause and its version, which is what keeps it clickable.
     assert answer["citations"] == [
-        {"clause_id": APP11, "cite": "APP 11.1", "version_id": LAW_VERSION, "incomplete": []}
+        {
+            "clause_id": APP11,
+            "cite": "APP 11.1",
+            "version_id": LAW_VERSION,
+            "href": "/v1/sources/privacy-act-1988/C2026C00227#clause-sch1-app11-1",
+            "incomplete": [],
+        }
     ]
     assert answer["trace_id"] == question["trace_id"] == response.headers["x-trace-id"]
     assert answer["as_of"] == AS_OF
@@ -599,6 +605,7 @@ async def test_an_unreadable_citation_stays_in_place_marked_and_the_chat_is_a_20
         "clause_id": APP11,
         "cite": "APP 11.1",
         "version_id": LAW_VERSION,
+        "href": "/v1/sources/privacy-act-1988/C2026C00227#clause-sch1-app11-1",
         "incomplete": [],
     }
     assert answer["citations"] == [
@@ -747,7 +754,13 @@ async def test_a_chat_is_recorded_and_read_back_through_the_api_on_postgres(quot
         assert other.status_code == 404
         assert [t["turn_index"] for t in read["turns"]] == [0, 1, 2, 3]
         assert read["turns"][1]["citations"] == [
-            {"clause_id": APP11, "cite": "APP 11.1", "version_id": LAW_VERSION, "incomplete": []}
+            {
+                "clause_id": APP11,
+                "cite": "APP 11.1",
+                "version_id": LAW_VERSION,
+                "href": "/v1/sources/privacy-act-1988/C2026C00227#clause-sch1-app11-1",
+                "incomplete": [],
+            }
         ]
         assert read["turns"][3]["text"] is None
         assert read["turns"][3]["withheld"] == answers.BLOCKED

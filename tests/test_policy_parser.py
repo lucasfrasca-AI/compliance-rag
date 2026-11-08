@@ -124,7 +124,7 @@ def test_a_blank_line_inside_a_numbered_item_does_not_truncate_it() -> None:
 
 
 def test_a_mis_numbered_line_fails_loudly_rather_than_trusting_the_heading() -> None:
-    """`_SUBSECTION_RE` captures the line's own claimed section number as
+    """`SUBSECTION_RE` captures the line's own claimed section number as
     well as the heading's — a source where they disagree is malformed and
     must be rejected, not silently filed under whichever one the code
     happened to trust."""
