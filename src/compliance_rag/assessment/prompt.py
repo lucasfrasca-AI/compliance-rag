@@ -38,7 +38,6 @@ from typing import Literal
 
 from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.history import PriorExchange
-from compliance_rag.assessment.prefix_cap import PREFIX_PART_SEPARATOR
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import Incomplete, parse_stable_id
 
@@ -209,13 +208,18 @@ def policy_prefix(policies: Sequence[SourceClause]) -> str | None:
     return fence("tenant_policies", policies) if policies else None
 
 
+PREFIX_PART_SEPARATOR = "\n\n"
+"""What joins the digest and the policies in the cached prefix."""
+
+
 def cag_prefix(policies: Sequence[SourceClause], digest_text: str | None = None) -> str | None:
-    """The whole cached prefix after the system prompt (D-11): the fenced
-    policies, then, when a document check passes one, the obligation digest
-    (`obligation_digest`, #295), joined by `PREFIX_PART_SEPARATOR`. With no
-    digest it is `policy_prefix` exactly, so a question that has none (Ask)
+    """The whole cached prefix after the system prompt (D-11, ADR-0012): when a
+    document check passes one, the obligation digest (`obligation_digest`,
+    #295), then the fenced policies, joined by `PREFIX_PART_SEPARATOR`. The one
+    place that decides the order and the joining, and the bytes the prefix cap
+    measures. With no digest it is `policy_prefix` exactly, so a question (Ask)
     sends the bytes it always did. `None` for neither."""
-    parts = [p for p in (policy_prefix(policies), digest_text) if p is not None]
+    parts = [p for p in (digest_text, policy_prefix(policies)) if p is not None]
     return PREFIX_PART_SEPARATOR.join(parts) if parts else None
 
 

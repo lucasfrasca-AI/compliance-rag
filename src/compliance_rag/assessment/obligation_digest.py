@@ -29,8 +29,9 @@ a new policy version is.
 **Fenced as data.** Each entry is one line between the section's tags, in the
 same hashed-boundary form as the policy fence (`prompt.fence`): the boundary
 is a hash of every entry, so no summary can contain it, and a summary and a
-form are JSON strings, so a quote, a bracket or a newline in one cannot close
-its own marker or start another. An obligation id is checked against a narrow
+form are ASCII-only JSON strings, so a quote, a bracket, a newline or any
+character a splitter treats as a line break (U+0085, U+2028, U+2029) cannot
+close its own marker or start another line. An obligation id is checked against a narrow
 grammar for the same reason. The few trusted words that say what the section
 is (`DIGEST_LEAD_IN`) sit in the prefix beside it, not in `SYSTEM_PROMPT`:
 the system prompt is what a prompt with no digest (Ask) is keyed on, and it
@@ -92,15 +93,14 @@ class DigestEntry:
     def marker(self) -> str:
         """What follows the boundary in the entry's line. JSON strings, so no
         value can close the marker or begin a line of its own."""
-        forms = json.dumps(list(self.display_forms), ensure_ascii=False)
+        forms = json.dumps(list(self.display_forms))
         marker = (
-            f"obligation {self.obligation_id} cited as {forms} "
-            f"summary {json.dumps(self.summary, ensure_ascii=False)}"
+            f"obligation {self.obligation_id} cited as {forms} summary {json.dumps(self.summary)}"
         )
         return f"{marker} unassessable" if self.unassessable else marker
 
     @classmethod
-    def of(cls, obligation: ObligationCoverage) -> DigestEntry:
+    def from_obligation(cls, obligation: ObligationCoverage) -> DigestEntry:
         return cls(
             obligation_id=obligation.obligation_id,
             summary=" ".join(obligation.summary.split()),
@@ -138,10 +138,14 @@ class ObligationDigest:
         order. Takes nothing but the coverage."""
         entries = tuple(
             sorted(
-                (DigestEntry.of(o) for o in coverage.might_apply),
+                (DigestEntry.from_obligation(o) for o in coverage.might_apply),
                 key=lambda e: e.obligation_id,
             )
         )
+        ids = [e.obligation_id for e in entries]
+        if len(set(ids)) != len(ids):
+            repeated = sorted({i for i in ids if ids.count(i) > 1})
+            raise ValueError(f"a coverage lists an obligation more than once: {repeated}")
         markers = [e.marker for e in entries]
         boundary = _boundary(markers)
         if any(boundary in m for m in markers):

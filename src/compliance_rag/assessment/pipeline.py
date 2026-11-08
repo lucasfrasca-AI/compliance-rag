@@ -23,8 +23,8 @@ with the version: read once per answer, for every policy version in the
 context, never once per clause or per citation. The answer carries what was
 read, so the API shows the same form.
 
-The prefix (the system prompt, the tenant's policies and, for a document
-check, the obligation digest after them) is capped at about 30k tokens, counted
+The prefix (the system prompt, then, for a document check, the obligation
+digest, then the tenant's policies, ADR-0012) is capped at about 30k tokens, counted
 locally (`prefix_cap`, ADR-0054): a larger one raises `PolicyCorpusTooLarge`
 before the generator is called. A question (Ask) passes no digest and sends the
 prefix it always did.
@@ -77,13 +77,12 @@ from compliance_rag.assessment.environment import (
 )
 from compliance_rag.assessment.history import MAX_EXCHANGES, PriorExchange, retrieval_query
 from compliance_rag.assessment.obligation_digest import ObligationDigest
-from compliance_rag.assessment.prefix_cap import check_prefix_cap
+from compliance_rag.assessment.prefix_cap import check_prefix_cap, estimate_tokens
 from compliance_rag.assessment.prompt import (
     REPAIR_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     SourceClause,
     cag_prefix,
-    policy_prefix,
     repair_prompt,
     user_prompt,
 )
@@ -282,7 +281,7 @@ class AssessmentPipeline:
         retriever as the previous question alone; the not-in-environment check
         reads `query` alone (ADR-0051), and with no history every byte of the
         prompt is as it was. `digest` is the obligation digest of a document
-        check (#295): built from Track A's coverage alone, it follows the
+        check (#295): built from Track A's coverage alone, it precedes the
         policies in the cached prefix and counts toward the cap, and it adds no
         clause to the context, since it is not a source. A question passes none,
         and with none the prefix is the policies' alone, byte for byte."""
@@ -367,15 +366,13 @@ class AssessmentPipeline:
             # The prefix is built once and its size checked locally before any
             # generator call: over the cap it is refused, never truncated
             # (ADR-0054). The span records the estimate and the cap either way.
-            digest_text = None if digest is None else digest.text
+            prefix = cag_prefix(policies, None if digest is None else digest.text)
             if digest is not None:
                 current.set_attribute(
                     "answer.digest_obligations", [e.obligation_id for e in digest.entries]
                 )
-            prefix = cag_prefix(policies, digest_text)
-            check_prefix_cap(
-                SYSTEM_PROMPT, policy_prefix(policies), digest=digest_text, current=current
-            )
+                current.set_attribute("prefix.digest_tokens", estimate_tokens(digest.text))
+            check_prefix_cap(SYSTEM_PROMPT, prefix, current=current)
             generation = await self.generator.generate(
                 system=SYSTEM_PROMPT,
                 cached_prefix=prefix,
