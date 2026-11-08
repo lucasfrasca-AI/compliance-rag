@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from compliance_rag.adapters.firebase_auth import is_member
 from compliance_rag.adapters.interfaces import (
     ClauseStore,
     GraphStore,
@@ -112,7 +113,7 @@ def cookie_member(request: Request, value: str) -> Member:
         member = codec.open(value)
     except Unauthenticated as refused:
         raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
-    if member.email.lower() not in {m.lower() for m in services_of(request).settings.members}:
+    if not is_member(member.email, services_of(request).settings.members):
         raise HTTPException(403, "not a member of this tenant")
     return member
 

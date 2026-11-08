@@ -19,6 +19,13 @@ Every state-changing request that carries the cookie must also pass an Origin
 check (`OriginGuard`), on top of `SameSite=Strict`. Sign-in is always required;
 there is no anonymous path.
 
+**The cookie is stateless.** Nothing about a session is stored on the server, so
+`POST /session/logout` clears the browser's copy and nothing else: a copy of the
+cookie taken before, if stolen, still signs in until its expiry (at most an
+hour, and never past the token's). Removing a member from `API_MEMBERS` ends
+their sessions at once, since membership is checked on every read; rotating
+`SESSION_SECRET` ends everyone's.
+
 The secret is never logged, never put on a span and never in an error message.
 """
 
@@ -40,6 +47,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from compliance_rag.adapters.interfaces import Member, Unauthenticated
+from compliance_rag.settings import MIN_SESSION_SECRET_CHARS
 
 COOKIE_NAME = "__Host-session"
 MAX_SESSION_SECONDS = 3600
@@ -64,6 +72,12 @@ class SessionCodec:
     """Makes and reads session cookie values under one secret."""
 
     def __init__(self, secret: str, *, clock: Callable[[], float] = time.time) -> None:
+        # Fail closed here too, not only in Settings: a codec built from a
+        # short or empty key would sign cookies anyone could forge.
+        if len(secret) < MIN_SESSION_SECRET_CHARS:
+            raise ValueError(
+                f"the session secret must be at least {MIN_SESSION_SECRET_CHARS} characters"
+            )
         self._key = secret.encode()
         self._clock = clock
 
@@ -78,6 +92,11 @@ class SessionCodec:
         )
         payload = _b64(body.encode())
         return f"{payload}.{self._signature(payload)}"
+
+    def max_age(self, expires_at: int) -> int:
+        """Seconds from now, by this codec's clock, until `expires_at`: the
+        cookie's `Max-Age`. Not positive means already over."""
+        return expires_at - int(self._clock())
 
     def expiry_for(self, member: Member) -> int:
         """When a session made now from `member`'s token ends: with the token,

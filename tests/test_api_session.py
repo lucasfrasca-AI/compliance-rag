@@ -79,6 +79,12 @@ def sealed(
     )
 
 
+def _max_age(response: httpx.Response) -> int:
+    found = re.search(r"Max-Age=(\d+)", response.headers["set-cookie"])
+    assert found is not None
+    return int(found.group(1))
+
+
 def with_cookie(value: str) -> dict[str, str]:
     return {"Cookie": f"{COOKIE_NAME}={value}"}
 
@@ -121,7 +127,7 @@ async def test_the_cookie_is_httponly_secure_samesite_strict_and_holds_only_uid_
 async def test_the_cookie_expires_no_later_than_the_token(client: httpx.AsyncClient) -> None:
     now = int(time.time())
     response = await sign_in(client, iat=now, auth_time=now, exp=now + 300)
-    max_age = int(re.search(r"Max-Age=(\d+)", response.headers["set-cookie"]).group(1))  # type: ignore[union-attr]
+    max_age = _max_age(response)
     assert 0 < max_age <= 300
     member = SessionCodec(SECRET).open(client.cookies[COOKIE_NAME])
     assert member.expires_at is not None and member.expires_at <= now + 300
@@ -132,7 +138,7 @@ async def test_a_long_lived_token_still_gets_a_session_of_at_most_an_hour(
 ) -> None:
     now = int(time.time())
     response = await sign_in(client, exp=now + 86400)
-    max_age = int(re.search(r"Max-Age=(\d+)", response.headers["set-cookie"]).group(1))  # type: ignore[union-attr]
+    max_age = _max_age(response)
     assert max_age <= MAX_SESSION_SECONDS
 
 
@@ -441,3 +447,40 @@ async def test_only_the_auth_sdk_is_vendored() -> None:
         "firebase-app.js",
         "firebase-auth.js",
     }
+
+
+# ---- the codec fails closed, shares one membership rule, and keeps time by its clock --
+
+
+@pytest.mark.parametrize("secret", ["", "short", "x" * (MIN_SESSION_SECRET_CHARS - 1)])
+def test_a_codec_refuses_a_short_or_empty_key(secret: str) -> None:
+    with pytest.raises(ValueError, match="at least") as refused:
+        SessionCodec(secret)
+    assert secret not in str(refused.value) or secret == ""
+
+
+def test_a_codec_accepts_a_key_of_the_minimum_length() -> None:
+    codec = SessionCodec("k" * MIN_SESSION_SECRET_CHARS)
+    member = Member(uid="u", email=MEMBER)
+    assert codec.open(codec.seal(member, expires_at=int(time.time()) + 60)).uid == "u"
+
+
+async def test_the_cookies_max_age_comes_from_the_codecs_clock() -> None:
+    """The codec's clock runs 1000 s behind the real one, so a session by that
+    clock is the full hour; a `Max-Age` from `time.time()` would be shorter."""
+    app = _app()
+    behind = time.time() - 1000
+    app.state.session = SessionCodec(SECRET, clock=lambda: behind)
+    async with _client(app) as c:
+        response = await sign_in(c, exp=int(time.time()) + 86400)
+    assert _max_age(response) == MAX_SESSION_SECONDS
+
+
+async def test_the_cookie_and_the_verifier_share_one_membership_rule() -> None:
+    """A member listed with other case and stray spaces is a member to both."""
+    listed = {"api_members": "  LEAD@Acme.Example , other@acme.example"}
+    async with _client(_app(**listed)) as c:
+        assert (await sign_in(c)).status_code == 200  # the verifier admits the token
+        assert (await c.get("/v1/me")).status_code == 200  # and the cookie is read the same
+    async with _client(_app(api_members="other@acme.example")) as c:
+        assert (await c.get("/v1/me", headers=with_cookie(sealed()))).status_code == 403

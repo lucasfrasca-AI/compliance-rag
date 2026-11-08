@@ -10,7 +10,6 @@ Firebase's own sign-in endpoints, named in `CONTENT_SECURITY_POLICY`.
 from __future__ import annotations
 
 import html
-import time
 from pathlib import Path
 from typing import Annotated
 
@@ -67,7 +66,7 @@ async def start_session(
     if codec is None:
         raise HTTPException(503, "sessions are not configured")
     expires_at = codec.expiry_for(member)
-    max_age = expires_at - int(time.time())
+    max_age = codec.max_age(expires_at)
     if max_age <= 0:
         raise HTTPException(401, "token expired", headers={"WWW-Authenticate": "Bearer"})
     response.set_cookie(
