@@ -41,7 +41,11 @@
 <p class="note">It clears when the quota is granted or refills. Nothing on this page needs fixing: ask again later.</p>
 {% elif kind == "policy_corpus_too_large" %}
 <h3>Your policy documents are too large to send with a question</h3>
+{% if t.estimated_tokens is not none and t.cap_tokens is not none %}
 <p>Your in-force policies come to about {{ t.estimated_tokens }} tokens, over the limit of {{ t.cap_tokens }} (ADR-0054). Nothing was generated.</p>
+{% else %}
+<p>Your in-force policies are over the size limit (ADR-0054), and the measure recorded with this turn can't be read. Nothing was generated.</p>
+{% endif %}
 <p class="note">The policy set needs to be made smaller before questions can be answered over it.</p>
 {% elif kind == "malformed_generation" %}
 <h3>The model's reply was not a valid answer</h3>

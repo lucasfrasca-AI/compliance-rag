@@ -21,14 +21,12 @@ reaches the browser as text. No template holds a script, an event handler or a
 style attribute (the CSP would refuse them anyway); `tests/test_api_pages.py`
 scans for all three.
 
-**What the stream knows that the ledger doesn't.** A request a quota refusal or
-an over-cap policy corpus ended is recorded as `internal` (#251, ADR-0054),
-the answer that couldn't be completed. The `error` event names them, and the
-script passes that to the fragment as `refine`, which re-labels the chat's last
-turn if (and only if) it was recorded as `internal`. It carries a kind and two
-numbers, never text: a forged `refine` changes how the member's own last failed
-turn is worded, and nothing else. Read back later, such a turn is the generic
-`internal` one.
+**The page shows what the ledger recorded, and nothing the browser says.** The
+fragment takes no parameter. Every outcome, a refused generation
+(`generation_unavailable`, with its reason) and an over-cap policy corpus
+(`policy_corpus_too_large`, with the estimate and the cap) included, is a turn
+outcome the ledger holds (#289, ledger 0019), so the specific card is the same
+live and after a reload.
 
 **Signing in.** A page request without a session redirects (303) to `/signin`.
 A signed-in non-member gets a 403 page, as a redirect would only loop. The
@@ -41,12 +39,14 @@ from __future__ import annotations
 import datetime as dt
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from compliance_rag.api.chats import read_chat
 from compliance_rag.api.deps import (
@@ -69,10 +69,44 @@ PAGE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
-"""On every page response, a redirect and an error page included."""
+"""On every response under `/chats`, a redirect, an error page, the fragment and
+its JSON refusals included (`PageHeaders`)."""
 
 HEADING_CHARS = 80
 _CHAT_ID = re.compile(UUID4_HEX)
+
+
+def is_chat_id(text: str) -> bool:
+    """Whether `text` is the form of a chat id, all of it: `fullmatch`, so a
+    trailing newline (which `$` alone lets through) is not one."""
+    return _CHAT_ID.fullmatch(text) is not None
+
+
+class PageHeaders:
+    """Adds `PAGE_HEADERS` to every response for a path under `/chats`, whatever
+    made it: a page, a redirect, the fragment, or a refusal from a dependency
+    or the validator (401, 404, 405, 422), which would otherwise carry none.
+    Pure ASGI, so no route can forget it; a header a response already has is
+    left as it is."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = str(scope.get("path", ""))
+        if scope["type"] != "http" or not (path == "/chats" or path.startswith("/chats/")):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in PAGE_HEADERS.items():
+                    if name not in headers:
+                        headers[name] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def _sydney(value: dt.datetime) -> str:
@@ -124,7 +158,8 @@ def sign_in_required(_: Request, __: Exception) -> Response:
 
 
 def page_error(_: Request, error: Exception) -> Response:
-    assert isinstance(error, PageError)
+    if not isinstance(error, PageError):  # registered for PageError alone
+        raise error
     return render("message.html", status=error.status, title=error.title, message=error.message)
 
 
@@ -161,30 +196,6 @@ def _heading(turns: list[dict[str, object]]) -> str:
     return text if len(text) <= HEADING_CHARS else text[: HEADING_CHARS - 1].rstrip() + "…"
 
 
-Refinement = Literal["generation_unavailable", "policy_corpus_too_large"]
-
-
-def refined(
-    turns: list[dict[str, object]],
-    refinement: Refinement | None,
-    estimated_tokens: int | None,
-    cap_tokens: int | None,
-) -> list[dict[str, object]]:
-    """The last turn re-labelled with what the `error` event said, when it was
-    recorded as `internal` (the only recording those two share). Anything else
-    is left exactly as the ledger has it."""
-    if refinement is None or not turns:
-        return turns
-    last = turns[-1]
-    if last["role"] != "assistant" or last["error"] != "internal":
-        return turns
-    if refinement == "policy_corpus_too_large":
-        if estimated_tokens is None or cap_tokens is None:
-            return turns
-        last = {**last, "estimated_tokens": estimated_tokens, "cap_tokens": cap_tokens}
-    return [*turns[:-1], {**last, "error": refinement}]
-
-
 @router.get("/chats", response_class=HTMLResponse)
 async def chats_page(request: Request, who: PageCaller) -> HTMLResponse:
     chats = await services_of(request).ledger.chats(who.tenant_id, who.member.uid)
@@ -200,7 +211,7 @@ async def new_chat_page(_: PageCaller) -> HTMLResponse:
 async def chat_page(request: Request, who: PageCaller, chat_id: str) -> HTMLResponse:
     turns = (
         await read_chat(services_of(request).ledger, who.tenant_id, who.member.uid, chat_id)
-        if _CHAT_ID.match(chat_id)
+        if is_chat_id(chat_id)
         else None
     )
     if turns is None:
@@ -213,15 +224,12 @@ async def turns_fragment(
     request: Request,
     who: CurrentCaller,
     chat_id: str,
-    refine: Refinement | None = None,
-    estimated_tokens: Annotated[int | None, Query(ge=0, le=10**9)] = None,
-    cap_tokens: Annotated[int | None, Query(ge=0, le=10**9)] = None,
 ) -> HTMLResponse:
     turns = (
         await read_chat(services_of(request).ledger, who.tenant_id, who.member.uid, chat_id)
-        if _CHAT_ID.match(chat_id)
+        if is_chat_id(chat_id)
         else None
     )
     if turns is None:
         raise HTTPException(404, "no such chat")
-    return render("_turns.html", turns=refined(turns, refine, estimated_tokens, cap_tokens))
+    return render("_turns.html", turns=turns)

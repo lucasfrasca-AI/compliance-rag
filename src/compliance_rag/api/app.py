@@ -75,6 +75,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.state.session = codec_for(services.settings.session_secret.get_secret_value())
     app.add_middleware(OriginGuard, extra_origins=services.settings.allowed_origins)
     app.add_middleware(RequestSpan)
+    app.add_middleware(pages.PageHeaders)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, error: RequestValidationError) -> JSONResponse:

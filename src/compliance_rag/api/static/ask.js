@@ -127,6 +127,51 @@ function countsText(counts) {
   return `${counts.applicable} apply, ${counts.not_applicable} do not, ${counts.unassessable} can't be assessed`;
 }
 
+function countTurns() {
+  return document.querySelectorAll("#turns .turn").length;
+}
+
+const ERROR_TEXT = {
+  residency: "The residency rule refused this question; nothing was sent to the model.",
+  generation_unavailable: "The model isn't taking requests right now; nothing was generated.",
+  malformed_generation: "The model's reply was not a valid answer; nothing in it is shown.",
+  internal: "The answer couldn't be completed.",
+};
+
+/** The stream's own outcome, as text, for an exchange the chat did not keep. */
+function showUnsaved({ name, data }) {
+  const notice = $("notice");
+  notice.replaceChildren();
+  notice.hidden = false;
+  const paragraph = (text, strong) => {
+    const p = document.createElement("p");
+    if (strong) {
+      const b = document.createElement("strong");
+      b.textContent = text;
+      p.append(b);
+    } else p.textContent = text;
+    notice.append(p);
+  };
+  paragraph("Not saved to this chat.", true);
+  paragraph(
+    "This result was not recorded, so it is not in the history above and will be gone when you leave. Ask again to keep it.",
+  );
+  if (name === "answer" && data.verified) {
+    paragraph("Verified answer", true);
+    paragraph(data.text);
+    for (const c of data.citations) paragraph(`Cited: ${c.cite}`);
+  } else if (name === "answer") {
+    paragraph("Answer withheld", true);
+    paragraph(data.withheld);
+  } else if (data.error === "policy_corpus_too_large") {
+    paragraph(
+      `Your policy documents are too large to send with a question: about ${Number(data.estimated_tokens)} tokens against a limit of ${Number(data.cap_tokens)}.`,
+    );
+  } else {
+    paragraph(ERROR_TEXT[data.error] ?? ERROR_TEXT.internal);
+  }
+}
+
 const REFUSALS = {
   403: "This account is not a member of this workspace.",
   404: "This chat no longer exists.",
@@ -137,8 +182,10 @@ async function ask(question) {
   const chat = $("chat");
   const submit = $("ask-submit");
   let chatId = chat.dataset.chatId || null;
-  let finished = null; // "answer" | "error"
-  let refine = "";
+  let outcome = null; // the stream's last event: { name: "answer" | "error", data }
+  // How many turns the chat shows now: a recorded exchange adds two (a question
+  // and its answer), so that is what tells whether this one was recorded.
+  const turnsBefore = countTurns();
 
   setNotice(null);
   submit.disabled = true;
@@ -185,17 +232,11 @@ async function ask(question) {
         setStage("answer", "running");
       } else if (name === "answer") {
         setStage("answer", "done");
-        finished = "answer";
+        outcome = { name, data };
       } else if (name === "error") {
         const running = STAGES.find((s) => stageItem(s).dataset.state === "running");
         if (running) setStage(running, "failed");
-        finished = "error";
-        if (data.error === "generation_unavailable") refine = "?refine=generation_unavailable";
-        else if (data.error === "policy_corpus_too_large") {
-          refine =
-            `?refine=policy_corpus_too_large&estimated_tokens=${Number(data.estimated_tokens)}` +
-            `&cap_tokens=${Number(data.cap_tokens)}`;
-        }
+        outcome = { name, data };
       }
     });
   } catch (failure) {
@@ -208,12 +249,14 @@ async function ask(question) {
     );
   }
 
-  if (finished && chatId) {
-    // Recorded before it was sent, so the server can draw it. Then the turns
-    // are the server's, and the pending question is among them.
+  if (outcome && chatId) {
+    // Recorded before it was sent, so the server can draw it from the ledger.
+    // Whether it was is decided by the turns the chat shows afterwards, never
+    // by what is last in the list: that could be the answer to the question
+    // before.
     fragmentFailed = false;
     try {
-      await window.htmx.ajax("GET", `/chats/${chatId}/turns${refine}`, {
+      await window.htmx.ajax("GET", `/chats/${chatId}/turns`, {
         target: "#turns", // htmx's default swap replaces its content
       });
     } catch {
@@ -222,19 +265,20 @@ async function ask(question) {
     const last = document.querySelector("#turns .turn:last-child");
     if (fragmentFailed) {
       setNotice("The answer could not be shown. Reload this chat to read it.");
-    } else if (!last?.classList.contains("turn-answer")) {
-      // The chat has no record of this answer (the ledger refused it), so
-      // there is nothing the server could draw: say so rather than show nothing.
-      setNotice("This question could not be answered, and the chat could not record it. Ask again.");
-    } else {
+    } else if (countTurns() >= turnsBefore + 2 && last?.classList.contains("turn-answer")) {
       $("pending-question").hidden = true;
       $("progress").hidden = true;
       $("progress-note").hidden = true;
       form.reset();
       last.scrollIntoView({ block: "nearest" });
+    } else {
+      // The chat has no record of this exchange (the ledger refused it), so
+      // the server has nothing to draw. Say what the stream said, and that it
+      // was not saved; the turns above are the earlier ones, not this answer.
+      showUnsaved(outcome);
     }
   }
-  if (!finished) $("progress-note").hidden = true;
+  if (!outcome) $("progress-note").hidden = true;
   submit.disabled = false;
   form.removeAttribute("aria-busy");
 }

@@ -44,10 +44,13 @@ and the config that keeps it inside the CSP).
 
 - A page request without a session redirects to `/signin`; a signed-in non-member gets a
   403 page. There is no page at `/`.
-- A turn recorded as `internal` that the `error` event named `generation_unavailable` or
-  `policy_corpus_too_large` is drawn as that state right after the request, because the
-  script passes the kind (and, for the cap, the two numbers) to the fragment. Read back
-  later, the ledger only knows `internal`, so it is the generic card.
-- `ask.js` is not exercised by CI (no browser there). It was driven once in headless Chrome
+- The fragment takes no parameter and the page shows exactly what the ledger recorded, so
+  every outcome (`generation_unavailable` with its reason, `policy_corpus_too_large` with
+  the estimate and the cap, #289) is the same card live and after a reload. If the ledger
+  did not record the exchange, `ask.js` (which compares the chat's turn count before and
+  after) says so and shows the stream's own outcome as text under "Not saved to this chat".
+- Every response under `/chats`, errors included, carries the CSP (`pages.PageHeaders`).
+- `ask.js` is not exercised by CI (no browser there). It was driven in headless Chrome
   against the app over fakes at 390px wide (ask, progress, panel, follow-up, withheld,
-  failure, sign-out); the tests make the same requests in the same order.
+  failure, an unrecorded exchange, sign-out); the tests make the same requests in the same
+  order.

@@ -5,7 +5,7 @@ member signs in (the cookie, as `test_api_session.py` does), lists chats, asks,
 reads the verified answer, opens a citation, asks a follow-up in the same chat
 and reads the history. The Ask script (`static/ask.js`) is a browser's; here the
 requests it makes are made by the test in the order it makes them (the stream,
-then the turns fragment, with the `refine` it derives from an `error` event),
+then the turns fragment, which takes no parameter),
 so what is checked is what the server draws for each outcome.
 
 One test per outcome state; escaping of markup in the question and the answer;
@@ -21,11 +21,13 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from html.parser import HTMLParser
 from typing import Any
 
 import httpx
 import pytest
+from starlette.requests import Request
 
 from compliance_rag.adapters.fakes import (
     FakeGenerator,
@@ -41,12 +43,13 @@ from compliance_rag.adapters.interfaces import (
     Generation,
     Generator,
     Member,
+    PrefixMeasure,
     TurnOutcome,
     UnreadableCitation,
     UnreadableReason,
 )
 from compliance_rag.api.app import create_app
-from compliance_rag.api.pages import ENV, TEMPLATE_DIR
+from compliance_rag.api.pages import ENV, TEMPLATE_DIR, PageError, is_chat_id, page_error
 from compliance_rag.api.session import COOKIE_NAME, SessionCodec
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY, STATIC_DIR
 from compliance_rag.assessment.environment import NotInEnvironment
@@ -212,9 +215,8 @@ async def ask(
     chat_id: str | None = None,
 ) -> tuple[list[EVENT], str]:
     """What `ask.js` does: stream `POST /v1/answers` with the cookie, then (the
-    request being over) have the server draw the chat's turns, passing the
-    `refine` it derives from an `error` event. Returns the events and the
-    fragment."""
+    request being over) have the server draw the chat's turns from what the
+    ledger recorded. Returns the events and the fragment."""
     body: dict[str, Any] = {"question": question, "as_of": AS_OF}  # Any: JSON
     if chat_id:
         body["chat_id"] = chat_id
@@ -222,16 +224,7 @@ async def ask(
     assert response.status_code == 200
     events = events_of(response.text)
     chat = events[0][1]["chat_id"]
-    refine = ""
-    name, last = events[-1]
-    if name == "error" and last["error"] == "generation_unavailable":
-        refine = "?refine=generation_unavailable"
-    elif name == "error" and last["error"] == "policy_corpus_too_large":
-        refine = (
-            f"?refine=policy_corpus_too_large&estimated_tokens={last['estimated_tokens']}"
-            f"&cap_tokens={last['cap_tokens']}"
-        )
-    fragment = await client.get(f"/chats/{chat}/turns{refine}")
+    fragment = await client.get(f"/chats/{chat}/turns")
     assert fragment.status_code == 200
     return events, fragment.text
 
@@ -504,15 +497,24 @@ async def test_generation_unavailable_is_its_own_state_with_no_sdk_words() -> No
     async with await client_for(generator, ledger=ledger, settings=settings) as client:
         await sign_in(client)
         events, fragment = await ask(client)
-        recorded = await client.get(f"/chats/{events[0][1]['chat_id']}/turns")  # as read back later
+        chat_id = events[0][1]["chat_id"]
+        recorded = await client.get(f"/chats/{chat_id}/turns")  # as read back later
+        chat_page = await client.get(f"/chats/{chat_id}")
+        api = (await client.get(f"/v1/chats/{chat_id}")).json()
     assert events[-1][1]["error"] == "generation_unavailable" and len(requests) == 1
     assert outcomes(fragment) == ["generation_unavailable"]
     assert "isn't taking requests right now" in text_of(fragment)
     for leaked in (*SDK_WORDS, "Traceback"):
         assert leaked not in fragment
-    # Recorded as the answer that couldn't be completed (#251): read back later
-    # it is that, which is all the ledger knows.
-    assert outcomes(recorded.text) == ["internal"]
+    # Its own recorded outcome (#289), so the same card after a reload, and the
+    # chat's JSON says so with the reason and none of the provider's words.
+    assert outcomes(recorded.text) == ["generation_unavailable"]
+    assert text_of(recorded.text) == text_of(fragment)
+    assert outcomes(chat_page.text) == ["generation_unavailable"]
+    assert (
+        api["turns"][1]["error"] == "generation_unavailable"
+        and api["turns"][1]["reason"] == "quota"
+    )
 
 
 async def test_a_policy_corpus_over_the_cap_is_its_own_state_with_its_numbers() -> None:
@@ -520,9 +522,13 @@ async def test_a_policy_corpus_over_the_cap_is_its_own_state_with_its_numbers() 
     async with await client_for(FakeGenerator(reply_of()), policy_text=huge) as client:
         await sign_in(client)
         events, fragment = await ask(client)
+        reloaded = await client.get(f"/chats/{events[0][1]['chat_id']}")
     error = events[-1][1]
     assert error["error"] == "policy_corpus_too_large"
     assert outcomes(fragment) == ["policy_corpus_too_large"]
+    # the same card, the same numbers, after a reload: the ledger holds them (#289)
+    assert outcomes(reloaded.text) == ["policy_corpus_too_large"]
+    assert f"about {error['estimated_tokens']} tokens" in text_of(reloaded.text)
     words = text_of(fragment)
     assert "too large to send with a question" in words
     assert f"about {error['estimated_tokens']} tokens" in words
@@ -645,32 +651,85 @@ async def test_an_unreadable_stored_citation_stays_in_place_marked_and_is_not_a_
     assert text_of(response.text).count("Unreadable") == 2
 
 
-async def test_a_refine_changes_only_a_last_turn_recorded_as_internal(quote: str) -> None:
-    """The hint carries a kind and two numbers and relabels one thing: the last
-    turn when the ledger recorded it as `internal`."""
+async def test_the_fragment_takes_no_parameter_so_a_query_cannot_change_what_is_shown(
+    quote: str,
+) -> None:
+    """The page shows what the ledger recorded and nothing the browser says: a
+    `refine`, or numbers, in the query change nothing."""
+    forged = "?refine=policy_corpus_too_large&estimated_tokens=1&cap_tokens=2&error=residency"
     async with await client_for(FakeGenerator(reply_of((APP11, quote)))) as client:
         await sign_in(client)
-        events, _ = await ask(client)
+        events, fragment = await ask(client)
         chat_id = events[0][1]["chat_id"]
-        verified = await client.get(
-            f"/chats/{chat_id}/turns?refine=policy_corpus_too_large&estimated_tokens=1&cap_tokens=2"
-        )
-        assert outcomes(verified.text) == ["verified"]  # not internal: left as recorded
-        incomplete_hint = await client.get(f"/chats/{chat_id}/turns?refine=policy_corpus_too_large")
-        assert incomplete_hint.status_code == 200
-        for query in ("refine=anything", "refine=internal", "estimated_tokens=-1", "cap_tokens=x"):
-            assert (await client.get(f"/chats/{chat_id}/turns?{query}")).status_code == 422
+        assert (await client.get(f"/chats/{chat_id}/turns{forged}")).text == fragment
     async with await client_for(Exploding()) as client:
         await sign_in(client)
-        events, _ = await ask(client)
+        events, fragment = await ask(client)
         chat_id = events[0][1]["chat_id"]
-        bare = await client.get(f"/chats/{chat_id}/turns?refine=policy_corpus_too_large")
-        assert outcomes(bare.text) == ["internal"]  # no numbers: nothing to say
-        marked = await client.get(
-            f"/chats/{chat_id}/turns?refine=policy_corpus_too_large"
-            "&estimated_tokens=<b>1</b>&cap_tokens=2"
+        marked = await client.get(f"/chats/{chat_id}/turns{forged}&x=<b>1</b>")
+        assert marked.text == fragment and outcomes(marked.text) == ["internal"]
+        assert "tokens" not in text_of(marked.text)
+
+
+async def test_a_turn_recorded_as_internal_before_0019_is_the_generic_card() -> None:
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    await ledger.record_chat_exchange(
+        ChatExchange(
+            tenant_id=TENANT,
+            chat_id=chat_id,
+            user_id=UID,
+            question=QUESTION,
+            answer=ChatAnswer(TurnOutcome.INTERNAL),
+            as_of=dt.date.fromisoformat(AS_OF),
+            trace_id="3" * 32,
         )
-        assert marked.status_code == 422  # a number is a number
+    )
+    async with await client_for(FakeGenerator(), ledger=ledger) as client:
+        await sign_in(client)
+        page = (await client.get(f"/chats/{chat_id}")).text
+    assert outcomes(page) == ["internal"] and "couldn't be completed" in text_of(page)
+
+
+async def test_an_over_cap_turn_whose_stored_measure_cant_be_read_still_has_its_card() -> None:
+    """The chat JSON says `null` for a measure it couldn't read (#289): the card
+    keeps its outcome and says the numbers are unavailable."""
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    await ledger.record_chat_exchange(
+        ChatExchange(
+            tenant_id=TENANT,
+            chat_id=chat_id,
+            user_id=UID,
+            question=QUESTION,
+            answer=ChatAnswer(TurnOutcome.POLICY_CORPUS_TOO_LARGE, prefix=PrefixMeasure(9, 3)),
+            as_of=dt.date.fromisoformat(AS_OF),
+            trace_id="4" * 32,
+        )
+    )
+    turns = ledger._chats[(TENANT, chat_id)]  # pyright: ignore[reportPrivateUsage]
+    turns[1] = replace(turns[1], prefix=None)
+    async with await client_for(FakeGenerator(), ledger=ledger) as client:
+        await sign_in(client)
+        page = (await client.get(f"/chats/{chat_id}")).text
+    assert outcomes(page) == ["policy_corpus_too_large"]
+    assert "can't be read" in text_of(page)
+
+
+def test_a_chat_id_is_all_of_its_form_not_just_a_line_of_it() -> None:
+    good = uuid.uuid4().hex
+    assert is_chat_id(good)
+    for bad in (good + "\n", "\n" + good, good[:-1], good.upper(), good + " ", "", "new"):
+        assert not is_chat_id(bad), repr(bad)
+
+
+def test_the_page_error_handler_handles_only_a_page_error() -> None:
+    """Not an `assert`, which `python -O` removes: any other exception handed
+    to it is raised again, never shown as a page."""
+    request = Request({"type": "http", "method": "GET", "path": "/chats", "headers": []})
+    assert page_error(request, PageError(404, "No such chat", "x")).status_code == 404
+    with pytest.raises(ValueError, match="not mine"):
+        page_error(request, ValueError("not mine"))
 
 
 # ---- escaping -----------------------------------------------------------------------------------
@@ -751,6 +810,20 @@ async def test_one_strict_csp_is_on_every_page_response(quote: str) -> None:
         events, _ = await ask(client)
         responses.update(await _every_page(client, events[0][1]["chat_id"]))
     assert len(responses) == 7
+    # and on the refusals no page makes: the fragment's 404, 401 and 422, and a
+    # method the routes don't take
+    async with await client_for(FakeGenerator()) as other:
+        responses["fragment, signed out (401)"] = await other.get(
+            f"/chats/{uuid.uuid4().hex}/turns"
+        )
+        await sign_in(other)
+        responses["fragment, no such chat (404)"] = await other.get(
+            f"/chats/{uuid.uuid4().hex}/turns"
+        )
+        responses["fragment, not a chat id (404)"] = await other.get("/chats/nope/turns")
+        responses["POST /chats (405)"] = await other.post("/chats")
+        responses["POST /chats/new (405)"] = await other.post("/chats/new")
+    assert [r.status_code for n, r in responses.items() if "(" in n] == [401, 404, 404, 405, 405]
     for name, response in responses.items():
         assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY, name
         assert response.headers["x-content-type-options"] == "nosniff", name
@@ -803,9 +876,6 @@ async def test_no_page_has_an_inline_script_handler_style_or_a_foreign_asset(quo
         events, _ = await ask(client)
         pages = await _every_page(client, several)
         pages["new chat answered"] = await client.get(f"/chats/{events[0][1]['chat_id']}")
-        pages["fragment refined"] = await client.get(
-            f"/chats/{several}/turns?refine=policy_corpus_too_large&estimated_tokens=9&cap_tokens=3"
-        )
         pages["403"] = await client.get(
             "/chats",
             headers={
