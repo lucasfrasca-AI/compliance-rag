@@ -1514,6 +1514,10 @@ class Member:
 
     uid: str
     email: str
+    expires_at: int | None = field(default=None, compare=False)
+    """When the token that signed them in expires (Unix seconds), for a verifier
+    that has one. A session made from the token ends no later (#280). Not part
+    of who they are, so not compared."""
 
 
 class Unauthenticated(Exception):
