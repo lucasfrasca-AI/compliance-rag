@@ -4,12 +4,15 @@ two routes that start and end a session (`session.py` has the cookie).
 The page loads only files this service serves (`/static`, with the Firebase Auth
 SDK vendored under `static/vendor/firebase`, version and hashes in its README),
 so it has one origin and one CSP. The only other hosts it may reach are
-Firebase's own sign-in endpoints, named in `CONTENT_SECURITY_POLICY`.
+Firebase's own sign-in endpoints, named in `CONTENT_SECURITY_POLICY`, and, for
+Google sign-in by popup, Google's gapi script and the project's auth domain
+(`sign_in_content_security_policy`, this page only).
 """
 
 from __future__ import annotations
 
 import html
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -24,25 +27,66 @@ from compliance_rag.api.session import COOKIE_NAME, SessionCodec
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-CONTENT_SECURITY_POLICY = "; ".join(
+_SHARED_DIRECTIVES: tuple[tuple[str, str], ...] = (
+    ("default-src", "'none'"),
+    ("script-src", "'self'"),
+    ("style-src", "'self'"),
+    ("img-src", "'self'"),
+    # The Ask pages' citation panel frames a source (`/v1/sources`, which
+    # is sandboxed by its own CSP); nothing else may be framed.
+    ("frame-src", "'self'"),
     (
-        "default-src 'none'",
-        "script-src 'self'",
-        "style-src 'self'",
-        "img-src 'self'",
-        # The Ask pages' citation panel frames a source (`/v1/sources`, which
-        # is sandboxed by its own CSP); nothing else may be framed.
-        "frame-src 'self'",
-        "connect-src 'self' https://identitytoolkit.googleapis.com "
-        "https://securetoken.googleapis.com",
-        "form-action 'self'",
-        "base-uri 'none'",
-        "frame-ancestors 'none'",
-    )
+        "connect-src",
+        "'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com",
+    ),
+    ("form-action", "'self'"),
+    ("base-uri", "'none'"),
+    ("frame-ancestors", "'none'"),
 )
-"""The one policy for the API's pages: scripts, styles and images from this
-origin only, no inline script or style, and Firebase's two token endpoints as
-the only other hosts a page may call."""
+
+CONTENT_SECURITY_POLICY = "; ".join(f"{name} {value}" for name, value in _SHARED_DIRECTIVES)
+"""The one policy for the Ask pages and every error response under them: scripts,
+styles and images from this origin only, no inline script or style, and Firebase's
+two token endpoints as the only other hosts a page may call. The sign-in page alone
+has a wider one (`sign_in_content_security_policy`)."""
+
+GOOGLE_GAPI_HOST = "https://apis.google.com"
+"""Added to the sign-in page's `script-src` and nowhere else. Firebase Auth's popup
+flow (`browserPopupRedirectResolver`) injects a `<script>` for `<host>/js/api.js`
+(`gapiScript` in the vendored `firebase-auth.js`), and gapi loads its own modules
+from the same host. It is Google's script, not ours, and Google serves it
+unversioned, so it cannot be pinned by hash. The human decided on 2026-11-08 to
+allow it (#291)."""
+
+_HOSTNAME = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::\d{1,5})?"
+)
+
+
+def sign_in_content_security_policy(auth_domain: str) -> str:
+    """The sign-in page's policy: `CONTENT_SECURITY_POLICY` plus two named
+    additions, each only for Google sign-in by popup (#291).
+
+    - `script-src` gains `GOOGLE_GAPI_HOST` (why, there).
+    - `frame-src` gains the project's auth domain: Firebase frames
+      `https://<authDomain>/__/auth/iframe` (`getIframeUrl` in the vendored SDK)
+      to receive the popup's result.
+    - `connect-src` gains nothing: the SDK's own calls go to
+      `identitytoolkit.googleapis.com` and `securetoken.googleapis.com`, which the
+      shared policy already names; the popup is a separate browsing context with
+      its own policy, and gapi talks to the frame by `postMessage`.
+
+    `auth_domain` is configuration, but it lands in a header, so anything that is
+    not a hostname (a space, a `;`, a scheme, a wildcard) is refused."""
+    if _HOSTNAME.fullmatch(auth_domain) is None:
+        raise ValueError("the auth domain is not a hostname")
+    wider = {
+        "script-src": f"'self' {GOOGLE_GAPI_HOST}",
+        "frame-src": f"'self' https://{auth_domain}",
+    }
+    return "; ".join(f"{name} {wider.get(name, value)}" for name, value in _SHARED_DIRECTIVES)
+
 
 router = APIRouter()
 
@@ -101,6 +145,10 @@ async def sign_in_page(request: Request) -> HTMLResponse:
         "auth-domain": settings.web_auth_domain,
         "project-id": settings.firebase_project_id,
     }
+    try:
+        policy = sign_in_content_security_policy(settings.web_auth_domain)
+    except ValueError:
+        raise HTTPException(503, "the sign-in page is not configured") from None
     attributes = " ".join(f'data-{k}="{html.escape(v, quote=True)}"' for k, v in config.items())
     page = f"""<!doctype html>
 <html lang="en">
@@ -119,6 +167,7 @@ async def sign_in_page(request: Request) -> HTMLResponse:
 <input name="password" type="password" autocomplete="current-password" required></label>
 <button type="submit">Sign in</button>
 </form>
+<p id="google-row"><button id="google-sign-in" type="button">Sign in with Google</button></p>
 <p id="signin-status" role="status"></p>
 <p id="signed-in" hidden>Signed in as <strong id="signed-in-email"></strong>.
 <a href="/chats">Open your chats</a>
@@ -131,7 +180,7 @@ async def sign_in_page(request: Request) -> HTMLResponse:
     return HTMLResponse(
         page,
         headers={
-            "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+            "Content-Security-Policy": policy,
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
