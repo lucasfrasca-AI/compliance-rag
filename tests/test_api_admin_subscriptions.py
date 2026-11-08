@@ -263,15 +263,27 @@ async def test_every_button_is_a_post_form_with_its_own_stable_id(admin: World) 
     )
 
 
-async def test_subscribing_twice_and_unsubscribing_what_was_never_ticked_are_harmless(
-    admin: World,
-) -> None:
+async def test_subscribing_twice_is_silent(admin: World) -> None:
     await admin.app.post(f"{PAGE}/{SPAM}/subscribe", headers=HTMX)
     again = await admin.app.post(f"{PAGE}/{SPAM}/subscribe", headers=HTMX)
     assert again.status_code == 200 and await subscriptions(admin.ledger) == [PRIVACY, SPAM]
-    await admin.app.post(f"{PAGE}/{SPAM}/unsubscribe", headers=HTMX)
-    once_more = await admin.app.post(f"{PAGE}/{SPAM}/unsubscribe", headers=HTMX)
-    assert once_more.status_code == 200 and await subscriptions(admin.ledger) == [PRIVACY]
+    assert not parsed(again.text).where("p", role="alert")
+
+
+async def test_unsubscribing_what_was_not_subscribed_changes_nothing_and_says_so(
+    admin: World,
+) -> None:
+    """Another admin, or another tab, may have got there first: a no-op, in
+    words, not an error. The other tenant's tick on the same instrument stays."""
+    for headers in (HTMX, {}):
+        response = await admin.app.post(f"{PAGE}/{SPAM}/unsubscribe", headers=headers)
+        assert response.status_code == 200
+        assert f"{SPAM} was not subscribed, so nothing changed." in words(response.text)
+        assert rows_of(response.text) == {PRIVACY: "subscribed", SPAM: "unsubscribed"}
+        assert await subscriptions(admin.ledger) == [PRIVACY]
+        assert await subscriptions(admin.ledger, "other-tenant") == [SPAM]
+    fragment = (await admin.app.post(f"{PAGE}/{SPAM}/unsubscribe", headers=HTMX)).text
+    assert "<html" not in fragment and parsed(fragment).where("p", role="alert")
 
 
 @pytest.mark.parametrize("instrument", ["not:a-library-id", "acme~policy", "has%20a%20space"])
@@ -349,7 +361,7 @@ async def test_a_member_gets_a_403_page_not_the_panel(member: World) -> None:
     assert response.status_code == 403
     assert response.headers["content-type"].startswith("text/html")
     assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
-    assert "subscriptions" not in rows_of(response.text) and rows_of(response.text) == {}
+    assert rows_of(response.text) == {}
     assert PRIVACY not in response.text and SPAM_TITLE not in response.text
 
 
@@ -376,8 +388,13 @@ async def test_a_member_sees_no_link_to_the_panel_and_an_admin_does(
         assert mine.status_code == 200 and PAGE not in mine.text, path
         theirs = await admin.app.get(path)
         assert parsed(theirs.text).where("a", href=PAGE), path
-    # an error page names no one's role, so it has no link for anyone
+    # the link follows the reader on every page that extends the shell, error
+    # pages included: no page passes it, `render` reads it from the one place
+    missing = f"/chats/{'a' * 12}4{'b' * 3}8{'c' * 15}"
+    assert (await member.app.get(missing)).status_code == 404
+    assert PAGE not in (await member.app.get(missing)).text
     assert PAGE not in (await member.app.get(PAGE)).text
+    assert parsed((await admin.app.get(missing)).text).where("a", href=PAGE)
 
 
 async def test_the_role_is_read_on_every_request_so_a_removed_admin_loses_the_panel() -> None:
@@ -404,6 +421,29 @@ async def test_nobody_signed_in_is_sent_to_sign_in_and_changes_nothing() -> None
             assert response.status_code == 303, (method, path)
             assert response.headers["location"] == "/signin"
         assert await subscriptions(world.ledger) == [PRIVACY]
+
+
+async def test_an_htmx_write_when_signed_out_is_told_to_leave_not_given_the_sign_in_page() -> None:
+    """A 303 would be followed by htmx and the whole sign-in page swapped into
+    the panel. Nothing in the body to swap; `HX-Redirect` sends the browser."""
+    async for world in _world():
+        for action, instrument in (("subscribe", SPAM), ("unsubscribe", PRIVACY)):
+            response = await world.app.post(f"{PAGE}/{instrument}/{action}", headers=HTMX)
+            assert response.status_code == 401
+            assert response.headers["hx-redirect"] == "/signin"
+            assert response.text == "" and "location" not in response.headers
+            assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
+        assert await subscriptions(world.ledger) == [PRIVACY]
+
+
+async def test_an_htmx_write_by_a_member_is_only_the_refusal_never_a_page(member: World) -> None:
+    response = await member.app.post(f"{PAGE}/{SPAM}/subscribe", headers=HTMX)
+    assert response.status_code == 403
+    assert "<html" not in response.text and "<nav" not in response.text
+    scan = parsed(response.text)
+    assert scan.where("p", role="alert") and "Admins only" in words(response.text)
+    assert not scan.where("script") and not scan.where("form")
+    assert await subscriptions(member.ledger) == [PRIVACY]
 
 
 async def test_an_address_outside_the_workspace_is_refused_even_if_listed_as_an_admin() -> None:
@@ -486,6 +526,17 @@ async def test_markup_in_a_library_title_reaches_the_browser_as_text() -> None:
             assert "<img" not in text and "<script>alert" not in text
             assert "&lt;img src=x onerror=alert(1)&gt;" in text
             assert rows_of(text)[SPAM] in {"subscribed", "unsubscribed"}
+
+
+async def test_a_hostile_id_in_the_url_is_echoed_as_text_if_at_all(admin: World) -> None:
+    hostile = "%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E"
+    for headers in (HTMX, {}):
+        for action in ("subscribe", "unsubscribe"):
+            response = await admin.app.post(f"{PAGE}/{hostile}/{action}", headers=headers)
+            assert response.status_code in {200, 422}
+            assert "<img" not in response.text and "onerror=alert(1)>" not in response.text
+            assert "&lt;img src=x onerror=alert(1)&gt;" in response.text
+    assert await subscriptions(admin.ledger) == [PRIVACY]
 
 
 def test_admin_js_never_writes_html_and_is_not_inline() -> None:

@@ -94,7 +94,7 @@ and the config that keeps it inside the CSP).
   the estimate and the cap, #289) is the same card live and after a reload. If the ledger
   did not record the exchange, `ask.js` (which compares the chat's turn count before and
   after) says so and shows the stream's own outcome as text under "Not saved to this chat".
-- Every response under `/chats`, errors included, carries the CSP (`pages.PageHeaders`).
+- Every response under `/chats` and `/admin`, errors included, carries the CSP (`pages.PageHeaders`).
 - `ask.js` is not exercised by CI (no browser there). It was driven in headless Chrome
   against the app over fakes at 390px wide (ask, progress, panel, follow-up, withheld,
   failure, an unrecorded exchange, sign-out); the tests make the same requests in the same
@@ -111,8 +111,9 @@ carries it (`pages.PageHeaders`).
 - **Admin only on every request.** Each route takes `admin.PageAdmin`: signed out redirects to
   `/signin`, a signed-in member who is not an admin (`deps.is_admin`, `API_ADMINS` read afresh)
   gets a 403 page, including on the writes. The nav shows the "Subscriptions" link only to an
-  admin (`render(..., admin=...)`); an error page never shows it. Showing or hiding the link
-  decides nothing: the routes do.
+  admin. The flag is set once per request, by `pages.page_caller`, and `render(request, ...)`
+  reads it, so no page passes it and none can drop it; an error page shows it to an admin whose
+  session resolved. Showing or hiding the link decides nothing: the routes do.
 - **The panel has no rule of its own.** `POST /admin/subscriptions/{id}/subscribe|unsubscribe`
   call `tenant.subscribe_tenant` and `tenant.unsubscribe_tenant`, the operations `PUT` and
   `DELETE /v1/subscriptions/{id}` call. Unsubscribing deletes the subscription row and touches no
@@ -124,6 +125,11 @@ carries it (`pages.PageHeaders`).
   records nothing (a 200 fragment, because htmx does not swap an error status; a 422 page without
   script). `admin.js` handles only what htmx leaves alone: a refused write (a 403 for an admin
   removed mid-session, a 401 to sign-in) and a send failure, in text via `textContent`.
+- **Signed out or refused, an htmx request gets no page.** A 303 would be followed and the whole
+  sign-in page swapped into the panel, so an htmx request (`HX-Request: true`) that needs sign-in
+  gets a 401 with `HX-Redirect: /signin` and an empty body, and a refused one (the 403 page) gets
+  only the refusal as a fragment (`_refusal.html`). Unsubscribing what was not subscribed is a
+  no-op the panel says so in words (status 200); subscribing twice is silent.
 - **A subscription the library no longer lists** is shown, marked, and can be removed.
 - `admin.js` is not exercised by CI (no browser there), like `ask.js`; the tests make the
   requests it causes.

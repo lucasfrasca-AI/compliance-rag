@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from compliance_rag.api.deps import Caller, is_admin, services_of, today
-from compliance_rag.api.pages import PAGE_HEADERS, PageCaller, PageError, render
+from compliance_rag.api.pages import PAGE_HEADERS, PageCaller, PageError, is_htmx, render
 from compliance_rag.api.tenant import subscribe_tenant, unsubscribe_tenant
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID
 
@@ -85,16 +85,12 @@ async def _panel(
     request: Request, who: Caller, *, fragment: bool, notice: str | None = None, status: int = 200
 ) -> HTMLResponse:
     return render(
+        request,
         "_subscriptions.html" if fragment else "subscriptions.html",
         status=status,
-        admin=True,
         rows=await _rows(request, who),
         notice=notice,
     )
-
-
-def _is_htmx(request: Request) -> bool:
-    return request.headers.get("hx-request") == "true"
 
 
 @router.get("/subscriptions", response_class=HTMLResponse)
@@ -105,18 +101,29 @@ async def subscriptions_page(request: Request, who: PageAdmin) -> HTMLResponse:
 async def _change(
     request: Request, who: Caller, instrument_id: str, *, subscribe: bool
 ) -> Response:
+    """Subscribing twice is silent (the adapter is idempotent). Unsubscribing
+    what the workspace isn't subscribed to changes nothing, and the panel says so
+    (another admin, or another tab, got there first); it is not an error, so the
+    status is 200. An id the adapter refuses is a 422 on the full page."""
     notice: str | None = None
+    refused_id = False
     try:
         if subscribe:
             await subscribe_tenant(request, who, instrument_id)
-        else:
+        elif instrument_id in await services_of(request).ledger.subscribed_instruments(
+            who.tenant_id
+        ):
             await unsubscribe_tenant(request, who, instrument_id)
+        else:
+            notice = f"{instrument_id} was not subscribed, so nothing changed."
     except ValueError as refused:
-        notice = f"Not subscribed: {refused}"
-    if _is_htmx(request):
+        notice, refused_id = f"Not subscribed: {refused}", True
+    if is_htmx(request):
         return await _panel(request, who, fragment=True, notice=notice)
     if notice is not None:
-        return await _panel(request, who, fragment=False, notice=notice, status=422)
+        return await _panel(
+            request, who, fragment=False, notice=notice, status=422 if refused_id else 200
+        )
     return RedirectResponse(PANEL_PATH, status_code=303, headers=PAGE_HEADERS)
 
 

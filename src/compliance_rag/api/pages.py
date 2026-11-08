@@ -153,25 +153,47 @@ class PageError(Exception):
         self.message = message
 
 
-def render(name: str, *, status: int = 200, admin: bool = False, **context: object) -> HTMLResponse:
-    """`admin` is whether the page's reader is an admin: it decides only whether
-    the nav links the admin panel. It is never what lets anyone in; the panel's
-    own routes check the role on every request."""
+def render(request: Request, name: str, *, status: int = 200, **context: object) -> HTMLResponse:
+    """Every page is drawn here, and `is_admin` (whether the nav links the admin
+    panel) is set here, from the one place that decides it: `page_caller`, which
+    records the reader's role on the request once. A page cannot forget it, and an
+    error page, drawn without a resolved reader, never shows the link. The flag
+    shows or hides a link and nothing else: the panel's routes check the role on
+    every request."""
+    shown = bool(getattr(request.state, "is_admin", False))
     return HTMLResponse(
-        ENV.get_template(name).render(is_admin=admin, **context),
+        ENV.get_template(name).render(is_admin=shown, **context),
         status_code=status,
         headers=PAGE_HEADERS,
     )
 
 
-def sign_in_required(_: Request, __: Exception) -> Response:
+def is_htmx(request: Request) -> bool:
+    return request.headers.get("hx-request") == "true"
+
+
+def sign_in_required(request: Request, __: Exception) -> Response:
+    """To sign in. htmx follows a 303 and would swap the whole sign-in page into
+    the fragment it targets, so an htmx request is told to leave instead:
+    `HX-Redirect` makes htmx load `/signin` itself, and the 401 (which htmx does
+    not swap) is what `admin.js` turns into the same redirect if it is ever
+    ignored."""
+    if is_htmx(request):
+        return Response(status_code=401, headers={**PAGE_HEADERS, "HX-Redirect": "/signin"})
     return RedirectResponse("/signin", status_code=303, headers=PAGE_HEADERS)
 
 
-def page_error(_: Request, error: Exception) -> Response:
+def page_error(request: Request, error: Exception) -> Response:
     if not isinstance(error, PageError):  # registered for PageError alone
         raise error
-    return render("message.html", status=error.status, title=error.title, message=error.message)
+    if is_htmx(request):
+        # Only the refusal, never a whole page, for a fragment to show.
+        return render(
+            request, "_refusal.html", status=error.status, title=error.title, message=error.message
+        )
+    return render(
+        request, "message.html", status=error.status, title=error.title, message=error.message
+    )
 
 
 async def page_caller(
@@ -189,14 +211,12 @@ async def page_caller(
                 403, "Not a member", "This account is not a member of this workspace."
             ) from None
         raise PageError(503, "Try again shortly", "Sign-in can't be checked right now.") from None
-    return await current_caller(request, member)
+    caller = await current_caller(request, member)
+    request.state.is_admin = is_admin(services_of(request).settings, caller.member.email)
+    return caller
 
 
 PageCaller = Annotated[Caller, Depends(page_caller)]
-
-
-def reader_is_admin(request: Request, who: Caller) -> bool:
-    return is_admin(services_of(request).settings, who.member.email)
 
 
 def _no_such_chat() -> PageError:
@@ -214,20 +234,12 @@ def _heading(turns: list[dict[str, object]]) -> str:
 @router.get("/chats", response_class=HTMLResponse)
 async def chats_page(request: Request, who: PageCaller) -> HTMLResponse:
     chats = await services_of(request).ledger.chats(who.tenant_id, who.member.uid)
-    return render(
-        "chats.html", admin=reader_is_admin(request, who), chats=chats, email=who.member.email
-    )
+    return render(request, "chats.html", chats=chats, email=who.member.email)
 
 
 @router.get("/chats/new", response_class=HTMLResponse)
-async def new_chat_page(request: Request, who: PageCaller) -> HTMLResponse:
-    return render(
-        "chat.html",
-        admin=reader_is_admin(request, who),
-        chat_id=None,
-        heading="New chat",
-        turns=[],
-    )
+async def new_chat_page(request: Request, _: PageCaller) -> HTMLResponse:
+    return render(request, "chat.html", chat_id=None, heading="New chat", turns=[])
 
 
 @router.get("/chats/{chat_id}", response_class=HTMLResponse)
@@ -239,13 +251,7 @@ async def chat_page(request: Request, who: PageCaller, chat_id: str) -> HTMLResp
     )
     if turns is None:
         raise _no_such_chat()
-    return render(
-        "chat.html",
-        admin=reader_is_admin(request, who),
-        chat_id=chat_id,
-        heading=_heading(turns),
-        turns=turns,
-    )
+    return render(request, "chat.html", chat_id=chat_id, heading=_heading(turns), turns=turns)
 
 
 @router.get("/chats/{chat_id}/turns", response_class=HTMLResponse)
@@ -261,4 +267,4 @@ async def turns_fragment(
     )
     if turns is None:
         raise HTTPException(404, "no such chat")
-    return render("_turns.html", turns=turns)
+    return render(request, "_turns.html", turns=turns)
