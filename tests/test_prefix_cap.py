@@ -24,7 +24,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import TurnOutcome
+from compliance_rag.adapters.interfaces import PrefixMeasure, TurnOutcome
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.assessment.prefix_cap import (
     CHARS_PER_TOKEN,
@@ -295,6 +295,7 @@ async def test_the_error_reaches_the_stream_and_the_chat_as_an_error_turn() -> N
     # Recorded as the chat's error turn, as a model that refused for quota is
     # (#251): the member's question, then a marker, and nothing else.
     turns = await ledger.chat_turns(POLICY_TENANT_ID, "uid-123", error["chat_id"])
-    assert [t.outcome for t in turns] == [None, TurnOutcome.INTERNAL]
+    assert [t.outcome for t in turns] == [None, TurnOutcome.POLICY_CORPUS_TOO_LARGE]
+    assert turns[1].prefix == PrefixMeasure(error["estimated_tokens"], error["cap_tokens"])
     assert turns[1].content is None and not turns[1].citations and not turns[1].blocked
     assert json.loads(json.dumps(error)) == error

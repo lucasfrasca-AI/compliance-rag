@@ -27,6 +27,7 @@ from compliance_rag.adapters.interfaces import (
     ChatTurn,
     LedgerStore,
     PolicyVersion,
+    PrefixMeasure,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
@@ -35,6 +36,7 @@ from compliance_rag.adapters.interfaces import (
     SourceVersion,
     TurnOutcome,
     TurnRole,
+    Unavailability,
     UsageRecord,
 )
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
@@ -826,6 +828,82 @@ async def test_the_fake_ledger_satisfies_the_environment_contract() -> None:
 
 async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:
     await assert_chat_contract(FakeLedgerStore())
+
+
+async def assert_refusal_outcomes_contract(ledger: LedgerStore) -> None:
+    """A refused generation and an over-cap corpus are their own outcomes, kept
+    with their one reason or measure (#289), and read back as recorded."""
+    await ledger.put_profile(Profile("acme"))
+    unavailable = ChatAnswer(TurnOutcome.GENERATION_UNAVAILABLE, unavailable=Unavailability.QUOTA)
+    too_large = ChatAnswer(
+        TurnOutcome.POLICY_CORPUS_TOO_LARGE, prefix=PrefixMeasure(31_204, 30_000)
+    )
+    for number, shown in enumerate((unavailable, too_large, ChatAnswer(TurnOutcome.INTERNAL))):
+        await ledger.record_chat_exchange(
+            an_exchange("refused", answer=shown, trace_id=f"{number}" * 32)
+        )
+    stored = await ledger.chat_turns("acme", "uid-1", "refused")
+    assert [(t.outcome, t.content, t.citations, t.blocked) for t in stored[1::2]] == [
+        (TurnOutcome.GENERATION_UNAVAILABLE, None, (), ()),
+        (TurnOutcome.POLICY_CORPUS_TOO_LARGE, None, (), ()),
+        (TurnOutcome.INTERNAL, None, (), ()),
+    ]
+    assert [(t.unavailable, t.prefix) for t in stored[1::2]] == [
+        (Unavailability.QUOTA, None),
+        (None, PrefixMeasure(31_204, 30_000)),
+        (None, None),
+    ]
+    # the question turns hold no detail; and the turns are exactly as written
+    assert [(t.unavailable, t.prefix) for t in stored[0::2]] == [(None, None)] * 3
+    assert tuple(replace(t, created_at=None) for t in stored[:2]) == an_exchange(
+        "refused", answer=unavailable, trace_id="0" * 32
+    ).turns(0)
+
+
+async def test_the_fake_ledger_satisfies_the_refusal_outcomes_contract() -> None:
+    await assert_refusal_outcomes_contract(FakeLedgerStore())
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(lambda: ChatAnswer(TurnOutcome.GENERATION_UNAVAILABLE), id="no-reason"),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.INTERNAL, unavailable=Unavailability.QUOTA),
+            id="a-reason-on-another-outcome",
+        ),
+        pytest.param(
+            lambda: ChatAnswer(
+                TurnOutcome.GENERATION_UNAVAILABLE,
+                unavailable=Unavailability.QUOTA,
+                prefix=PrefixMeasure(1, 2),
+            ),
+            id="both-details",
+        ),
+        pytest.param(lambda: ChatAnswer(TurnOutcome.POLICY_CORPUS_TOO_LARGE), id="no-measure"),
+        pytest.param(
+            lambda: ChatAnswer(TurnOutcome.VERIFIED, "t", prefix=PrefixMeasure(1, 2)),
+            id="a-measure-on-a-verified-answer",
+        ),
+        pytest.param(lambda: PrefixMeasure(-1, 2), id="negative-estimate"),
+        pytest.param(lambda: PrefixMeasure(1, -2), id="negative-cap"),
+        pytest.param(lambda: PrefixMeasure(1.5, 2), id="fractional"),  # pyright: ignore[reportArgumentType]
+        pytest.param(lambda: PrefixMeasure(True, 2), id="a-bool"),
+    ],
+)
+def test_a_refusal_names_its_one_detail_and_no_other_turn_does(build: Callable[[], object]) -> None:
+    with pytest.raises(ValueError):
+        build()
+
+
+def test_both_refusals_are_failures_so_they_carry_no_flag() -> None:
+    assert TurnOutcome.GENERATION_UNAVAILABLE.failed and TurnOutcome.POLICY_CORPUS_TOO_LARGE.failed
+    with pytest.raises(ValueError, match="marker only"):
+        ChatAnswer(
+            TurnOutcome.GENERATION_UNAVAILABLE,
+            unavailable=Unavailability.QUOTA,
+            not_in_environment=(NotInEnvironment("spam act"),),
+        )
 
 
 @pytest.mark.parametrize(

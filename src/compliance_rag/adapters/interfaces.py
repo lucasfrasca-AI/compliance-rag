@@ -501,6 +501,14 @@ class TurnOutcome(StrEnum):
     """The model's reply wasn't a valid answer; nothing in it is kept."""
     INTERNAL = "internal"
     """The answer couldn't be completed."""
+    GENERATION_UNAVAILABLE = "generation_unavailable"
+    """The model refused the request, for a reason in `Unavailability` (the
+    429 quota case, #251). Kept with that reason, never the provider's words
+    (#289). Rows recorded before it existed read `internal`."""
+    POLICY_CORPUS_TOO_LARGE = "policy_corpus_too_large"
+    """The CAG prefix was over the cap (ADR-0054), refused before any model was
+    called. Kept with the measured estimate and the cap (#289). Rows recorded
+    before it existed read `internal`."""
 
     @property
     def failed(self) -> bool:
@@ -508,7 +516,24 @@ class TurnOutcome(StrEnum):
             TurnOutcome.RESIDENCY,
             TurnOutcome.MALFORMED_GENERATION,
             TurnOutcome.INTERNAL,
+            TurnOutcome.GENERATION_UNAVAILABLE,
+            TurnOutcome.POLICY_CORPUS_TOO_LARGE,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PrefixMeasure:
+    """What a request refused for an over-cap policy corpus was told: the
+    prefix's estimated size and the cap, in tokens (ADR-0054). A measurement,
+    never the policies' words."""
+
+    estimated_tokens: int
+    cap_tokens: int
+
+    def __post_init__(self) -> None:
+        for value in (self.estimated_tokens, self.cap_tokens):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:  # pyright: ignore[reportUnnecessaryIsInstance] — a stored value is not trusted
+                raise ValueError("a prefix measure is two non-negative whole numbers")
 
 
 @dataclass(frozen=True, slots=True)
@@ -613,10 +638,19 @@ class ChatAnswer:
     answer: set by the pipeline from the question, never by the model, and
     kept with a verified or a withheld answer alike. A failed request shows
     only its marker, so it carries none."""
+    unavailable: Unavailability | None = None
+    """Why the model refused, for `GENERATION_UNAVAILABLE` only: our word for
+    it, never the provider's message (#289)."""
+    prefix: PrefixMeasure | None = None
+    """The estimate and the cap, for `POLICY_CORPUS_TOO_LARGE` only (#289)."""
 
     def __post_init__(self) -> None:
         if self.outcome.failed and self.not_in_environment:
             raise ValueError("a failed request is a marker only: it carries no flag")
+        if (self.unavailable is not None) != (self.outcome is TurnOutcome.GENERATION_UNAVAILABLE):
+            raise ValueError("a refused generation names its reason, and no other turn does")
+        if (self.prefix is not None) != (self.outcome is TurnOutcome.POLICY_CORPUS_TOO_LARGE):
+            raise ValueError("an over-cap corpus names its measure, and no other turn does")
         if self.outcome is TurnOutcome.VERIFIED:
             if self.text is None or not self.text.strip() or not self.citations or self.blocked:
                 raise ValueError("a verified answer has its text and citations, and none blocked")
@@ -667,6 +701,11 @@ class ChatTurn:
     """An answer's flags: the instruments its question named that the
     environment didn't hold (#252). As recorded, a corrupt stored one read
     back as an `UnreadableNotInEnvironment` in its place."""
+    unavailable: Unavailability | None = None
+    """For a `GENERATION_UNAVAILABLE` turn: the reason (#289)."""
+    prefix: PrefixMeasure | None = None
+    """For a `POLICY_CORPUS_TOO_LARGE` turn: the estimate and the cap (#289).
+    None on such a turn too if its stored measure couldn't be read."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -695,6 +734,8 @@ class ChatExchange:
                 answer.citations,
                 answer.blocked,
                 answer.not_in_environment,
+                answer.unavailable,
+                answer.prefix,
             ),
         )
 
@@ -707,6 +748,8 @@ class ChatExchange:
         citations: tuple[ChatCitation, ...],
         blocked: tuple[str, ...],
         not_in_environment: tuple[NotInEnvironment, ...] = (),
+        unavailable: Unavailability | None = None,
+        prefix: PrefixMeasure | None = None,
     ) -> ChatTurn:
         return ChatTurn(
             tenant_id=self.tenant_id,
@@ -721,6 +764,8 @@ class ChatExchange:
             as_of=self.as_of,
             trace_id=self.trace_id,
             not_in_environment=not_in_environment,
+            unavailable=unavailable,
+            prefix=prefix,
         )
 
 

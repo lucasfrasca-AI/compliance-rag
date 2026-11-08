@@ -61,6 +61,7 @@ from tests.contracts.test_ledger import (
     assert_chat_contract,
     assert_environment_titles_contract,
     assert_ledger_contract,
+    assert_refusal_outcomes_contract,
 )
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -131,6 +132,12 @@ async def test_postgres_satisfies_the_ledger_contract(ledger: PostgresLedgerStor
 
 async def test_postgres_satisfies_the_chat_contract(ledger: PostgresLedgerStore) -> None:
     await assert_chat_contract(ledger)
+
+
+async def test_postgres_satisfies_the_refusal_outcomes_contract(
+    ledger: PostgresLedgerStore,
+) -> None:
+    await assert_refusal_outcomes_contract(ledger)
 
 
 async def test_postgres_satisfies_the_environment_contract(ledger: PostgresLedgerStore) -> None:

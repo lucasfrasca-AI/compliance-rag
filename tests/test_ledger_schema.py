@@ -807,6 +807,11 @@ def _chat_turn(
     )
 
 
+QUOTA_DETAIL = Jsonb({"reason": "quota"})
+MEASURE_DETAIL = Jsonb({"estimated_tokens": 31204, "cap_tokens": 30000})
+FLAG = Jsonb([{"named": "x", "known_as": None, "part_of": None}])
+
+
 def _answer(**changes: object) -> dict[str, object]:
     return {"turn_index": 1, "role": "assistant", "content": None, **changes}
 
@@ -820,6 +825,15 @@ def _answer(**changes: object) -> dict[str, object]:
         pytest.param(_answer(outcome="residency"), id="residency"),
         pytest.param(_answer(outcome="malformed_generation"), id="malformed"),
         pytest.param(_answer(outcome="internal"), id="internal"),
+        # 0019 (#289): the two refusals, each with its one detail
+        pytest.param(
+            _answer(outcome="generation_unavailable", outcome_detail=QUOTA_DETAIL),
+            id="generation-unavailable",
+        ),
+        pytest.param(
+            _answer(outcome="policy_corpus_too_large", outcome_detail=MEASURE_DETAIL),
+            id="policy-corpus-too-large",
+        ),
     ],
 )
 def test_a_chat_holds_a_question_and_what_the_member_was_shown(
@@ -863,6 +877,114 @@ def test_a_chat_holds_a_question_and_what_the_member_was_shown(
             id="verified-and-blocked",
         ),
         pytest.param(_answer(outcome="maybe"), id="unknown-outcome"),
+        # 0019 (#289): a refusal holds its one detail and nothing else, and no
+        # other turn holds a detail. In particular no free text: the provider's
+        # words can't be stored in it.
+        pytest.param(_answer(outcome="generation_unavailable"), id="refused-without-a-reason"),
+        pytest.param(
+            _answer(
+                outcome="generation_unavailable",
+                outcome_detail=Jsonb({"reason": "Quota exceeded: token ya29.SECRET"}),
+            ),
+            id="refused-with-the-providers-words-as-the-reason",
+        ),
+        pytest.param(
+            _answer(
+                outcome="generation_unavailable",
+                outcome_detail=Jsonb({"reason": "quota", "message": "ya29.SECRET"}),
+            ),
+            id="refused-with-a-message-beside-the-reason",
+        ),
+        pytest.param(
+            _answer(outcome="generation_unavailable", outcome_detail=Jsonb({"reason": 5})),
+            id="refused-with-a-numeric-reason",
+        ),
+        pytest.param(
+            _answer(outcome="generation_unavailable", outcome_detail=Jsonb("quota")),
+            id="refused-with-a-scalar-detail",
+        ),
+        pytest.param(
+            _answer(outcome="generation_unavailable", outcome_detail=Jsonb(["quota"])),
+            id="refused-with-an-array-detail",
+        ),
+        pytest.param(
+            _answer(outcome="generation_unavailable", outcome_detail=MEASURE_DETAIL),
+            id="refused-with-a-measure",
+        ),
+        pytest.param(
+            _answer(outcome="generation_unavailable", outcome_detail=QUOTA_DETAIL, content="x"),
+            id="refused-with-text",
+        ),
+        pytest.param(
+            _answer(
+                outcome="generation_unavailable",
+                outcome_detail=QUOTA_DETAIL,
+                not_in_environment=FLAG,
+            ),
+            id="refused-with-a-flag",
+        ),
+        pytest.param(_answer(outcome="policy_corpus_too_large"), id="too-large-without-a-measure"),
+        pytest.param(
+            _answer(outcome="policy_corpus_too_large", outcome_detail=QUOTA_DETAIL),
+            id="too-large-with-a-reason",
+        ),
+        pytest.param(
+            _answer(
+                outcome="policy_corpus_too_large",
+                outcome_detail=Jsonb({"estimated_tokens": 31204}),
+            ),
+            id="too-large-without-a-cap",
+        ),
+        pytest.param(
+            _answer(
+                outcome="policy_corpus_too_large",
+                outcome_detail=Jsonb({"estimated_tokens": 31204, "cap_tokens": 30000, "m": "x"}),
+            ),
+            id="too-large-with-a-message",
+        ),
+        pytest.param(
+            _answer(
+                outcome="policy_corpus_too_large",
+                outcome_detail=Jsonb({"estimated_tokens": -1, "cap_tokens": 30000}),
+            ),
+            id="too-large-negative",
+        ),
+        pytest.param(
+            _answer(
+                outcome="policy_corpus_too_large",
+                outcome_detail=Jsonb({"estimated_tokens": 1.5, "cap_tokens": 30000}),
+            ),
+            id="too-large-fractional",
+        ),
+        pytest.param(
+            _answer(
+                outcome="policy_corpus_too_large",
+                outcome_detail=Jsonb({"estimated_tokens": "31204", "cap_tokens": 30000}),
+            ),
+            id="too-large-numbers-as-text",
+        ),
+        pytest.param(
+            _answer(outcome="policy_corpus_too_large", outcome_detail=Jsonb(31204)),
+            id="too-large-scalar-detail",
+        ),
+        pytest.param(
+            _answer(outcome="policy_corpus_too_large", outcome_detail=MEASURE_DETAIL, content="x"),
+            id="too-large-with-text",
+        ),
+        pytest.param(
+            _answer(outcome="internal", outcome_detail=QUOTA_DETAIL), id="internal-detail"
+        ),
+        pytest.param(
+            _answer(outcome="residency", outcome_detail=MEASURE_DETAIL), id="residency-detail"
+        ),
+        pytest.param(_answer(outcome="uncited", outcome_detail=QUOTA_DETAIL), id="uncited-detail"),
+        pytest.param(
+            _answer(
+                outcome="verified", content="Text.", citations=CITED, outcome_detail=QUOTA_DETAIL
+            ),
+            id="verified-detail",
+        ),
+        pytest.param({"outcome_detail": QUOTA_DETAIL}, id="question-with-a-detail"),
         pytest.param(_answer(), id="an-answer-that-ended-no-way"),
         # A question is the member's own words and nothing else.
         pytest.param({"outcome": "verified"}, id="question-with-an-outcome"),
@@ -948,5 +1070,6 @@ def test_every_chat_rule_is_validated_on_the_rows_there_are(
         "chat_trace_id",
         "chat_outcome",
         "chat_turn_shape",
+        "chat_outcome_detail",
     }
     assert all(validated for _, validated in rows)

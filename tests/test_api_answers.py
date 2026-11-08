@@ -35,6 +35,7 @@ from compliance_rag.adapters.interfaces import (
     LedgerStore,
     Profile,
     TurnOutcome,
+    Unavailability,
 )
 from compliance_rag.api import answers
 from compliance_rag.api.app import create_app
@@ -408,7 +409,7 @@ async def test_a_vertex_quota_refusal_is_generation_unavailable_with_no_sdk_text
     through the real `VertexClaudeGenerator`. The stream ends in a typed
     `generation_unavailable` with a fixed reason and the request's trace id,
     and carries none of the SDK's words, its type or a traceback. The chat
-    records `internal`, the answer that couldn't be completed."""
+    records `generation_unavailable` with its reason (#289)."""
     ledger = await _ledger()
     requests: list[httpx.Request] = []
     generator = quota_exhausted_generator(
@@ -429,7 +430,8 @@ async def test_a_vertex_quota_refusal_is_generation_unavailable_with_no_sdk_text
     for leaked in (*SDK_WORDS, "Traceback", PLACEHOLDER_TOKEN):
         assert leaked not in response.text
     turns = await ledger.chat_turns(POLICY_TENANT_ID, "uid-123", error["chat_id"])
-    assert [t.outcome for t in turns] == [None, TurnOutcome.INTERNAL]
+    assert [t.outcome for t in turns] == [None, TurnOutcome.GENERATION_UNAVAILABLE]
+    assert turns[1].unavailable is Unavailability.QUOTA  # our word, never the provider's
     # The server's own log keeps what Vertex said, as the cause, for whoever runs it.
     logged = [r.exc_info[1] for r in caplog.records if r.exc_info]
     assert any(isinstance(e and e.__cause__, anthropic.RateLimitError) for e in logged)
