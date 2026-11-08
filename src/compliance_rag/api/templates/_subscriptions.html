@@ -1,0 +1,25 @@
+<div id="subscriptions" class="subscriptions" aria-live="polite">
+{% if notice %}
+<p class="card notice" role="alert">{{ notice }}</p>
+{% endif %}
+{% if rows %}
+<ul class="sub-list">
+{% for row in rows %}
+{% set action = "unsubscribe" if row.subscribed else "subscribe" %}
+<li data-instrument="{{ row.instrument_id }}" data-state="{{ 'subscribed' if row.subscribed else 'unsubscribed' }}">
+<div class="sub-name">
+<span class="chat-name">{{ row.title }}</span>
+<span class="meta"><code>{{ row.instrument_id }}</code> ·
+{% if row.subscribed %}<strong>Subscribed</strong>{% else %}Not subscribed{% endif %}
+{% if not row.in_library %} · not in the library now{% endif %}</span>
+</div>
+<form method="post" action="/admin/subscriptions/{{ row.instrument_id | urlencode }}/{{ action }}" hx-post="/admin/subscriptions/{{ row.instrument_id | urlencode }}/{{ action }}" hx-target="#subscriptions" hx-swap="outerHTML">
+<button type="submit" id="toggle-{{ row.instrument_id }}"{% if row.subscribed %} class="secondary"{% endif %} aria-label="{{ action | capitalize }}: {{ row.title }}">{{ action | capitalize }}</button>
+</form>
+</li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="empty">The library holds no instruments yet.</p>
+{% endif %}
+</div>

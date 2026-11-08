@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from compliance_rag.api import answers, chats, pages, sign_in, sources, tenant
+from compliance_rag.api import admin, answers, chats, pages, sign_in, sources, tenant
 from compliance_rag.api.deps import ApiServices, Caller, current_caller
 from compliance_rag.api.session import OriginGuard, codec_for
 from compliance_rag.telemetry import current_trace_id, span
@@ -94,6 +94,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(sources.router)
     app.include_router(sign_in.router)
     app.include_router(pages.router)
+    app.include_router(admin.router)
     app.add_exception_handler(pages.SignInRequired, pages.sign_in_required)
     app.add_exception_handler(pages.PageError, pages.page_error)
     app.mount("/static", sign_in.Assets(directory=sign_in.STATIC_DIR), name="static")

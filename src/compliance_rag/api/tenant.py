@@ -45,6 +45,7 @@ from compliance_rag.api.deps import (
     EARLIEST,
     LATEST,
     UUID4_HEX,
+    Caller,
     CurrentAdmin,
     CurrentCaller,
     counts,
@@ -428,15 +429,31 @@ async def list_subscriptions(request: Request, who: CurrentCaller) -> dict[str, 
     return {"instruments": sorted(subscribed)}
 
 
+async def subscribe_tenant(request: Request, who: Caller, instrument_id: str) -> None:
+    """Tick a library instrument for the caller's tenant, in their name and
+    under this request's trace. The one operation behind `PUT /v1/subscriptions`
+    and the admin panel's button (#302), so the panel has no rule of its own.
+    `ValueError` if the adapter refuses the id; the caller says how."""
+    await services_of(request).ledger.subscribe(
+        tenant_id=who.tenant_id,
+        instrument_id=instrument_id,
+        subscribed_by=who.member.email,
+        trace_id=current_trace_id(),
+    )
+
+
+async def unsubscribe_tenant(request: Request, who: Caller, instrument_id: str) -> None:
+    """The subscription row only: nothing is deleted from any store (D-17).
+    Shared with the admin panel (#302)."""
+    await services_of(request).ledger.unsubscribe(
+        tenant_id=who.tenant_id, instrument_id=instrument_id
+    )
+
+
 @router.put("/subscriptions/{instrument_id}", status_code=204)
 async def subscribe(request: Request, who: CurrentAdmin, instrument_id: str) -> Response:
     try:
-        await services_of(request).ledger.subscribe(
-            tenant_id=who.tenant_id,
-            instrument_id=instrument_id,
-            subscribed_by=who.member.email,
-            trace_id=current_trace_id(),
-        )
+        await subscribe_tenant(request, who, instrument_id)
     except ValueError as refused:
         raise HTTPException(422, str(refused)) from None
     return Response(status_code=204)
@@ -445,7 +462,5 @@ async def subscribe(request: Request, who: CurrentAdmin, instrument_id: str) -> 
 @router.delete("/subscriptions/{instrument_id}", status_code=204)
 async def unsubscribe(request: Request, who: CurrentAdmin, instrument_id: str) -> Response:
     """The subscription row only: nothing is deleted from any store (D-17)."""
-    await services_of(request).ledger.unsubscribe(
-        tenant_id=who.tenant_id, instrument_id=instrument_id
-    )
+    await unsubscribe_tenant(request, who, instrument_id)
     return Response(status_code=204)

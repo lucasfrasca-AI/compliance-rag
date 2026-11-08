@@ -14,6 +14,9 @@
 <nav aria-label="Main">
 <a href="/chats">Chats</a>
 <a href="/chats/new">New chat</a>
+{% if is_admin %}
+<a href="/admin/subscriptions">Subscriptions</a>
+{% endif %}
 <button type="button" class="link" data-sign-out>Sign out</button>
 </nav>
 </header>
