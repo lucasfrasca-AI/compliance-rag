@@ -252,6 +252,38 @@ async def get_profile(request: Request, who: CurrentCaller) -> dict[str, object]
     }
 
 
+async def record_asserted_evidence(
+    request: Request,
+    who: Caller,
+    *,
+    field: str,
+    value: FactValue,
+    period: Period,
+    source: str,
+    supersedes: str | None = None,
+) -> Evidence:
+    """Append one asserted fact in the caller's name, under this request's trace.
+    The one operation behind `POST /v1/profile/evidence` and the admin
+    questionnaire (#304), so the page has no rule of its own: the ledger's
+    (append-only; a `supersedes` it doesn't know, or that something else
+    already supersedes, is refused). `ValueError` if the evidence or the ledger
+    refuses it; the caller says how."""
+    evidence = Evidence(
+        tenant_id=who.tenant_id,
+        evidence_id=uuid.uuid4().hex,
+        field=field,
+        value=value,
+        period=period,
+        provenance=EvidenceProvenance.ASSERTED,
+        source=source,
+        asserted_by=who.member.email,
+        supersedes=supersedes,
+        trace_id=current_trace_id(),
+    )
+    await services_of(request).ledger.record_evidence(evidence)
+    return evidence
+
+
 @router.post("/profile/evidence", status_code=201)
 async def record_evidence(
     request: Request, who: CurrentAdmin, body: EvidenceIn
@@ -259,19 +291,15 @@ async def record_evidence(
     """Admin only (ADR-0053 U6, #294): any member reads the profile, an admin
     writes to it."""
     try:
-        evidence = Evidence(
-            tenant_id=who.tenant_id,
-            evidence_id=uuid.uuid4().hex,
+        evidence = await record_asserted_evidence(
+            request,
+            who,
             field=body.field,
             value=body.fact(),
             period=body.period.period(),
-            provenance=EvidenceProvenance.ASSERTED,
             source=body.source,
-            asserted_by=who.member.email,
             supersedes=body.supersedes,
-            trace_id=current_trace_id(),
         )
-        await services_of(request).ledger.record_evidence(evidence)
     except ValueError as refused:
         raise HTTPException(422, str(refused)) from None
     return _evidence_json(evidence, current=True)

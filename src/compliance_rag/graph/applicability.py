@@ -32,6 +32,7 @@ from typing import cast
 
 from compliance_rag.assessment.coverage import (
     ActorCoverage,
+    AnswerKind,
     Coverage,
     Explanation,
     ObligationCoverage,
@@ -195,6 +196,8 @@ class _Evaluator:
         self._facts = facts
         self._as_of = snapshot.as_of
         self._memo: dict[str, Explanation] = {}
+        self._asked: dict[str, tuple[AnswerKind, tuple[str, ...]]] = {}
+        """What each leaf evaluated asks for, worked out once, when it is first read."""
         self._successor = {
             earlier: c.id for c in snapshot.conditions.values() for earlier in c.lineage
         }
@@ -225,7 +228,8 @@ class _Evaluator:
 
     def _evaluate(self, spec: ConditionSpec) -> Explanation:
         if spec.operator is Operator.LEAF and spec.leaf is not None:
-            return self._leaf(spec, spec.leaf)
+            options = self._asked.setdefault(spec.id, _asked(spec.leaf))[1]
+            return replace(self._leaf(spec, spec.leaf), field=spec.leaf.field, options=options)
         children = tuple(self.condition(o) for o in spec.operands)
         if spec.operator is Operator.NOT:
             (child,) = children
@@ -295,6 +299,7 @@ class _Evaluator:
             f"{during} was a part year, which {cites} governs, can't be settled.",
             clause_ids=spec.clause_ids,
             evidence_ids=evidence_ids,
+            answer_kind=AnswerKind.DATE,
         )
 
     def _gaps(self, spec: ConditionSpec) -> tuple[_Gap, ...]:
@@ -464,6 +469,7 @@ class _Evaluator:
         needs = () if since_known else (leaf.since_field,)
         if open_years:
             needs += _started_fields(gaps)
+        kind, options = self._asked[spec.id]
         question = Question(
             condition_id=spec.id,
             field=leaf.field,
@@ -475,6 +481,8 @@ class _Evaluator:
             evidence_ids=evidence_ids,
             missing_periods=tuple(unknown_years),
             also_needs=tuple(dict.fromkeys(needs)),
+            answer_kind=kind,
+            options=options,
         )
         return _node(
             spec,
@@ -495,6 +503,7 @@ class _Evaluator:
         conflict: bool = False,
     ) -> Explanation:
         evidence_ids = tuple(e.evidence_id for e in reading.evidence)
+        kind, options = self._asked[spec.id]
         question = Question(
             condition_id=spec.id,
             field=leaf.field,
@@ -504,6 +513,8 @@ class _Evaluator:
             clause_ids=spec.clause_ids,
             conflict=conflict or reading.conflict,
             evidence_ids=evidence_ids,
+            answer_kind=kind,
+            options=options,
         )
         return _node(spec, Truth.UNKNOWN, (), question=question, evidence_ids=evidence_ids)
 
@@ -571,6 +582,7 @@ class _Evaluator:
                 clause_ids=(),
                 conflict=reading.conflict,
                 evidence_ids=tuple(e.evidence_id for e in reading.evidence),
+                answer_kind=AnswerKind.LIST,
             )
             return Explanation(
                 node_id,
@@ -696,6 +708,33 @@ def _pairs(gaps: tuple[_Gap, ...]) -> tuple[tuple[str, str], ...]:
 
 def _cites(gaps: tuple[_Gap, ...]) -> str:
     return " and ".join(dict.fromkeys(_cite(g.clause_id) for g in gaps))
+
+
+def _asked(leaf: Leaf) -> tuple[AnswerKind, tuple[str, ...]]:
+    """What a leaf's question says about the answer it wants: the shape of the
+    fact its test reads, and, for a text fact tested against a closed list, the
+    list."""
+    value = leaf.value
+    options: tuple[str, ...] = ()
+    kind: AnswerKind
+    match leaf.test:
+        case Comparison.GT | Comparison.GTE | Comparison.LT | Comparison.LTE:
+            kind = AnswerKind.NUMBER
+        case Comparison.BEFORE | Comparison.ON_OR_AFTER:
+            kind = AnswerKind.DATE
+        case _:
+            first = value[0] if isinstance(value, tuple) else value
+            if isinstance(first, bool):
+                kind = AnswerKind.BOOLEAN
+            elif isinstance(first, int | float):
+                kind = AnswerKind.NUMBER
+            elif isinstance(first, dt.date):
+                kind = AnswerKind.DATE
+            else:
+                kind = AnswerKind.TEXT
+                if isinstance(value, tuple):
+                    options = tuple(str(v) for v in cast("tuple[object, ...]", value))
+    return kind, options
 
 
 def _started_fields(gaps: tuple[_Gap, ...]) -> tuple[str, ...]:
