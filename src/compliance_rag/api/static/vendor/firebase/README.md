@@ -29,10 +29,31 @@ no `gstatic.com` import remains.
 
 ## What the page uses of it
 
-`signin.js` uses in-memory persistence and no popup/redirect resolver, so the SDK
-never loads Google's `apis.google.com` script (that is what the popup and redirect
-flows would need, and the CSP would refuse it). Email and password sign-in works;
-Google popup sign-in does not, until a decision on a third-party script is made.
+`signin.js` uses in-memory persistence, email and password sign-in, and Google
+sign-in by popup (`GoogleAuthProvider`, `signInWithPopup`,
+`browserPopupRedirectResolver`; issue #291, which the human decided on 2026-11-08).
+All three are already in the vendored `firebase-auth.js` (checked in its `export{...}`
+list and by `tests/test_api_session.py`), so **no further file was vendored** and the
+two hashes above are unchanged.
+
+What the popup resolver loads, read from the vendored source (not guessed):
+
+- `gapiScript:"https://apis.google.com/js/api.js"` (injected as a `<script>` by
+  `_loadJS`), and gapi's own modules from the same host. This is the one script the
+  page loads that is not served from here; Google serves it unversioned. The sign-in
+  page's `script-src` names it.
+- `getIframeUrl`: `https://<authDomain>/__/auth/iframe`, framed by gapi to receive the
+  popup's result. The sign-in page's `frame-src` names the configured auth domain.
+- The popup itself (`window.open` to `<authDomain>/__/auth/handler`) is its own browsing
+  context, outside the page's policy.
+- Its own calls go to `identitytoolkit.googleapis.com` and `securetoken.googleapis.com`,
+  already in `connect-src`.
+
+Only the sign-in page's CSP carries the two additions (`sign_in.sign_in_content_security_policy`);
+the Ask pages, the source view and error responses keep the shared policy. In headless Chrome
+(2026-11-08) the page loaded with no CSP violation, and clicking the Google button fetched
+`api.js`, its gapi module and the auth iframe, and called `identitytoolkit.googleapis.com`,
+all allowed; only a fake API key was refused, by Google.
 
 ## Upgrading
 
