@@ -48,15 +48,20 @@ LOCK_KEY = 2930001
 """The advisory lock one runner holds for its whole run."""
 
 _FILE_NAME = re.compile(r"(?P<number>\d{4})_[a-z0-9_]+\.sql")
-_OWN_TRANSACTION = re.compile(r"^(?:BEGIN|COMMIT);[ \t]*\r?$", re.MULTILINE)
+_OWN_TRANSACTION = re.compile(r"(?:BEGIN|COMMIT);[ \t]*")
 """A line that is only `BEGIN;` or `COMMIT;`: the transaction a file opens for
 itself, which the runner opens instead."""
 _OTHER_CONTROL = re.compile(
-    r"^[ \t]*(?:BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\b[^\n]*;", re.MULTILINE | re.IGNORECASE
+    r"[ \t]*(?:ROLLBACK|ABORT|BEGIN|COMMIT|START\s+TRANSACTION|SAVEPOINT\s+\S+|"
+    r"RELEASE(?:\s+SAVEPOINT)?\s+\S+)(?:\s+(?:WORK|TRANSACTION))?[ \t]*;[ \t]*",
+    re.IGNORECASE,
 )
-"""Transaction control that is left over once the file's own is taken out. The
-runner can't keep a file atomic with its record if the file ends the
-transaction some other way, so it refuses the file."""
+"""A top-level line that is only a transaction-control statement, left once the
+file's own is taken out. The runner can't keep a file atomic with its record if
+the file ends the transaction some other way, so it refuses the file. `END;` is
+not here: on a line of its own it is far more often the close of a function
+body than the SQL synonym of COMMIT."""
+_DOLLAR_QUOTE = re.compile(r"\$[A-Za-z_]*\$")
 
 _CREATE_TABLE: LiteralString = (
     "CREATE TABLE IF NOT EXISTS schema_migration ("
@@ -121,17 +126,41 @@ def read_migrations(directory: Path = MIGRATIONS_DIR) -> tuple[MigrationFile, ..
     return tuple(files)
 
 
+def _top_level_lines(sql: str) -> list[tuple[str, bool]]:
+    """Each line of `sql` and whether it starts outside any dollar-quoted body
+    (`$$ ... $$`, `$f$ ... $f$`), where a `BEGIN`, `END;` or `COMMIT;` belongs
+    to a function or procedure and not to the file's own transaction. A `--`
+    comment is not scanned for quotes."""
+    open_tag: str | None = None
+    lines: list[tuple[str, bool]] = []
+    for line in sql.splitlines(keepends=True):
+        lines.append((line, open_tag is None))
+        code = line.split("--", 1)[0] if open_tag is None else line
+        for quote in _DOLLAR_QUOTE.finditer(code):
+            if open_tag is None:
+                open_tag = quote.group()
+            elif quote.group() == open_tag:
+                open_tag = None
+    return lines
+
+
 def transaction_body(migration: MigrationFile) -> str:
-    """The file's statements without the `BEGIN;` and `COMMIT;` lines it wraps
-    itself in. Refused if it ends the transaction in any other way."""
-    body = _OWN_TRANSACTION.sub("", migration.sql)
-    other = _OTHER_CONTROL.search(body)
-    if other is not None:
-        raise MigrationRefused(
-            f"{migration.name} controls its own transaction ({other.group().strip()!r}): "
-            "only a leading BEGIN; and trailing COMMIT; line are allowed"
-        )
-    return body
+    """The file's statements without the top-level `BEGIN;` and `COMMIT;`
+    lines it wraps itself in. Refused if it ends the transaction in any other
+    way: another transaction-control statement on a top-level line of its own.
+    A function body that has its own `BEGIN ... END` is not touched."""
+    kept: list[str] = []
+    for line, top_level in _top_level_lines(migration.sql):
+        text = line.rstrip("\r\n")
+        if top_level and _OWN_TRANSACTION.fullmatch(text):
+            continue
+        if top_level and _OTHER_CONTROL.fullmatch(text):
+            raise MigrationRefused(
+                f"{migration.name} controls its own transaction ({text.strip()!r}): "
+                "only a BEGIN; and COMMIT; line are allowed"
+            )
+        kept.append(line)
+    return "".join(kept)
 
 
 class LedgerMigrator:
@@ -188,11 +217,13 @@ class LedgerMigrator:
                         await conn.execute(cast("LiteralString", transaction_body(f)))
                         await self._record(conn, f)
                 except psycopg.Error as exc:
+                    position = exc.diag.statement_position
                     raise MigrationFailed(
-                        f"{f.name} failed and was rolled back ({type(exc).__name__}: "
-                        f"{exc.diag.message_primary or exc}); "
-                        f"{len(applied)} file(s) before it stay applied"
-                    ) from None
+                        f"{f.name} failed and was rolled back ({type(exc).__name__}, "
+                        f"SQLSTATE {exc.sqlstate or 'unknown'}: {exc.diag.message_primary or exc}"
+                        + (f", at character {position} of its statement" if position else "")
+                        + f"); {len(applied)} file(s) before it stay applied"
+                    ) from exc
                 applied.append(f.name)
             return MigrationRun(
                 applied=tuple(applied),

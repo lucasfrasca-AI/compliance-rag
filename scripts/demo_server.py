@@ -117,6 +117,7 @@ from compliance_rag.corpus.models import (
     parse_stable_id,
     validate_library_instrument_id,
 )
+from compliance_rag.corpus.tenant_seed import record_evidence_in_span
 from compliance_rag.eval.acme_seed import demo_profile
 from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.eval.embedding_cache import EmbeddingCache, text_key
@@ -167,9 +168,6 @@ def _member_arg(value: str) -> Member:
     except ValueError as refused:
         raise argparse.ArgumentTypeError(str(refused)) from None
 
-
-_SETUP_TRACE = "de30" + "0" * 28
-"""The trace id the demo's own setup records Acme's facts under."""
 
 FAKE_BANNER = "FAKE GENERATOR — not a real answer"
 BANNER_SLOT = "<!-- demo:fake-banner -->"
@@ -508,8 +506,8 @@ async def demo_ledger() -> FakeLedgerStore:
     await ledger.subscribe(
         tenant_id=DEMO_TENANT, instrument_id=LAW_INSTRUMENT_ID, subscribed_by="the demo server"
     )
-    for evidence in demo_profile().evidence():
-        await ledger.record_evidence(dataclasses.replace(evidence, trace_id=_SETUP_TRACE))
+    with telemetry.span("demo.setup"):
+        await record_evidence_in_span(ledger, demo_profile().evidence())
     return ledger
 
 

@@ -14,7 +14,6 @@ facts.
 
 from __future__ import annotations
 
-import dataclasses
 from collections import defaultdict
 
 from compliance_rag.adapters.interfaces import Profile
@@ -36,10 +35,6 @@ from compliance_rag.eval.harness import GOLDEN_VALID_FROM
 DEMO_PROFILE = "GA-01"
 """The applicability set's base Acme profile: every APP applies but the two
 that bind only agencies."""
-SEED_TRACE = "5eed" + "0" * 28
-"""The trace id the seed records Acme's evidence under: the seed is a script,
-not a request, so there is no request's id to carry (CLAUDE.md: a ledger row
-stores one)."""
 SEEDED_BY = "scripts/seed_tenant.py"
 
 
@@ -48,10 +43,9 @@ def demo_profile() -> ApplicabilityCase:
 
 
 def acme_evidence() -> tuple[Evidence, ...]:
-    """`DEMO_PROFILE`'s facts, recorded under the seed's trace id."""
-    return tuple(
-        dataclasses.replace(evidence, trace_id=SEED_TRACE) for evidence in demo_profile().evidence()
-    )
+    """`DEMO_PROFILE`'s facts. The trace id is the run's, set when they are
+    recorded (`record_evidence_in_span`)."""
+    return demo_profile().evidence()
 
 
 def acme_policies() -> tuple[SeedPolicy, ...]:

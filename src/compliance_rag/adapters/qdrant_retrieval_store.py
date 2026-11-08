@@ -470,6 +470,11 @@ class QdrantRetrievalStore(RetrievalStore, RetrievalAdmin):
             await client.close()
         return leftovers
 
+    async def collection_exists(self) -> bool:
+        """Whether this store's collection is there. Reads only: unlike
+        `ensure_ready`, it creates nothing and changes no index."""
+        return await self._client.collection_exists(self._collection_name)
+
     async def ensure_ready(self) -> None:
         await ensure_collection(
             self._client, self._collection_name, dense_dims=self._embedder.dimensions

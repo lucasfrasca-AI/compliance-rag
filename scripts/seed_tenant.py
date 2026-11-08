@@ -15,9 +15,14 @@ checked-in registry vouches for them (ADR-0026); this script cannot say so.
 
 Reads DATABASE_URL, QDRANT_URL / QDRANT_API_KEY / QDRANT_COLLECTION and
 CORPUS_BUCKET through `Settings` (the bucket may be given as `--bucket`), and
-never prints them. Writes to the stores those name. The chunks are embedded
-with `gemini-embedding-001` in australia-southeast1 (the six policies: well
-under a cent).
+never prints them. Writes rows and objects to the stores those name and
+**creates no resource**: on a Qdrant that isn't on this machine it refuses,
+before anything is written, if the collection is missing
+(`scripts/bootstrap_qdrant_collection.py` makes it); only on a local Qdrant
+does it create the collection. The chunks are embedded with
+`gemini-embedding-001` in australia-southeast1: SERVICES.md, the "Vertex AI
+Embeddings" row (unlocked from Phase 1, per call, under $1 a month for the
+corpus; the six policies are well under a cent).
 
     uv run python -m scripts.seed_tenant --tenant acme [--bucket NAME] [--dry-run]
 
@@ -31,7 +36,9 @@ import argparse
 import asyncio
 import datetime as dt
 from collections.abc import Callable
+from urllib.parse import urlparse
 
+from compliance_rag import telemetry
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.interfaces import ClauseStore, LedgerStore, RetrievalAdmin
@@ -64,6 +71,7 @@ async def run_seed(
             plan = await plan_seed(
                 seed,
                 ledger=ledger,
+                lifecycle=lifecycle,
                 retrieval=retrieval,
                 clauses=clauses,
                 count_tokens=count_tokens,
@@ -89,12 +97,20 @@ async def run_seed(
     return 0
 
 
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def is_local(url: str) -> bool:
+    return urlparse(url).hostname in _LOCAL_HOSTS
+
+
 async def main(tenant: str, *, bucket: str | None, dry_run: bool) -> int:
     if tenant not in SEEDS:
         print(f"seed_tenant: no seed for {tenant!r}; seeds: {', '.join(sorted(SEEDS))}")
         return 2
     seed = SEEDS[tenant]()
     settings = Settings()
+    telemetry.configure(settings)
     bucket = bucket or settings.corpus_bucket
     if not bucket:
         print("seed_tenant: no corpus bucket (--bucket or CORPUS_BUCKET)")
@@ -108,8 +124,14 @@ async def main(tenant: str, *, bucket: str | None, dry_run: bool) -> int:
     clause_store = GCSClauseStore.for_bucket(bucket, project=settings.gcp_project_id or None)
     embedder = VertexEmbedder.from_settings(settings)
     retrieval = QdrantRetrievalStore.from_settings(settings, embedder=embedder, ledger=ledger)
-    if not dry_run:
-        await retrieval.ensure_ready()
+    if is_local(settings.qdrant_url) and not dry_run:
+        await retrieval.ensure_ready()  # a throwaway local server: its collection costs nothing
+    elif not await retrieval.collection_exists():
+        print(
+            f"seed_tenant: the Qdrant collection {settings.qdrant_collection!r} doesn't exist, "
+            "and this script creates no resource: run scripts/bootstrap_qdrant_collection.py"
+        )
+        return 2
     code = await run_seed(
         seed,
         ledger=ledger,

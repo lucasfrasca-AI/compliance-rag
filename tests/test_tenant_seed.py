@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from scripts.seed_tenant import run_seed
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
@@ -36,7 +37,7 @@ from compliance_rag.corpus.tenant_seed import (
     apply_seed,
     plan_seed,
 )
-from compliance_rag.eval.acme_seed import SEED_TRACE, acme_seed, demo_profile
+from compliance_rag.eval.acme_seed import acme_seed, demo_profile
 from compliance_rag.eval.golden_corpus import (
     LAW_INSTRUMENT_ID,
     LAW_TITLE,
@@ -107,7 +108,8 @@ class Stores:
             "profile": await self.ledger.get_profile(tenant),
             "subscriptions": await self.ledger.subscribed_instruments(tenant),
             "evidence": [
-                dataclasses.replace(e, recorded_at=None) for e in await self.ledger.evidence(tenant)
+                dataclasses.replace(e, recorded_at=None, trace_id=None)
+                for e in await self.ledger.evidence(tenant)
             ],
             "policies": await self.ledger.policy_versions(tenant, as_of=TODAY),
             "titles": await self.ledger.version_titles(
@@ -172,6 +174,7 @@ async def plan_of(stores: Stores, seed: TenantSeed = SEED) -> SeedPlan:
     return await plan_seed(
         seed,
         ledger=stores.ledger,
+        lifecycle=stores.lifecycle,
         retrieval=stores.retrieval,
         clauses=stores.clauses,
         count_tokens=count_reranker_tokens,
@@ -211,7 +214,7 @@ def test_the_acme_seed_is_the_six_policies_and_the_demos_facts() -> None:
     assert {(e.field, e.value, e.period) for e in SEED.evidence} == {
         (f.field, f.value, f.period) for f in demo_profile().evidence()
     }
-    assert {e.trace_id for e in SEED.evidence} == {SEED_TRACE}
+    assert {e.trace_id for e in SEED.evidence} == {None}  # the run's, set when recorded
 
 
 def test_a_seed_cannot_carry_another_tenants_evidence() -> None:
@@ -331,7 +334,13 @@ def _renamed(seed: TenantSeed) -> TenantSeed:
     return with_policies(seed, (*seed.policies[:-1], other))
 
 
+def _seventh(seed: TenantSeed) -> TenantSeed:
+    """The seed and a seventh policy, `acme/other-policy`."""
+    return with_policies(seed, (*seed.policies, _renamed(seed).policies[-1]))
+
+
 DIFFERENT_POLICY_SETS: dict[str, Callable[[TenantSeed], TenantSeed]] = {
+    "one policy more": _seventh,
     "one policy fewer": lambda s: with_policies(s, s.policies[:-1]),
     "one policy replaced by another": _renamed,
     "one policy reworded": lambda s: with_policies(
@@ -382,6 +391,52 @@ async def test_a_seed_with_a_bad_policy_late_in_it_writes_none_of_the_earlier_on
     assert len(await stores.ledger.policy_versions(POLICY_TENANT_ID, as_of=TODAY)) == 1
 
 
+async def test_a_policy_the_registry_does_not_vouch_for_is_refused_by_the_plan_before_any_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Offshore, the lifecycle refuses text the registry doesn't call synthetic.
+    It would do so at the last policy, after five were published; the plan asks
+    it first, so none are."""
+    stores = await fresh_stores()
+    stores.watch(monkeypatch)
+    real = with_policies(SEED, (*SEED.policies[:-1], reworded(SEED.policies[-1])))
+
+    with pytest.raises(SeedRefused, match="the lifecycle would refuse it"):
+        await seed_into(stores, real)
+
+    assert stores.writes == []
+    assert await stores.ledger.get_profile(POLICY_TENANT_ID) is None
+
+
+async def test_a_title_the_lifecycle_would_refuse_is_refused_by_the_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stores = await fresh_stores()
+    stores.watch(monkeypatch)
+    untitled = dataclasses.replace(SEED.policies[-1], title="two\nlines")
+
+    with pytest.raises(SeedRefused, match="the lifecycle would refuse it"):
+        await seed_into(stores, with_policies(SEED, (*SEED.policies[:-1], untitled)))
+
+    assert stores.writes == []
+
+
+async def test_the_evidence_carries_the_trace_id_of_the_span_the_seed_ran_in(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """The seed is a script, so its span is its request: the trace id on every
+    row it writes is that span's, not one made up for it."""
+    stores = await fresh_stores()
+    await seed_into(stores)
+
+    apply_spans = [s for s in span_exporter.get_finished_spans() if s.name == "tenant_seed.apply"]
+    assert len(apply_spans) == 1 and apply_spans[0].context is not None
+    trace_id = format(apply_spans[0].context.trace_id, "032x")
+    recorded = await stores.ledger.evidence(POLICY_TENANT_ID)
+    assert len(recorded) == len(SEED.evidence) > 0
+    assert {e.trace_id for e in recorded} == {trace_id} and trace_id.strip("0")
+
+
 async def test_a_profile_the_tenant_already_has_is_not_overwritten(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -406,7 +461,9 @@ async def test_evidence_the_seed_would_contradict_is_refused_before_any_write(
 ) -> None:
     stores = await fresh_stores()
     await stores.ledger.put_profile(SEED.profile)
-    await stores.ledger.record_evidence(dataclasses.replace(SEED.evidence[0], **changes))
+    await stores.ledger.record_evidence(
+        dataclasses.replace(SEED.evidence[0], trace_id="a" * 32, **changes)
+    )
     stores.watch(monkeypatch)
 
     with pytest.raises(SeedRefused, match=reason):

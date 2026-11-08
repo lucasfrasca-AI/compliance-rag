@@ -224,15 +224,14 @@ class CorpusLifecycle:
         docstring), writing nothing the clause store already holds."""
         if supersedes == version_id:
             raise ValueError("a version cannot supersede itself — that is replace-in-place")
-        validate_title(title)
-        await self._check_class(tenant_id, instrument_id, document_class)
-        chunks = self._admitted(
+        chunks = await self._precheck(
             clauses,
             count_tokens=count_tokens,
             instrument_id=instrument_id,
             tenant_id=tenant_id,
             version_id=version_id,
             document_class=document_class,
+            title=title,
         )
         if await self._retrieval.version_exists(
             instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
@@ -257,6 +256,57 @@ class CorpusLifecycle:
             supersedes=supersedes,
             document_class=document_class,
             title=title,
+        )
+
+    async def check_publishable(
+        self,
+        clauses: tuple[ClauseRecord, ...],
+        *,
+        count_tokens: Callable[[str], int],
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        document_class: DocumentClass,
+        title: str,
+    ) -> None:
+        """Raise what `publish_version` would raise about these clauses, title
+        and class before it wrote anything, and write nothing: the title, the
+        class against the instrument's recorded one, one version with one owner
+        and one canonicalisation, the scope allowed for the class, the
+        registry's say on what is synthetic, and the residency gate. It reads
+        the ledger for the instrument's class and nothing else. For an
+        operator script to plan a run, so that a refusal comes before its first
+        write (#293)."""
+        await self._precheck(
+            clauses,
+            count_tokens=count_tokens,
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            document_class=document_class,
+            title=title,
+        )
+
+    async def _precheck(
+        self,
+        clauses: tuple[ClauseRecord, ...],
+        *,
+        count_tokens: Callable[[str], int],
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        document_class: DocumentClass,
+        title: str,
+    ) -> tuple[Chunk, ...]:
+        validate_title(title)
+        await self._check_class(tenant_id, instrument_id, document_class)
+        return self._admitted(
+            clauses,
+            count_tokens=count_tokens,
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            document_class=document_class,
         )
 
     async def complete_version(

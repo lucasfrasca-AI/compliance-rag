@@ -7,27 +7,42 @@ Every write goes through `LedgerStore` and `CorpusLifecycle`, so a policy is
 chunked, marked synthetic by the registry alone (ADR-0026) and gated for
 residency (ADR-0023) as an upload is, and no store is written to directly. The
 lifecycle is driven by `load_version_vectors`, which finishes a publish that
-stopped part-way, so a run that died after three policies is finished by
-running it again.
+stopped part-way.
 
 **Idempotent and refusing, never overwriting.** `plan_seed` reads and writes
-nothing. It finds what is missing, and refuses, with every reason, when the
-tenant already holds something this seed would contradict:
+nothing. It finds what is missing, and refuses, with every reason, when:
 
-- a profile that isn't the seed's;
-- evidence the seed doesn't carry, or the seed's own id recorded with other
-  content (evidence is append-only, so it can't be corrected here);
-- a policy the seed doesn't carry in force for the tenant, or one of the seed's
-  recorded, stored or published differently: another title or start date,
-  chunks or clauses that aren't the ones given, another source.
+- the tenant holds something this seed would contradict: a profile that isn't
+  the seed's; evidence the seed doesn't carry, or the seed's own id recorded
+  with other content (evidence is append-only); a policy in force the seed
+  doesn't carry; a policy of the seed's recorded, stored or published
+  differently (another title or start date, chunks or clauses that aren't the
+  ones given, another source);
+- the seed carries a policy the tenant doesn't hold, when the seed has been
+  applied to this tenant before: a different policy set, whether it has one
+  more or one fewer (the seed's evidence, which is written last, is what says a
+  run completed); a half-done run, which has not all of that evidence yet, is
+  finished instead;
+- the lifecycle would refuse a policy: text the registry doesn't vouch for as
+  synthetic while generation is offshore, a title that isn't a title, a class
+  that isn't the instrument's, clauses that don't fit one version (the same
+  checks `publish_version` makes, run by `CorpusLifecycle.check_publishable`);
+- the ledger would refuse a row: evidence it would not record, or a
+  subscription to law it doesn't hold (`scripts/load_compilation_vectors.py`
+  has to have run first, because the ledger refuses a subscription to a library
+  instrument it doesn't hold).
 
-`apply_seed` runs the plan first, so a refused seed has written nothing, to any
-store. A tenant that already holds exactly the seed gets an empty plan and no
-write. The law version record is not the seed's job: it is
-`scripts/load_compilation_vectors.py`'s, and it comes first, because the ledger
-refuses a subscription to a library instrument it doesn't hold. A seed whose
-subscription names one the ledger lacks is refused with that said, before any
-write, rather than failing after the profile was written.
+`apply_seed` runs the plan first, inside one span, so a refused seed has
+written nothing to any store, and the rows it writes carry that span's trace id
+(CLAUDE.md: a ledger row stores the trace it came from; the seed is a script,
+so the span is its request). A tenant that already holds exactly the seed gets
+an empty plan and no write.
+
+**What remains.** An infrastructure failure part-way through the writes (a
+store unreachable, a network error): some stores or policies are written and
+the rest are not. Nothing is lost or contradicted; running the script again
+plans from what is stored and finishes it (profile and policies first, evidence
+last).
 """
 
 from __future__ import annotations
@@ -35,12 +50,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
+from compliance_rag.adapters.generation_residency import GenerationResidencyError
 from compliance_rag.adapters.interfaces import ClauseStore, LedgerStore, Profile, RetrievalAdmin
-from compliance_rag.assessment.evidence import Evidence
+from compliance_rag.assessment.evidence import Evidence, check_evidence_write
 from compliance_rag.corpus.chunker import chunk_clauses
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -48,8 +64,10 @@ from compliance_rag.corpus.models import (
     DocumentClass,
     canonical_sha256,
     sha256_hex,
+    validate_library_instrument_id,
     validate_tenant_id,
 )
+from compliance_rag.corpus.synthetic_registry import SyntheticClaimRefused
 from compliance_rag.corpus.vector_load import load_version_vectors
 
 _CONCURRENT_READS = 16
@@ -90,6 +108,8 @@ class TenantSeed:
 
     def __post_init__(self) -> None:
         validate_tenant_id(self.tenant_id)
+        for instrument_id in self.subscriptions:
+            validate_library_instrument_id(instrument_id)
         if self.profile.tenant_id != self.tenant_id:
             raise ValueError("the seed's profile is another tenant's")
         if any(e.tenant_id != self.tenant_id for e in self.evidence):
@@ -144,33 +164,27 @@ class SeedPlan:
         return "; ".join(p for p in parts if p)
 
 
-def _same_evidence(a: Evidence, b: Evidence) -> bool:
-    """Whether two rows are one fact: everything the seed says. Not
-    `recorded_at`, which the ledger sets."""
-    return (
-        a.tenant_id,
-        a.evidence_id,
-        a.field,
-        a.value,
-        a.period,
-        a.provenance,
-        a.source,
-        a.asserted_by,
-        a.supersedes,
-        a.trace_id,
-        a.document_id,
-    ) == (
-        b.tenant_id,
-        b.evidence_id,
-        b.field,
-        b.value,
-        b.period,
-        b.provenance,
-        b.source,
-        b.asserted_by,
-        b.supersedes,
-        b.trace_id,
-        b.document_id,
+def traced(evidence: Evidence) -> Evidence:
+    """The row with the active span's trace id, as the ledger requires of
+    asserted evidence. A span that isn't a real one (telemetry not configured)
+    has the all-zero id, which the ledger refuses, so this does too."""
+    return replace(evidence, trace_id=telemetry.current_trace_id())
+
+
+async def record_evidence_in_span(ledger: LedgerStore, evidence: tuple[Evidence, ...]) -> None:
+    """Record each fact under the trace id of the span this runs in. The one
+    way a script records a tenant's evidence: the seed and the local demo
+    server's ledger both call it."""
+    for fact in evidence:
+        await ledger.record_evidence(traced(fact))
+
+
+def _same_fact(a: Evidence, b: Evidence) -> bool:
+    """Whether two rows say one thing. What may differ between a recorded row
+    and the seed's is when it was recorded (the ledger's `recorded_at`) and
+    under which run (`trace_id`)."""
+    return replace(a, recorded_at=None, trace_id=None) == replace(
+        b, recorded_at=None, trace_id=None
     )
 
 
@@ -179,15 +193,29 @@ async def _plan_policy(
     seed: TenantSeed,
     *,
     ledger: LedgerStore,
+    lifecycle: CorpusLifecycle,
     retrieval: RetrievalAdmin,
     clauses: ClauseStore,
     count_tokens: Callable[[str], int],
     refusals: list[str],
 ) -> bool:
     """Whether the policy still has something to publish, and any way it
-    contradicts what is stored, by reading all three stores."""
+    contradicts what is stored or would be refused, by reading all three
+    stores."""
     name = f"{policy.instrument_id}:{policy.version_id}"
     tenant_id = seed.tenant_id
+    try:
+        await lifecycle.check_publishable(
+            policy.clauses,
+            count_tokens=count_tokens,
+            instrument_id=policy.instrument_id,
+            tenant_id=tenant_id,
+            version_id=policy.version_id,
+            document_class=DocumentClass.INTERNAL_POLICY,
+            title=policy.title,
+        )
+    except (ValueError, GenerationResidencyError, SyntheticClaimRefused) as refused:
+        refusals.append(f"{name}: the lifecycle would refuse it: {refused}")
     expected = frozenset(
         c.chunk_id for c in chunk_clauses(policy.clauses, count_tokens=count_tokens)
     )
@@ -266,6 +294,7 @@ async def plan_seed(
     seed: TenantSeed,
     *,
     ledger: LedgerStore,
+    lifecycle: CorpusLifecycle,
     retrieval: RetrievalAdmin,
     clauses: ClauseStore,
     count_tokens: Callable[[str], int],
@@ -273,7 +302,9 @@ async def plan_seed(
 ) -> SeedPlan:
     """What `apply_seed` would write, found by reading only. Raises
     `SeedRefused`, naming every reason, if the tenant holds anything the seed
-    contradicts (module docstring)."""
+    contradicts or a store would refuse any of it (module docstring).
+    `lifecycle` is only asked what it would refuse
+    (`CorpusLifecycle.check_publishable`)."""
     tenant_id = seed.tenant_id
     refusals: list[str] = []
     with telemetry.span("tenant_seed.plan", **{"seed.tenant_id": tenant_id}):
@@ -302,7 +333,7 @@ async def plan_seed(
                 f"(e.g. {extra[0]})"
             )
         for evidence_id in sorted(recorded_evidence.keys() & given_evidence.keys()):
-            if not _same_evidence(recorded_evidence[evidence_id], given_evidence[evidence_id]):
+            if not _same_fact(recorded_evidence[evidence_id], given_evidence[evidence_id]):
                 refusals.append(
                     f"evidence {evidence_id} is recorded with other content, and evidence is "
                     "append-only"
@@ -310,6 +341,13 @@ async def plan_seed(
         missing_evidence = tuple(
             e.evidence_id for e in seed.evidence if e.evidence_id not in recorded_evidence
         )
+        for fact in seed.evidence:
+            if fact.evidence_id in missing_evidence:
+                try:
+                    check_evidence_write(traced(fact))
+                except ValueError as refused:
+                    refusals.append(f"evidence {fact.evidence_id} would be refused: {refused}")
+        applied_before = bool(seed.evidence) and not missing_evidence
 
         given_versions = {(p.instrument_id, p.version_id) for p in seed.policies}
         try:
@@ -319,15 +357,19 @@ async def plan_seed(
         except ValueError as unclassified:
             refusals.append(str(unclassified))
             in_force = ()
-        foreign = sorted(
-            f"{p.instrument_id}:{p.version_id}"
-            for p in in_force
-            if (p.instrument_id, p.version_id) not in given_versions
-        )
+        held_versions = {(p.instrument_id, p.version_id) for p in in_force}
+        foreign = sorted(f"{i}:{v}" for i, v in held_versions - given_versions)
         if foreign:
             refusals.append(
                 f"the tenant has {len(foreign)} policy version(s) in force the seed doesn't "
                 f"carry (e.g. {foreign[0]}): a different policy set"
+            )
+        absent_versions = sorted(f"{i}:{v}" for i, v in given_versions - held_versions)
+        if applied_before and absent_versions:
+            refusals.append(
+                f"the seed has been applied to this tenant, and it carries {len(absent_versions)} "
+                f"policy version(s) the tenant doesn't have in force (e.g. {absent_versions[0]}): "
+                "a different policy set"
             )
 
         unpublished: list[str] = []
@@ -336,6 +378,7 @@ async def plan_seed(
                 policy,
                 seed,
                 ledger=ledger,
+                lifecycle=lifecycle,
                 retrieval=retrieval,
                 clauses=clauses,
                 count_tokens=count_tokens,
@@ -363,29 +406,31 @@ async def apply_seed(
     count_tokens: Callable[[str], int],
     today: dt.date,
 ) -> SeedPlan:
-    """Plan, then write what the plan says. `lifecycle` must be the one over
-    this `ledger`, `retrieval` and `clauses`. Returns what was written.
-    A refused seed (`SeedRefused`) has written nothing."""
-    plan = await plan_seed(
-        seed,
-        ledger=ledger,
-        retrieval=retrieval,
-        clauses=clauses,
-        count_tokens=count_tokens,
-        today=today,
-    )
+    """Plan, then write what the plan says, all inside one span whose trace id
+    the rows carry. `lifecycle` must be the one over this `ledger`, `retrieval`
+    and `clauses`. Returns what was written. A refused seed (`SeedRefused`) has
+    written nothing. Order: profile, subscriptions, policies, evidence last, so
+    that the evidence says a run completed (module docstring)."""
     with telemetry.span("tenant_seed.apply", **{"seed.tenant_id": seed.tenant_id}) as span:
+        plan = await plan_seed(
+            seed,
+            ledger=ledger,
+            lifecycle=lifecycle,
+            retrieval=retrieval,
+            clauses=clauses,
+            count_tokens=count_tokens,
+            today=today,
+        )
         if plan.profile:
             await ledger.put_profile(seed.profile)
+        trace_id = telemetry.current_trace_id()
         for instrument_id in plan.subscriptions:
             await ledger.subscribe(
                 tenant_id=seed.tenant_id,
                 instrument_id=instrument_id,
                 subscribed_by=seed.subscribed_by,
+                trace_id=trace_id,
             )
-        for evidence in seed.evidence:
-            if evidence.evidence_id in plan.evidence:
-                await ledger.record_evidence(evidence)
         for policy in seed.policies:
             if f"{policy.instrument_id}:{policy.version_id}" not in plan.policies:
                 continue
@@ -403,5 +448,8 @@ async def apply_seed(
                 document_class=DocumentClass.INTERNAL_POLICY,
                 title=policy.title,
             )
+        await record_evidence_in_span(
+            ledger, tuple(e for e in seed.evidence if e.evidence_id in plan.evidence)
+        )
         span.set_attribute("seed.policies_published", len(plan.policies))
         return plan

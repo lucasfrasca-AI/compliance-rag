@@ -71,12 +71,51 @@ def test_every_real_migration_runs_inside_the_runners_transaction(name: str) -> 
 
 
 @pytest.mark.parametrize(
-    "sql", ["SELECT 1;\nROLLBACK;\n", "COMMIT;\nSELECT 1;\nBEGIN;\nSELECT 2;\nCOMMIT;\nCOMMIT ;\n"]
+    "sql",
+    [
+        "SELECT 1;\nSAVEPOINT a;\n",
+        "SELECT 1;\nROLLBACK;\n",
+        "COMMIT;\nSELECT 1;\nBEGIN;\nSELECT 2;\nCOMMIT;\nCOMMIT ;\n",
+    ],
 )
 def test_a_file_that_ends_its_own_transaction_otherwise_is_refused(sql: str) -> None:
     migration = MigrationFile(name="0001_x.sql", number="0001", sha256="", sql=sql)
     with pytest.raises(MigrationRefused, match="controls its own transaction"):
         transaction_body(migration)
+
+
+FUNCTION_BODIES = """
+CREATE FUNCTION one() RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN 1; END $$;
+
+CREATE FUNCTION two() RETURNS int LANGUAGE plpgsql AS $body$
+BEGIN
+    RETURN 2;
+END;
+$body$;
+
+CREATE PROCEDURE keep() LANGUAGE plpgsql AS $$
+BEGIN
+    COMMIT;
+END;
+$$;
+"""
+
+
+def test_a_plpgsql_body_is_not_a_transaction_the_runner_takes_apart() -> None:
+    """`BEGIN ... END;` and even a `COMMIT;` line inside a dollar-quoted body
+    belong to the function: neither is refused or removed."""
+    for wrapped in (FUNCTION_BODIES, f"BEGIN;\n{FUNCTION_BODIES}\nCOMMIT;\n"):
+        migration = MigrationFile(name="0001_f.sql", number="0001", sha256="", sql=wrapped)
+        assert transaction_body(migration).strip() == FUNCTION_BODIES.strip()
+
+
+@needs_ledger_db
+async def test_a_file_defining_functions_applies_and_the_functions_work(
+    dsn: str, tmp_path: Path
+) -> None:
+    _file(tmp_path, "0001_f.sql", f"BEGIN;\n{FUNCTION_BODIES}\nCOMMIT;\n")
+    await LedgerMigrator(dsn, tmp_path).migrate()
+    assert _query(dsn, "SELECT one() + two()") == [(3,)]
 
 
 async def test_a_baseline_naming_no_file_is_refused_before_the_database_is_reached() -> None:
@@ -215,10 +254,19 @@ async def test_baseline_through_is_refused_on_a_database_with_no_ledger(dsn: str
 @needs_ledger_db
 async def test_a_file_that_fails_is_rolled_back_and_not_recorded(dsn: str, tmp_path: Path) -> None:
     _file(tmp_path, "0001_a.sql", "CREATE TABLE a (n INT);\n")
-    _file(tmp_path, "0002_bad.sql", "BEGIN;\nCREATE TABLE half (n INT);\nSELECT 1 / 0;\nCOMMIT;\n")
+    _file(
+        tmp_path,
+        "0002_bad.sql",
+        "BEGIN;\nCREATE TABLE half (n INT);\nSELECT nope FROM half;\nCOMMIT;\n",
+    )
 
-    with pytest.raises(MigrationFailed, match=r"0002_bad.sql failed and was rolled back"):
+    with pytest.raises(MigrationFailed) as failed:
         await LedgerMigrator(dsn, tmp_path).migrate()
+    message = str(failed.value)
+    assert "0002_bad.sql failed and was rolled back" in message
+    assert "SQLSTATE 42703" in message and 'column "nope" does not exist' in message
+    assert "at character" in message
+    assert isinstance(failed.value.__cause__, psycopg.errors.UndefinedColumn)
     assert _recorded(dsn) == ["0001_a.sql"]
     assert "half" not in _tables(dsn)
 

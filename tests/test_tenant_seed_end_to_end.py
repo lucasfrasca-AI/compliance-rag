@@ -22,7 +22,8 @@ import os
 import re
 
 import pytest
-from scripts.ingest_compilation import INSTRUMENT_ID, START, TITLE, VERSION_ID
+from scripts.ingest_compilation import INSTRUMENT_ID, VERSION_ID
+from scripts.load_compilation_vectors import load_law
 from scripts.seed_tenant import run_seed
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
@@ -36,15 +37,9 @@ from compliance_rag.assessment.evidence import Facts
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.assessment.policies import tenant_policies
 from compliance_rag.corpus.display_form import cite
-from compliance_rag.corpus.models import PUBLIC_TENANT_ID, DocumentClass
-from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
+from compliance_rag.corpus.models import PUBLIC_TENANT_ID
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.corpus.tenant_seed import TenantSeed
-from compliance_rag.corpus.vector_load import (
-    load_version_vectors,
-    read_version_clauses,
-    read_version_source,
-)
 from compliance_rag.eval.acme_seed import acme_seed
 from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.eval.embedding_cache import CachedEmbedder, EmbeddingCache
@@ -156,31 +151,11 @@ async def test_migrate_load_law_seed_then_an_acme_member_is_answered_from_law_an
             assert "load_compilation_vectors" in capsys.readouterr().out
             assert await ledger.get_profile(POLICY_TENANT_ID) is None
 
-            # scripts/load_compilation_vectors.py's own steps.
-            await load_version_vectors(
-                await read_version_clauses(
-                    bucket,
-                    instrument_id=INSTRUMENT_ID,
-                    version_id=VERSION_ID,
-                    tenant_id=PUBLIC_TENANT_ID,
-                ),
-                source_html=await read_version_source(
-                    bucket,
-                    instrument_id=INSTRUMENT_ID,
-                    version_id=VERSION_ID,
-                    tenant_id=PUBLIC_TENANT_ID,
-                ),
-                count_tokens=count_reranker_tokens,
-                lifecycle=lifecycle,
-                retrieval=retrieval,
-                ledger=ledger,
-                instrument_id=INSTRUMENT_ID,
-                version_id=VERSION_ID,
-                tenant_id=PUBLIC_TENANT_ID,
-                effective_from=dt.date.fromisoformat(START),
-                document_class=DocumentClass.LIBRARY_LAW,
-                title=TITLE,
+            # scripts/load_compilation_vectors.py's own entry, over these stores.
+            _, loaded = await load_law(
+                clause_store=bucket, ledger=ledger, retrieval=retrieval, lifecycle=lifecycle
             )
+            assert loaded.recorded_in_ledger and loaded.written == loaded.chunks > 0
 
             assert await seeded_with(seed) == 0
             assert "6 policy version(s)" in capsys.readouterr().out
