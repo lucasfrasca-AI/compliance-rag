@@ -56,6 +56,7 @@ from compliance_rag.api.deps import (
     CurrentCaller,
     current_caller,
     current_member,
+    is_admin,
     services_of,
 )
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY
@@ -69,8 +70,10 @@ PAGE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
-"""On every response under `/chats`, a redirect, an error page, the fragment and
-its JSON refusals included (`PageHeaders`)."""
+"""On every response under `/chats` and `/admin`, a redirect, an error page, a
+fragment and its JSON refusals included (`PageHeaders`)."""
+
+PAGE_PREFIXES = ("/chats", "/admin")
 
 HEADING_CHARS = 80
 _CHAT_ID = re.compile(UUID4_HEX)
@@ -83,7 +86,8 @@ def is_chat_id(text: str) -> bool:
 
 
 class PageHeaders:
-    """Adds `PAGE_HEADERS` to every response for a path under `/chats`, whatever
+    """Adds `PAGE_HEADERS` to every response for a path under `/chats` or
+    `/admin` (`PAGE_PREFIXES`), whatever
     made it: a page, a redirect, the fragment, or a refusal from a dependency
     or the validator (401, 404, 405, 422), which would otherwise carry none.
     Pure ASGI, so no route can forget it; a header a response already has is
@@ -94,7 +98,9 @@ class PageHeaders:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = str(scope.get("path", ""))
-        if scope["type"] != "http" or not (path == "/chats" or path.startswith("/chats/")):
+        if scope["type"] != "http" or not any(
+            path == prefix or path.startswith(f"{prefix}/") for prefix in PAGE_PREFIXES
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -147,9 +153,14 @@ class PageError(Exception):
         self.message = message
 
 
-def render(name: str, *, status: int = 200, **context: object) -> HTMLResponse:
+def render(name: str, *, status: int = 200, admin: bool = False, **context: object) -> HTMLResponse:
+    """`admin` is whether the page's reader is an admin: it decides only whether
+    the nav links the admin panel. It is never what lets anyone in; the panel's
+    own routes check the role on every request."""
     return HTMLResponse(
-        ENV.get_template(name).render(**context), status_code=status, headers=PAGE_HEADERS
+        ENV.get_template(name).render(is_admin=admin, **context),
+        status_code=status,
+        headers=PAGE_HEADERS,
     )
 
 
@@ -184,6 +195,10 @@ async def page_caller(
 PageCaller = Annotated[Caller, Depends(page_caller)]
 
 
+def reader_is_admin(request: Request, who: Caller) -> bool:
+    return is_admin(services_of(request).settings, who.member.email)
+
+
 def _no_such_chat() -> PageError:
     return PageError(404, "No such chat", "This chat doesn't exist, or it isn't yours.")
 
@@ -199,12 +214,20 @@ def _heading(turns: list[dict[str, object]]) -> str:
 @router.get("/chats", response_class=HTMLResponse)
 async def chats_page(request: Request, who: PageCaller) -> HTMLResponse:
     chats = await services_of(request).ledger.chats(who.tenant_id, who.member.uid)
-    return render("chats.html", chats=chats, email=who.member.email)
+    return render(
+        "chats.html", admin=reader_is_admin(request, who), chats=chats, email=who.member.email
+    )
 
 
 @router.get("/chats/new", response_class=HTMLResponse)
-async def new_chat_page(_: PageCaller) -> HTMLResponse:
-    return render("chat.html", chat_id=None, heading="New chat", turns=[])
+async def new_chat_page(request: Request, who: PageCaller) -> HTMLResponse:
+    return render(
+        "chat.html",
+        admin=reader_is_admin(request, who),
+        chat_id=None,
+        heading="New chat",
+        turns=[],
+    )
 
 
 @router.get("/chats/{chat_id}", response_class=HTMLResponse)
@@ -216,7 +239,13 @@ async def chat_page(request: Request, who: PageCaller, chat_id: str) -> HTMLResp
     )
     if turns is None:
         raise _no_such_chat()
-    return render("chat.html", chat_id=chat_id, heading=_heading(turns), turns=turns)
+    return render(
+        "chat.html",
+        admin=reader_is_admin(request, who),
+        chat_id=chat_id,
+        heading=_heading(turns),
+        turns=turns,
+    )
 
 
 @router.get("/chats/{chat_id}/turns", response_class=HTMLResponse)

@@ -99,3 +99,31 @@ and the config that keeps it inside the CSP).
   against the app over fakes at 390px wide (ask, progress, panel, follow-up, withheld,
   failure, an unrecorded exchange, sign-out); the tests make the same requests in the same
   order.
+
+## The admin panel (`admin.py`, `templates/subscriptions.html`, `static/admin.js`)
+
+`GET /admin/subscriptions` (#302, ADR-0053 I5) is the first admin page: the library (the ledger's
+`_public` environment on today's date, with the recorded titles) and this workspace's tick
+against each instrument, with a Subscribe or Unsubscribe button per row. It is built like the
+Ask pages: Jinja2 autoescaped, nothing marked safe, the one CSP, and every `/admin` response
+carries it (`pages.PageHeaders`).
+
+- **Admin only on every request.** Each route takes `admin.PageAdmin`: signed out redirects to
+  `/signin`, a signed-in member who is not an admin (`deps.is_admin`, `API_ADMINS` read afresh)
+  gets a 403 page, including on the writes. The nav shows the "Subscriptions" link only to an
+  admin (`render(..., admin=...)`); an error page never shows it. Showing or hiding the link
+  decides nothing: the routes do.
+- **The panel has no rule of its own.** `POST /admin/subscriptions/{id}/subscribe|unsubscribe`
+  call `tenant.subscribe_tenant` and `tenant.unsubscribe_tenant`, the operations `PUT` and
+  `DELETE /v1/subscriptions/{id}` call. Unsubscribing deletes the subscription row and touches no
+  clause or retrieval store (D-17); `tests/test_api_admin_subscriptions.py` snapshots both stores
+  around it. Writes are unsafe methods, so the `OriginGuard` covers them.
+- **htmx swaps the server's fragment.** A write carrying `HX-Request` is answered with the panel
+  alone (`_subscriptions.html`), redrawn from the ledger after the write; the same form posted
+  without script is answered 303 back to the page. An id the adapter refuses is said in words and
+  records nothing (a 200 fragment, because htmx does not swap an error status; a 422 page without
+  script). `admin.js` handles only what htmx leaves alone: a refused write (a 403 for an admin
+  removed mid-session, a 401 to sign-in) and a send failure, in text via `textContent`.
+- **A subscription the library no longer lists** is shown, marked, and can be removed.
+- `admin.js` is not exercised by CI (no browser there), like `ask.js`; the tests make the
+  requests it causes.

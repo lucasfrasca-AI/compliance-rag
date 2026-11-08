@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Subscriptions{% endblock %}
+{% block body %}
+<main class="page narrow">
+<h1>Subscriptions</h1>
+<p class="note">The library is the law and standards every workspace shares. A subscription is this workspace's tick against one instrument: answers and checks read the instruments you tick, and nothing else from the library. Unsubscribing removes the tick only. The instrument stays in the library, no other workspace sees a change, and earlier citations still open.</p>
+<p id="admin-notice" class="card notice" role="alert" hidden></p>
+{% include "_subscriptions.html" %}
+</main>
+<script type="module" src="/static/admin.js"></script>
+{% endblock %}
