@@ -25,17 +25,18 @@ Two roles (ADR-0053 U6, #294): a member asks and reads; an admin also writes. Ad
 configuration, `API_ADMINS` beside `API_MEMBERS`, until a user table is worth managing.
 
 - **An admin is a member first.** `deps.current_admin` (`CurrentAdmin`) requires the address to
-  pass `is_member` against both `Settings.members` and `Settings.admins`, the same parser
-  (`settings._addresses`) and the same case-insensitive comparison the token verifier and the
-  cookie reader use. An address in `API_ADMINS` alone is refused with a 403.
+  pass `is_member` against both `Settings.members` and `Settings.admins`: the members list's
+  parsing, and the same case-insensitive comparison the token verifier and the cookie reader
+  use. An address in `API_ADMINS` alone is refused with a 403.
 - **The role is in neither credential.** The token and the cookie carry identity only, and
   `API_ADMINS` is read on every request, so removing an address takes effect on that user's next
   request, whichever credential they hold (the same property as removing a member, above).
 - **Admin-only today:** `PUT` and `DELETE /v1/subscriptions/{instrument_id}` and
   `POST /v1/profile/evidence` (any member could call it before, #147). A signed-in member who is
   not an admin gets 403 `admin only`; no sign-in is still 401. Reads stay open to every member.
-  New admin-only routes (policy versions, mapping approvals, withdraw and purge, the
-  questionnaire) take `CurrentAdmin` in place of `CurrentCaller`.
+  ADR-0053 U6 plans the same role for policy versions, mapping approvals, withdraw and purge,
+  and the questionnaire; a route that becomes admin-only takes `CurrentAdmin` in place of
+  `CurrentCaller`.
 - Empty `API_ADMINS` makes no one an admin: these writes are refused for everyone.
 
 ## The secret

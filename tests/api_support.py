@@ -43,6 +43,8 @@ from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifie
 PROJECT = "compliance-rag-test"
 TENANT = "acme"
 MEMBER = "lead@acme.example"
+SECOND = "second@acme.example"
+"""The other listed member (listed as `Second@Acme.example`); not an admin."""
 KID = "test-key-1"
 
 
