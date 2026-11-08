@@ -5,17 +5,28 @@ Two kinds of stored source, one anchor scheme: every clause a citation can
 name has an element with `id="{clause_anchor_id(clause_path)}"`.
 
 - **Law** is third-party markup, stored with the parser's synthesized anchors
-  written in (`ClauseStore.get_source_html`). `sanitise_source_html` serves it
-  as it is, minus anything that can run: scripts, event handlers,
-  `javascript:` URLs, frames, objects and the like. Every `id` is kept, so the
-  anchors survive. This is a second line of defence: the response's CSP
-  (`api/sources.py`) is the first, and neither is relied on alone.
+  written in (`ClauseStore.get_source_html`). `sanitise_source_html` does not
+  filter it, it **rebuilds** it: a page is written from scratch out of the
+  stored document's text and its allowlisted structure. Only the elements in
+  `ALLOWED_TAGS` are written, each with only `id`, `class`, `colspan`,
+  `rowspan` and, on an `a`, a same-document `#fragment` `href`. Every other
+  element is dropped with everything inside it (script, style, noscript,
+  template, iframe, object, embed, math, svg, img, forms, and any element not
+  named), and text is escaped on the way out. Nothing the source says is
+  passed through as markup, so a parser that reads a source differently from
+  a browser (mutation XSS: `<noscript>`, `<math>`/`<mglyph>`, `<svg><animate>`)
+  can't leave something behind: there is nothing to leave.
 - **A tenant's document** is stored as the Markdown its publisher uploaded
   (ADR-0048). `render_policy_html` builds the page from it with the policy
   parser's own line grammar, so a clause is anchored exactly where the parser
   made one: `## N.` opens a section and `N.M ` starts clause `N/M`. Every
-  character of the source goes through `html.escape`, so the page holds no
-  markup the document did not write as text, whatever the document says.
+  character of the source goes through `html.escape`.
+
+The two layers: this module's output is already inert, and the route
+(`api/sources.py`) serves it under a CSP that would stop script even if it
+weren't. Neither is relied on alone. The allowlist loses presentation (the
+compilation's inline `style` attributes and its stylesheet), not text or
+anchors.
 
 Both are pure: no store, no network.
 """
@@ -36,60 +47,80 @@ TARGET_STYLE = (
 """Marks the clause a link opened at. Added to a page; a stored object is
 never changed."""
 
-# ---- law: third-party markup, minus whatever can run ---------------------------------
+# ---- law: third-party markup, rebuilt from an allowlist ------------------------------
 
-_DROPPED_TAGS = frozenset(
-    {"script", "iframe", "frame", "frameset", "object", "embed", "applet", "base", "link"}
+ALLOWED_TAGS = frozenset(
+    {"p", "div", "span", "a", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption"}
+    | {"ul", "ol", "li", "em", "strong", "b", "i", "u", "sup", "sub", "br", "hr", "blockquote"}
+    | {"h1", "h2", "h3", "h4", "h5", "h6"}
 )
-"""Elements that load or run something. Their own markup is dropped; `script`'s
-content too (it is code). A `style` element stays: it is a stylesheet, and the
-CSP allows inline styles only."""
-_DROPPED_META = frozenset({"refresh", "set-cookie", "content-security-policy"})
-_URL_ATTRIBUTES = frozenset({"href", "src", "xlink:href", "action", "formaction", "srcdoc", "data"})
-_DANGEROUS_URL_RE = re.compile(r"^(?:javascript|vbscript|data\s*:\s*text/html)", re.IGNORECASE)
-_URL_NOISE_RE = re.compile(r"[\x00-\x20\x7f]+")
-_SCRIPT_OPEN_RE = re.compile(r"<(\s*/?\s*script)", re.IGNORECASE)
+"""What the stored compilation's body is made of: `span`, `p`, `a` and `div`
+(the real fixtures use nothing else), and the structural and text elements a
+longer Act's tables, lists and notes need. Everything else is dropped."""
+_VOID_TAGS = frozenset({"br", "hr"})
+_TRANSPARENT_TAGS = frozenset({"html", "body"})
+"""The document's own wrapper: dropped, its children kept."""
+_VOID_UNKNOWN = frozenset(
+    {"img", "input", "link", "meta", "base", "embed", "source", "track", "wbr", "area", "col"}
+    | {"param", "keygen", "basefont", "frame"}
+)
+"""Elements with no end tag: dropped alone, so nothing after them is skipped."""
+_PLAIN_ATTRIBUTES = frozenset({"id", "class"})
+_SPAN_ATTRIBUTES = frozenset({"colspan", "rowspan"})
+_FRAGMENT_RE = re.compile(r"#[A-Za-z0-9_.:-]*\Z")
+_SPAN_VALUE_RE = re.compile(r"[0-9]{1,3}\Z")
+_PAGE_STYLE = (
+    "<style>body{font:16px/1.5 system-ui,sans-serif;margin:0 auto;max-width:60rem;"
+    "padding:1rem}table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:.2rem .4rem}"
+    "</style>"
+)
 
 
-def _is_dropped_attribute(name: str, value: str | None) -> bool:
-    lowered = name.lower()
-    if lowered.startswith("on"):
-        return True
-    if lowered in _URL_ATTRIBUTES and value is not None:
-        # A browser ignores whitespace and control characters inside a scheme
-        # ("java\tscript:"), so the check does too.
-        return _DANGEROUS_URL_RE.match(_URL_NOISE_RE.sub("", value)) is not None
-    return False
+def _kept_attributes(tag: str, attrs: list[tuple[str, str | None]]) -> str:
+    kept: list[str] = []
+    for name, value in attrs:
+        name = name.lower()
+        if value is None:
+            continue
+        if name in _PLAIN_ATTRIBUTES or (
+            name in _SPAN_ATTRIBUTES and _SPAN_VALUE_RE.match(value) is not None
+        ):
+            kept.append(f' {name}="{html.escape(value, quote=True)}"')
+        elif tag == "a" and name == "href" and _FRAGMENT_RE.match(value) is not None:
+            kept.append(f' href="{html.escape(value, quote=True)}"')
+    return "".join(kept)
 
 
-class _Sanitiser(HTMLParser):
-    """Re-emits a document token by token. A start tag with nothing to drop is
-    written back exactly as it was (`get_starttag_text`), so ids, classes and
-    every other attribute are untouched."""
+class _Rebuilder(HTMLParser):
+    """Writes a new page from a stored document's token stream. It keeps a
+    stack of the allowlisted elements it has opened, so what it writes is
+    balanced whatever the source was, and a closing tag the source has with no
+    opening one closes nothing."""
 
     def __init__(self) -> None:
-        super().__init__(convert_charrefs=False)
+        super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self._in_script = False
-        self.styled = False
+        self._open: list[str] = []
+        self._skipping: str | None = None
+        self._skip_depth = 0
 
     def _start(self, tag: str, attrs: list[tuple[str, str | None]], *, closed: bool) -> None:
-        if tag in _DROPPED_TAGS:
-            self._in_script = tag == "script" and not closed
+        if self._skipping is not None:
+            if tag == self._skipping and not closed:
+                self._skip_depth += 1
             return
-        if tag == "meta" and any(
-            n.lower() == "http-equiv" and (v or "").strip().lower() in _DROPPED_META
-            for n, v in attrs
-        ):
-            return  # a page that redirects itself, or sets a cookie
-        kept = [(n, v) for n, v in attrs if not _is_dropped_attribute(n, v)]
-        if len(kept) == len(attrs):
-            self.parts.append(self.get_starttag_text() or "")
+        if tag in _TRANSPARENT_TAGS or tag in _VOID_UNKNOWN:
             return
-        rendered = "".join(
-            f" {n}" if v is None else f' {n}="{html.escape(v, quote=True)}"' for n, v in kept
-        )
-        self.parts.append(f"<{tag}{rendered}{' /' if closed else ''}>")
+        if tag not in ALLOWED_TAGS:
+            if not closed:  # dropped with everything inside it
+                self._skipping, self._skip_depth = tag, 1
+            return
+        self.parts.append(f"<{tag}{_kept_attributes(tag, attrs)}>")
+        if tag not in _VOID_TAGS:
+            if closed:
+                self.parts.append(f"</{tag}>")
+            else:
+                self._open.append(tag)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._start(tag, attrs, closed=False)
@@ -98,48 +129,48 @@ class _Sanitiser(HTMLParser):
         self._start(tag, attrs, closed=True)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in _DROPPED_TAGS:
-            self._in_script = False
+        if self._skipping is not None:
+            if tag == self._skipping:
+                self._skip_depth -= 1
+                if self._skip_depth == 0:
+                    self._skipping = None
             return
-        if tag == "head" and not self.styled:
-            self.parts.append(TARGET_STYLE)
-            self.styled = True
-        self.parts.append(f"</{tag}>")
+        if tag in self._open:
+            while self._open:
+                closing = self._open.pop()
+                self.parts.append(f"</{closing}>")
+                if closing == tag:
+                    break
 
     def handle_data(self, data: str) -> None:
-        if not self._in_script:
-            self.parts.append(data)
+        if self._skipping is None:
+            self.parts.append(html.escape(data, quote=False))
 
-    def handle_entityref(self, name: str) -> None:
-        if not self._in_script:
-            self.parts.append(f"&{name};")
+    # Comments, declarations, processing instructions and CDATA sections are
+    # never written.
 
-    def handle_charref(self, name: str) -> None:
-        if not self._in_script:
-            self.parts.append(f"&#{name};")
-
-    def handle_decl(self, decl: str) -> None:
-        self.parts.append(f"<!{decl}>")
-
-    # Comments, processing instructions and CDATA sections are dropped: a
-    # conditional comment is markup some browsers read, and none carries a clause.
+    def finish(self) -> str:
+        self.close()
+        self.parts.extend(f"</{tag}>" for tag in reversed(self._open))
+        self._open.clear()
+        return "".join(self.parts)
 
 
 @lru_cache(maxsize=4)
-def sanitise_source_html(source: str) -> str:
-    """A stored law source, safe to serve as a page, with the clause the link
-    opens at marked (`TARGET_STYLE`). Cached by the source itself, so a source
-    revised in place (ADR-0042) is read afresh and an unchanged one is parsed
-    once."""
-    sanitiser = _Sanitiser()
-    sanitiser.feed(source)
-    sanitiser.close()
-    page = "".join(sanitiser.parts)
-    if not sanitiser.styled:
-        page = TARGET_STYLE + page
-    # A parser can disagree with a browser about where a tag starts. Whatever
-    # `<script` is left is made text, which can't run.
-    return _SCRIPT_OPEN_RE.sub(r"&lt;\1", page)
+def sanitise_source_html(source: str, title: str) -> str:
+    """A stored law source as a page that holds only its text, its allowlisted
+    structure and its ids (see the module docstring), named `title`, with the
+    clause a link opens at marked (`TARGET_STYLE`). Cached by the source
+    itself, so a source revised in place (ADR-0042) is read afresh and an
+    unchanged one is rebuilt once."""
+    rebuilder = _Rebuilder()
+    rebuilder.feed(source)
+    body = rebuilder.finish()
+    heading = html.escape(title)
+    return (
+        '<!doctype html><html lang="en-AU"><head><meta charset="utf-8">'
+        f"<title>{heading}</title>{_PAGE_STYLE}{TARGET_STYLE}</head><body>{body}</body></html>"
+    )
 
 
 # ---- a tenant's document: Markdown, escaped, anchored as the parser anchors ----------

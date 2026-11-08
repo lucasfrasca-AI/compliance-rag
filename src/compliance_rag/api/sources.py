@@ -7,7 +7,8 @@ page, and the citation's `href` adds the clause's anchor, `#clause-...`
 anchor is the browser's, so a citation costs no lookup.
 
 - **Law** is the stored source HTML (`ClauseStore.get_source_html`), as the
-  parser anchored it, served through `sanitise_source_html`.
+  parser anchored it, rebuilt by `sanitise_source_html` from an allowlist of
+  elements and attributes: text, structure and ids survive, nothing else.
 - **A tenant's document** is rendered from the Markdown it was published as
   (ADR-0048) and named by the title recorded with its version (ADR-0049):
   `render_policy_html`, the same anchors.
@@ -23,10 +24,19 @@ member: the clause store returns a private clause to its owner alone. A
 withdrawn version still opens, so the citation in an old chat does; a purged
 one has no stored source and is a 404.
 
-**The page can't run anything.** The CSP is `sandbox; default-src 'none'`
-with inline styles and data images only: no script runs even if one got
-through, and nothing loads. Stored law is third-party markup, so it is also
-sanitised, and a policy's page is escaped from the start.
+**The page can't run anything, in two layers.** First, what is served holds no
+markup the source chose: stored law is third-party markup, so it is rebuilt
+from an allowlist (`corpus/source_view.py`), and a policy's page is escaped
+from the start. Second, every response of this route, a 404 included, carries a
+CSP of `sandbox; default-src 'none'` with inline styles and data images only,
+so even a script that got through would not run, and nothing loads. The
+sign-in's own refusals (401, 403) come from the dependency before the route
+and carry none; they are JSON.
+
+**Opening a link.** A citation's `href` is a plain link, so a browser click
+sends no `Authorization` header: it opens only with a cookie session (#283),
+which the page (#281) relies on. API clients that send the bearer token can
+follow it directly.
 """
 
 from __future__ import annotations
@@ -64,6 +74,12 @@ SOURCE_HEADERS = {
 NOT_FOUND = "no such source"
 
 
+def _not_found() -> HTTPException:
+    """The one answer for everything that isn't theirs, with the same headers
+    as a page: the response is JSON, but the route's rule has no exceptions."""
+    return HTTPException(404, NOT_FOUND, headers=SOURCE_HEADERS)
+
+
 def source_href(clause_id: str) -> str:
     """Where a citation of `clause_id` opens: the API's source route for its
     version, at the clause's anchor. Built from the id alone, so a chat read
@@ -83,7 +99,10 @@ async def _library_source(
     html = await services.clauses.get_source_html(
         instrument_id, version_id, tenant_id=PUBLIC_TENANT_ID
     )
-    return None if html is None else sanitise_source_html(html)
+    if html is None:
+        return None
+    titles = await services.ledger.version_titles(PUBLIC_TENANT_ID, [(instrument_id, version_id)])
+    return sanitise_source_html(html, titles.get((instrument_id, version_id), instrument_id))
 
 
 async def _tenant_source(
@@ -114,24 +133,24 @@ async def _tenant_source(
     return None if markdown is None else render_policy_html(markdown, title=title)
 
 
-@router.get("/sources/{instrument_id:path}/{version_id}", response_class=HTMLResponse)
-async def open_source(
-    request: Request,
-    who: CurrentCaller,
-    instrument_id: str,
-    version_id: str,
-) -> HTMLResponse:
-    services = services_of(request)
+@router.get("/sources/{reference:path}", response_class=HTMLResponse)
+async def open_source(request: Request, who: CurrentCaller, reference: str) -> HTMLResponse:
+    """`reference` is `{instrument_id}/{version_id}`; the instrument id may
+    hold a slash (a tenant's), so it is split at the last one. Anything that
+    isn't a well-formed reference is a 404 from here, with the CSP, not the
+    router's own."""
+    instrument_id, _, version_id = reference.rpartition("/")
     try:
         validate_instrument_id(instrument_id)
     except ValueError:
-        raise HTTPException(404, NOT_FOUND) from None
+        raise _not_found() from None
     if not VERSION_ID_RE.match(version_id):
-        raise HTTPException(404, NOT_FOUND)
+        raise _not_found()
+    services = services_of(request)
     with span("api.source", instrument_id=instrument_id, version_id=version_id):
         page = await (
             _library_source if instrument_tenant_prefix(instrument_id) is None else _tenant_source
         )(services, who, instrument_id, version_id)
     if page is None:
-        raise HTTPException(404, NOT_FOUND)
+        raise _not_found()
     return HTMLResponse(page, headers=SOURCE_HEADERS)
