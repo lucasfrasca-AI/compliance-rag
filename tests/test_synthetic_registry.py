@@ -260,6 +260,29 @@ def test_only_known_paths_write_to_the_corpus_stores() -> None:
     assert callers == WRITERS
 
 
+PUBLISHING_SCRIPTS = {
+    "scripts/load_compilation_vectors.py",  # library law, from the bucket ingest filled
+    "scripts/seed_tenant.py",  # Acme's six policies: synthetic because the registry says so (#293)
+}
+
+
+def test_only_known_scripts_publish_through_the_lifecycle_and_each_loads_the_registry() -> None:
+    """A script that builds a `CorpusLifecycle` is an operator path into every
+    corpus store. The write path marks content synthetic from the registry it
+    is given, so a script is listed here, deliberately, and must hand it the
+    checked-in one (`SyntheticRegistry.load()`), not an empty or hand-made
+    registry that would call real text synthetic or the reverse (ADR-0026)."""
+    root = Path(__file__).resolve().parents[1]
+    callers = {
+        str(path.relative_to(root)): path.read_text(encoding="utf-8")
+        for path in (root / "scripts").glob("*.py")
+        if re.search(r"\bCorpusLifecycle\(", path.read_text(encoding="utf-8"))
+    }
+    assert set(callers) == PUBLISHING_SCRIPTS
+    for name, source in callers.items():
+        assert "synthetic_registry=SyntheticRegistry.load()" in source, name
+
+
 async def test_compilation_ingest_refuses_a_tenant_document() -> None:
     with pytest.raises(ValueError, match="library law only"):
         await ingest_compilation(
