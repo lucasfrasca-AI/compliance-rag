@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from compliance_rag.adapters.firebase_auth import is_member
 from compliance_rag.adapters.interfaces import (
     ClauseStore,
     GraphStore,
@@ -26,6 +27,7 @@ from compliance_rag.adapters.interfaces import (
     Unauthenticated,
     VerifierUnavailable,
 )
+from compliance_rag.api.session import COOKIE_NAME, SessionCodec
 from compliance_rag.assessment.coverage import Coverage, Outcome
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.assessment.pipeline import AssessmentPipeline
@@ -82,10 +84,12 @@ def services_of(request: Request) -> ApiServices:
     return services
 
 
-async def current_member(
+async def bearer_member(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> Member:
+    """The member a Bearer ID token signs in; 401/403/503 otherwise. The only
+    way to start a session (`POST /session`): a cookie can't mint a cookie."""
     if credentials is None:
         raise HTTPException(401, "sign in required", headers=_CHALLENGE)
     try:
@@ -96,6 +100,34 @@ async def current_member(
         raise HTTPException(403, str(refused)) from None
     except VerifierUnavailable:
         raise HTTPException(503, "sign-in can't be checked right now") from None
+
+
+def cookie_member(request: Request, value: str) -> Member:
+    """The member a session cookie signs in, with the outcomes a token has: 401
+    if it is forged, tampered or expired, 403 if the member has since left the
+    tenant. It needs no signing keys, so it is never a 503."""
+    codec: SessionCodec | None = request.app.state.session
+    if codec is None:
+        raise HTTPException(401, "sign in required", headers=_CHALLENGE)
+    try:
+        member = codec.open(value)
+    except Unauthenticated as refused:
+        raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
+    if not is_member(member.email, services_of(request).settings.members):
+        raise HTTPException(403, "not a member of this tenant")
+    return member
+
+
+async def current_member(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> Member:
+    """The Bearer token if one is sent, else the session cookie (#280). A Bearer
+    header is never overridden by a cookie."""
+    cookie = request.cookies.get(COOKIE_NAME)
+    if credentials is None and cookie is not None:
+        return cookie_member(request, cookie)
+    return await bearer_member(request, credentials)
 
 
 async def current_caller(

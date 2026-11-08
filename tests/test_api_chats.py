@@ -186,10 +186,13 @@ async def test_a_chat_continues_when_its_id_is_named_and_each_request_has_its_ow
     assert len(await ledger.chats(TENANT, UID)) == 1
 
 
-async def test_earlier_turns_do_not_reach_the_model(quote: str) -> None:
-    """The prompt and retrieval are as they were with no chat (#29): a follow-up
-    sent in a chat is the prompt it would have been on its own. Whether history
-    should reach the model is the design session's (#162)."""
+async def test_earlier_turns_reach_the_model_as_fenced_data_and_only_in_a_chat(
+    quote: str,
+) -> None:
+    """History is the design session's decision (ADR-0053, I4; #278, whose
+    `test_chat_history.py` has the rest): a follow-up sent in a chat carries the
+    earlier question and the answer the member was shown, fenced; the same
+    question in no chat carries none."""
     ledger = await acme_ledger()
     generator = FakeGenerator(reply_of((APP11, quote)))
     async with await answers_client(generator, ledger, await golden_clause_store()) as c:
@@ -197,8 +200,12 @@ async def test_earlier_turns_do_not_reach_the_model(quote: str) -> None:
         await _ask(c, question=FOLLOW_UP, chat_id=_chat_id(events))
         await _ask(c, question=FOLLOW_UP)  # the same question, in no chat
     in_chat, alone = generator.calls[1], generator.calls[2]
-    assert in_chat["user"] == alone["user"] and in_chat["cached_prefix"] == alone["cached_prefix"]
-    assert QUESTION not in str(in_chat["user"]) and ANSWER not in str(in_chat["user"])
+    assert "<chat_history" in str(in_chat["user"])
+    assert QUESTION in str(in_chat["user"]) and ANSWER in str(in_chat["user"])
+    assert "<chat_history" not in str(alone["user"])
+    assert QUESTION not in str(alone["user"]) and ANSWER not in str(alone["user"])
+    assert in_chat["cached_prefix"] == alone["cached_prefix"]
+    assert in_chat["system"] == alone["system"]
 
 
 # ---- an answer turn holds only what the member was shown (ADR-0003) ------------------
