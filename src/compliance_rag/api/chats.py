@@ -52,6 +52,7 @@ from compliance_rag.adapters.interfaces import (
     ChatCitation,
     ChatTurn,
     Citation,
+    LedgerStore,
     TurnOutcome,
     UnreadableCitation,
 )
@@ -164,13 +165,25 @@ async def list_chats(request: Request, who: CurrentCaller) -> dict[str, object]:
     }
 
 
+async def read_chat(
+    ledger: LedgerStore, tenant_id: str, uid: str, chat_id: str
+) -> list[dict[str, object]] | None:
+    """A member's chat turn by turn, as the API serves it; None when it is not
+    theirs or has no turns. The one reader of a chat: the JSON route below and
+    the server-rendered pages (`pages.py`, #281) both show these turns, so what
+    a page shows is what the API says."""
+    turns = await ledger.chat_turns(tenant_id, uid, chat_id)
+    if not turns:
+        return None
+    titles = await ledger.version_titles(tenant_id, cited_policy_versions(_named(turns)))
+    return [_turn_json(t, titles) for t in turns]
+
+
 @router.get("/chats/{chat_id}")
 async def get_chat(
     request: Request, who: CurrentCaller, chat_id: Annotated[str, Path(pattern=UUID4_HEX)]
 ) -> dict[str, object]:
-    ledger = services_of(request).ledger
-    turns = await ledger.chat_turns(who.tenant_id, who.member.uid, chat_id)
-    if not turns:
+    turns = await read_chat(services_of(request).ledger, who.tenant_id, who.member.uid, chat_id)
+    if turns is None:
         raise HTTPException(404, "no such chat")
-    titles = await ledger.version_titles(who.tenant_id, cited_policy_versions(_named(turns)))
-    return {"chat_id": chat_id, "turns": [_turn_json(t, titles) for t in turns]}
+    return {"chat_id": chat_id, "turns": turns}

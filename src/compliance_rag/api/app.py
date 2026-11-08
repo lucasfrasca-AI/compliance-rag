@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from compliance_rag.api import answers, chats, sign_in, sources, tenant
+from compliance_rag.api import answers, chats, pages, sign_in, sources, tenant
 from compliance_rag.api.deps import ApiServices, Caller, current_caller
 from compliance_rag.api.session import OriginGuard, codec_for
 from compliance_rag.telemetry import current_trace_id, span
@@ -75,6 +75,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.state.session = codec_for(services.settings.session_secret.get_secret_value())
     app.add_middleware(OriginGuard, extra_origins=services.settings.allowed_origins)
     app.add_middleware(RequestSpan)
+    app.add_middleware(pages.PageHeaders)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, error: RequestValidationError) -> JSONResponse:
@@ -92,6 +93,9 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(chats.router)
     app.include_router(sources.router)
     app.include_router(sign_in.router)
+    app.include_router(pages.router)
+    app.add_exception_handler(pages.SignInRequired, pages.sign_in_required)
+    app.add_exception_handler(pages.PageError, pages.page_error)
     app.mount("/static", sign_in.Assets(directory=sign_in.STATIC_DIR), name="static")
 
     # Not /healthz: Cloud Run reserves paths ending in "z".

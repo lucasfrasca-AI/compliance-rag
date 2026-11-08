@@ -1,0 +1,150 @@
+{#- A chat's turns, as the API reads them back (`chats.read_chat`). Everything
+    here is autoescaped; nothing is marked safe. Each outcome is its own state,
+    named by `data-outcome`. -#}
+{% macro flags(reasons) %}
+{% for r in reasons %}
+<p class="reasons"><span class="flag flag-incomplete">Incomplete</span> {{ r.detail }}</p>
+{% endfor %}
+{% endmacro %}
+
+{% macro not_in_environment(items) %}
+{% if items %}
+<section class="card outcome not-in-environment" data-outcome="not-in-environment" aria-label="Not in your environment">
+<h3>Not in your environment</h3>
+<p>Your question names law that your environment does not hold. Nothing in the answer below is that law: it cites only what your environment holds.</p>
+<ul>
+{% for n in items %}
+{% if n.get("unreadable") %}
+<li>An instrument the question named (its name could not be read back)</li>
+{% else %}
+<li><strong>{{ n.known_as or n.named }}</strong>{% if n.known_as and n.known_as != n.named %} (you wrote "{{ n.named }}"){% endif %}{% if n.part_of %}, part of {{ n.part_of }}, which your environment does not select{% endif %}</li>
+{% endif %}
+{% endfor %}
+</ul>
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro meta(t) %}
+<p class="meta">As of <time datetime="{{ t.as_of }}">{{ t.as_of }}</time> · trace <code>{{ t.trace_id }}</code></p>
+{% endmacro %}
+
+{% macro error_card(t) %}
+{% set kind = t.error %}
+<section class="card outcome error" data-outcome="{{ kind }}" role="group" aria-label="This question was not answered">
+{% if kind == "residency" %}
+<h3>Not sent: the residency rule refused this question</h3>
+<p>While the model runs outside Australia (the build phase), a question is sent to it only from a registered build-phase tester, and only over synthetic policy text. Nothing was sent to the model, and the question did not leave Australia.</p>
+{% elif kind == "generation_unavailable" %}
+<h3>The model isn't taking requests right now</h3>
+<p>The model's service refused the request for quota, so no answer was generated. Coverage and retrieval ran; the model wrote nothing, and nothing unverified is shown.</p>
+<p class="note">It clears when the quota is granted or refills. Nothing on this page needs fixing: ask again later.</p>
+{% elif kind == "policy_corpus_too_large" %}
+<h3>Your policy documents are too large to send with a question</h3>
+{% if t.estimated_tokens is not none and t.cap_tokens is not none %}
+<p>Your in-force policies come to about {{ t.estimated_tokens }} tokens, over the limit of {{ t.cap_tokens }} (ADR-0054). Nothing was generated.</p>
+{% else %}
+<p>Your in-force policies are over the size limit (ADR-0054), and the measure recorded with this turn can't be read. Nothing was generated.</p>
+{% endif %}
+<p class="note">The policy set needs to be made smaller before questions can be answered over it.</p>
+{% elif kind == "malformed_generation" %}
+<h3>The model's reply was not a valid answer</h3>
+<p>Nothing in it is shown, because nothing in it could be checked. Try asking again.</p>
+{% else %}
+<h3>The answer couldn't be completed</h3>
+<p>Something failed while answering. Nothing unverified is shown. Try asking again.</p>
+{% endif %}
+{{ meta(t) }}
+</section>
+{% endmacro %}
+
+{% macro citation_item(c) %}
+{% if c.get("unreadable") %}
+<li class="citation" data-citation="unreadable">
+<span class="flag flag-unreadable">Unreadable</span>
+{% if c.get("cite") %}<span class="cite">{{ c.cite }}</span>{% endif %}
+<span class="note">This stored citation can't be read, so it asserts nothing ({{ c.reason }}).</span>
+</li>
+{% else %}
+<li class="citation" data-citation="{{ c.clause_id }}">
+{% if c.href.startswith("/v1/sources/") %}
+<a class="cite" href="{{ c.href }}" data-source-link>{{ c.cite }}</a>
+{% else %}
+<span class="cite">{{ c.cite }}</span>
+{% endif %}
+<span class="meta">version {{ c.version_id }}</span>
+{% if c.incomplete %}
+<span class="flag flag-incomplete">Incomplete</span>
+{{ flags(c.incomplete) }}
+{% endif %}
+</li>
+{% endif %}
+{% endmacro %}
+
+{% macro answer_card(t) %}
+{% if t.verified %}
+<section class="card outcome verified" data-outcome="verified" aria-label="Verified answer">
+<h3><span class="verdict verdict-ok">Verified</span></h3>
+<p class="answer-text">{{ t.text }}</p>
+{% if t.incomplete %}
+<div class="incomplete-summary" data-incomplete-summary role="note">
+<h4>Incomplete clauses cited</h4>
+<p>The law sets more in these clauses than the text held here. Read the source before relying on them.</p>
+<ul>
+{% for i in t.incomplete %}
+<li><strong>{{ i.cite }}</strong>{{ flags(i.reasons) }}</li>
+{% endfor %}
+</ul>
+</div>
+{% endif %}
+<h4>Citations</h4>
+<ol class="citations">
+{% for c in t.citations %}
+{{ citation_item(c) }}
+{% endfor %}
+</ol>
+<p class="note">Each citation is the clause's own text, checked against the stored source. Open one to read it in place.</p>
+{{ meta(t) }}
+</section>
+{% else %}
+<section class="card outcome withheld" data-outcome="withheld" aria-label="Withheld answer">
+<h3><span class="verdict verdict-bad">Answer withheld</span></h3>
+<p>{{ t.withheld[0] | upper }}{{ t.withheld[1:] }}</p>
+<p class="note">Nothing the model wrote is shown: its prose can repeat a quote the verifier refused (ADR-0003). This is not an error; the check did its job.</p>
+{% if t.blocked %}
+<h4>Citations that did not verify</h4>
+<ul class="blocked">
+{% for b in t.blocked %}
+{% if b.get("unreadable") %}
+<li><span class="flag flag-unreadable">Unreadable</span> a blocked citation that can't be read back</li>
+{% else %}
+<li data-blocked="{{ b.clause_id }}"><span class="cite">{{ b.cite }}</span></li>
+{% endif %}
+{% endfor %}
+</ul>
+{% endif %}
+{{ meta(t) }}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% for t in turns %}
+{% if t.role == "user" %}
+<article class="turn turn-question" data-turn="{{ t.turn_index }}">
+<h2 class="label">You asked</h2>
+<p class="question-text">{{ t.text }}</p>
+</article>
+{% else %}
+<article class="turn turn-answer" data-turn="{{ t.turn_index }}">
+<h2 class="label">Answer</h2>
+{% if t.error %}
+{{ error_card(t) }}
+{% else %}
+{{ not_in_environment(t.not_in_environment) }}
+{{ answer_card(t) }}
+{% endif %}
+</article>
+{% endif %}
+{% else %}
+<p class="empty">No questions yet. Ask one below.</p>
+{% endfor %}

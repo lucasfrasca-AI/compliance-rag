@@ -31,3 +31,26 @@ on a span or echoed in an error.
 The sign-in page offers email and password only. Firebase's Google popup loads
 `apis.google.com` and is refused by the page's CSP (see
 `static/vendor/firebase/README.md`); allowing it is the human's decision.
+
+## The Ask pages (`pages.py`, `templates/`, `static/ask.js`)
+
+`/chats`, `/chats/new` and `/chats/{id}` are server-rendered (Jinja2, autoescaped, nothing
+marked safe) and use htmx only to swap in the server's own fragment
+(`/chats/{id}/turns`) after an answer. Every page carries the one CSP
+(`sign_in.CONTENT_SECURITY_POLICY`): scripts, styles, images and frames from this origin
+only, no inline script or style. The assets are `static/ask.js` (the stream, the progress,
+the citation panel) and the vendored htmx (`static/vendor/htmx/README.md`: version, hash,
+and the config that keeps it inside the CSP).
+
+- A page request without a session redirects to `/signin`; a signed-in non-member gets a
+  403 page. There is no page at `/`.
+- The fragment takes no parameter and the page shows exactly what the ledger recorded, so
+  every outcome (`generation_unavailable` with its reason, `policy_corpus_too_large` with
+  the estimate and the cap, #289) is the same card live and after a reload. If the ledger
+  did not record the exchange, `ask.js` (which compares the chat's turn count before and
+  after) says so and shows the stream's own outcome as text under "Not saved to this chat".
+- Every response under `/chats`, errors included, carries the CSP (`pages.PageHeaders`).
+- `ask.js` is not exercised by CI (no browser there). It was driven in headless Chrome
+  against the app over fakes at 390px wide (ask, progress, panel, follow-up, withheld,
+  failure, an unrecorded exchange, sign-out); the tests make the same requests in the same
+  order.
