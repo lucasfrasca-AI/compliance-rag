@@ -23,6 +23,10 @@ with the version: read once per answer, for every policy version in the
 context, never once per clause or per citation. The answer carries what was
 read, so the API shows the same form.
 
+The prefix (the system prompt and the tenant's policies) is capped at about
+30k tokens, counted locally (`prefix_cap`, ADR-0054): a larger one raises
+`PolicyCorpusTooLarge` before the generator is called.
+
 An incomplete clause (ADR-0047) is marked so in its fence, and an answer that
 cites one carries it (`Answer.incomplete`): the verifier still checks the
 quote against the stored text, and the flag says that text isn't all the
@@ -70,6 +74,7 @@ from compliance_rag.assessment.environment import (
     not_in_environment,
 )
 from compliance_rag.assessment.history import MAX_EXCHANGES, PriorExchange, retrieval_query
+from compliance_rag.assessment.prefix_cap import check_prefix_cap
 from compliance_rag.assessment.prompt import (
     REPAIR_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -350,9 +355,14 @@ class AssessmentPipeline:
                 "answer.qualifiers_fetched",
                 [c.clause_id for c in qualifiers if c.clause_id in fetched],
             )
+            # The prefix is built once and its size checked locally before any
+            # generator call: over the cap it is refused, never truncated
+            # (ADR-0054). The span records the estimate and the cap either way.
+            prefix = policy_prefix(policies)
+            check_prefix_cap(SYSTEM_PROMPT, prefix, current=current)
             generation = await self.generator.generate(
                 system=SYSTEM_PROMPT,
-                cached_prefix=policy_prefix(policies),
+                cached_prefix=prefix,
                 user=user_prompt(query, retrieved, absent, history),
                 max_tokens=max_tokens,
             )

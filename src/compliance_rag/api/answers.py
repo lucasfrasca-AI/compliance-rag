@@ -69,7 +69,10 @@ is checked, retrieved, generated or written.
   request for quota (`GenerationUnavailable`) is sent as
   `generation_unavailable`, with a fixed reason and the trace id and none of
   its SDK's words, so a client can say so plainly (#251). It is recorded as
-  `internal`: the answer couldn't be completed. Never the model's text,
+  `internal`: the answer couldn't be completed. A policy corpus over the
+  prefix cap (ADR-0054) is sent as `policy_corpus_too_large`, with the measured
+  estimate and the cap, before any generator call, and recorded the same way.
+  Never the model's text,
   and not the message, which can name clauses: the marker is the whole record.
   The question is the member's own words and stays in the ledger, in Sydney
   (SERVICES.md); a residency refusal exists so that it never leaves Australia,
@@ -122,6 +125,7 @@ from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.history import prior_exchanges
 from compliance_rag.assessment.pipeline import Answer
 from compliance_rag.assessment.policies import tenant_policies
+from compliance_rag.assessment.prefix_cap import PolicyCorpusTooLarge
 from compliance_rag.corpus.display_form import Titles, cite
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import ClauseRecord, Incomplete
@@ -304,6 +308,15 @@ def _failure(error: Exception) -> TurnOutcome:
 def _error_json(outcome: TurnOutcome, error: Exception) -> dict[str, object]:
     if isinstance(error, GenerationUnavailable):
         return {**UNAVAILABLE, "reason": error.reason.value, "trace_id": current_trace_id()}
+    if isinstance(error, PolicyCorpusTooLarge):
+        # A measurement, never the policies' words (ADR-0054).
+        return {
+            "error": "policy_corpus_too_large",
+            "message": str(error),
+            "estimated_tokens": error.estimated_tokens,
+            "cap_tokens": error.cap_tokens,
+            "trace_id": current_trace_id(),
+        }
     if outcome is TurnOutcome.RESIDENCY:
         return {"error": "residency", "message": str(error)}
     return MALFORMED if outcome is TurnOutcome.MALFORMED_GENERATION else FAILED
@@ -449,6 +462,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
             if outcome is TurnOutcome.RESIDENCY:
                 log.warning("an answer was refused by the residency gate: %s", failed)
                 trace.get_current_span().set_attribute("answer.refused", "residency")
+            elif isinstance(failed, PolicyCorpusTooLarge):
+                log.warning("an answer was refused: %s", failed)
+                trace.get_current_span().set_attribute("answer.refused", "policy_corpus_too_large")
             elif outcome is TurnOutcome.INTERNAL:
                 log.exception("answering failed")
             yield staged("error", _error_json(outcome, failed))
