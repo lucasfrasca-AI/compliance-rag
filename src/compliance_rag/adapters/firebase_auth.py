@@ -220,7 +220,12 @@ class FirebaseTokenVerifier(TokenVerifier):
             or email.lower() not in self._members
         ):
             raise NotAMember("not a member of this tenant")
-        return Member(uid=uid, email=email.lower())
+        expires = claims.get("exp")
+        return Member(
+            uid=uid,
+            email=email.lower(),
+            expires_at=int(expires) if isinstance(expires, int | float) else None,
+        )
 
     async def aclose(self) -> None:
         await self._source.aclose()
