@@ -137,6 +137,11 @@
 {% else %}
 <article class="turn turn-answer" data-turn="{{ t.turn_index }}">
 <h2 class="label">Answer</h2>
+{#- On every answer turn the demo generator wrote, by what the ledger recorded
+    with the turn, not by what the deployment runs now; whichever outcome it shows. -#}
+{% with banner = fake_banner if t.generator == "demo" else None %}
+{% include "_banner.html" %}
+{% endwith %}
 {% if t.error %}
 {{ error_card(t) }}
 {% else %}

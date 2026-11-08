@@ -165,6 +165,26 @@ async def test_the_database_refuses_a_flag_on_a_question_or_a_failed_request(
             await conn.execute("UPDATE chat SET not_in_environment = '{}' WHERE turn_index = 1")
 
 
+async def test_the_generator_is_a_column_only_an_answer_turn_holds_and_old_rows_read_none(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """Ledger 0020 (#292): `claude` or `demo` on an answer turn, whatever writes
+    the row; a question and any other word are refused; a row without one (every
+    row before the column) reads back `None`."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_chat_exchange(an_exchange("c1", generator="demo"))
+    for turn_index, value in ((0, "demo"), (1, "gpt")):
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            with pytest.raises(psycopg.errors.CheckViolation, match="chat_generator"):
+                await conn.execute(
+                    "UPDATE chat SET generator = %s WHERE turn_index = %s", (value, turn_index)
+                )
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute("UPDATE chat SET generator = NULL WHERE turn_index = 1")
+    (_, answer) = await ledger.chat_turns("acme", "uid-1", "c1")
+    assert answer.generator is None
+
+
 async def test_a_flag_is_its_own_jsonb_element_and_a_corrupt_one_reads_back_unreadable(
     ledger: PostgresLedgerStore, caplog: pytest.LogCaptureFixture
 ) -> None:

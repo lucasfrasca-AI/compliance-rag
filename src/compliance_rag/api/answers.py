@@ -31,6 +31,10 @@ The stream carries stages and a verified result, never unverified text
 - `answer`;
 - or `error`.
 
+Each `answer` event names the generator that wrote it (`"generator": "claude"`
+or `"demo"`, #292): the demo generator is an in-process stand-in that calls no
+model, and every page says so while it is on (`api/banner.py`).
+
 An answer that cites an incomplete clause (ADR-0047) says so: each citation
 carries its clause's `incomplete` reasons, and `incomplete` lists every such
 clause with its display form, so a client shows it beside the answer. Each
@@ -134,6 +138,7 @@ from compliance_rag.corpus.display_form import Titles, cite
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import ClauseRecord, Incomplete
 from compliance_rag.retrieval.pipeline import RetrievalTrace
+from compliance_rag.settings import GeneratorName
 from compliance_rag.telemetry import current_trace_id
 
 router = APIRouter(prefix="/v1")
@@ -223,8 +228,13 @@ def _shown(answer: Answer) -> ChatAnswer:
     )
 
 
-def _answer_json(answer: Answer, shown: ChatAnswer) -> dict[str, object]:
+def _answer_json(
+    answer: Answer, shown: ChatAnswer, *, generator: GeneratorName
+) -> dict[str, object]:
     common: dict[str, object] = {
+        # `claude` or `demo`: a client can tell a stand-in's answer from a
+        # model's, withheld or verified (#292).
+        "generator": generator,
         "verified": shown.outcome is TurnOutcome.VERIFIED,
         "blocked": [
             {"clause_id": c.citation.clause_id, "outcome": c.outcome.value} for c in answer.blocked
@@ -354,6 +364,8 @@ class _ChatRecorder:
     chat_id: str
     question: str
     as_of: dt.date
+    generator: GeneratorName
+    """What wrote the answer turn, from `Settings` (ledger 0020)."""
 
     async def record(self, shown: ChatAnswer) -> None:
         await self.ledger.record_chat_exchange(
@@ -368,6 +380,7 @@ class _ChatRecorder:
                 answer=shown,
                 as_of=self.as_of,
                 trace_id=current_trace_id(),
+                generator=self.generator,
             )
         )
         current = trace.get_current_span()
@@ -406,7 +419,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
         if not earlier:
             raise HTTPException(404, "no such chat")
         chat_id = body.chat_id
-    chat = _ChatRecorder(services.ledger, who, chat_id, body.question, day)
+    chat = _ChatRecorder(
+        services.ledger, who, chat_id, body.question, day, services.settings.generator
+    )
 
     def staged(name: str, data: dict[str, object]) -> str:
         return event(name, {"chat_id": chat_id, **data})
@@ -476,7 +491,9 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
             if retrieved.done():
                 yield retrieved.result()
             answer, shown = await asyncio.shield(answering)
-            yield staged("answer", _answer_json(answer, shown))
+            yield staged(
+                "answer", _answer_json(answer, shown, generator=services.settings.generator)
+            )
         except Exception as failed:
             outcome = _failure(failed)
             if answering is None:  # not yet started, so nothing has recorded this request

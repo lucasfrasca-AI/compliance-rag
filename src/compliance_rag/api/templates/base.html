@@ -7,8 +7,10 @@
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyEnabled":false}'>
 <title>{% block title %}{% endblock %} - Compliance Ask</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/banner.css">
 </head>
 <body>
+{% include "_banner.html" %}
 <header class="bar">
 <a class="brand" href="/chats">Compliance Ask</a>
 <nav aria-label="Main">

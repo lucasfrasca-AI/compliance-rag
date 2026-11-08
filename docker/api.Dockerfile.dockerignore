@@ -1,0 +1,47 @@
+# The API image's build context (issue #292): the repo's `.dockerignore` plus
+# `models/`. BuildKit reads this file, not the root one, for
+# `docker/api.Dockerfile`. The root file leaves `models/` in because the
+# reranker image copies its ONNX weights from there; the API never ships them.
+# Keep the two in step: tests/test_api_image.py compares them.
+
+# secrets and local configuration
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+credentials*.json
+service-account*.json
+.claude
+
+# history and tooling
+.git
+.github
+.gitignore
+.venv
+.pytest_cache
+.ruff_cache
+.pyright
+**/__pycache__
+**/*.pyc
+.fastembed_cache
+
+# the reranker's ONNX weights (2.27 GB at fp32): built, not shipped with the API
+models
+
+# tests and what only they read
+tests
+docs
+demo
+scripts
+ci
+prompts
+corpus/golden
+corpus/mappings
+corpus/instruments/**/raw
+db
+
+# local data
+data
+*.db
+*.sqlite

@@ -2,12 +2,12 @@
 `create_app` from its services (`deps.ApiServices`), so tests pass fakes and
 `api/main.py` passes the real adapters.
 
-Every route but `/health`, the sign-in page and its assets needs a signed-in member of the tenant
-(`TokenVerifier`, #146), and acts on `Settings.tenant_id` (`deps.py`). Every
-request runs in one span, from the first byte to the last, a streamed response
-included (D-16), so ledger rows written while handling it carry its
-`trace_id`. The response returns that id as `X-Trace-Id`, so a reported
-problem can be found.
+`GET /` redirects to `/chats`. Every route but `/health`, `/`, the sign-in page
+and its assets needs a signed-in member of the tenant (`TokenVerifier`, #146),
+and acts on `Settings.tenant_id` (`deps.py`). Every request runs in one span,
+from the first byte to the last, a streamed response included (D-16), so ledger
+rows written while handling it carry its `trace_id`. The response returns that
+id as `X-Trace-Id`, so a reported problem can be found.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -54,7 +54,10 @@ class RequestSpan:
             await self.app(scope, receive, send_traced)
 
 
-def create_app(services: ApiServices) -> FastAPI:
+def create_app(services: ApiServices, *, redirect_root: bool = True) -> FastAPI:
+    """`redirect_root`: `GET /` goes to the chat list. The throwaway demo
+    server, which serves its own page there, turns it off."""
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         try:
@@ -98,6 +101,14 @@ def create_app(services: ApiServices) -> FastAPI:
     app.add_exception_handler(pages.SignInRequired, pages.sign_in_required)
     app.add_exception_handler(pages.PageError, pages.page_error)
     app.mount("/static", sign_in.Assets(directory=sign_in.STATIC_DIR), name="static")
+
+    if redirect_root:
+
+        @app.get("/", include_in_schema=False)
+        async def root() -> RedirectResponse:  # pyright: ignore[reportUnusedFunction] — a route
+            return RedirectResponse(
+                "/chats", status_code=303, headers={"Cache-Control": "no-store"}
+            )
 
     # Not /healthz: Cloud Run reserves paths ending in "z".
     @app.get("/health")

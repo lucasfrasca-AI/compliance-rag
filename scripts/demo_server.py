@@ -62,12 +62,14 @@ is deployed (`refuse_unless_local`).
   shows "Generation unavailable" and nothing the SDK said. For any other
   failure, which the API reports only as `internal`, as it must, the page asks
   `/demo/failures/<trace id>` what failed and shows it plainly.
-- **`--fake-generator`:** an in-process stand-in that quotes the top-ranked
-  retrieved clause and Acme's first policy clause verbatim, so the page can be
-  exercised. It is never the default, and the page carries a "FAKE GENERATOR —
-  not a real answer" banner whenever it is on. It runs in this process, so
-  generation isn't offshore, and the gates are given Sydney as its region. A
-  question containing "withhold" makes it misquote, to show a withheld answer.
+- **`--fake-generator`:** the in-process stand-in the deployed API also builds
+  with `GENERATOR=demo` (`adapters/demo_generator.py`, #292): it quotes the
+  top-ranked retrieved clause and Acme's first policy clause verbatim, so the
+  page can be exercised. It is never the default, and the page carries a "FAKE
+  GENERATOR — not a real answer" banner whenever it is on. It runs in this
+  process, so generation isn't offshore, and the gates are given Sydney as its
+  region. A question containing "withhold" makes it misquote, to show a
+  withheld answer.
 """
 
 from __future__ import annotations
@@ -75,7 +77,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
-import json
 import re
 from collections import OrderedDict
 from collections.abc import AsyncGenerator, Sequence
@@ -89,6 +90,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from compliance_rag import telemetry
+from compliance_rag.adapters.demo_generator import FAKE_BANNER, FakeDemoGenerator
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.generation_residency import TenantTextGate, is_offshore
 from compliance_rag.adapters.interfaces import (
@@ -106,7 +108,6 @@ from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices, current_member
 from compliance_rag.api.sources import SOURCE_CSP
 from compliance_rag.assessment.pipeline import AssessmentPipeline
-from compliance_rag.assessment.prompt import REPAIR_SYSTEM_PROMPT
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -169,7 +170,6 @@ def _member_arg(value: str) -> Member:
         raise argparse.ArgumentTypeError(str(refused)) from None
 
 
-FAKE_BANNER = "FAKE GENERATOR — not a real answer"
 BANNER_SLOT = "<!-- demo:fake-banner -->"
 POLICY_HAS_NO_ANCHOR = (
     "A policy has no anchor in a stored source: how policies are rendered is I2's "
@@ -307,74 +307,6 @@ class SnapshotThenSydney(Embedder):
         return tuple(fresh[t] if t in fresh else self._cache.vectors[text_key(t)] for t in texts)
 
 
-# --- The fake generator, for exercising the page -----------------------------
-
-# The fence and question format `assessment/prompt.py` writes (`fence`,
-# `user_prompt`). Should it change, the fake cites nothing and
-# tests/test_demo_server.py's end-to-end test fails.
-_BLOCK_RE = re.compile(
-    r"\[(?P<boundary>[0-9a-f]{24}) clause (?P<clause_id>\S+)[^\n]*\]\n"
-    r"(?P<text>.*?)\n\[(?P=boundary) end\]",
-    re.DOTALL,
-)
-_QUOTE_CHARS = 120
-_MISQUOTE = "words the fake generator made up, which no clause contains"
-
-
-def _fenced(prompt: str | None) -> list[tuple[str, str]]:
-    """Each fenced clause in a prompt, in order: its id and its text."""
-    return [(m["clause_id"], m["text"]) for m in _BLOCK_RE.finditer(prompt or "")]
-
-
-def _opening(text: str) -> str:
-    """A verbatim quote: the clause's opening, cut at a word."""
-    if len(text) <= _QUOTE_CHARS:
-        return text
-    return text[:_QUOTE_CHARS].rsplit(" ", 1)[0]
-
-
-class FakeDemoGenerator(Generator):
-    """`--fake-generator` only. No model is called: it reads the clauses the
-    prompt fences and quotes the top-ranked retrieved clause and the first
-    clause of the tenant's policies verbatim, so the verifier, the citations
-    and click-to-clause can be exercised. A question containing "withhold"
-    makes it misquote, and it never repairs, so the answer is withheld
-    (ADR-0003)."""
-
-    async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
-    ) -> Generation:
-        if system == REPAIR_SYSTEM_PROMPT:
-            clause_id = next(iter(_fenced(user)), ("", ""))[0]
-            reply: dict[str, object] = {"clause_id": clause_id, "quote": _MISQUOTE}
-        else:
-            question = user.rsplit("\nQuestion: ", 1)[-1]
-            withhold = "withhold" in question.lower()
-            quoted = [*_fenced(user)[:1], *_fenced(cached_prefix)[:1]]
-            reply = {
-                "answer": f"{FAKE_BANNER}. No model was called. This stand-in quotes "
-                + (
-                    "words no clause contains, because the question says 'withhold', "
-                    "so the verifier blocks the answer."
-                    if withhold
-                    else "the top-ranked retrieved clause and the first clause of Acme's "
-                    "policies verbatim, so the citations, the verifier and "
-                    "click-to-clause can be exercised."
-                ),
-                "citations": [
-                    {"clause_id": clause_id, "quote": _MISQUOTE if withhold else _opening(text)}
-                    for clause_id, text in quoted
-                ],
-            }
-        return Generation(
-            text=json.dumps(reply),
-            input_tokens=0,
-            output_tokens=0,
-            stop_reason="end_turn",
-            model="fake-demo-generator",
-        )
-
-
 # --- The app ------------------------------------------------------------------
 
 
@@ -422,7 +354,7 @@ def create_demo_app(
     """Production's app over `services`, answering as `member`, plus the
     page and the three things it needs: where a citation opens, the stored
     law source, and what a failed request's failure was."""
-    app = create_app(services)
+    app = create_app(services, redirect_root=False)  # the demo's own page is at /
 
     async def demo_member() -> Member:
         return member
@@ -618,11 +550,19 @@ def demo_settings(*, qdrant_url: str, fake_generator: bool, bucket: str | None =
     `bucket` if one is named (as the other operator scripts take `--bucket`).
     The fake generator runs in this process, so the gates are told generation
     is in Sydney: what they ask is where the generator runs."""
-    settings = Settings(tenant_id=DEMO_TENANT, qdrant_url=qdrant_url)
+    # `generator` too, so the production pages this app mounts carry the banner
+    # and its answer events report "demo" (#292).
+    if fake_generator:
+        settings = Settings(
+            tenant_id=DEMO_TENANT,
+            qdrant_url=qdrant_url,
+            generator="demo",
+            vertex_claude_region=REGION,
+        )
+    else:
+        settings = Settings(tenant_id=DEMO_TENANT, qdrant_url=qdrant_url)
     if bucket:
         settings = settings.model_copy(update={"corpus_bucket": bucket})
-    if fake_generator:
-        return settings.model_copy(update={"vertex_claude_region": REGION})
     return settings
 
 

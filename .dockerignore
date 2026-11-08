@@ -1,0 +1,45 @@
+# What a `docker build` sends to the daemon when no Dockerfile-specific ignore
+# file applies (BuildKit reads `docker/api.Dockerfile.dockerignore` for the API
+# image, which is this file plus `models/`). The Dockerfiles COPY named paths
+# only; this keeps the rest out of the context altogether, secrets first.
+# `models/` is deliberately not listed here: the reranker image copies its ONNX
+# weights from `models/reranker-onnx` (docker/reranker.Dockerfile).
+
+# secrets and local configuration
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+credentials*.json
+service-account*.json
+.claude
+
+# history and tooling
+.git
+.github
+.gitignore
+.venv
+.pytest_cache
+.ruff_cache
+.pyright
+**/__pycache__
+**/*.pyc
+.fastembed_cache
+
+# tests and what only they read
+tests
+docs
+demo
+scripts
+ci
+prompts
+corpus/golden
+corpus/mappings
+corpus/instruments/**/raw
+db
+
+# local data
+data
+*.db
+*.sqlite

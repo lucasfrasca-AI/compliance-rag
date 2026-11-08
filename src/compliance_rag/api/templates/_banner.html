@@ -1,0 +1,5 @@
+{#- The one banner (#292): the base page, each answer turn and the sign-in page
+    all render this file. `banner` is the words, or nothing for no banner. -#}
+{% if banner %}
+<p class="fake-banner" role="note" data-fake-banner>{{ banner }}</p>
+{% endif %}

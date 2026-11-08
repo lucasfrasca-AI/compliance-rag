@@ -82,7 +82,7 @@ from compliance_rag.corpus.models import (
     validate_tenant_id,
     validate_title,
 )
-from compliance_rag.settings import Settings
+from compliance_rag.settings import GeneratorName, Settings
 
 log = logging.getLogger(__name__)
 _PROFILE_LISTS = ("jurisdictions", "sectors", "actor_roles", "data_categories", "regulators")
@@ -220,6 +220,18 @@ def _detail_row(turn: ChatTurn) -> Jsonb | None:
             }
         )
     return None
+
+
+def _generator_of_row(raw: object) -> GeneratorName | None:
+    """The generator a turn was written under; the column's CHECK admits these two
+    and NULL, so anything else would be a schema this code doesn't know."""
+    if raw is None:
+        return None
+    if raw == "claude":
+        return "claude"
+    if raw == "demo":
+        return "demo"
+    raise ValueError(f"a chat turn records generator {raw!r}, which this code doesn't know")
 
 
 def _detail_of_row(raw: object) -> tuple[Unavailability | None, PrefixMeasure | None]:
@@ -553,8 +565,9 @@ class PostgresLedgerStore(LedgerStore):
                         # a chat's latest turn could carry the earlier time.
                         "INSERT INTO chat (tenant_id, chat_id, turn_index, user_id, role, content, "
                         "outcome, citations, blocked, as_of, trace_id, not_in_environment, "
-                        "outcome_detail, created_at) VALUES "
-                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
+                        "outcome_detail, generator, created_at) VALUES "
+                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                        "clock_timestamp())",
                         [
                             (
                                 turn.tenant_id,
@@ -570,6 +583,7 @@ class PostgresLedgerStore(LedgerStore):
                                 turn.trace_id,
                                 Jsonb([_named_absent_row(n) for n in turn.not_in_environment]),
                                 _detail_row(turn),
+                                turn.generator,
                             )
                             for turn in exchange.turns(0 if last is None else int(last[0]) + 1)
                         ],
@@ -587,7 +601,7 @@ class PostgresLedgerStore(LedgerStore):
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         rows = await self._fetchall(
             "SELECT turn_index, role, content, outcome, citations, blocked, as_of, trace_id, "
-            "created_at, not_in_environment, outcome_detail FROM chat "
+            "created_at, not_in_environment, outcome_detail, generator FROM chat "
             "WHERE tenant_id = %s AND user_id = %s AND chat_id = %s ORDER BY turn_index",
             (tenant_id, user_id, chat_id),
         )
@@ -617,6 +631,7 @@ class PostgresLedgerStore(LedgerStore):
                     not_in_environment=absent,
                     unavailable=unavailable,
                     prefix=prefix,
+                    generator=_generator_of_row(r[11]),
                 )
             )
         return tuple(turns)

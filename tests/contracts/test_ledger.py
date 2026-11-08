@@ -757,6 +757,16 @@ async def assert_chat_contract(ledger: LedgerStore) -> None:
         assert answer.not_in_environment == shown.not_in_environment
     assert (await turns("unflagged"))[1].not_in_environment == ()
 
+    # ---- an answer turn says which generator wrote it (ledger 0020, #292); a
+    # question never does, and a caller that doesn't say records none
+    for number, generator in enumerate(("demo", "claude", None), start=7):
+        await ledger.record_chat_exchange(
+            an_exchange("generated", generator=generator, trace_id=f"{number}" * 32)
+        )
+    generated = await turns("generated")
+    assert [t.generator for t in generated[1::2]] == ["demo", "claude", None]
+    assert {t.generator for t in generated[0::2]} == {None}
+
 
 async def assert_environment_titles_contract(ledger: LedgerStore) -> None:
     """What a tenant's retrieval can see on a date, as titles (#252): its own

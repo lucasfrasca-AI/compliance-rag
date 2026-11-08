@@ -128,6 +128,9 @@ def _turn_json(turn: ChatTurn, titles: Titles) -> dict[str, object]:
     return {
         **common,
         **_refusal_json(turn),
+        # What wrote it, as recorded with the turn (ledger 0020, #292); null for a
+        # turn written before the column. The pages show the demo banner from it.
+        "generator": turn.generator,
         "verified": turn.outcome is TurnOutcome.VERIFIED,
         "text": turn.content,
         "citations": [_citation_json(c, titles) for c in turn.citations],

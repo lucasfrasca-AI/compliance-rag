@@ -57,6 +57,7 @@ from compliance_rag.corpus.models import (
     validate_tenant_id,
 )
 from compliance_rag.corpus.revision import RevisionRecord
+from compliance_rag.settings import GeneratorName
 
 # --------------------------------------------------------------------------
 # Shared value objects
@@ -706,6 +707,11 @@ class ChatTurn:
     prefix: PrefixMeasure | None = None
     """For a `POLICY_CORPUS_TOO_LARGE` turn: the estimate and the cap (#289).
     None on such a turn too if its stored measure couldn't be read."""
+    generator: GeneratorName | None = None
+    """On an answer turn: the generator the deployment was running when the turn
+    was written (ledger 0020, #292), so a chat read back later says whether a
+    model or the demo stand-in wrote it. None on a question, and on a turn
+    written before the column existed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -720,6 +726,9 @@ class ChatExchange:
     answer: ChatAnswer
     as_of: dt.date
     trace_id: str
+    generator: GeneratorName | None = None
+    """Recorded with the answer turn (not the question). None only for a caller
+    that doesn't know, which the API never is."""
 
     def turns(self, first_index: int) -> tuple[ChatTurn, ChatTurn]:
         """The two rows, the question at `first_index`."""
@@ -736,6 +745,7 @@ class ChatExchange:
                 answer.not_in_environment,
                 answer.unavailable,
                 answer.prefix,
+                self.generator,
             ),
         )
 
@@ -750,6 +760,7 @@ class ChatExchange:
         not_in_environment: tuple[NotInEnvironment, ...] = (),
         unavailable: Unavailability | None = None,
         prefix: PrefixMeasure | None = None,
+        generator: GeneratorName | None = None,
     ) -> ChatTurn:
         return ChatTurn(
             tenant_id=self.tenant_id,
@@ -766,6 +777,7 @@ class ChatExchange:
             not_in_environment=not_in_environment,
             unavailable=unavailable,
             prefix=prefix,
+            generator=generator,
         )
 
 
