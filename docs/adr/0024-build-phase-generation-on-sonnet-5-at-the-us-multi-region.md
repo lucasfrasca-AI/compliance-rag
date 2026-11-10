@@ -1,6 +1,6 @@
 # ADR-0024 — Build-phase generation on Sonnet 5 at the US multi-region endpoint
 
-- Status: accepted
+- Status: accepted; platform and region superseded by ADR-0056 (Sonnet 5 on Bedrock's AU geographic profile, after this quota went unanswered for three weeks)
 - Date: 2026-10-10
 - Decision IDs: amends `D-07` and `D-16` (`DECISIONS.md`); supersedes ADR-0023's choice of model and region, and keeps its gate unchanged
 
