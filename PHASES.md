@@ -44,7 +44,7 @@ Deliverables
 - Router: clause-ID regex → keyword lookup, skip rerank; else hybrid → rerank
 - **Reranker service** on Cloud Run (`australia-southeast1`): FastAPI + ONNX Runtime, `POST /rerank {query, documents[]}` → scores; models benchmarked: `BAAI/bge-reranker-v2-m3` (default), `mixedbread-ai/mxbai-rerank-base-v2`, `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - **ColBERT rescoring** in Qdrant (multivector, HNSW off) as the A/B; Vertex Ranking API adapter kept for CI only, hard-gated to `TENANT_ID == dev-tenant`
-- Generator adapter (Claude on Vertex — `claude-sonnet-5` at the US multi-region endpoint during build, ADR-0023/ADR-0024) with structured output; prompt caching on the system prefix
+- Generator adapter (Claude Sonnet 5 on Amazon Bedrock, through the Australian geographic inference profile `au.anthropic.claude-sonnet-5` from `ap-southeast-2`, ADR-0056, #322; it replaces Claude on Vertex at the US multi-region endpoint, ADR-0023/ADR-0024, whose quota was never granted) with structured output; prompt caching on the system prefix
 - **Citation verifier**: canonical-form comparison against Cloud Storage; fail → targeted repair
 - **Eval harness**: 25 labelled queries to start (exact ID, paraphrase, cross-clause) — enough to catch a regression, expanded when a real failure shows a gap rather than padded to a count; recall@k per channel and fused; verifier pass rate; runs in CI as a regression gate
 
@@ -60,7 +60,7 @@ Exit criteria
 
 Sequencing: **nothing writes to Cloud Storage or Qdrant until #2, #3 and #4 are merged.** Those three shape `ClauseRecord` and the stable-ID grammar, so a parser run before them produces records that must be rewritten and embeddings that must be paid for twice. Order: #3 → #4 → #2 → format spike → parser → #6 → chunker → #5 → router.
 
-Unlocks: Cloud Storage bucket, Vertex Embeddings, Claude on Vertex, Cloud Run `reranker` service (min 0), Cloud Run jobs, Cloud Build + Artifact Registry (needed to build the reranker image), Cloud Trace/Logging, budget Pub/Sub wiring. Ranking API in `us-central1` for CI only.
+Unlocks: Cloud Storage bucket, Vertex Embeddings, Claude Sonnet 5 on Bedrock AU and its IAM web-identity role (ADR-0056; was Claude on Vertex), Cloud Run `reranker` service (min 0), Cloud Run jobs, Cloud Build + Artifact Registry (needed to build the reranker image), Cloud Trace/Logging, budget Pub/Sub wiring. Ranking API in `us-central1` for CI only.
 
 ## Phase 2 — Graph and Track A
 
@@ -129,4 +129,4 @@ Unlocks: Cloud Scheduler, Cloud Workflows.
 
 ## Phase 5 — Hardening (outside build budget; decisions only)
 
-**AU-resident generation**: Claude on Vertex is not served from Sydney (ADR-0023); generation runs at the US multi-region endpoint during build (ADR-0024), gated to public law plus synthetic data. Before the first real customer document, generation must move to Australia. On GCP today that means `gemini-3.5-flash` on Single Zone Provisioned Throughput, **~$2.2–3k/month**, a real pricing fact about this market that a first customer has to fund, plus a new `Generator` adapter and its own ADR. **The comparison to make then:** AWS Bedrock publishes an Australian geo inference profile, `au.anthropic.claude-sonnet-5`, that keeps processing in Australian regions on **pay-per-token** pricing. That's ~$2.2–3k/month committed on GCP versus per-token on Bedrock AU, and it would also keep the model unchanged. Recorded 2026-10-10 for the decision, not acted on: the stack stays on GCP. Residency move for the graph (Aura Pro in AU — Qdrant is already in Sydney), trace UI (Phoenix on Cloud Run, or self-hosted Langfuse if prompt management is ever needed), real multi-tenancy (RLS, per-tenant labels, scope filters enforced in adapters), SSO via OIDC/SAML. Each is an ADR before it is a task.
+**AU-resident generation**: resolved for Claude at pay-per-token pricing by ADR-0056 (2026-11-10). Generation runs on Claude Sonnet 5 through Bedrock's Australian geographic inference profile, `au.anthropic.claude-sonnet-5`, from `ap-southeast-2`, with Sydney and Melbourne as its only destinations. The GCP alternative, `gemini-3.5-flash` on Single Zone Provisioned Throughput at ~$2.2–3k/month, stays recorded and unused. Residency move for the graph (Aura Pro in AU — Qdrant is already in Sydney), trace UI (Phoenix on Cloud Run, or self-hosted Langfuse if prompt management is ever needed), real multi-tenancy (RLS, per-tenant labels, scope filters enforced in adapters), SSO via OIDC/SAML. Each is an ADR before it is a task.
