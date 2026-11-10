@@ -3,10 +3,12 @@ drives it: a PreToolUse payload on stdin, a decision (or silence) on stdout.
 Each test gets its own project directory, so the real approvals file is never
 read or written.
 
-#322 added AWS: a command that creates, modifies, attaches, puts, subscribes,
-requests or invokes in IAM, Bedrock, Marketplace or Service Quotas is gated at
-a shell-segment boundary, like gcloud; the read-only `get-`, `list-` and
-`describe-` commands stay open.
+#322 added AWS, default-deny: SERVICES.md allows nothing on AWS but Bedrock
+generation and its IAM role, so every `aws` command is gated at a shell-segment
+boundary, like gcloud, unless it is a read (`get-`, `list-`, `describe-`,
+`batch-get-`, `simulate-`, `lookup-`, `help`, `wait`, which includes `sts
+get-caller-identity`). The segmenter reads through quoting, continuations,
+wrappers and `bash -c`; what it cannot see is stated in the guard's docstring.
 """
 
 from __future__ import annotations
@@ -88,9 +90,16 @@ READ_ONLY_AWS = [
     "aws iam help",
     "aws bedrock",
     "aws sts get-caller-identity --profile compliance-rag",
-    "aws sso login --profile compliance-rag",
-    "aws configure list",
-    "aws s3 ls",
+    "aws sts get-caller-identity",
+    "aws --version",
+    "aws help",
+    "aws",
+    "aws iam wait role-exists --role-name r",
+    "aws ec2 describe-instances --region ap-southeast-2",
+    "aws s3api list-buckets",
+    "aws lambda get-function --function-name f",
+    "aws iam --profile x get-role --role-name r",
+    "aws --query 'Roles[?x y]' iam list-roles",
 ]
 
 
@@ -210,3 +219,150 @@ def test_the_existing_gcloud_rules_still_work(project: pathlib.Path) -> None:
 def test_env_assignments_still_come_off_before_the_match(project: pathlib.Path) -> None:
     denied("CLOUDSDK_CORE_PROJECT=p gcloud run deploy api --image x", project)
     denied("env CLOUDSDK_CORE_PROJECT=p gcloud run deploy api --image x", project)
+
+
+DEFAULT_DENY_AWS = [
+    "aws s3 cp x s3://bucket/x",
+    "aws s3 ls",
+    "aws s3 mb s3://bucket",
+    "aws lambda invoke --function-name f out.json",
+    "aws ec2 run-instances --image-id i",
+    "aws secretsmanager create-secret --name n",
+    "aws sts assume-role --role-arn r --role-session-name s",
+    "aws cloudformation deploy --template-file t --stack-name s",
+    "aws dynamodb put-item --table-name t",
+    "aws ssm send-command --document-name d",
+    "aws sso login --profile compliance-rag",
+    "aws configure",
+    "aws configure list",
+    "aws configure set aws_session_token x",
+    "aws configure sso --profile compliance-rag",
+    "aws totally-new-service do-a-thing",
+    "aws iam --profile x create-role --role-name r",
+]
+
+
+@pytest.mark.parametrize("command", DEFAULT_DENY_AWS)
+def test_aws_is_default_deny_for_every_service_but_the_read_only_verbs(
+    command: str, project: pathlib.Path
+) -> None:
+    """SERVICES.md allows nothing on AWS but Bedrock generation and its IAM
+    role, so a service the guard has never heard of is gated too."""
+    reason = denied(command, project)
+    assert "BILLABLE" in reason and "AWS" in reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "aws --query 'x y' iam create-role --role-name r",
+        'aws --query "a b" --profile "my profile" iam delete-role --role-name r',
+        "aws --query 'Roles[?RoleName==`x`]' --region ap-southeast-2 iam attach-role-policy",
+        "aws --profile='a b' bedrock put-use-case-for-model-access",
+        "aws --output 'json' --endpoint-url 'https://x y' service-quotas "
+        "request-service-quota-increase",
+    ],
+)
+def test_quoted_option_values_with_spaces_do_not_hide_the_command(
+    command: str, project: pathlib.Path
+) -> None:
+    denied(command, project)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "aws iam \\\ncreate-role --role-name r",
+        "aws \\\n  --region ap-southeast-2 \\\n  iam create-role \\\n  --role-name r",
+        "aws bedrock put-use-case-for-model-access \\\n --form-data file://f.json",
+        "true && \\\naws iam create-role --role-name r",
+    ],
+)
+def test_backslash_line_continuations_are_joined_before_segmenting(
+    command: str, project: pathlib.Path
+) -> None:
+    assert "\\\n" in command
+    denied(command, project)
+
+
+def test_a_gcloud_command_split_over_lines_is_found_too(project: pathlib.Path) -> None:
+    assert "Cloud Run" in denied("gcloud run \\\n  deploy api --image x", project)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "env -i aws iam create-role --role-name r",
+        "env -i AWS_PROFILE=x aws iam create-role --role-name r",
+        "env -u AWS_PROFILE aws iam create-role --role-name r",
+        "env -u A -u B AWS_REGION=r aws iam create-role --role-name r",
+        "sudo -E aws iam create-role --role-name r",
+        "sudo -u root -E aws iam create-role --role-name r",
+        "sudo -n -- aws iam create-role --role-name r",
+        "nice aws iam create-role --role-name r",
+        "nice -n 10 aws iam create-role --role-name r",
+        "nice -5 aws iam create-role --role-name r",
+        "time aws iam create-role --role-name r",
+        "time -p aws iam create-role --role-name r",
+        "nohup aws iam create-role --role-name r",
+        "timeout 30 aws iam create-role --role-name r",
+        "timeout -s KILL 30 aws iam create-role --role-name r",
+        "echo r | xargs aws iam delete-role --role-name",
+        "echo r | xargs -n1 aws iam delete-role --role-name",
+        "echo r | xargs -I{} aws iam delete-role --role-name {}",
+        "echo r | xargs -n 1 -I {} aws iam delete-role --role-name {}",
+        "command aws iam create-role --role-name r",
+        "exec aws iam create-role --role-name r",
+        "sudo nice -n 5 env -i time aws iam create-role --role-name r",
+        "env -i gcloud run deploy api --image x",
+    ],
+)
+def test_wrappers_and_their_options_do_not_hide_a_gated_command(
+    command: str, project: pathlib.Path
+) -> None:
+    denied(command, project)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'aws iam create-role --role-name r'",
+        'bash -c "aws iam create-role --role-name r"',
+        "sh -c 'echo hi && aws iam create-role --role-name r'",
+        "zsh -lc 'aws iam create-role --role-name r'",
+        "bash -ec 'aws bedrock put-use-case-for-model-access'",
+        "eval 'aws iam create-role --role-name r'",
+        'eval "aws" iam create-role --role-name r',
+        "bash -c 'bash -c \"aws iam create-role --role-name r\"'",
+        "sudo bash -c 'aws iam create-role --role-name r'",
+        "bash -c 'gcloud run deploy api --image x'",
+        '"aws" iam create-role --role-name r',
+        "'aws' iam create-role --role-name r",
+        '"/opt/homebrew/bin/aws" iam create-role --role-name r',
+        "echo $(aws iam create-role --role-name r)",
+        'echo "$(aws iam create-role --role-name r)"',
+    ],
+)
+def test_a_shell_payload_a_quoted_program_name_or_a_substitution_is_read_through(
+    command: str, project: pathlib.Path
+) -> None:
+    denied(command, project)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'aws iam get-role --role-name r'",
+        "echo $(aws sts get-caller-identity)",
+        'echo "$(aws iam list-roles)"',
+        "timeout 30 aws iam list-roles",
+        "sudo -E aws bedrock get-inference-profile --inference-profile-identifier x",
+        "env -i AWS_PROFILE=x aws iam get-role --role-name r",
+        "xargs -n1 aws iam get-role --role-name",
+        "git commit -m 'run `aws iam create-role` by hand'",
+    ],
+)
+def test_reads_and_prose_stay_open_through_the_same_wrappers(
+    command: str, project: pathlib.Path
+) -> None:
+    assert run_guard(command, project) is None

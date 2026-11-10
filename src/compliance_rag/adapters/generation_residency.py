@@ -13,8 +13,8 @@ in Australia, so it is **not offshore** and none of the gates below fires.
 The gates are told where generation runs through one key,
 `Settings.generation_region`, which takes the backend into account: the Vertex
 region on `vertex`, `ap-southeast-2` on `bedrock`. `Settings` and
-`validate_bedrock_target` refuse any other profile prefix (`global.`, `us.`,
-`apac.`) and any other source Region, so that key can only mean Sydney.
+`validate_bedrock_target` refuse any profile but the one exact Australian profile (`global.`, `us.`,
+`apac.` and the rest) and any other source Region, so that key can only mean Sydney.
 
 The Vertex exception is closed by a gate, not a note, at both ends:
 
@@ -50,7 +50,7 @@ from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.settings import (
     AUSTRALIAN_GENERATION_REGIONS,
-    BEDROCK_PROFILE_PREFIX,
+    BEDROCK_INFERENCE_PROFILE,
     BEDROCK_REGION,
     GENERATION_REGIONS,
     VERTEX_GENERATION_REGIONS,
@@ -89,18 +89,19 @@ def validate_vertex_region(region: str) -> str:
 
 def validate_bedrock_target(*, region: str, inference_profile: str) -> str:
     """Bedrock is Australian only when it is called from Sydney through the
-    `au.` geographic profile, whose destinations are Sydney and Melbourne. Any
-    other source Region or profile prefix (`global.`, `us.`, `apac.`, a bare
-    model id) can route a request outside Australia, and is refused (ADR-0056).
-    Returns the gate's key."""
+    Australian geographic profile (`BEDROCK_INFERENCE_PROFILE`, an exact match),
+    whose destinations are Sydney and Melbourne. Any other source Region or
+    profile (`global.`, `us.`, `apac.`, a bare model id, another `au.` model)
+    can route a request outside Australia, and is refused (ADR-0056). Returns
+    the gate's key."""
     if region != BEDROCK_REGION:
         raise GenerationResidencyError(
             f"Bedrock region {region!r} refused: it is called from {BEDROCK_REGION} only (ADR-0056)"
         )
-    if not inference_profile.startswith(BEDROCK_PROFILE_PREFIX):
+    if inference_profile != BEDROCK_INFERENCE_PROFILE:
         raise GenerationResidencyError(
-            f"Bedrock inference profile {inference_profile!r} refused: only the Australian "
-            f"profile ({BEDROCK_PROFILE_PREFIX}…) keeps processing in Australia (ADR-0056)"
+            f"Bedrock inference profile {inference_profile!r} refused: only "
+            f"{BEDROCK_INFERENCE_PROFILE!r} is known to keep processing in Australia (ADR-0056)"
         )
     return region
 

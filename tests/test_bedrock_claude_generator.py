@@ -360,6 +360,10 @@ async def test_a_client_is_built_per_set_of_credentials_and_not_per_request() ->
         "eu.anthropic.claude-sonnet-5",
         "anthropic.claude-sonnet-5",
         "AU.anthropic.claude-sonnet-5",
+        "au.anthropic.claude-opus-5",
+        "au.anthropic.claude-sonnet-5-v2",
+        "au.anthropic.claude-sonnet-5 ",
+        "au.",
         " au.anthropic.claude-sonnet-5",
     ],
 )
@@ -446,3 +450,58 @@ def test_a_long_lived_bedrock_api_key_is_refused() -> None:
 def test_create_builds_from_settings_with_injected_credentials() -> None:
     generator = BedrockClaudeGenerator.create(_settings(), credentials=FakeCredentials())
     assert isinstance(generator, BedrockClaudeGenerator)
+
+
+# ---- the SDK's environment hooks change nothing -----------------------------------------
+
+
+async def test_a_hostile_base_url_in_the_environment_changes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK honours `ANTHROPIC_BEDROCK_BASE_URL` unless told otherwise, and
+    would send the signed request, prompt and all, wherever it says. The host
+    comes from the validated Region instead."""
+    monkeypatch.setenv("ANTHROPIC_BEDROCK_BASE_URL", "https://evil.example/steal")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    requests: list[httpx.Request] = []
+    generator = bedrock_generator(lambda _: answered(), requests)
+    await generator.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=8)
+    (request,) = requests
+    assert request.url.host == "bedrock-runtime.ap-southeast-2.amazonaws.com"
+    assert request.url.scheme == "https"
+    assert request.url.path == f"/model/{PROFILE}/invoke"
+    assert "evil.example" not in str(request.url)
+    assert f"/{REGION}/bedrock/aws4_request" in request.headers["authorization"]
+
+
+async def test_a_bedrock_api_key_in_the_environment_fails_closed_not_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK reads `AWS_BEARER_TOKEN_BEDROCK` itself; given credentials as
+    well it refuses to build, so the bearer key is never what signs."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-api-key-xyz")
+    requests: list[httpx.Request] = []
+    generator = bedrock_generator(lambda _: answered(), requests)
+    with pytest.raises(ValueError, match="api_key"):
+        await generator.generate(system="s", cached_prefix=None, user="q", max_tokens=8)
+    assert requests == []
+
+
+CLOCK_OR_SIGNATURE = {
+    "expired token": refused(
+        403, "The security token included in the request is expired", "ExpiredTokenException"
+    ),
+    "signature": refused(
+        403, "The request signature we calculated does not match", "InvalidSignatureException"
+    ),
+    "skew": refused(403, "Signature not yet current", "RequestTimeTooSkewed"),
+}
+
+
+@pytest.mark.parametrize("name", list(CLOCK_OR_SIGNATURE))
+async def test_clock_skew_and_signature_faults_are_internal_not_access(name: str) -> None:
+    generator = bedrock_generator(lambda _: CLOCK_OR_SIGNATURE[name])
+    with pytest.raises(anthropic.APIStatusError) as raised:
+        await generator.generate(system="s", cached_prefix=None, user="q", max_tokens=8)
+    assert not isinstance(raised.value, GenerationUnavailable)
+    assert unavailability_of(raised.value) is None

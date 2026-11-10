@@ -14,13 +14,14 @@ What you end up with:
 | Cloud Run (the API) | none stored | the runtime service account's Google ID token is exchanged at STS for the role `compliance-rag-bedrock` (`AWS_ROLE_ARN`) |
 | Your laptop | none stored | a named IAM Identity Center (SSO) profile (`AWS_PROFILE`) |
 
-Placeholders in this file, and only these: `<AWS_ACCOUNT_ID>` (12 digits) and `<SA_UNIQUE_ID>` (21
-digits, step 6).
+The only placeholder in this file is `<AWS_ACCOUNT_ID>` (12 digits). The runtime service
+account's unique id is real and written out below; it identifies an account and is not a secret.
 
-> **Before the first real call:** `SERVICES.md` still lists Bedrock under "wrong cloud for this
-> build". ADR-0056 reverses that; make the matching `SERVICES.md` row yourself (service, region,
-> estimated $/month, phase) so the billable protocol has something to point at. Until then the
-> billable guard denies the `aws` commands that create or change things (below) and says why.
+`SERVICES.md` has the two AWS rows this setup needs (ADR-0056): Bedrock generation through the
+Australian profile, and the IAM role for web-identity federation. Nothing else on AWS is allowed.
+Claude Code's billable guard denies every `aws` command except reads (`get-`, `list-`,
+`describe-` and the like), so every step below that creates or changes something is yours to
+run, in your own shell or the console.
 
 ## 1. Sign in and pick the Region
 
@@ -50,11 +51,14 @@ allowed to subscribe creates the subscription.
 1. **Payment method.** Billing console, Payment preferences: a valid card or invoice arrangement
    must be on the account. Without one, requests fail with `INVALID_PAYMENT_INSTRUMENT` (also
    shown as `access`).
-2. **Subscribe once, as an administrator, not as the runtime role.** The identity you use for the
-   first call needs `aws-marketplace:ViewSubscriptions` and `aws-marketplace:Subscribe` (the AWS
-   managed policy `AmazonBedrockFullAccess` carries both, as does an administrator). Open
-   **Playgrounds, Chat**, choose Claude Sonnet 5, and send one short message. Bedrock
-   subscribes the account at that point; it can take a couple of minutes to settle.
+2. **Subscribe once, as an administrator, not as the runtime role.** Per the Bedrock
+   [model access page](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html),
+   the identity that first invokes an Anthropic model must be allowed
+   `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and
+   `aws-marketplace:ViewSubscriptions`. Use an administrator, or grant your own identity exactly
+   those three actions for this one step and remove them afterwards. Open **Playgrounds, Chat**,
+   choose Claude Sonnet 5, and send one short message. Bedrock subscribes the account at that
+   point; it can take a couple of minutes to settle.
 3. The runtime role (step 7) and your local SSO role do **not** get Marketplace permissions. They
    only invoke.
 
@@ -102,7 +106,9 @@ gcloud iam service-accounts describe \
   --format='value(uniqueId)'
 ```
 
-It prints about 21 digits. That is `<SA_UNIQUE_ID>`. It is an identifier, not a secret.
+For `compliance-rag-runtime` it prints `108732406356973787342`, which is what the trust policy below
+names. Run the command again if the API ever runs as a different service account: the id is the
+account's, not the project's. It is an identifier, not a secret.
 
 ## 7. Create the role (web-identity federation, no key)
 
@@ -110,8 +116,9 @@ It prints about 21 digits. That is `<SA_UNIQUE_ID>`. It is an identifier, not a 
 provider needs creating. What the trust policy checks:
 
 - the token was issued by Google (`Principal: Federated: accounts.google.com`);
-- `accounts.google.com:aud` is `<SA_UNIQUE_ID>`. For a service account's ID token, Google puts the
+- `accounts.google.com:aud` is `108732406356973787342`. For a service account's ID token, Google puts the
   account's unique id in the `azp` claim, and IAM maps `azp` to `aud`;
+- `accounts.google.com:sub` is the same id, the token's subject;
 - `accounts.google.com:oaud` is `sts.amazonaws.com`: the token's own `aud` claim, which is the
   audience the API asks Google for (`AWS_WEB_IDENTITY_AUDIENCE`, default `sts.amazonaws.com`).
   Whoever can mint an ID token for another audience cannot use it here.
@@ -128,7 +135,8 @@ provider needs creating. What the trust policy checks:
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "accounts.google.com:aud": "<SA_UNIQUE_ID>",
+          "accounts.google.com:aud": "108732406356973787342",
+          "accounts.google.com:sub": "108732406356973787342",
           "accounts.google.com:oaud": "sts.amazonaws.com"
         }
       }
@@ -208,7 +216,7 @@ long-lived access-key environment variables.
 |---|---|---|
 | `GENERATION_BACKEND` | `bedrock` (the default) | both |
 | `BEDROCK_REGION` | `ap-southeast-2` (the only value accepted) | both |
-| `BEDROCK_INFERENCE_PROFILE` | `au.anthropic.claude-sonnet-5` (must start with `au.`) | both |
+| `BEDROCK_INFERENCE_PROFILE` | `au.anthropic.claude-sonnet-5` (exactly this value; any other profile is refused) | both |
 | `AWS_ROLE_ARN` | `arn:aws:iam::<AWS_ACCOUNT_ID>:role/compliance-rag-bedrock` | Cloud Run |
 | `AWS_PROFILE` | `compliance-rag` | local |
 | `AWS_WEB_IDENTITY_AUDIENCE` | `sts.amazonaws.com` (the default; must match `oaud` above) | Cloud Run |
@@ -218,30 +226,37 @@ can route a request outside Australia.
 
 ## If something fails
 
-The member sees "the model isn't taking requests right now" in every case below; the span on the
-request (`generator.generate`) and the server log say which.
+The member sees "the model isn't taking requests right now" for `quota` and `access`, and
+"the answer couldn't be completed" for `internal`. The span on the request (`generator.generate`)
+and the server log say which. This table is exactly what the code does
+(`adapters/bedrock_claude_generator.py`, `adapters/aws_credentials.py`).
 
-| Span / log | Meaning | Fix |
+| What AWS or STS said | Shown as | Meaning and fix |
 |---|---|---|
-| `generator.unavailable=quota`, `provider_error_type=ThrottlingException` or `ServiceQuotaExceededException` | The Service Quotas value in step 4 is too low, or was exceeded | Request an increase, or wait |
-| `generator.unavailable=access`, `provider_error_type=AccessDeniedException` | The role's policy doesn't name the profile or a destination model; or the model isn't enabled | Check step 7's ARNs against step 5's output; complete steps 2 and 3 |
-| `access`, status 404, `ResourceNotFoundException` | The first-time-use form (step 2) isn't done | Complete it |
-| `access`, message mentions a payment instrument or Marketplace | Step 3 isn't done | Add a payment method; subscribe once |
-| `access`, `generator.credentials_error` = `STS refused the web-identity exchange (InvalidIdentityToken / AccessDenied)` | The trust policy doesn't match the token: the wrong `<SA_UNIQUE_ID>`, a different audience, or the API is running as another service account | Re-check step 6 and the `Principal`; see "Not verified" below |
-| `access`, `credentials_error` names `aws sso login` | The local SSO session lapsed | `aws sso login --profile compliance-rag` |
-| `internal`, `credentials_error` absent, "metadata server" in the log | The process isn't on Cloud Run, or the metadata server was unreachable | Run locally with `AWS_PROFILE`, not `AWS_ROLE_ARN` |
+| HTTP 429 (`ThrottlingException`, `ModelNotReadyException`), or `ServiceQuotaExceededException` on any status | `quota` | The value in step 4 is too low or was exceeded. Request an increase, or wait |
+| HTTP 403 or 401 (`AccessDeniedException`, `UnrecognizedClientException`, ...) | `access` | The role's policy doesn't name the profile or a destination model, or the model isn't enabled, or the credentials are not accepted. Check step 7's ARNs against step 5's output; complete steps 2 and 3 |
+| HTTP 404 `ResourceNotFoundException` or HTTP 400 whose message mentions use-case details, model access, access to the model, Marketplace, a payment instrument, "not enabled", or a legacy model | `access` | The first-time-use form (step 2) isn't done, or step 3 isn't, or the model isn't enabled |
+| Any other 404 (for example "model identifier is invalid") or 400 (for example "prompt is too long") | `internal` | Not an access problem: a wrong profile id or a bad request |
+| `ExpiredTokenException`, `InvalidSignatureException`, `SignatureDoesNotMatch`, `RequestExpired`, `RequestTimeTooSkewed`, on any status | `internal` | Clock or signing, not IAM. Check the host's clock; do not edit the policy |
+| Any other 5xx or SDK error | `internal` | AWS side or a bug; see the log |
+| STS `AccessDenied`, `AccessDeniedException`, `InvalidIdentityToken`, `IDPRejectedClaim` (`generator.credentials_error` names the code) | `access` | The trust policy doesn't match the token: the service account's id, the audience, or the API is running as another service account. See "Not verified" below |
+| STS `InvalidIdentityToken` whose message says the token is expired or the clock is off; `ExpiredTokenException`; `InvalidSignatureException`; STS throttled, unreachable or malformed; the metadata server unreachable | `internal` | Clock or network, not IAM. A metadata-server error means the process isn't on Cloud Run: use `AWS_PROFILE` locally |
+| Local profile missing, its SSO login lapsed, or the profile holds long-lived keys (no session token) | `access` | `aws sso login --profile compliance-rag`, or use an SSO profile: the application refuses a profile that resolves to access keys |
+
+A failed STS renewal is not an error while the current credentials are still valid: they are
+used until they actually expire, and STS is asked again after 30 seconds.
 
 ## Not verified from here (check on the first live call, #29/#31)
 
-This repository has no AWS access, so these were written from AWS's documentation and are the
-first things to check if the exchange is refused:
+This repository has no AWS access, so these were written from AWS's documentation. If STS
+answers `AccessDenied` or `InvalidIdentityToken` on the first call, **stop and tell the human**:
+the cause is one of the points below, and loosening the trust policy (in particular removing the
+audience pin) is theirs to decide, not something to try.
 
 - That IAM exposes the token's `azp` claim as `accounts.google.com:aud` and its `aud` claim as
-  `accounts.google.com:oaud` for a Google service-account ID token. If STS answers `AccessDenied`
-  with a correct `<SA_UNIQUE_ID>`, drop the `oaud` line from the trust policy and keep `aud`, then
-  tell us so the audience pin can be revisited.
-- That a Cloud Run service account's ID token carries the unique id as `azp` (the default token
-  format from the metadata server). Decode the token's payload (not its signature) to see the
-  claims: `azp` and `sub` should both be `<SA_UNIQUE_ID>`.
+  `accounts.google.com:oaud` for a Google service-account ID token.
+- That a Cloud Run service account's ID token carries the unique id as `azp` and `sub` (the
+  default token format from the metadata server). Decode the token's payload (not its
+  signature) to see the claims: both should be `108732406356973787342`.
 - The exact `modelArn`s in step 5 (the foundation-model id may carry a version suffix) and the
   quota names in step 4.

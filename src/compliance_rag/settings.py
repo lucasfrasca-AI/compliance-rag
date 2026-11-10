@@ -32,9 +32,12 @@ BEDROCK_REGION = "ap-southeast-2"
 `au.` geographic inference profile processes every request in Sydney or
 Melbourne, so it is the gate's key for generation that stays in Australia."""
 
-BEDROCK_PROFILE_PREFIX = "au."
-"""The Australian geographic inference-profile prefix. `global.`, `us.`,
-`apac.` and the rest route outside Australia and are refused (ADR-0056)."""
+BEDROCK_INFERENCE_PROFILE = "au.anthropic.claude-sonnet-5"
+"""The one inference profile the Bedrock backend may name: the Australian
+geographic profile, whose destinations are Sydney and Melbourne only. An exact
+allowlist, not a prefix: `global.`, `us.`, `apac.` route outside Australia, and
+a prefix alone is not proof of where a request goes (ADR-0056). Adding a model
+means adding its profile here, after reading its destinations."""
 
 VERTEX_GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 """What `VERTEX_CLAUDE_REGION` may be. Unchanged from the build phase (ADR-0023,
@@ -108,9 +111,9 @@ class Settings(BaseSettings):
     # --- Bedrock -----------------------------------------------------------
     bedrock_region: str = BEDROCK_REGION
     """The Region Bedrock is called from: Sydney only (ADR-0056)."""
-    bedrock_inference_profile: str = f"{BEDROCK_PROFILE_PREFIX}anthropic.claude-sonnet-5"
+    bedrock_inference_profile: str = BEDROCK_INFERENCE_PROFILE
     """The Australian geographic inference profile, whose destinations are
-    Sydney and Melbourne only. Any other prefix is refused."""
+    Sydney and Melbourne only. Anything but that exact profile is refused."""
     aws_role_arn: str = ""
     """`AWS_ROLE_ARN`: on Cloud Run, the role the runtime service account's
     Google ID token is exchanged for (STS `AssumeRoleWithWebIdentity`). No AWS
@@ -245,11 +248,11 @@ class Settings(BaseSettings):
     @field_validator("bedrock_inference_profile")
     @classmethod
     def _bedrock_profile_is_australian(cls, v: str) -> str:
-        if not v.startswith(BEDROCK_PROFILE_PREFIX):
+        if v != BEDROCK_INFERENCE_PROFILE:
             raise ValueError(
-                f"bedrock_inference_profile must start with {BEDROCK_PROFILE_PREFIX!r}, the "
-                "Australian geographic profile; `global.`, `us.`, `apac.` and any other prefix "
-                f"route outside Australia (ADR-0056); got {v!r}"
+                f"bedrock_inference_profile must be {BEDROCK_INFERENCE_PROFILE!r}, the Australian "
+                "geographic profile; `global.`, `us.`, `apac.` and any other profile can route "
+                f"outside Australia (ADR-0056); got {v!r}"
             )
         return v
 

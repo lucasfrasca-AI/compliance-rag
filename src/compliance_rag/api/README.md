@@ -206,8 +206,10 @@ and the prompts are the same either way.
   (`adapters/bedrock_claude_generator.py`). The profile's only destinations are Sydney and
   Melbourne, so every request is processed in Australia and the offshore gates (ADR-0023,
   ADR-0032) do not fire: a non-tester's question and unregistered tenant text go through.
-  `BEDROCK_REGION` other than `ap-southeast-2`, or a `BEDROCK_INFERENCE_PROFILE` that does not
-  start with `au.` (`global.`, `us.`, `apac.`), refuses to start.
+  `BEDROCK_REGION` other than `ap-southeast-2`, or a `BEDROCK_INFERENCE_PROFILE` that is not
+  exactly `au.anthropic.claude-sonnet-5` (an allowlist, not a prefix: `global.`, `us.`,
+  `apac.`, another `au.` model), refuses to start. The endpoint is built from the validated
+  Region, so `ANTHROPIC_BEDROCK_BASE_URL` in the environment changes nothing.
 - `vertex`: the build-phase path, unchanged (ADR-0023, ADR-0024, ADR-0032): `VERTEX_CLAUDE_MODEL`
   is required and `VERTEX_CLAUDE_REGION` (`us`, or Sydney) feeds the residency gates. It stays
   until the Bedrock path replaces it.

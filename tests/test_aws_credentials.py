@@ -140,7 +140,7 @@ async def test_concurrent_requests_share_one_exchange() -> None:
     assert len(sts.calls) == 1 and len(set(results)) == 1
 
 
-@pytest.mark.parametrize("code", ["AccessDenied", "InvalidIdentityToken", "ExpiredTokenException"])
+@pytest.mark.parametrize("code", ["AccessDenied", "InvalidIdentityToken"])
 async def test_sts_refusing_the_token_or_the_trust_policy_is_a_refusal(code: str) -> None:
     clock = Clock()
     sts = FakeSts(clock)
@@ -152,6 +152,67 @@ async def test_sts_refusing_the_token_or_the_trust_policy_is_a_refusal(code: str
         await _provider(clock, sts, FakeTokens()).credentials()
     assert raised.value.refused is True
     assert "arn:aws" not in str(raised.value) and "Not authorized" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("ExpiredTokenException", "The security token included in the request is expired"),
+        ("InvalidSignatureException", "The request signature we calculated does not match"),
+        ("RequestTimeTooSkewed", "The difference between the request time and the server's"),
+        ("InvalidIdentityToken", "Token expired: the clock on this host may be skewed"),
+    ],
+)
+async def test_clock_and_signature_faults_are_internal_not_access(code: str, message: str) -> None:
+    """Our clock or our signing, not the account's policy: the operator's IAM
+    is not the thing to fix, so it must not read as `access`."""
+    clock = Clock()
+    sts = FakeSts(clock)
+    sts.fail = botocore.exceptions.ClientError(
+        {"Error": {"Code": code, "Message": message}}, "AssumeRoleWithWebIdentity"
+    )
+    with pytest.raises(CredentialsUnavailable) as raised:
+        await _provider(clock, sts, FakeTokens()).credentials()
+    assert raised.value.refused is False
+
+
+async def test_a_failed_renewal_keeps_the_credentials_in_hand_until_they_expire() -> None:
+    clock, tokens = Clock(), FakeTokens()
+    sts = FakeSts(clock)
+    provider = _provider(clock, sts, tokens)
+    first = await provider.credentials()
+    sts.fail = botocore.exceptions.EndpointConnectionError(endpoint_url="https://sts.example")
+    clock.now = START + dt.timedelta(minutes=56)  # inside the margin, still valid
+    assert await provider.credentials() == first  # STS failed; these are still good
+    calls = len(sts.calls)
+    clock.now += dt.timedelta(seconds=10)
+    assert await provider.credentials() == first
+    assert len(sts.calls) == calls  # not hammered: it waits before asking again
+    clock.now = START + dt.timedelta(minutes=57)  # past the wait: asks again, fails again
+    assert await provider.credentials() == first and len(sts.calls) == calls + 1
+    sts.fail = None
+    clock.now = START + dt.timedelta(minutes=58)  # STS is back: renewed
+    assert (await provider.credentials()).access_key_id != first.access_key_id
+    sts.fail = botocore.exceptions.EndpointConnectionError(endpoint_url="https://sts.example")
+    clock.now = START + dt.timedelta(hours=2)  # now actually expired, and STS is down
+    with pytest.raises(CredentialsUnavailable):
+        await provider.credentials()
+
+
+async def test_a_refusal_inside_the_margin_also_keeps_valid_credentials() -> None:
+    clock = Clock()
+    sts = FakeSts(clock)
+    provider = _provider(clock, sts, FakeTokens())
+    first = await provider.credentials()
+    sts.fail = botocore.exceptions.ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "no"}}, "AssumeRoleWithWebIdentity"
+    )
+    clock.now = START + dt.timedelta(minutes=58)
+    assert await provider.credentials() == first
+    clock.now = START + dt.timedelta(minutes=61)
+    with pytest.raises(CredentialsUnavailable) as raised:
+        await provider.credentials()
+    assert raised.value.refused is True
 
 
 async def test_throttling_malformed_replies_and_unreachable_sts_are_not_refusals() -> None:
@@ -270,6 +331,22 @@ async def test_a_named_profile_is_used_and_the_environments_keys_are_not(
     assert credentials.access_key_id == "PROFILEKEY"
     assert credentials.secret_access_key == "profile-secret"
     assert credentials.session_token == "profile-token"
+
+
+@pytest.mark.usefixtures("profile_files")
+async def test_a_profile_that_resolves_to_long_lived_keys_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No session token means an access key in a file: the one thing this
+    application never accepts, whatever the profile is called."""
+    with (tmp_path / "credentials").open("a") as shared:
+        shared.write("[plain]\naws_access_key_id = LONGLIVEDKEY\naws_secret_access_key = s\n")
+    with (tmp_path / "config").open("a") as config:
+        config.write("[profile plain]\nregion = ap-southeast-2\n")
+    with pytest.raises(CredentialsUnavailable) as raised:
+        await ProfileCredentials("plain").credentials()
+    assert raised.value.refused is True and "long-lived" in str(raised.value)
+    assert "LONGLIVEDKEY" not in str(raised.value)
 
 
 @pytest.mark.usefixtures("profile_files")

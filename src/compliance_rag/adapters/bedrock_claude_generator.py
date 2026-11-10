@@ -3,7 +3,8 @@ inference profile (#322, ADR-0056): `au.anthropic.claude-sonnet-5`, called from
 `ap-southeast-2` (Sydney). The profile's only destination Regions are Sydney and
 Melbourne, so the model processes every request in Australia, and the offshore
 gates of ADR-0023 and ADR-0032 do not fire: `validate_bedrock_target` refuses
-any other profile prefix or source Region, so nothing offshore can be built.
+any profile but the one exact Australian profile, and any source Region but
+Sydney, so nothing offshore can be built.
 
 It mirrors `VertexClaudeGenerator` and speaks the same Messages API through the
 `anthropic` SDK's Bedrock client:
@@ -65,7 +66,7 @@ from compliance_rag.adapters.interfaces import (
     Generator,
     Unavailability,
 )
-from compliance_rag.settings import Settings
+from compliance_rag.settings import BEDROCK_INFERENCE_PROFILE, Settings
 
 # `claude-sonnet-5` per-token prices, USD, on Bedrock's Australian geographic
 # inference profile: input $2.20, output $11.00, 5-minute cache write $2.75,
@@ -130,10 +131,27 @@ def _says_access(error: anthropic.APIStatusError) -> bool:
     return any(phrase in text for phrase in _ACCESS_PHRASES)
 
 
+_OUR_CLOCK_OR_SIGNATURE = frozenset(
+    {
+        "ExpiredTokenException",
+        "InvalidSignatureException",
+        "SignatureDoesNotMatch",
+        "RequestExpired",
+        "RequestTimeTooSkewed",
+        "IncompleteSignatureException",
+    }
+)
+"""A request AWS refuses because of this process's clock or its signing, not
+because of what the account may do. Access would be the wrong word: the fix is
+ours, not the operator's IAM, so they stay internal errors."""
+
+
 def unavailability_of(error: anthropic.APIStatusError) -> Unavailability | None:
     """Which of our reasons a Bedrock refusal is, or None when it is something
     else (and so an internal error)."""
     kind = _error_type(error)
+    if kind in _OUR_CLOCK_OR_SIGNATURE:
+        return None
     if isinstance(error, anthropic.RateLimitError) or kind == "ServiceQuotaExceededException":
         return Unavailability.QUOTA
     if isinstance(error, anthropic.PermissionDeniedError | anthropic.AuthenticationError):
@@ -162,7 +180,9 @@ class CredentialedMessages:
         max_retries: int = 2,  # the SDK's own default
     ) -> None:
         self._credentials = credentials
-        self._region = region
+        self._region = validate_bedrock_target(
+            region=region, inference_profile=BEDROCK_INFERENCE_PROFILE
+        )
         self._max_retries = max_retries
         self._http = http_client or httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=5.0))
         self._client_for = client_for or self._sdk_client
@@ -171,7 +191,11 @@ class CredentialedMessages:
     def _sdk_client(self, credentials: AwsCredentials) -> _MessagesLike:
         from anthropic.lib.bedrock import AsyncAnthropicBedrock  # only the real path needs it
 
+        # `base_url` is explicit because the SDK would otherwise honour
+        # `ANTHROPIC_BEDROCK_BASE_URL` from the environment and send the signed
+        # request wherever it says. The host is built from the validated Region.
         return AsyncAnthropicBedrock(
+            base_url=f"https://bedrock-runtime.{self._region}.amazonaws.com",
             aws_access_key=credentials.access_key_id,
             aws_secret_key=credentials.secret_access_key,
             aws_session_token=credentials.session_token,

@@ -63,17 +63,23 @@ REFRESH_MARGIN = dt.timedelta(minutes=5)
 """Credentials with less than this left are renewed before they are used."""
 
 _REFUSED_CODES = frozenset(
-    {
-        "AccessDenied",
-        "AccessDeniedException",
-        "InvalidIdentityToken",
-        "ExpiredTokenException",
-        "IDPRejectedClaim",
-        "MalformedPolicyDocument",
-    }
+    {"AccessDenied", "AccessDeniedException", "InvalidIdentityToken", "IDPRejectedClaim"}
 )
 """STS error codes that mean the trust policy or the token was refused, as
-opposed to STS being unreachable or throttled."""
+opposed to STS being unreachable or throttled. `ExpiredTokenException`,
+`InvalidSignatureException` and the other clock or signature codes are left
+out on purpose: they are this process's fault (a skewed clock), not the
+account's, and surface as internal errors."""
+
+_CLOCK_WORDS = ("expired", "not yet valid", "clock", "skew")
+"""`InvalidIdentityToken` is also what STS says of a token whose times are
+wrong; a message with these words is a clock problem, not a trust policy."""
+
+RETRY_AFTER = dt.timedelta(seconds=30)
+"""After a failed renewal, how long still-valid credentials are used before
+STS is asked again, so a struggling STS isn't hit on every request."""
+
+START_OF_TIME = dt.datetime.min.replace(tzinfo=dt.UTC)
 
 
 class CredentialsUnavailable(RuntimeError):
@@ -225,6 +231,7 @@ class WebIdentityCredentials:
         self._margin = refresh_margin
         self._seconds = session_seconds
         self._current: AwsCredentials | None = None
+        self._next_attempt = START_OF_TIME
         self._lock = asyncio.Lock()
 
     def _fresh(self) -> bool:
@@ -235,12 +242,36 @@ class WebIdentityCredentials:
             and current.expires_at - self._margin > self._now()
         )
 
+    def _still_valid(self) -> bool:
+        current = self._current
+        return (
+            current is not None
+            and current.expires_at is not None
+            and current.expires_at > self._now()
+        )
+
     async def credentials(self) -> AwsCredentials:
         if self._current is not None and self._fresh():
             return self._current
         async with self._lock:
-            if self._current is None or not self._fresh():  # another request may have renewed
+            if self._current is not None and self._fresh():  # another request renewed
+                return self._current
+            if (
+                self._current is not None
+                and self._still_valid()
+                and self._now() < self._next_attempt
+            ):
+                return self._current  # a renewal failed lately: ask again soon
+            try:
                 self._current = await self._exchange()
+            except CredentialsUnavailable:
+                # A renewal that fails inside the margin costs nothing while
+                # the credentials in hand are still good: keep using them, and
+                # fail only once they have actually expired.
+                if self._current is not None and self._still_valid():
+                    self._next_attempt = self._now() + RETRY_AFTER
+                    return self._current
+                raise
             return self._current
 
     async def _exchange(self) -> AwsCredentials:
@@ -255,14 +286,15 @@ class WebIdentityCredentials:
             )
         except ClientError as refused:
             detail = cast("Mapping[str, object]", refused.response).get("Error")
-            code = (
-                str(cast("Mapping[str, object]", detail).get("Code", ""))
-                if isinstance(detail, Mapping)
-                else ""
-            )
+            fields: Mapping[str, object] = {}
+            if isinstance(detail, Mapping):
+                fields = cast("Mapping[str, object]", detail)
+            code = str(fields.get("Code", ""))
+            said = str(fields.get("Message", "")).lower()
+            clock = code == "InvalidIdentityToken" and any(w in said for w in _CLOCK_WORDS)
             raise CredentialsUnavailable(
                 f"STS refused the web-identity exchange ({code or 'no code'})",
-                refused=code in _REFUSED_CODES,
+                refused=code in _REFUSED_CODES and not clock,
             ) from refused
         except BotoCoreError as failed:
             raise CredentialsUnavailable(
@@ -298,10 +330,19 @@ class ProfileCredentials:
                 f"run `aws sso login --profile {self._profile}`",
                 refused=True,
             ) from failed
+        if not frozen.token:
+            # Long-lived keys have no session token. A profile may hold only
+            # short-lived credentials (SSO, an assumed role); anything else is a
+            # key in a file, which this application never accepts.
+            raise CredentialsUnavailable(
+                f"AWS profile {self._profile!r} resolves to long-lived access keys (no session "
+                "token): use an IAM Identity Center (SSO) profile",
+                refused=True,
+            )
         return AwsCredentials(
             cast("str", frozen.access_key),
             cast("str", frozen.secret_key),
-            cast("str | None", frozen.token),
+            cast("str", frozen.token),
         )
 
     async def credentials(self) -> AwsCredentials:
