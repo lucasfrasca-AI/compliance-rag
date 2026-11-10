@@ -1,6 +1,6 @@
 # Compliance RAG
 
-A compliance tool for corporates: check proposals and documents against the company's own policies and against law and frameworks, with every citation verbatim, versioned and clickable to the clause. Hybrid graph RAG on GCP `australia-southeast1`: Qdrant (dense + BM25 + RRF), Neo4j (Cypher, bitemporal), a self-hosted cross-encoder reranker on Cloud Run, Claude Sonnet 5 on Amazon Bedrock (generation runs through the Australian geographic inference profile `au.anthropic.claude-sonnet-5`, called from `ap-southeast-2`, whose only destinations are Sydney and Melbourne — the one service outside GCP, and in Australia like everything else at query time; ADR-0056).
+A compliance tool for corporates: check proposals and documents against the company's own policies and against law and frameworks, with every citation verbatim, versioned and clickable to the clause. Hybrid graph RAG on GCP `australia-southeast1`: Qdrant (dense + BM25 + RRF), Neo4j (Cypher, bitemporal), a self-hosted cross-encoder reranker on Cloud Run, Claude Sonnet 5 on Amazon Bedrock (generation is decided to run through the Australian geographic inference profile `au.anthropic.claude-sonnet-5`, called from `ap-southeast-2`, whose only destinations are Sydney and Melbourne — the one cloud besides GCP, and in Australia like every query-time byte except the graph (Aura Free, D-09's build exception); ADR-0056, adapter #322; the Vertex `us` path is removed by #323 after the first live Bedrock call).
 
 ## Read before acting
 

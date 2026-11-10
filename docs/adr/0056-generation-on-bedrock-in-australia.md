@@ -4,8 +4,9 @@
 - Date: 2026-11-10
 - Decision IDs: amends `D-07` and `D-16` (`DECISIONS.md`)
 - Supersedes: ADR-0024's platform and region (Vertex, the US multi-region
-  endpoint); ADR-0023's offshore build-phase exception. ADR-0032's tester gate
-  is retired with it, and its code is removed by #323
+  endpoint); the model, Sonnet 5, is unchanged. Also ADR-0023's offshore
+  build-phase exception. ADR-0032's tester gate is retired with it, and its
+  code is removed by #323
 - Evidence: `docs/research/generation-in-australia-2026-11.md`
 - Issues: #322 (the Bedrock adapter), #323 (removing the offshore paths)
 
@@ -29,8 +30,10 @@ On the gate:
 > only, and the US and offshore paths are removed entirely — no tester list,
 > no offshore exception.
 
-The fallback, had Bedrock not held up: Gemini 3.5 Flash, pay-per-token, at
-`us` or `global`.
+The fallback, had Bedrock not held up:
+
+> If it doesn't hold up, go with option 1 — Gemini 3.5 Flash PAYG on us or
+> global — and accept that residency stays as it is for the build phase.
 
 ## Context
 
@@ -63,6 +66,15 @@ Every quotation, with its URL, is in the research document.
   Australian geographic inference profile `au.anthropic.claude-sonnet-5`,
   called from `ap-southeast-2`. Its only destinations are Sydney and
   Melbourne, so every request is processed in Australia.
+- **Generation runs in Australia only.** The human's instruction was that
+  "the residency gate's allowed-region list goes back to
+  australia-southeast1 only". AWS names Sydney `ap-southeast-2`, where GCP
+  names it `australia-southeast1`, so this ADR reads the instruction as a
+  rule about geography, not one region string. The gate accepts exactly two
+  configurations: `australia-southeast1` for the in-process demo generator,
+  and `ap-southeast-2` with an `au.` inference profile whose destinations
+  are Sydney and Melbourne for Bedrock. Every other region or profile is
+  refused (#322 adds the Bedrock half; #323 removes the rest).
 - **The model doesn't change.** It is still Sonnet 5, through the same
   Messages API, so the system prompt, the prompt contract, the draft schema
   and the pinned golden prompts carry over unchanged. The prices per 1M
@@ -93,17 +105,20 @@ Every quotation, with its URL, is in the research document.
   account, completes the first-time-use form, sets up Marketplace payment and
   creates the IAM role. Billing arrives through AWS Marketplace, outside the
   GCP budget alert, so the $200 ceiling now spans two bills.
-- **Generation is no longer an exception to residency.** Every query-time
-  byte is processed in Australia, which was D-07's original rationale. D-16's
-  generation exception is removed. Neo4j Aura Free stays under D-09's build
-  exception, as before.
+- **Generation is no longer an exception to residency.** Once the adapter
+  (#322) is live, every query-time byte is processed in Australia except the
+  graph's, which stays on Neo4j Aura Free under D-09's build exception, as
+  before. D-16's generation exception is removed.
 - **The offshore code is removed by #323, and only after the first live
   Bedrock call succeeds** in `ap-southeast-2` with the profile's destinations
-  confirmed. Until then the Vertex `us` path and its gate (ADR-0023,
-  ADR-0032) stay in code, so the Gemini fallback isn't taken away before
-  Bedrock is proven on this account. After #323, `GENERATION_REGIONS` holds
-  only Australian configurations and generation outside Australia has no code
-  path. *Build-phase tester* leaves `CONTEXT.md` with it.
+  confirmed. The human's fallback, quoted above, is Gemini 3.5 Flash PAYG at
+  `us` or `global` with residency as it was for the build phase, and that
+  fallback needs the offshore gate (ADR-0023, ADR-0032). Removing the gate
+  before Bedrock is proven on this account would remove the fallback with it.
+  Until #323 the Vertex `us` path stays in code, dormant: it is not called,
+  except as this fallback. After #323, `GENERATION_REGIONS` holds
+  only the two Australian configurations above, and generation outside
+  Australia has no code path. *Build-phase tester* leaves `CONTEXT.md` with it.
 - **The request-path egress audit** (a Phase 3 deliverable) now includes the
   Bedrock runtime endpoint and the STS endpoint, both in `ap-southeast-2`.
 - **Telemetry stays in Cloud Logging, Sydney.** Bedrock model invocation

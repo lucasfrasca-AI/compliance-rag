@@ -13,7 +13,7 @@ Two candidates were checked: Gemini on Vertex in `australia-southeast1`, and Cla
 | Fact | Source |
 |---|---|
 | `gemini-3.5-flash` in Sydney is Provisioned Throughput only: "Note: In asia-northeast1, asia-south1, asia-southeast1, australia-southeast1, and europe-west2, only Single Zone Provisioned Throughput is supported." | Gemini 3.5 Flash model page, https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-5-flash (the documentation now sits under `docs.cloud.google.com/gemini-enterprise-agent-platform/...`) |
-| Standard PayGo is not offered in Sydney. The Standard PayGo row reads: "Global: global; Multi-region: us, eu" | Same page |
+| Standard PayGo is not offered in Sydney. The Standard PayGo row lists two items, "Global: global" and "Multi-region: us, eu" | Same page |
 | Launch stage GA; retirement "May 19, 2027 or later" | Same page |
 | `gemini-2.5-flash`, the last Gemini model with a regional Sydney endpoint, has already retired: "Retirement date†: October 20, 2026" | Gemini 2.5 Flash model page, same documentation set |
 | Single Zone Provisioned Throughput: 1 GSU minimum, $4.068493151 per GSU-hour on a 1-month, non-global commitment, about **$2,970 a month** (× 730 hours). Ordered through an account representative | Vertex AI pricing, https://cloud.google.com/vertex-ai/generative-ai/pricing |
@@ -72,7 +72,8 @@ The AU profile's rates are the same as the Vertex `us` rates in ADR-0024 ($2.20 
 | Prompt caching is explicit: a cache checkpoint must be placed, minimum 1,024 tokens per checkpoint, at most 4 checkpoints, TTL 5 minutes or 1 hour. Implicit caching is not supported | https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html |
 | Structured outputs are supported. They are incompatible with Claude's built-in citations feature, which this project doesn't use (D-02: the model never authors a citation) | Bedrock user guide, Claude structured outputs |
 | Model invocation logging is off by default | https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html |
-| Sonnet 5's data retention mode is not documented. The retention-mode statement appears only on the Fable 5 and later model pages | Model cards, as above |
+| Sonnet 5's data retention mode is not documented. A retention-mode statement appears on some model cards of Claude Fable 5 and later, not on all of them: the Opus 5.5 and Sonnet 5.5 cards lack it, and so does Sonnet 5's | Model cards, as above |
+| The data-retention page says: "There is no data retention change to Claude models released before Claude Fable 5". That sentence doesn't cover Sonnet 5, which was released on 30 June 2026, after Fable 5 (9 June 2026). So Sonnet 5's retention is neither stated nor excluded, and is checked live | Bedrock data-retention page (downloaded as `data-retention.txt`) |
 
 ## Unverified, checked live after setup
 
@@ -81,4 +82,4 @@ These can't be read from documentation. Each is checked on the account once the 
 - **The quota actually granted.** Service Quotas, `ap-southeast-2`: "Cross-region model inference tokens per minute for Anthropic Claude Sonnet 5". The documented default is 6,000,000; an account's value may be lower.
 - **The profile's destinations.** `aws bedrock get-inference-profile --inference-profile-identifier au.anthropic.claude-sonnet-5 --region ap-southeast-2` must list exactly `ap-southeast-2` and `ap-southeast-4`. Anything else stops the adapter (#322), and #323 waits on it.
 - **Melbourne's opt-in status.** `ap-southeast-4` is an opt-in Region. Whether the account has opted in doesn't change residency, since both destinations are Australian; it may change which destination serves a request.
-- **Sonnet 5's retention mode.** Undocumented for Sonnet 5 (above). Checked on the account and recorded.
+- **Sonnet 5's retention mode.** Its model card says nothing, and the data-retention page's "released before Claude Fable 5" sentence doesn't reach it (above). Checked on the account and recorded.
