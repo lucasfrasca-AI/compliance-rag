@@ -5,7 +5,8 @@
   same day, with the tester list left empty: "Nobody asks questions offshore
   until Phase 1's live run, and that's me alone when the quota lands." So
   `OFFSHORE_GENERATION_TESTERS` stays empty, and no member's question reaches
-  offshore generation in the build phase.
+  offshore generation in the build phase. Retired by ADR-0056: generation runs
+  in Australia, and the tester list and offshore checks are removed by #323.
 - Date: 2026-10-14
 - Issue: #155
 - Extends: ADR-0023 (the build-phase residency gate), ADR-0026 (synthetic is operator-registered)
