@@ -1,7 +1,7 @@
 """The `AccountDirectory` contract (issue #319): one definition, run against
 `FakeAccountDirectory` and against `IdentityToolkitAccounts` over an httpx mock
 transport that answers as the Identity Toolkit API's `accounts:lookup` does
-(`users[].localId`, `.disabled`, `.validSince` as a string of seconds; a false
+(`users[].localId`, `.createdAt`, `.disabled`, `.validSince` as a string of seconds; a false
 `disabled` left out; `users` left out for an account that isn't there). No test
 calls Google.
 """
@@ -18,6 +18,7 @@ from compliance_rag.adapters.interfaces import AccountDirectory, AccountStatus
 
 ENABLED, DISABLED, REVOKED, MISSING = "uid-enabled", "uid-disabled", "uid-revoked", "uid-missing"
 REVOKED_AT = 1_700_000_000
+CREATED = "1600000000000"
 
 
 async def assert_account_directory_contract(directory: AccountDirectory) -> None:
@@ -32,9 +33,9 @@ async def assert_account_directory_contract(directory: AccountDirectory) -> None
 
 def identity_toolkit_double() -> httpx.MockTransport:
     accounts: dict[str, dict[str, object]] = {
-        ENABLED: {"localId": ENABLED, "email": "someone@acme.example"},
-        DISABLED: {"localId": DISABLED, "disabled": True},
-        REVOKED: {"localId": REVOKED, "validSince": str(REVOKED_AT)},
+        ENABLED: {"localId": ENABLED, "createdAt": CREATED, "email": "someone@acme.example"},
+        DISABLED: {"localId": DISABLED, "createdAt": CREATED, "disabled": True},
+        REVOKED: {"localId": REVOKED, "createdAt": CREATED, "validSince": str(REVOKED_AT)},
     }
 
     def respond(request: httpx.Request) -> httpx.Response:

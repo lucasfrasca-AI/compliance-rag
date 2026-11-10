@@ -1586,6 +1586,11 @@ class Unauthenticated(Exception):
     account that no longer exists."""
 
 
+ACCOUNT_DISABLED = "this account is disabled"
+"""What a refusal for a disabled account says: the API's pages tell it apart
+from a person who is not a member (#319)."""
+
+
 class NotAMember(Exception):
     """A valid sign-in for someone not admitted to the tenant: 403. Not on the
     member list, or the account is disabled."""

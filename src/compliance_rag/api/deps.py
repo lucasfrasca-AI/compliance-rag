@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable
-from contextlib import AsyncExitStack
+from collections.abc import Awaitable, Callable, Generator, Iterable
+from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass, field
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -84,6 +84,23 @@ def services_of(request: Request) -> ApiServices:
     return services
 
 
+@contextmanager
+def sign_in_refusals() -> Generator[None]:
+    """The one ladder from what a check raises to what the API answers, for a
+    token (`bearer_member`) and a session (`cookie_member`) alike: 401 for a
+    sign-in that isn't valid, 403 for a valid one that isn't admitted (not a
+    member, or a disabled account), 503 when it can't be checked right now. A
+    failure to check is a refusal, never an admission (#319)."""
+    try:
+        yield
+    except Unauthenticated as refused:
+        raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
+    except NotAMember as refused:
+        raise HTTPException(403, str(refused)) from None
+    except VerifierUnavailable:
+        raise HTTPException(503, "sign-in can't be checked right now") from None
+
+
 async def bearer_member(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
@@ -92,41 +109,23 @@ async def bearer_member(
     way to start a session (`POST /session`): a cookie can't mint a cookie."""
     if credentials is None:
         raise HTTPException(401, "sign in required", headers=_CHALLENGE)
-    try:
+    with sign_in_refusals():
         return await services_of(request).verifier.verify(credentials.credentials)
-    except Unauthenticated as refused:
-        raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
-    except NotAMember as refused:
-        raise HTTPException(403, str(refused)) from None
-    except VerifierUnavailable:
-        raise HTTPException(503, "sign-in can't be checked right now") from None
 
 
 async def cookie_member(request: Request, value: str) -> Member:
-    """The member a session cookie signs in, with the outcomes a token has: 401
-    if it is forged, tampered or expired, or the account was deleted or its
-    sign-ins revoked; 403 if the member has since left the tenant or the account
-    was disabled; 503 if the account can't be looked up (#319). The account is
-    looked up at most every `SESSION_RECHECK_SECONDS` per session, and a failed
-    lookup refuses."""
+    """The member a session cookie signs in, with the outcomes a token has
+    (`sign_in_refusals`). The account is looked up at most every
+    `SESSION_RECHECK_SECONDS` per session, and a failed lookup refuses."""
     codec: SessionCodec | None = request.app.state.session
     if codec is None:
         raise HTTPException(401, "sign in required", headers=_CHALLENGE)
-    try:
-        member = codec.open(value)
-    except Unauthenticated as refused:
-        raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
     services = services_of(request)
-    if not is_member(member.email, services.settings.members):
-        raise HTTPException(403, "not a member of this tenant")
-    try:
+    with sign_in_refusals():
+        member = codec.open(value)
+        if not is_member(member.email, services.settings.members):
+            raise NotAMember("not a member of this tenant")
         await services.verifier.recheck(member, session=value)
-    except Unauthenticated as refused:
-        raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
-    except NotAMember as refused:
-        raise HTTPException(403, str(refused)) from None
-    except VerifierUnavailable:
-        raise HTTPException(503, "sign-in can't be checked right now") from None
     return member
 
 

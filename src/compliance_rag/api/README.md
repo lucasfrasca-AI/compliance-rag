@@ -36,7 +36,7 @@ which the API already mapped to **503**. A lookup that fails is never an admissi
 |---|---|---|---|
 | No `Authorization` and no cookie; empty Bearer; malformed or empty cookie; forged or expired cookie | 401 | 401 | 303 to `/signin` |
 | Verified email not in `API_MEMBERS` (also: unverified email, untrusted provider); `API_MEMBERS` empty | 403 | 403 | 403 page |
-| Account disabled | 403 | 403 | 403 page |
+| Account disabled | 403 | 403 | 403 page saying the account can't be used here (a non-member's says "Not a member") |
 | Account deleted; tokens revoked since the sign-in (`validSince` > `auth_time`) | 401 | 401 | 303 to `/signin` |
 | Lookup times out, 5xx, 429, 403 permission error, malformed JSON, or an unexpected shape | 503 | 503 | 503 page |
 
@@ -46,7 +46,12 @@ with `{"localId": [uid]}`, authorised by an OAuth2 access token for the **runtim
 Application Default Credentials (scope `https://www.googleapis.com/auth/cloud-platform`). No API
 key, no service-account key, and never a user's token. It reads `users[0].localId`, `.disabled` and
 `.validSince` and nothing else (the response also carries the account's email and providers).
-Timeout 5 s. Its one call outside Australia, like the signing-key fetch, carries a uid and no
+Timeout 5 s on the lookup, and 5 s on getting the access token (each request google-auth's
+refresh makes, and the whole call, the wait for its lock included; google-auth's own default is
+120 s): past either the sign-in is a 503. The record must carry `localId` equal to the uid and
+a string `createdAt` (always on a user record) or it is a 503; an absent `disabled` means enabled
+only in a record that passes that. A renamed `disabled` inside an otherwise whole record would
+still read as enabled, which only a live check against the real API can rule out. Its one call outside Australia, like the signing-key fetch, carries a uid and no
 document text, and is for the egress audit (PHASES.md Phase 3) to list.
 
 - **At sign-in and on every Bearer request** the verifier looks the account up, after membership.
@@ -58,7 +63,8 @@ document text, and is for the egress audit (PHASES.md Phase 3) to list.
 - **The cookie carries the token's `auth_time`** (payload field `auth_time`), because revocation is
   `validSince` against the sign-in. A cookie without it (made before #319) is not a session; its
   holder signs in again once.
-- **Telemetry** gets `auth.outcome` (`active`, `disabled`, `not_found`, `revoked`, `lookup_failed`)
+- **Telemetry** records no exception on these spans (nothing is raised inside them), so a cause
+  that names a uid or an email cannot reach a span event or a status description. It gets `auth.outcome` (`active`, `disabled`, `not_found`, `revoked`, `lookup_failed`)
   and `auth.account_disabled` on `auth.check_account`, and `auth.lookup_outcome` on
   `auth.lookup_account`. No email, uid or response body reaches a span or a log.
 - **Misconfiguration refuses.** An empty `API_MEMBERS` admits no one (every path above is a 403).

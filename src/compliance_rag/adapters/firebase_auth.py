@@ -54,6 +54,7 @@ import binascii
 import hashlib
 import json
 import re
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -65,6 +66,7 @@ from google.auth import exceptions as google_auth_exceptions
 from google.auth import jwt
 
 from compliance_rag.adapters.interfaces import (
+    ACCOUNT_DISABLED,
     AccountDirectory,
     AccountStatus,
     Member,
@@ -99,6 +101,10 @@ IDENTITY_TOOLKIT_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 """Either this or `.../auth/identitytoolkit` authorises `accounts:lookup`; the
 first is what Application Default Credentials grant a Cloud Run identity."""
 LOOKUP_TIMEOUT_SECONDS = 5.0
+TOKEN_TIMEOUT_SECONDS = 5.0
+"""The longest getting an access token may take, waiting for the refresh lock
+included. google-auth's own refresh waits up to 120 s per request; a hung
+metadata server must be a 503, not a stalled sign-in."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,34 +168,69 @@ class _Credentials(Protocol):
     def refresh(self, request: object) -> None: ...
 
 
-def adc_access_token(scope: str = IDENTITY_TOOLKIT_SCOPE) -> AccessTokenSource:
+def adc_access_token(timeout: float = TOKEN_TIMEOUT_SECONDS) -> AccessTokenSource:
     """Access tokens from Application Default Credentials (on Cloud Run, the
-    service's own identity from the metadata server). google-auth is blocking,
-    so the refresh runs in a thread, and one lock keeps a burst of requests to
-    one refresh. No service-account key is read or created."""
+    service's own identity from the metadata server), scoped to
+    `IDENTITY_TOOLKIT_SCOPE`. google-auth is blocking, so the refresh runs in a
+    thread, and one lock keeps a burst of requests to one refresh. Each request
+    the refresh makes is bounded by `timeout`, and so is the whole call, the wait
+    for the lock included: past it, the call raises (`TimeoutError`) and the
+    lookup that asked is refused. No service-account key is read or created."""
     import google.auth
     import google.auth.transport.requests
 
+    limit = timeout
+
+    class BoundedRequest(google.auth.transport.requests.Request):
+        """google-auth's transport, whose default per-request timeout is 120 s."""
+
+        def __call__(  # pyright: ignore[reportIncompatibleMethodOverride] — widened signature
+            self,
+            url: str,
+            method: str = "GET",
+            body: object = None,
+            headers: object = None,
+            timeout: float | None = None,
+            **kwargs: object,
+        ) -> object:
+            asked = limit if timeout is None else min(timeout, limit)
+            # google-auth annotates `timeout: int`; `requests` takes a float.
+            return super().__call__(  # pyright: ignore[reportUnknownMemberType]
+                url,
+                method,
+                body,
+                headers,
+                timeout=asked,  # pyright: ignore[reportArgumentType]
+                **kwargs,
+            )
+
     lock = asyncio.Lock()
+    guard = threading.Lock()
     held: list[_Credentials] = []
 
     def refreshed() -> str:
-        if not held:
-            found = cast(
-                "tuple[_Credentials, str | None]",
-                google.auth.default(scopes=[scope]),  # pyright: ignore[reportUnknownMemberType]
-            )
-            held.append(found[0])
-        credentials = held[0]
-        if not credentials.valid:
-            credentials.refresh(google.auth.transport.requests.Request())
-        if not isinstance(credentials.token, str) or not credentials.token:
-            raise RuntimeError("no access token")
-        return credentials.token
+        with guard:  # a refresh that outlived its caller may still be running
+            if not held:
+                found = cast(
+                    "tuple[_Credentials, str | None]",
+                    google.auth.default(  # pyright: ignore[reportUnknownMemberType]
+                        scopes=[IDENTITY_TOOLKIT_SCOPE]
+                    ),
+                )
+                held.append(found[0])
+            credentials = held[0]
+            if not credentials.valid:
+                credentials.refresh(BoundedRequest())
+            if not isinstance(credentials.token, str) or not credentials.token:
+                raise RuntimeError("no access token")
+            return credentials.token
 
-    async def token() -> str:
+    async def locked() -> str:
         async with lock:
             return await asyncio.to_thread(refreshed)
+
+    async def token() -> str:
+        return await asyncio.wait_for(locked(), timeout)
 
     return token
 
@@ -223,19 +264,25 @@ class IdentityToolkitAccounts(AccountDirectory):
         self._client = client or httpx.AsyncClient(timeout=LOOKUP_TIMEOUT_SECONDS)
 
     async def lookup(self, uid: str) -> AccountStatus | None:
+        failure: Exception | None = None
+        status: AccountStatus | None = None
+        # Nothing is raised inside the span: it would record the exception, and
+        # its cause could carry an identifier (#319).
         with span("auth.lookup_account") as current:
             try:
                 status = await self._lookup(uid)
-            except VerifierUnavailable:
-                current.set_attribute("auth.lookup_outcome", "failed")
-                raise
             except Exception as failed:  # the token source, or anything unforeseen
+                failure = failed
                 current.set_attribute("auth.lookup_outcome", "failed")
-                raise VerifierUnavailable("couldn't look up the account") from failed
-            current.set_attribute("auth.lookup_outcome", "found" if status else "not_found")
-            if status is not None:
-                current.set_attribute("auth.account_disabled", status.disabled)
+            else:
+                current.set_attribute("auth.lookup_outcome", "found" if status else "not_found")
+                if status is not None:
+                    current.set_attribute("auth.account_disabled", status.disabled)
+        if failure is None:
             return status
+        if isinstance(failure, VerifierUnavailable):
+            raise failure
+        raise VerifierUnavailable("couldn't look up the account") from failure
 
     async def _lookup(self, uid: str) -> AccountStatus | None:
         unavailable = VerifierUnavailable("couldn't look up the account")
@@ -261,9 +308,17 @@ class IdentityToolkitAccounts(AccountDirectory):
         if not isinstance(user, dict):
             raise unavailable
         account = cast("dict[str, object]", user)
-        disabled = account.get("disabled", False)  # JSON leaves out a false boolean
+        # An absent `disabled` is false (JSON leaves a false boolean out) only
+        # in a record that is otherwise the whole user record: `createdAt` is
+        # always on one. A record without it is not the shape this was written
+        # against, and a renamed `disabled` must not read as an enabled account.
+        disabled = account.get("disabled", False)
         valid_since = account.get("validSince", "0")  # an int64, so a string of seconds
-        if account.get("localId") != uid or not isinstance(disabled, bool):
+        if (
+            account.get("localId") != uid
+            or not isinstance(account.get("createdAt"), str)
+            or not isinstance(disabled, bool)
+        ):
             raise unavailable
         if not isinstance(valid_since, str) or re.fullmatch(r"[0-9]{1,18}", valid_since) is None:
             raise unavailable
@@ -271,6 +326,12 @@ class IdentityToolkitAccounts(AccountDirectory):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _unavailable_from(cause: Exception) -> VerifierUnavailable:
+    unavailable = VerifierUnavailable("couldn't look up the account")
+    unavailable.__cause__ = cause
+    return unavailable
 
 
 def _key_id(token: str) -> str:
@@ -313,7 +374,7 @@ class FirebaseTokenVerifier(TokenVerifier):
         if not project_id:
             raise ValueError("FIREBASE_PROJECT_ID is not set: no token could be checked")
         self._accounts = accounts
-        self._rechecked: dict[str, float] = {}
+        self._session_passes: dict[str, float] = {}
         """Session (a hash of its cookie) -> when its account was last checked."""
         self._project_id = project_id
         self._issuer = f"https://securetoken.google.com/{project_id}"
@@ -400,26 +461,32 @@ class FirebaseTokenVerifier(TokenVerifier):
         """The account exists, is enabled, and its tokens haven't been revoked
         since `auth_time`; otherwise a refusal. A lookup that fails in any way is
         `VerifierUnavailable`, never an admission (#319)."""
+        refusal: Exception | None = None
+        # Nothing is raised inside the span (see `IdentityToolkitAccounts.lookup`).
         with span("auth.check_account") as current:
             try:
                 status = await self._accounts.lookup(uid)
-            except VerifierUnavailable:
+            except Exception as failed:  # VerifierUnavailable, or an adapter that let something by
                 current.set_attribute("auth.outcome", "lookup_failed")
-                raise
-            except Exception as failed:  # an adapter that let something through
-                current.set_attribute("auth.outcome", "lookup_failed")
-                raise VerifierUnavailable("couldn't look up the account") from failed
-            if status is None:
-                current.set_attribute("auth.outcome", "not_found")
-                raise Unauthenticated("account not found")
-            current.set_attribute("auth.account_disabled", status.disabled)
-            if status.disabled:
-                current.set_attribute("auth.outcome", "disabled")
-                raise NotAMember("this account is disabled")
-            if auth_time < status.valid_since:
-                current.set_attribute("auth.outcome", "revoked")
-                raise Unauthenticated("sign-in revoked")
-            current.set_attribute("auth.outcome", "active")
+                refusal = (
+                    failed if isinstance(failed, VerifierUnavailable) else _unavailable_from(failed)
+                )
+            else:
+                if status is None:
+                    current.set_attribute("auth.outcome", "not_found")
+                    refusal = Unauthenticated("account not found")
+                else:
+                    current.set_attribute("auth.account_disabled", status.disabled)
+                    if status.disabled:
+                        current.set_attribute("auth.outcome", "disabled")
+                        refusal = NotAMember(ACCOUNT_DISABLED)
+                    elif auth_time < status.valid_since:  # equal is the sign-in itself
+                        current.set_attribute("auth.outcome", "revoked")
+                        refusal = Unauthenticated("sign-in revoked")
+                    else:
+                        current.set_attribute("auth.outcome", "active")
+        if refusal is not None:
+            raise refusal
 
     async def recheck(self, member: Member, *, session: str) -> None:
         """A session's account, looked up again unless it was within
@@ -429,14 +496,14 @@ class FirebaseTokenVerifier(TokenVerifier):
             raise Unauthenticated("invalid session")  # fail closed: nothing to check against
         now = self._clock()
         key = hashlib.sha256(session.encode()).hexdigest()
-        checked = self._rechecked.pop(key, None)
+        checked = self._session_passes.pop(key, None)
         if checked is not None and 0 <= now - checked < SESSION_RECHECK_SECONDS:
-            self._rechecked[key] = checked
+            self._session_passes[key] = checked
             return
         await self._require_active_account(member.uid, member.auth_time)
-        self._rechecked[key] = now
-        while len(self._rechecked) > MAX_REMEMBERED_SESSIONS:
-            del self._rechecked[next(iter(self._rechecked))]
+        self._session_passes[key] = now
+        while len(self._session_passes) > MAX_REMEMBERED_SESSIONS:
+            del self._session_passes[next(iter(self._session_passes))]
 
     async def aclose(self) -> None:
         try:

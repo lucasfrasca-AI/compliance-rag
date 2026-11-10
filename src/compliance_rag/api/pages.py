@@ -48,6 +48,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from compliance_rag.adapters.demo_generator import FAKE_BANNER
+from compliance_rag.adapters.interfaces import ACCOUNT_DISABLED
 from compliance_rag.api.banner import TEMPLATE_DIR, banner_text
 from compliance_rag.api.chats import read_chat
 from compliance_rag.api.deps import (
@@ -240,6 +241,10 @@ async def page_caller(
     except HTTPException as refused:
         if refused.status_code == 401:
             raise SignInRequired from None
+        if refused.status_code == 403 and refused.detail == ACCOUNT_DISABLED:
+            raise PageError(
+                403, "Account unavailable", "This account can't be used here."
+            ) from None
         if refused.status_code == 403:
             raise PageError(
                 403, "Not a member", "This account is not a member of this workspace."

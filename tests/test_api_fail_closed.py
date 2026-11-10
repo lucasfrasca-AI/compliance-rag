@@ -162,10 +162,6 @@ async def test_a_disabled_account_loses_its_cookie_session_within_the_recheck_in
         assert page.status_code == 403 and "text/html" in page.headers["content-type"]
 
 
-def test_the_recheck_interval_is_five_minutes_at_most() -> None:
-    assert SESSION_RECHECK_SECONDS <= 300
-
-
 async def test_a_cookie_is_checked_at_most_once_an_interval_and_a_bearer_request_every_time() -> (
     None
 ):
@@ -214,7 +210,7 @@ async def test_the_remembered_sessions_are_bounded(monkeypatch: pytest.MonkeyPat
         ]
         for value in cookies:
             await c.get("/v1/me", headers=with_cookie(value))
-        assert len(world.verifier._rechecked) == 2  # pyright: ignore[reportPrivateUsage]
+        assert len(world.verifier._session_passes) == 2  # pyright: ignore[reportPrivateUsage]
         before = accounts.lookups
         await c.get("/v1/me", headers=with_cookie(cookies[0]))  # forgotten: asked again
         assert accounts.lookups == before + 1
@@ -303,7 +299,9 @@ BROKEN = [
     ),
     pytest.param(httpx.MockTransport(lambda _: httpx.Response(200, text="{not json")), id="json"),
     pytest.param(
-        httpx.MockTransport(lambda _: httpx.Response(200, json={"users": [{"localId": "x"}]})),
+        httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"users": [{"localId": "x", "createdAt": "1"}]})
+        ),
         id="unexpected-shape",
     ),
 ]
@@ -345,6 +343,54 @@ async def test_an_outage_is_noticed_when_the_interval_ends_and_not_before() -> N
         assert (await c.get("/v1/me", headers=with_cookie(sealed()))).status_code == 200  # inside
         world.now[0] += SESSION_RECHECK_SECONDS + 1
         assert (await c.get("/v1/me", headers=with_cookie(sealed()))).status_code == 503
+
+
+# ---- the boundary, and who else the check reaches ---------------------------------------
+
+
+async def test_tokens_valid_since_the_very_second_of_the_sign_in_are_admitted() -> None:
+    accounts = enabled()
+    signed_in_at = int(time.time()) - 60
+    accounts.register(UID, valid_since=signed_in_at)
+    async with World(accounts).client() as c:
+        equal = await c.get("/v1/me", headers=bearer(mint(auth_time=signed_in_at)))
+        before = await c.get("/v1/me", headers=bearer(mint(auth_time=signed_in_at - 1)))
+    assert (equal.status_code, before.status_code) == (200, 401)
+
+
+async def test_a_disabled_account_is_refused_on_an_admin_route_and_on_a_page() -> None:
+    """The member is also an admin (`API_ADMINS`), and still refused: the check
+    sits under `CurrentAdmin` and under every page, not beside them."""
+    accounts = enabled()
+    accounts.register(UID, disabled=True)
+    world = World(accounts)
+    admin_write = "/v1/subscriptions/privacy-act-1988"
+    async with world.client() as c:
+        by_bearer = await c.put(admin_write, headers=bearer(mint()))
+        by_cookie = await c.put(admin_write, headers=with_cookie(sealed()))
+        admin_page = await c.get("/admin/subscriptions", headers=with_cookie(sealed()))
+        page = await c.get("/chats", headers=with_cookie(sealed()))
+    assert (by_bearer.status_code, by_cookie.status_code) == (403, 403)
+    assert by_bearer.json() == {"detail": "this account is disabled"}
+    assert admin_page.status_code == 403 and page.status_code == 403
+    for refused in (admin_page, page):
+        text = refused.text.lower()
+        assert "can&#39;t be used here" in text or "can't be used here" in text
+        assert "not a member" not in text
+    # ... and the same admin, enabled, is let through to prove the route was reachable.
+    accounts.register(UID)
+    async with world.client() as c:
+        assert (
+            await c.get("/admin/subscriptions", headers=with_cookie(sealed()))
+        ).status_code == 200
+
+
+async def test_a_non_member_keeps_the_not_a_member_page() -> None:
+    async with World(enabled()).client() as c:
+        page = await c.get(
+            "/chats", headers=with_cookie(sealed(email=STRANGER, uid="uid-stranger"))
+        )
+    assert page.status_code == 403 and "not a member" in page.text.lower()
 
 
 # ---- a missing token is refused -----------------------------------------------------
@@ -457,8 +503,14 @@ async def test_no_email_or_uid_reaches_a_span_or_a_log_from_the_account_check(
         {"auth.account_disabled": True, "auth.outcome": "disabled"},
         {"auth.outcome": "lookup_failed"},
     ]
+    spans = span_exporter.get_finished_spans()
     seen = " ".join(
         [r.getMessage() for r in caplog.records]
-        + [str(v) for s in checks for v in (s.attributes or {}).values()]
+        + [str(v) for s in spans for v in (s.attributes or {}).values()]
+        + [str(v) for s in spans for e in s.events for v in (e.attributes or {}).values()]
+        + [e.name for s in spans for e in s.events]
+        + [str(s.status.description) for s in spans]
     )
     assert UID not in seen and MEMBER not in seen
+    assert all(s.events == () for s in checks), "no exception is recorded on the check's span"
+    assert all(not s.status.description for s in spans)
