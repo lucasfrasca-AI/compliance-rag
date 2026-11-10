@@ -7,14 +7,18 @@ never deployed, and nothing in `src/` imports it.
         -e QDRANT__TELEMETRY_DISABLED=true qdrant/qdrant:v1.19.1
     uv run python -m scripts.demo_server --fake-generator \
         --bucket compliance-rag-508904-corpus              # no model is called
-    VERTEX_CLAUDE_MODEL=claude-sonnet-5 VERTEX_CLAUDE_REGION=us \
+    AWS_PROFILE=<profile> \
+        uv run python -m scripts.demo_server --member you@example.com \
+        --bucket compliance-rag-508904-corpus      # Bedrock's Australian profile
+    GENERATION_BACKEND=vertex VERTEX_CLAUDE_MODEL=claude-sonnet-5 VERTEX_CLAUDE_REGION=us \
     OFFSHORE_GENERATION_TESTERS=you@example.com \
         uv run python -m scripts.demo_server --member you@example.com \
-        --bucket compliance-rag-508904-corpus
+        --bucket compliance-rag-508904-corpus      # the offshore build-phase path
 
-The real run sends the question offshore only with the member listed as a
-tester (ADR-0032); leave the list out, or ask as someone it doesn't name, and
-the page shows the gate's refusal instead. `--member` (default
+On Bedrock nothing leaves Australia (ADR-0056). The Vertex run sends the
+question offshore only with the member listed as a tester (ADR-0032); leave
+the list out, or ask as someone it doesn't name, and the page shows the
+gate's refusal instead. `--member` (default
 `local-demo@acme.example`) is who asks, lowercased as the sign-in verifier
 lowercases an email. Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`, the
 corpus is loaded into it at start), the reranker's ONNX model
@@ -52,8 +56,9 @@ is deployed (`refuse_unless_local`).
   the snapshot and evaluator `GraphTrackA` uses).
 - **Law source HTML:** the corpus bucket, read only, through
   `GCSClauseStore.get_source_html`.
-- **Generation:** Claude on Vertex, built by `VertexClaudeGenerator.create`, so
-  the residency gate runs first (ADR-0023, ADR-0024). Offshore, ADR-0032 holds
+- **Generation:** Claude, built by `build_generator` (Bedrock's Australian
+  profile by default; on Vertex, `VertexClaudeGenerator.create`, so the
+  residency gate runs first, ADR-0023, ADR-0024). Offshore, ADR-0032 holds
   as it does in production: the member's question is sent only if
   `OFFSHORE_GENERATION_TESTERS` names the `--member` email, which this server
   never adds for you; otherwise the page shows the residency gate's refusal.
@@ -93,6 +98,7 @@ from compliance_rag import telemetry
 from compliance_rag.adapters.demo_generator import FAKE_BANNER, FakeDemoGenerator
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.generation_residency import TenantTextGate, is_offshore
+from compliance_rag.adapters.generator_factory import build_generator, generation_label
 from compliance_rag.adapters.interfaces import (
     ClauseStore,
     Embedder,
@@ -372,14 +378,14 @@ def create_demo_app(
 
     @app.get("/demo/config")
     async def config() -> dict[str, object]:  # pyright: ignore[reportUnusedFunction] — a route
-        region = services.settings.vertex_claude_region
+        region = services.settings.generation_region
         return {
             "fake_generator": fake_generator,
             "tenant_id": services.settings.tenant_id,
             "member": member.email,
             "generation": "fake, in process"
             if fake_generator
-            else f"{services.settings.vertex_claude_model or '(no model configured)'} at {region}"
+            else generation_label(services.settings)
             + (" (offshore: ADR-0032's tester list applies)" if is_offshore(region) else ""),
         }
 
@@ -533,9 +539,7 @@ async def local_services(
         if fake_generator:
             generator: Generator = FakeDemoGenerator()
         else:
-            from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator
-
-            real = await VertexClaudeGenerator.create(settings, corpus=store)
+            real = await build_generator(settings, corpus=store)
             generator = RecordingGenerator(real, failures)
         services = assemble(
             settings,
@@ -630,11 +634,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.fake_generator:
         print(f"*** {FAKE_BANNER}: answers come from an in-process stand-in ***", flush=True)
     elif (
-        is_offshore(settings.vertex_claude_region)
+        is_offshore(settings.generation_region)
         and args.member.email not in settings.offshore_testers
     ):
         print(
-            f"Generation runs at {settings.vertex_claude_region}, outside Australia, and "
+            f"Generation runs at {settings.generation_region}, outside Australia, and "
             f"{args.member.email} isn't in OFFSHORE_GENERATION_TESTERS: every question will "
             "be refused by the residency gate (ADR-0032) until the operator lists it.",
             flush=True,

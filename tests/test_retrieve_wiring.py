@@ -54,10 +54,11 @@ pipeline = RetrievalPipeline(store, FakeReranker())
 law = LawScope.unscoped("wiring test")
 asyncio.run(pipeline.retrieve("protect it", "_public", dt.date(2026, 1, 1), law=law))
 asyncio.run(pipeline.route(chunk.clause_id, "_public", dt.date(2026, 1, 1), law=law))
-llm = ("anthropic", "anthropic.", "vertexai.generative")
+llm = ("anthropic", "anthropic.", "vertexai.generative", "boto3", "botocore")
 loaded = [
     m for m in sys.modules
-    if m.startswith(llm) or (m.startswith("compliance_rag") and "generator" in m)
+    if m.startswith(llm)
+    or (m.startswith("compliance_rag") and ("generator" in m or "bedrock" in m or "aws_" in m))
 ]
 print(loaded)
 assert not loaded, loaded

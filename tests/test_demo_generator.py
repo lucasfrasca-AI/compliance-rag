@@ -175,7 +175,11 @@ def test_with_claude_the_generator_is_built_through_the_gate_at_startup(
         return FakeGenerator()
 
     monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", create)
-    settings = api_settings(vertex_claude_model="claude-sonnet-5", vertex_claude_region="us")
+    settings = api_settings(
+        generation_backend="vertex",
+        vertex_claude_model="claude-sonnet-5",
+        vertex_claude_region="us",
+    )
     app = api_main.build_app(settings)
     assert built == []  # not at import or build: at startup, where the gate can ask the store
     with TestClient(app):
@@ -187,7 +191,9 @@ def test_with_claude_the_generator_is_built_through_the_gate_at_startup(
 
 def test_claude_with_no_model_refuses_to_start(stores: None) -> None:
     with pytest.raises(ValueError, match="VERTEX_CLAUDE_MODEL"):
-        api_main.build_app(api_settings(generator="claude", vertex_claude_model=""))
+        api_main.build_app(
+            api_settings(generator="claude", generation_backend="vertex", vertex_claude_model="")
+        )
     # `demo` needs no model.
     api_main.build_app(demo_settings())
 

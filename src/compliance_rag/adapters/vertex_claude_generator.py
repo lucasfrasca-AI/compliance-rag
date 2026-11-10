@@ -33,7 +33,7 @@ from compliance_rag import telemetry
 from compliance_rag.adapters.generation_residency import (
     assert_generation_allowed,
     is_offshore,
-    validate_generation_region,
+    validate_vertex_region,
 )
 from compliance_rag.adapters.interfaces import (
     Generation,
@@ -90,7 +90,7 @@ class VertexClaudeGenerator(Generator):
             raise ValueError("no Claude model configured (VERTEX_CLAUDE_MODEL)")
         self._messages = messages
         self._model = model
-        self._region = validate_generation_region(region)
+        self._region = validate_vertex_region(region)
         self._corpus = corpus
 
     async def _assert_still_allowed(self) -> None:
@@ -107,7 +107,7 @@ class VertexClaudeGenerator(Generator):
         `Settings` (`global` and anything but Sydney or the US multi-region refused), and
         an offshore region is refused outright while `corpus` holds any real
         tenant data. Async because the gate asks the store."""
-        region = validate_generation_region(settings.vertex_claude_region)
+        region = validate_vertex_region(settings.vertex_claude_region)
         if is_offshore(region):
             assert_generation_allowed(
                 generation_region=region,

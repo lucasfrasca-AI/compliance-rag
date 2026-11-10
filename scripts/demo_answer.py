@@ -8,8 +8,8 @@ form, version, the canonical text the user is shown (never the model's
 words), and a link that opens the stored source HTML at the clause's
 synthesized anchor (ADR-0019). Blocked citations are listed as blocked.
 
-    QDRANT_URL=http://localhost:6333 VERTEX_CLAUDE_MODEL=claude-sonnet-5 \\
-    VERTEX_CLAUDE_REGION=us uv run python scripts/demo_answer.py \\
+    QDRANT_URL=http://localhost:6333 AWS_PROFILE=<profile> \\
+    uv run python scripts/demo_answer.py \\
         "What must an entity do with personal information it no longer needs?"
 """
 

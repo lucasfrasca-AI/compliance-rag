@@ -141,7 +141,7 @@ async def main(tenant: str, *, bucket: str | None, dry_run: bool) -> int:
             ledger=ledger,
             retrieval=retrieval,
             clauses=clause_store,
-            generation_region=settings.vertex_claude_region,
+            generation_region=settings.generation_region,
             synthetic_registry=SyntheticRegistry.load(),
         ),
         today=dt.date.today(),

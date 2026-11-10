@@ -44,6 +44,7 @@ from compliance_rag.adapters.interfaces import (
     Generator,
     PrefixMeasure,
     TurnOutcome,
+    Unavailability,
     UnreadableCitation,
     UnreadableReason,
 )
@@ -76,6 +77,7 @@ from tests.api_support import (
     mint,
     session_member,
 )
+from tests.bedrock_support import bedrock_generator, refused
 from tests.test_api_answers import (
     AS_OF,
     NOT_RETRIEVED,
@@ -520,6 +522,43 @@ async def test_generation_unavailable_is_its_own_state_with_no_sdk_words() -> No
         api["turns"][1]["error"] == "generation_unavailable"
         and api["turns"][1]["reason"] == "quota"
     )
+
+
+async def test_bedrock_access_denied_is_unavailable_not_internal_and_reads_back_as_such() -> None:
+    """Bedrock's AccessDeniedException (#322): the stream says
+    `generation_unavailable` with reason `access`, not `internal`; the ledger
+    keeps the reason and none of the provider's words; the reloaded card says
+    the operator has to restore access. The member is no tester, and the
+    question still reaches the model: on the Australian profile no offshore
+    gate stands in the way."""
+    ledger = await acme_ledger()
+    requests: list[httpx.Request] = []
+    provider = "User: arn:aws:sts::123456789012:assumed-role/x is not authorized (ya29.TOKEN)"
+    generator = bedrock_generator(
+        lambda _: refused(403, provider, "AccessDeniedException"), requests
+    )
+    settings = page_settings()  # bedrock by default, and MEMBER is no tester
+    async with await client_for(generator, ledger=ledger, settings=settings) as client:
+        await sign_in(client)
+        events, fragment = await ask(client)
+        chat_id = events[0][1]["chat_id"]
+        recorded = await client.get(f"/chats/{chat_id}/turns")
+        api = (await client.get(f"/v1/chats/{chat_id}")).json()
+    assert len(requests) == 1  # it was sent: not refused by the residency gate
+    error = events[-1][1]
+    assert error["error"] == "generation_unavailable" and error["reason"] == "access"
+    assert outcomes(fragment) == ["generation_unavailable"]
+    words = text_of(fragment)
+    assert "refused access" in words and "quota" not in words
+    for leaked in ("arn:aws", "ya29", "AccessDenied", "Traceback"):
+        assert leaked not in fragment and leaked not in recorded.text
+    assert outcomes(recorded.text) == ["generation_unavailable"]
+    assert text_of(recorded.text) == words
+    assert api["turns"][1]["error"] == "generation_unavailable"
+    assert api["turns"][1]["reason"] == "access"
+    stored = await ledger.chat_turns(TENANT, UID, chat_id)
+    assert stored[1].unavailable is Unavailability.ACCESS
+    assert "arn:aws" not in repr(stored)
 
 
 async def test_a_policy_corpus_over_the_cap_is_its_own_state_with_its_numbers() -> None:

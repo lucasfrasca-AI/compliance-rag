@@ -12,8 +12,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from compliance_rag.adapters.generation_residency import TenantTextGate
+from compliance_rag.adapters.generator_factory import build_generator
 from compliance_rag.adapters.interfaces import Embedder
-from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator
 from compliance_rag.adapters.vertex_embedder import VertexEmbedder
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord
@@ -61,9 +61,10 @@ async def live_answer_pipeline(
 ) -> AsyncGenerator[AssessmentPipeline]:
     """`answer()` on the golden corpus with every real stage: Qdrant, cached
     real embeddings, the int8 cross-encoder, **live Claude** (built only
-    through `VertexClaudeGenerator.create`, so the residency gate runs first —
-    ADR-0023/0024), and the real verifier against golden canonical text and a
-    ledger with every golden version recorded. Shared by the live eval and
+    through `build_generator`, so on Vertex the residency gate runs first —
+    ADR-0023/0024; Bedrock's Australian profile is ADR-0056), and the real
+    verifier against golden canonical text and a ledger with every golden
+    version recorded. Shared by the live eval and
     the demo.
 
     `whole_compilation` puts it in place of the excerpt, in Qdrant and
@@ -93,7 +94,7 @@ async def live_answer_pipeline(
     ):
         if extra_chunks:
             await store.upsert_chunks(extra_chunks)
-        generator = await VertexClaudeGenerator.create(settings, corpus=store)
+        generator = await build_generator(settings, corpus=store)
         # The injection probe is invented by this operator script, so it is
         # registered here, in memory, for this run only (ADR-0026's operator
         # path); every other tenant text must already be registered.
@@ -105,7 +106,7 @@ async def live_answer_pipeline(
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
             tenant_text=TenantTextGate(
-                settings.vertex_claude_region,
+                settings.generation_region,
                 SyntheticRegistry(registry.keys | probe.keys, f"{registry.source}; {probe.source}"),
             ),
         )

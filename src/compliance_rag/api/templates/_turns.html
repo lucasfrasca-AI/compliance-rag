@@ -37,8 +37,13 @@
 <p>While the model runs outside Australia (the build phase), a question is sent to it only from a registered build-phase tester, and only over synthetic policy text. Nothing was sent to the model, and the question did not leave Australia.</p>
 {% elif kind == "generation_unavailable" %}
 <h3>The model isn't taking requests right now</h3>
+{% if t.reason == "access" %}
+<p>The model's service refused access, so no answer was generated. Coverage and retrieval ran; the model wrote nothing, and nothing unverified is shown.</p>
+<p class="note">Access to the model has to be put right by the operator. Nothing on this page needs fixing: ask again once they have.</p>
+{% else %}
 <p>The model's service refused the request for quota, so no answer was generated. Coverage and retrieval ran; the model wrote nothing, and nothing unverified is shown.</p>
 <p class="note">It clears when the quota is granted or refills. Nothing on this page needs fixing: ask again later.</p>
+{% endif %}
 {% elif kind == "policy_corpus_too_large" %}
 <h3>Your policy documents are too large to send with a question</h3>
 {% if t.estimated_tokens is not none and t.cap_tokens is not none %}

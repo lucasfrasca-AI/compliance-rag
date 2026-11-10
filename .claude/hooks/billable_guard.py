@@ -22,6 +22,15 @@ or a newline, with leading environment assignments stripped. Prose that merely
 mentions a billable command (a heredoc writing BUILD_LOG, an ADR body) no
 longer trips the guard.
 
+*Reach.* Before the match, a backslash-newline continuation is joined, command
+substitution (`$(`, not backticks) starts a new segment, env assignments and
+wrappers (`sudo -E`, `env -i -u X`, `nice -n 5`, `time`, `nohup`, `timeout 5`,
+`xargs -n1`) are stripped with their own options, a quoted program name is read
+unquoted, and the payload of `bash -c '...'` / `eval '...'` is segmented too.
+`aws` is default-deny (see below). Known gap, for every tool: a program run
+through a variable (`$AWS iam ...`), a command in backticks, a script or alias
+that holds the command, `python -m awscli`, and anything else a real shell would resolve at run time.
+
 *Full-command equality.* An approval authorises exactly one command string,
 compared after whitespace normalisation. `<approved> && anything` does not
 match; a chain must be approved as the whole chain.
@@ -100,22 +109,134 @@ if m(
 
 
 # --- shell segmentation -----------------------------------------------------
-SEGMENT_SPLIT = re.compile(r";|&&|\|\||\||\n")
+# A command is split at `;`, `&&`, `||`, `|`, a newline and `$(` (the opener of
+# a command substitution), after a backslash-newline continuation is joined.
+# Backticks are not a boundary: a BUILD_LOG heredoc or a commit message quotes
+# commands in backticks all the time, and prose must not trip the guard. Each
+# segment is then reduced to the command it runs: environment assignments, and wrappers such as `sudo -E`, `env -i -u X`,
+# `nice -n 5`, `time`, `nohup`, `timeout 5` and `xargs -n1`, come off (each with
+# its own options), the program name loses its quotes, and the payload of
+# `bash -c '...'` / `eval '...'` is segmented in turn.
+#
+# Known gaps, shared by every rule below and by every tool: a program run
+# through a shell variable (`$AWS iam ...`), a command in backticks, a script
+# file or alias that holds the command, `python -m awscli`, and a command
+# assembled by `eval` from variables. The guard reads the command line; it does not run a shell.
+SEGMENT_SPLIT = re.compile(r";|&&|\|\||\||\n|\$\(")
+CONTINUATION = re.compile(r"\\\r?\n")
 ENV_PREFIX = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*")
-LEADING_NOISE = re.compile(r"^(?:sudo|command|env|nohup|time|exec)\s+")
+SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+MAX_NESTING = 4
+# wrapper -> (options that take a value, positional arguments before the command)
+WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
+    "sudo": (frozenset("-u -g -C -h -p -r -t -T -U -D".split()), 0),
+    "env": (frozenset({"-u", "-C", "-S"}), 0),
+    "command": (frozenset(), 0),
+    "nohup": (frozenset(), 0),
+    "time": (frozenset({"-f", "-o"}), 0),
+    "exec": (frozenset({"-a"}), 0),
+    "nice": (frozenset({"-n"}), 0),
+    "ionice": (frozenset({"-c", "-n", "-p"}), 0),
+    "stdbuf": (frozenset({"-i", "-o", "-e"}), 0),
+    "setsid": (frozenset(), 0),
+    "timeout": (frozenset({"-s", "-k"}), 1),
+    "xargs": (frozenset("-n -I -L -P -s -d -E -a".split()), 0),
+}
+
+
+def scan(text: str) -> list[tuple[str, int, int]]:
+    """Shell words as (value, start, end): quotes and backslashes removed from
+    the value, offsets into `text`. An unterminated quote runs to the end."""
+    words: list[tuple[str, int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i].isspace():
+            i += 1
+            continue
+        start, value = i, []
+        while i < n and not text[i].isspace():
+            c = text[i]
+            if c == "\\" and i + 1 < n:
+                value.append(text[i + 1])
+                i += 2
+            elif c in "'\"":
+                j = i + 1
+                while j < n and text[j] != c:
+                    if c == '"' and text[j] == "\\" and j + 1 < n:
+                        j += 1
+                    value.append(text[j])
+                    j += 1
+                i = j + 1
+            else:
+                value.append(c)
+                i += 1
+        words.append(("".join(value), start, min(i, n)))
+    return words
+
+
+def reduce_to_command(seg: str) -> str:
+    """The command a segment runs, with env assignments and wrappers off."""
+    while True:
+        seg = ENV_PREFIX.sub("", seg).strip()
+        words = scan(seg)
+        if not words:
+            return ""
+        name = os.path.basename(words[0][0])
+        spec = WRAPPERS.get(name)
+        if spec is None:
+            # the program name unquoted, so `"aws" iam ...` is read as `aws`
+            return words[0][0] + seg[words[0][2] :]
+        valued, positional = spec
+        i = 1
+        while i < len(words):
+            word = words[i][0]
+            if word == "--":
+                i += 1
+                break
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word) and name == "env":
+                i += 1
+            elif word.startswith("-") and len(word) > 1:
+                i += 2 if word in valued else 1
+            else:
+                break
+        i += positional
+        if i >= len(words):
+            return ""
+        seg = seg[words[i][1] :]
+
+
+def nested(seg: str, depth: int) -> list[str]:
+    """Segments inside `bash -c '...'` and `eval '...'` payloads."""
+    if depth >= MAX_NESTING:
+        return []
+    words = scan(seg)
+    if not words:
+        return []
+    name = os.path.basename(words[0][0])
+    payload = None
+    if name in SHELLS:
+        for i, (word, _, _) in enumerate(words[1:], start=1):
+            if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word) and i + 1 < len(words):
+                payload = words[i + 1][0]
+                break
+    elif name == "eval" and len(words) > 1:
+        payload = " ".join(w[0] for w in words[1:])
+    return split_segments(payload, depth + 1) if payload else []
+
+
+def split_segments(command: str, depth: int = 0) -> list[str]:
+    result: list[str] = []
+    for raw in SEGMENT_SPLIT.split(CONTINUATION.sub(" ", command)):
+        seg = reduce_to_command(raw.strip().lstrip("(){}& \t").rstrip(")}\"' \t"))
+        if seg:
+            result.append(seg)
+            result.extend(nested(seg, depth))
+    return result
 
 
 def segments(command: str) -> list[str]:
-    """Shell segments, each stripped of env assignments and common prefixes."""
-    result: list[str] = []
-    for raw in SEGMENT_SPLIT.split(command):
-        seg = raw.strip().lstrip("(){}& \t")
-        seg = ENV_PREFIX.sub("", seg)
-        while LEADING_NOISE.match(seg):
-            seg = LEADING_NOISE.sub("", seg)
-        if seg:
-            result.append(seg)
-    return result
+    """Shell segments, each reduced to the command it runs."""
+    return split_segments(command)
 
 
 SEGMENTS = segments(cmd)
@@ -124,6 +245,72 @@ SEGMENTS = segments(cmd)
 def at_boundary(pattern: str) -> bool:
     """True if a rule matches at the start of any shell segment."""
     return any(re.match(pattern, seg, re.I) for seg in SEGMENTS)
+
+
+# --- AWS (ADR-0056, #322) ---------------------------------------------------
+# SERVICES.md allows nothing on AWS but Bedrock generation and the IAM role it
+# runs under, and Claude Code is given no AWS access, so `aws` is default-deny:
+# every command is gated unless it is plainly a read (`get-`, `list-`,
+# `describe-`, `batch-get-`, `simulate-`, `lookup-`, `help`, `wait`; that
+# includes `sts get-caller-identity`). Gating those would block the checks that
+# prove what the human set up, as it did for gcloud's `describe`. `aws
+# configure` writes credentials and is always gated; so is anything unparsed
+# that is not a read. The CLI is read from the words of the segment, so quoted
+# option values (`--query 'a b'`), global options after the service, a
+# path-qualified binary and a quoted program name all parse the same way.
+AWS_VALUE_OPTIONS = frozenset(
+    {
+        "--profile",
+        "--region",
+        "--output",
+        "--endpoint-url",
+        "--query",
+        "--ca-bundle",
+        "--cli-read-timeout",
+        "--cli-connect-timeout",
+        "--color",
+        "--cli-binary-format",
+    }
+)
+AWS_READ_ONLY = re.compile(r"(?:get|list|describe|batch-get|simulate|lookup)-[\w-]+|help|wait")
+
+
+def aws_gated(seg: str) -> bool:
+    words = [w[0] for w in scan(seg)]
+    if not words or os.path.basename(words[0]).lower() not in ("aws", "aws.exe"):
+        return False
+
+    def skip_options(i: int) -> int:
+        while i < len(words) and words[i].startswith("-"):
+            i += 2 if words[i] in AWS_VALUE_OPTIONS else 1
+        return i
+
+    i = skip_options(1)
+    if i >= len(words):
+        return False  # `aws`, `aws --version`
+    service = words[i].lower()
+    if service == "help":
+        return False
+    if service == "configure":
+        return True  # writes credentials and config
+    i = skip_options(i + 1)
+    if i >= len(words):
+        return False  # `aws iam`: prints help
+    return AWS_READ_ONLY.fullmatch(words[i].lower()) is None
+
+
+AWS_META = (
+    "AWS",
+    "whatever the command names (IAM role or policy, Bedrock model access, quota, "
+    "Marketplace subscription, an invocation, or any other service)",
+    "ap-southeast-2 (Bedrock AU inference profile; IAM is global)",
+    "$0 for IAM and quota requests; Bedrock Claude Sonnet 5 bills per token "
+    "($2.20 in / $11.00 out per 1M, cache write $2.75, read $0.22); a Marketplace "
+    "subscription may add its own charge; any other AWS service is not allowed at all",
+    "SERVICES.md rows 'Amazon Bedrock — Claude Sonnet 5 via au.anthropic.claude-sonnet-5' "
+    "and 'AWS IAM role for web-identity federation' (ADR-0056, #322). Nothing else on AWS "
+    "is allowed. Read-only get-/list-/describe- commands are not gated.",
+)
 
 
 # --- billable catalogue -----------------------------------------------------
@@ -293,6 +480,8 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
 
 
 def classify() -> tuple[str, str, str, str, str] | None:
+    if any(aws_gated(seg) for seg in SEGMENTS):
+        return AWS_META
     for pattern, service, resource, region, est, row in BILLABLE_RULES:
         if at_boundary(pattern):
             return service, resource, region, est, row
