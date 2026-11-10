@@ -27,7 +27,29 @@ MIN_SESSION_SECRET_CHARS = 32
 """A session secret shorter than this is refused: the cookie's signature is
 only as strong as the key (#280)."""
 
-GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
+BEDROCK_REGION = "ap-southeast-2"
+"""Sydney, the only Region the Bedrock backend is called from (ADR-0056). Its
+`au.` geographic inference profile processes every request in Sydney or
+Melbourne, so it is the gate's key for generation that stays in Australia."""
+
+BEDROCK_PROFILE_PREFIX = "au."
+"""The Australian geographic inference-profile prefix. `global.`, `us.`,
+`apac.` and the rest route outside Australia and are refused (ADR-0056)."""
+
+VERTEX_GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
+"""What `VERTEX_CLAUDE_REGION` may be. Unchanged from the build phase (ADR-0023,
+ADR-0024)."""
+
+AUSTRALIAN_GENERATION_REGIONS = frozenset({REGION, BEDROCK_REGION})
+"""Where generation runs inside Australia, and so where no offshore gate
+fires: Vertex in Sydney, or Bedrock's `au.` profile called from Sydney."""
+
+GENERATION_REGIONS = VERTEX_GENERATION_REGIONS | {BEDROCK_REGION}
+"""Every key the residency gates accept: `Settings.generation_region` is one of
+these, whichever backend is in use."""
+
+GenerationBackend = Literal["bedrock", "vertex"]
+"""`GENERATION_BACKEND`: which provider serves Claude (ADR-0056)."""
 
 GeneratorName = Literal["claude", "demo"]
 """What `GENERATOR` can name, and what the ledger records with an answer turn
@@ -64,16 +86,45 @@ class Settings(BaseSettings):
     # --- Vertex ------------------------------------------------------------
     generator: GeneratorName = "claude"
     """`GENERATOR`: which `Generator` the API builds (#292). `claude` is Claude
-    on Vertex (`VERTEX_CLAUDE_MODEL` required, built through the residency
-    gate); `demo` is the in-process stand-in that calls no model
+    through `GENERATION_BACKEND` (Bedrock's Australian profile by default; on
+    `vertex`, `VERTEX_CLAUDE_MODEL` is required and the residency gate runs);
+    `demo` is the in-process stand-in that calls no model
     (`adapters/demo_generator.py`), which runs in Sydney and so requires
     `VERTEX_CLAUDE_REGION=australia-southeast1`. While it is `demo`, every
     page the API serves carries a banner saying so, and every answer event
     reports it."""
+    generation_backend: GenerationBackend = "bedrock"
+    """`GENERATION_BACKEND` (ADR-0056): `bedrock` is Claude Sonnet 5 through
+    Bedrock's Australian inference profile, called from Sydney, so every
+    request is processed in Australia; `vertex` is the build-phase path
+    (`VERTEX_CLAUDE_*`), kept until it is removed. Only `GENERATOR=claude`
+    uses either."""
     vertex_claude_model: str = ""
     vertex_claude_region: str = REGION
     """Sydney by default — fail closed. The build phase opts into the US
-    multi-region explicitly (`VERTEX_CLAUDE_REGION=us`, ADR-0024)."""
+    multi-region explicitly (`VERTEX_CLAUDE_REGION=us`, ADR-0024). Read only
+    with `GENERATION_BACKEND=vertex`."""
+
+    # --- Bedrock -----------------------------------------------------------
+    bedrock_region: str = BEDROCK_REGION
+    """The Region Bedrock is called from: Sydney only (ADR-0056)."""
+    bedrock_inference_profile: str = f"{BEDROCK_PROFILE_PREFIX}anthropic.claude-sonnet-5"
+    """The Australian geographic inference profile, whose destinations are
+    Sydney and Melbourne only. Any other prefix is refused."""
+    aws_role_arn: str = ""
+    """`AWS_ROLE_ARN`: on Cloud Run, the role the runtime service account's
+    Google ID token is exchanged for (STS `AssumeRoleWithWebIdentity`). No AWS
+    key exists anywhere (`adapters/aws_credentials.py`)."""
+    aws_profile: str = ""
+    """`AWS_PROFILE`: locally, a named profile (IAM Identity Center or SSO).
+    Set this or `AWS_ROLE_ARN`, not both."""
+    aws_web_identity_audience: str = "sts.amazonaws.com"
+    """The audience asked of Google for the ID token, which the role's trust
+    policy pins as `accounts.google.com:oaud` (docs/setup/aws-bedrock.md)."""
+    aws_bearer_token_bedrock: SecretStr = SecretStr("")
+    """`AWS_BEARER_TOKEN_BEDROCK`, which the Anthropic SDK would otherwise pick
+    up from the environment on its own: a long-lived Bedrock API key. Read here
+    only to refuse it."""
     vertex_embedding_model: str = "gemini-embedding-001"
     vertex_embedding_dims: int = 1536
     vertex_ranking_model: str = "semantic-ranker-default"
@@ -174,12 +225,47 @@ class Settings(BaseSettings):
     @field_validator("vertex_claude_region")
     @classmethod
     def _generation_region(cls, v: str) -> str:
-        if v not in GENERATION_REGIONS:
+        if v not in VERTEX_GENERATION_REGIONS:
             raise ValueError(
-                f"vertex_claude_region must be one of {sorted(GENERATION_REGIONS)} — never "
-                f"`global` or any other region (ADR-0023); got {v!r}"
+                f"vertex_claude_region must be one of {sorted(VERTEX_GENERATION_REGIONS)} — "
+                f"never `global` or any other region (ADR-0023); got {v!r}"
             )
         return v
+
+    @field_validator("bedrock_region")
+    @classmethod
+    def _bedrock_region_is_sydney(cls, v: str) -> str:
+        if v != BEDROCK_REGION:
+            raise ValueError(
+                f"bedrock_region must be {BEDROCK_REGION}: the Australian inference profile is "
+                f"called from Sydney only (ADR-0056); got {v!r}"
+            )
+        return v
+
+    @field_validator("bedrock_inference_profile")
+    @classmethod
+    def _bedrock_profile_is_australian(cls, v: str) -> str:
+        if not v.startswith(BEDROCK_PROFILE_PREFIX):
+            raise ValueError(
+                f"bedrock_inference_profile must start with {BEDROCK_PROFILE_PREFIX!r}, the "
+                "Australian geographic profile; `global.`, `us.`, `apac.` and any other prefix "
+                f"route outside Australia (ADR-0056); got {v!r}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _no_long_lived_aws_credentials(self) -> Settings:
+        # The SDK reads this variable by itself, and a bearer key would then
+        # replace the federated credentials without a word.
+        if (
+            self.generation_backend == "bedrock"
+            and self.aws_bearer_token_bedrock.get_secret_value()
+        ):
+            raise ValueError(
+                "AWS_BEARER_TOKEN_BEDROCK is a long-lived Bedrock API key and is refused: "
+                "credentials come from web-identity federation or a named profile (ADR-0056)"
+            )
+        return self
 
     @model_validator(mode="after")
     def _demo_generator_runs_in_sydney(self) -> Settings:
@@ -210,6 +296,24 @@ class Settings(BaseSettings):
         if v != 1536:
             raise ValueError(f"vertex_embedding_dims is fixed at 1536 (PHASES.md Phase 1); got {v}")
         return v
+
+    @property
+    def generation_region(self) -> str:
+        """The key the residency gates ask about, by backend: Bedrock's `au.`
+        profile called from Sydney (`bedrock_region`, already refused unless
+        `ap-southeast-2`), or the Vertex region. A Bedrock request is processed
+        in Sydney or Melbourne, so its key is not offshore (ADR-0056)."""
+        if self.generation_backend == "bedrock":
+            return self.bedrock_region
+        return self.vertex_claude_region
+
+    @property
+    def generation_model(self) -> str:
+        """What is asked to generate, by backend: the Vertex model, or the
+        Bedrock inference profile."""
+        if self.generation_backend == "bedrock":
+            return self.bedrock_inference_profile
+        return self.vertex_claude_model
 
     @property
     def ranking_api_allowed(self) -> bool:

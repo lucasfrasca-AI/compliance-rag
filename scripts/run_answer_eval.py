@@ -1,7 +1,8 @@
 """`answer()` over the whole golden set, live (issue #31): real Qdrant, real
 cached `gemini-embedding-001` vectors, the int8 cross-encoder over the top 20,
-**live Claude on Vertex** (`claude-sonnet-5` at the US multi-region — build
-phase, ADR-0023/ADR-0024; built through `VertexClaudeGenerator.create`, so the
+**live Claude** (Sonnet 5 on Bedrock's Australian inference profile by default,
+ADR-0056; or `GENERATION_BACKEND=vertex`, the build phase's US multi-region,
+ADR-0023/ADR-0024, built through `VertexClaudeGenerator.create`, so the
 residency gate runs before the client exists), and the real verifier against
 the golden canonical text and a ledger with every golden version recorded.
 
@@ -14,8 +15,8 @@ re-verifies the recorded drafts on every build with no LLM. Tenant `acme`
 queries carry its six synthetic policies as the cached prefix and run back to
 back, so cache hits are measured, not assumed.
 
-    QDRANT_URL=http://localhost:6333 VERTEX_CLAUDE_MODEL=claude-sonnet-5 \\
-    VERTEX_CLAUDE_REGION=us uv run python scripts/run_answer_eval.py [--injection]
+    QDRANT_URL=http://localhost:6333 AWS_PROFILE=<profile> \\
+    uv run python scripts/run_answer_eval.py [--injection]
 
 `--injection` instead runs live prompt-injection probes: a poisoned synthetic
 clause is added to the corpus and questions that retrieve it are asked. The
@@ -246,7 +247,7 @@ async def run(mode: Mode) -> None:
 
     stamp = dt.date.today().isoformat()
     suffix = "" if mode == "golden" else f"-{mode}"
-    name = f"{stamp}-{settings.vertex_claude_model}{suffix}.json"
+    name = f"{stamp}-{settings.generation_model}{suffix}.json"
     failed = [r["id"] for r in rows if mode == "environment" and not r["check"]["acceptable"]]
     summaries: dict[Mode, dict[str, Any] | None] = {  # Any: JSON document
         "golden": summarise(rows) if mode == "golden" else None,
@@ -258,8 +259,9 @@ async def run(mode: Mode) -> None:
         },
     }
     document: dict[str, Any] = {  # Any: JSON document
-        "model": settings.vertex_claude_model,
-        "region": settings.vertex_claude_region,
+        "model": settings.generation_model,
+        "backend": settings.generation_backend,
+        "region": settings.generation_region,
         "run_on": stamp,
         "summary": summaries[mode],
         "rows": rows,

@@ -365,7 +365,7 @@ async def test_an_unrecognised_generation_failure_is_shown_plainly_and_without_a
     assert BANNER_DIV not in page
 
 
-OFFSHORE = {"vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
+OFFSHORE = {"generation_backend": "vertex", "vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
 LISTED = "lucas.frasca@example.com"
 
 
@@ -462,6 +462,7 @@ def test_main_serves_as_the_member_it_was_given(
         pass
 
     monkeypatch.setattr(demo_server.telemetry, "configure", configured)
+    monkeypatch.setenv("GENERATION_BACKEND", "vertex")
     monkeypatch.setenv("VERTEX_CLAUDE_REGION", BUILD_PHASE_OFFSHORE_REGION)
     monkeypatch.setenv("OFFSHORE_GENERATION_TESTERS", "")
     demo_server.main(["--member", "Lucas.Frasca@Example.COM"])

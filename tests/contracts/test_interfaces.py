@@ -29,6 +29,7 @@ from compliance_rag.adapters.interfaces import (
     CitationVerifier,
     ClauseStore,
     Embedder,
+    Generation,
     Generator,
     LawScope,
     LedgerStore,
@@ -697,6 +698,27 @@ async def test_embedder_returns_configured_dimensions() -> None:
     vectors = await embedder.embed(("hello world", "another"))
     assert len(vectors) == 2
     assert all(len(v) == 1536 for v in vectors)
+
+
+async def assert_generator_contract(generator: Generator) -> Generation:
+    """The `Generator` contract itself, shared by every implementation: a
+    generation has text, counts that are not negative, and says whether the
+    cached prefix was hit. The Bedrock adapter (`tests/test_bedrock_claude_
+    generator.py`) calls this same function with a stubbed transport, not a
+    second, independently written test. Returns the generation for the
+    caller's own checks."""
+    assert isinstance(generator, Generator)
+    generation = await generator.generate(
+        system="s", cached_prefix="tenant policies", user="q", max_tokens=100
+    )
+    assert isinstance(generation, Generation) and generation.text
+    assert generation.input_tokens >= 0 and generation.output_tokens >= 0
+    assert isinstance(generation.cached_prefix_hit, bool)
+    return generation
+
+
+async def test_generator_meets_the_generator_contract() -> None:
+    assert (await assert_generator_contract(FakeGenerator())).cached_prefix_hit is True
 
 
 async def test_generator_reports_cached_prefix_hit() -> None:

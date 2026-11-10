@@ -110,9 +110,13 @@ def segments(command: str) -> list[str]:
     result: list[str] = []
     for raw in SEGMENT_SPLIT.split(command):
         seg = raw.strip().lstrip("(){}& \t")
-        seg = ENV_PREFIX.sub("", seg)
-        while LEADING_NOISE.match(seg):
-            seg = LEADING_NOISE.sub("", seg)
+        # Alternate until nothing more comes off, so `env A=b aws ...` and
+        # `sudo A=b aws ...` reduce to the command, as `A=b sudo aws ...` does.
+        while True:
+            stripped = LEADING_NOISE.sub("", ENV_PREFIX.sub("", seg))
+            if stripped == seg:
+                break
+            seg = stripped
         if seg:
             result.append(seg)
     return result
@@ -124,6 +128,35 @@ SEGMENTS = segments(cmd)
 def at_boundary(pattern: str) -> bool:
     """True if a rule matches at the start of any shell segment."""
     return any(re.match(pattern, seg, re.I) for seg in SEGMENTS)
+
+
+# --- AWS (ADR-0056, #322) ---------------------------------------------------
+# `aws [global options] <service> <command>`. Global options may precede the
+# service (`aws --profile x --region y iam create-role`), and the binary may be
+# path-qualified (`/opt/homebrew/bin/aws`), so neither hides a command from the
+# boundary match. Value-taking global options consume one argument; the rest
+# are flags.
+AWS_VALUE_OPTIONS = (
+    r"--(?:profile|region|output|endpoint-url|query|ca-bundle|cli-read-timeout"
+    r"|cli-connect-timeout|color|cli-binary-format)(?:=\S+|\s+\S+)"
+)
+AWS_FLAG_OPTIONS = (
+    r"--(?:debug|no-verify-ssl|no-paginate|no-sign-request|no-cli-pager"
+    r"|no-cli-auto-prompt|cli-auto-prompt)"
+)
+AWS_CLI = rf"(?:\S*/)?aws(?:\.exe)?\s+(?:(?:{AWS_VALUE_OPTIONS}|{AWS_FLAG_OPTIONS})\s+)*"
+# IAM, Bedrock (and its runtime and agent services, which bill per token),
+# Marketplace and Service Quotas: the services #322 sets up. Anything a command
+# in them does that is not plainly a read is gated, creating, modifying,
+# attaching, putting, subscribing, requesting or invoking alike. Only the
+# read-only verbs `get-`, `list-`, `describe-`, `batch-get-`, `simulate-`
+# and `lookup-` (and `help`/`wait`) stay open: gating them would block the
+# verification that proves what was set up, as it did for gcloud's `describe`.
+AWS_GATED_SERVICES = (
+    r"(?:iam|bedrock[\w-]*|(?:aws-)?marketplace[\w-]*|meteringmarketplace|service-quotas)"
+)
+AWS_READ_ONLY = r"(?!(?:get|list|describe|batch-get|simulate|lookup)-|help\b|wait\b)"
+AWS_GATED = rf"{AWS_CLI}{AWS_GATED_SERVICES}\s+{AWS_READ_ONLY}[\w-]+"
 
 
 # --- billable catalogue -----------------------------------------------------
@@ -280,6 +313,18 @@ BILLABLE_RULES: list[tuple[str, str, str, str, str, str]] = [
         "n/a (global)",
         "$0",
         "SERVICES.md: 'Cloud Billing budget' — created by the human, not by Claude Code.",
+    ),
+    (
+        AWS_GATED,
+        "AWS (IAM / Bedrock / Marketplace / Service Quotas)",
+        "role, policy, model access, subscription, quota or invocation (named in the command)",
+        "ap-southeast-2 (Bedrock AU inference profile; IAM is global)",
+        "$0 for IAM and quota requests; Bedrock Claude Sonnet 5 bills per token "
+        "($2.20 in / $11.00 out per 1M, cache write $2.75, read $0.22); a Marketplace "
+        "subscription may add its own charge",
+        "ADR-0056, issue #322. AWS has no SERVICES.md row yet (its forbidden list still says "
+        "Bedrock): the human adds it before the first real call. Read-only get-/list-/describe- "
+        "commands are not gated.",
     ),
     (
         r"(?:terraform\s+(apply|destroy)|firebase\s+deploy)",

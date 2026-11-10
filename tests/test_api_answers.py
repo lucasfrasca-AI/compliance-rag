@@ -357,7 +357,7 @@ async def test_law_outside_track_as_scope_never_reaches_the_model() -> None:
 
 # ---- the residency gate, per request (#155, ADR-0032) -----------------------------
 
-OFFSHORE = {"vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
+OFFSHORE = {"generation_backend": "vertex", "vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
 
 
 async def test_offshore_a_member_who_isnt_a_registered_tester_is_refused_before_the_model() -> None:
@@ -519,7 +519,7 @@ def test_a_residency_refusal_at_startup_stops_the_app(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", refused)
     generator = GeneratorAtStartup(
-        api_settings(), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
+        api_settings(**OFFSHORE), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
     )
     app = create_app(fake_api_services(checks=(generator.start,)))
     with pytest.raises(GenerationResidencyError), TestClient(app):
@@ -538,7 +538,7 @@ async def test_once_started_the_generator_is_the_one_the_gate_built(
 
     monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", create)
     generator = GeneratorAtStartup(
-        api_settings(), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
+        api_settings(**OFFSHORE), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
     )
     await generator.start()
     await generator.generate(system="s", cached_prefix=None, user="u", max_tokens=1)

@@ -169,10 +169,11 @@ from compliance_rag.retrieval.pipeline import RetrievalPipeline
 CachedEmbedder(EmbeddingCache.load())
 store = FakeRetrievalStore(gate_chunks(), ledger=FakeLedgerStore())
 asyncio.run(measure(RetrievalPipeline(store, NoRerank()), load_golden_set()))
-llm = ("anthropic", "vertexai.generative")
+llm = ("anthropic", "vertexai.generative", "boto3", "botocore")
 loaded = [
     m for m in sys.modules
-    if m.startswith(llm) or (m.startswith("compliance_rag") and "generator" in m)
+    if m.startswith(llm)
+    or (m.startswith("compliance_rag") and ("generator" in m or "bedrock" in m or "aws_" in m))
 ]
 assert not loaded, loaded
 """

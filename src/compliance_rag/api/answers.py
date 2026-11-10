@@ -433,7 +433,7 @@ async def ask(request: Request, who: CurrentCaller, body: Question) -> Streaming
             # question leaves Australia (ADR-0032). The prefix is checked by
             # `answer()` itself.
             assert_question_allowed(
-                generation_region=services.settings.vertex_claude_region,
+                generation_region=services.settings.generation_region,
                 asker=who.member.email,
                 testers=services.settings.offshore_testers,
             )

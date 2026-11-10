@@ -294,12 +294,16 @@ async def test_a_stored_detail_that_cant_be_read_costs_the_turn_its_detail_and_n
                 _, too_large = await postgres.chat_turns("acme", "uid-1", "c1")
             finally:
                 await conn.execute("DELETE FROM chat")
-                # the migration is idempotent: it puts the constraint back
+                # the migrations that define the constraint are idempotent, and
+                # applied in order they put the latest one back (0019's, then
+                # 0021's, which widens the reasons); 0019 alone would leave a
+                # shared database one reason short
                 await conn.commit()
                 with psycopg.connect(DATABASE_URL, autocommit=True) as restore:
-                    restore.execute(
-                        _sql((MIGRATIONS / "0019_chat_refusal_outcomes.sql").read_text())
-                    )
+                    for migration in sorted(MIGRATIONS.glob("*.sql")):
+                        text = migration.read_text()
+                        if "ADD CONSTRAINT chat_outcome_detail" in text:
+                            restore.execute(_sql(text))
                 await conn.commit()
         assert (unavailable.outcome, unavailable.unavailable) == (
             TurnOutcome.GENERATION_UNAVAILABLE,
@@ -413,3 +417,39 @@ def test_0019_applies_to_a_ledger_at_0018_and_leaves_its_rows_as_they_were() -> 
     finally:
         admin.execute(_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.close()
+
+
+@needs_postgres
+async def test_an_access_refusal_is_stored_with_its_reason_and_read_back_on_postgres() -> None:
+    """#322, ledger 0021: `access` joins `quota`, and a turn recorded with it
+    reads back with it, holding nothing the provider said."""
+    from tests.test_postgres_ledger_store import empty_ledger
+
+    postgres = await empty_ledger()
+    try:
+        await postgres.put_profile(Profile("acme"))
+        await postgres.record_chat_exchange(
+            ChatExchange(
+                tenant_id="acme",
+                chat_id="access-1",
+                user_id="uid-1",
+                question="Q?",
+                answer=ChatAnswer(
+                    TurnOutcome.GENERATION_UNAVAILABLE, unavailable=Unavailability.ACCESS
+                ),
+                as_of=dt.date(2026, 11, 10),
+                trace_id="1" * 32,
+            )
+        )
+        turns = await postgres.chat_turns("acme", "uid-1", "access-1")
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            stored = await (
+                await conn.execute(
+                    "SELECT outcome, outcome_detail FROM chat WHERE chat_id = 'access-1' "
+                    "AND role = 'assistant'"
+                )
+            ).fetchone()
+        assert stored == ("generation_unavailable", {"reason": "access"})
+        assert turns[-1].unavailable is Unavailability.ACCESS
+    finally:
+        await empty_ledger()

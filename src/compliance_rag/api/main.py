@@ -6,21 +6,26 @@ one sink, D-16):
 - the Postgres ledger;
 - Track A over the deployed graph;
 - the corpus bucket;
-- `answer()` over Qdrant, the reranker and Claude on Vertex.
+- `answer()` over Qdrant, the reranker and Claude (on Bedrock's Australian
+  inference profile by default, on Vertex with `GENERATION_BACKEND=vertex`).
 
 Tests build it with `create_app` and fakes instead.
 
 Which generator is `GENERATOR` (#292): `claude` (the default) or `demo`, the
 in-process stand-in that calls no model (`adapters/demo_generator.py`).
-`demo` never imports or constructs `VertexClaudeGenerator`, and needs
-`VERTEX_CLAUDE_REGION=australia-southeast1` (`Settings`); `claude` with no
-`VERTEX_CLAUDE_MODEL` refuses to start.
+`demo` never imports or constructs either Claude adapter, and needs
+`VERTEX_CLAUDE_REGION=australia-southeast1` (`Settings`).
+
+Which Claude is `GENERATION_BACKEND` (ADR-0056): `bedrock` (the default) or
+`vertex`. `bedrock` with neither `AWS_ROLE_ARN` (Cloud Run) nor `AWS_PROFILE`
+(local) refuses to start, as does `vertex` with no `VERTEX_CLAUDE_MODEL`.
 
 Two things run at startup, before anything is served:
 - the graph's connectivity check;
-- with `claude`, the generator, built through `VertexClaudeGenerator.create`,
-  so the residency gate (ADR-0023) runs first. That gate asks whether the
-  vector store holds real tenant chunks.
+- with `claude`, the generator, built by `build_generator`. On `vertex` that
+  runs the residency gate (ADR-0023), which asks whether the vector store
+  holds real tenant chunks; on `bedrock` there is nothing to ask, because the
+  Australian profile never leaves Australia.
 
 Before either, the signed `incomplete.yaml` and `part_year.yaml` files are
 read (#211, ADR-0047, ADR-0052):
@@ -48,6 +53,7 @@ from compliance_rag.adapters.firebase_auth import (
 )
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.generation_residency import TenantTextGate
+from compliance_rag.adapters.generator_factory import build_generator
 from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
@@ -63,7 +69,7 @@ from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifie
 
 class GeneratorAtStartup(Generator):
     """The Claude generator, built at startup rather than at import: its
-    constructor is async, because the residency gate asks the store."""
+    constructor is async, because on Vertex the residency gate asks the store."""
 
     def __init__(self, settings: Settings, *, corpus: RetrievalAdmin) -> None:
         self._settings = settings
@@ -71,9 +77,7 @@ class GeneratorAtStartup(Generator):
         self._generator: Generator | None = None
 
     async def start(self) -> None:
-        from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator
-
-        self._generator = await VertexClaudeGenerator.create(self._settings, corpus=self._corpus)
+        self._generator = await build_generator(self._settings, corpus=self._corpus)
 
     async def generate(
         self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
@@ -89,8 +93,8 @@ def generator_for(
     settings: Settings, *, corpus: RetrievalAdmin
 ) -> tuple[Generator, tuple[Callable[[], Awaitable[None]], ...]]:
     """The generator `GENERATOR` names, and the startup checks it needs. `demo`
-    is built here and imports nothing of Vertex's; `claude` is built at startup
-    through the residency gate."""
+    is built here and imports no Claude adapter; `claude` is built at startup
+    by `build_generator`, through the residency gate on Vertex."""
     if settings.generator == "demo":
         return FakeDemoGenerator(), ()
     started = GeneratorAtStartup(settings, corpus=corpus)
@@ -106,10 +110,18 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         keys=GoogleSigningKeys(),
         accounts=IdentityToolkitAccounts(project_id=settings.firebase_project_id),
     )
-    if settings.generator == "claude" and not settings.vertex_claude_model:
-        # Before any store is opened: a deploy without a model fails now, not
-        # at the first question.
-        raise ValueError("GENERATOR=claude needs VERTEX_CLAUDE_MODEL, which is empty")
+    if settings.generator == "claude":
+        # Before any store is opened: a deploy without a model or credentials
+        # fails now, not at the first question.
+        if settings.generation_backend == "vertex" and not settings.vertex_claude_model:
+            raise ValueError("GENERATOR=claude needs VERTEX_CLAUDE_MODEL, which is empty")
+        if settings.generation_backend == "bedrock" and not (
+            settings.aws_role_arn or settings.aws_profile
+        ):
+            raise ValueError(
+                "GENERATION_BACKEND=bedrock needs AWS_ROLE_ARN (Cloud Run) or AWS_PROFILE "
+                "(local); both are empty"
+            )
     telemetry.configure(settings)
     committed_incomplete_readings()  # refuses an unsigned reading file (D-01)
     graph = Neo4jGraph.open(settings)

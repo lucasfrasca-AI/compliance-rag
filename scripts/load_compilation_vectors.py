@@ -119,7 +119,7 @@ async def main(bucket: str, *, defer_ledger: bool) -> None:
         ledger=ledger,
         retrieval=retrieval,
         clauses=clause_store,
-        generation_region=settings.vertex_claude_region,
+        generation_region=settings.generation_region,
         synthetic_registry=SyntheticRegistry.load(),
     )
     clauses, load = await load_law(

@@ -167,12 +167,11 @@ and the config that keeps it inside the CSP).
 `GENERATOR` chooses what writes the answer, and nothing else about the pipeline changes (the
 same retrieval, the same verifier, the same ledger):
 
-- `claude` (the default): Claude on Vertex, built at startup through the residency gate
-  (ADR-0023, ADR-0032). Refuses to start with no `VERTEX_CLAUDE_MODEL`.
+- `claude` (the default): Claude, built at startup by `GENERATION_BACKEND` (below).
 - `demo`: `adapters/demo_generator.FakeDemoGenerator`, in process, no model called. It quotes
   the top retrieved clause and Acme's first policy clause verbatim, so the citations, the
   verifier and click-to-clause work; a question containing "withhold" makes it misquote, so
-  the answer is withheld. `build_app` never imports `VertexClaudeGenerator` for it. It runs in
+  the answer is withheld. `build_app` never imports a Claude adapter for it. It runs in
   Sydney, so `Settings` refuses `VERTEX_CLAUDE_REGION` anything but `australia-southeast1`
   with it.
 
@@ -197,6 +196,43 @@ Every `answer` event reports `"generator"` (`"demo"` or `"claude"`), and each an
 iframe). They show stored law and policy text, never generated text, so they carry no banner
 even while the deployment is `demo`; `tests/test_demo_generator.py` pins that.
 
+## Which Claude (`GENERATION_BACKEND`, #322, ADR-0056)
+
+With `GENERATOR=claude`, `GENERATION_BACKEND` chooses the provider; the pipeline, the verifier
+and the prompts are the same either way.
+
+- `bedrock` (the default): Claude Sonnet 5 on Amazon Bedrock's Australian geographic inference
+  profile, `au.anthropic.claude-sonnet-5`, called from `ap-southeast-2`
+  (`adapters/bedrock_claude_generator.py`). The profile's only destinations are Sydney and
+  Melbourne, so every request is processed in Australia and the offshore gates (ADR-0023,
+  ADR-0032) do not fire: a non-tester's question and unregistered tenant text go through.
+  `BEDROCK_REGION` other than `ap-southeast-2`, or a `BEDROCK_INFERENCE_PROFILE` that does not
+  start with `au.` (`global.`, `us.`, `apac.`), refuses to start.
+- `vertex`: the build-phase path, unchanged (ADR-0023, ADR-0024, ADR-0032): `VERTEX_CLAUDE_MODEL`
+  is required and `VERTEX_CLAUDE_REGION` (`us`, or Sydney) feeds the residency gates. It stays
+  until the Bedrock path replaces it.
+
+**Credentials: no AWS key exists anywhere** (`adapters/aws_credentials.py`).
+
+- **On Cloud Run** set `AWS_ROLE_ARN`. The runtime service account's Google-signed ID token
+  (audience `AWS_WEB_IDENTITY_AUDIENCE`, default `sts.amazonaws.com`) comes from the metadata
+  server and is exchanged at STS's Sydney endpoint (`AssumeRoleWithWebIdentity`, unsigned) for
+  that role. The role's trust policy names `accounts.google.com` and the service account's
+  unique id. The one-hour session is renewed five minutes before it lapses. Setup:
+  `docs/setup/aws-bedrock.md`.
+- **Locally** set `AWS_PROFILE` to an IAM Identity Center (SSO) profile and run
+  `aws sso login --profile <name>`. botocore resolves and refreshes it.
+- Set one, not both. Neither refuses to start; nothing falls back to the default credential
+  chain, and a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`) is refused.
+
+**When Bedrock says no**, the member sees "unavailable", never "internal" or the provider's
+words: throttling or a service quota is `generation_unavailable` with reason `quota`; access
+denied, the model not enabled, the first-time-use form or the Marketplace subscription not
+completed, or credentials AWS refuses is `generation_unavailable` with reason `access` (ledger
+0021 admits it); anything else is `internal`. The span carries `generator.region`,
+`generator.inference_profile`, tokens, cache use, cost and `generator.price_table`
+(`claude-sonnet-5-bedrock-au-geo-2026-11-10`), never prompt text.
+
 ## The container (`docker/api.Dockerfile`)
 
 `compliance-rag-api` on Cloud Run: `python:3.12-slim`, `uv sync --frozen --no-dev`, built for
@@ -219,8 +255,10 @@ Configuration is environment only. Names: `ENV`, `PORT` (Cloud Run injects it), 
 `GENERATOR`, `GCP_PROJECT_ID`, `CORPUS_BUCKET`, `RERANKER_URL`, `QDRANT_URL`, `QDRANT_API_KEY`
 (secret), `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` (secret), `NEO4J_DATABASE`,
 `DATABASE_URL` (secret), `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, `API_MEMBERS`,
-`SESSION_SECRET` (secret), and for `claude`, `VERTEX_CLAUDE_MODEL`, `VERTEX_CLAUDE_REGION` and
-`OFFSHORE_GENERATION_TESTERS`.
+`SESSION_SECRET` (secret), and for `claude`: `GENERATION_BACKEND`, then on `bedrock`
+`BEDROCK_REGION`, `BEDROCK_INFERENCE_PROFILE`, `AWS_ROLE_ARN` (Cloud Run) or `AWS_PROFILE`
+(local) and `AWS_WEB_IDENTITY_AUDIENCE`, or on `vertex` `VERTEX_CLAUDE_MODEL`,
+`VERTEX_CLAUDE_REGION` and `OFFSHORE_GENERATION_TESTERS`. None of them is a key.
 
 ## The admin panel (`admin.py`, `templates/subscriptions.html`, `static/admin.js`)
 
