@@ -41,7 +41,11 @@ from fastapi import FastAPI
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.demo_generator import FakeDemoGenerator
-from compliance_rag.adapters.firebase_auth import FirebaseTokenVerifier, GoogleSigningKeys
+from compliance_rag.adapters.firebase_auth import (
+    FirebaseTokenVerifier,
+    GoogleSigningKeys,
+    IdentityToolkitAccounts,
+)
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
@@ -100,6 +104,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         members=settings.members,
         sign_in_providers=settings.sign_in_providers,
         keys=GoogleSigningKeys(),
+        accounts=IdentityToolkitAccounts(project_id=settings.firebase_project_id),
     )
     if settings.generator == "claude" and not settings.vertex_claude_model:
         # Before any store is opened: a deploy without a model fails now, not

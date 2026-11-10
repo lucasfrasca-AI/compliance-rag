@@ -102,10 +102,13 @@ async def bearer_member(
         raise HTTPException(503, "sign-in can't be checked right now") from None
 
 
-def cookie_member(request: Request, value: str) -> Member:
+async def cookie_member(request: Request, value: str) -> Member:
     """The member a session cookie signs in, with the outcomes a token has: 401
-    if it is forged, tampered or expired, 403 if the member has since left the
-    tenant. It needs no signing keys, so it is never a 503."""
+    if it is forged, tampered or expired, or the account was deleted or its
+    sign-ins revoked; 403 if the member has since left the tenant or the account
+    was disabled; 503 if the account can't be looked up (#319). The account is
+    looked up at most every `SESSION_RECHECK_SECONDS` per session, and a failed
+    lookup refuses."""
     codec: SessionCodec | None = request.app.state.session
     if codec is None:
         raise HTTPException(401, "sign in required", headers=_CHALLENGE)
@@ -113,8 +116,17 @@ def cookie_member(request: Request, value: str) -> Member:
         member = codec.open(value)
     except Unauthenticated as refused:
         raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
-    if not is_member(member.email, services_of(request).settings.members):
+    services = services_of(request)
+    if not is_member(member.email, services.settings.members):
         raise HTTPException(403, "not a member of this tenant")
+    try:
+        await services.verifier.recheck(member, session=value)
+    except Unauthenticated as refused:
+        raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
+    except NotAMember as refused:
+        raise HTTPException(403, str(refused)) from None
+    except VerifierUnavailable:
+        raise HTTPException(503, "sign-in can't be checked right now") from None
     return member
 
 
@@ -126,7 +138,7 @@ async def current_member(
     header is never overridden by a cookie."""
     cookie = request.cookies.get(COOKIE_NAME)
     if credentials is None and cookie is not None:
-        return cookie_member(request, cookie)
+        return await cookie_member(request, cookie)
     return await bearer_member(request, credentials)
 
 
