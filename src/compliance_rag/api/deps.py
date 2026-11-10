@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable
-from contextlib import AsyncExitStack
+from collections.abc import Awaitable, Callable, Generator, Iterable
+from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass, field
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -84,16 +84,15 @@ def services_of(request: Request) -> ApiServices:
     return services
 
 
-async def bearer_member(
-    request: Request,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-) -> Member:
-    """The member a Bearer ID token signs in; 401/403/503 otherwise. The only
-    way to start a session (`POST /session`): a cookie can't mint a cookie."""
-    if credentials is None:
-        raise HTTPException(401, "sign in required", headers=_CHALLENGE)
+@contextmanager
+def sign_in_refusals() -> Generator[None]:
+    """The one ladder from what a check raises to what the API answers, for a
+    token (`bearer_member`) and a session (`cookie_member`) alike: 401 for a
+    sign-in that isn't valid, 403 for a valid one that isn't admitted (not a
+    member, or a disabled account), 503 when it can't be checked right now. A
+    failure to check is a refusal, never an admission (#319)."""
     try:
-        return await services_of(request).verifier.verify(credentials.credentials)
+        yield
     except Unauthenticated as refused:
         raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
     except NotAMember as refused:
@@ -102,19 +101,31 @@ async def bearer_member(
         raise HTTPException(503, "sign-in can't be checked right now") from None
 
 
-def cookie_member(request: Request, value: str) -> Member:
-    """The member a session cookie signs in, with the outcomes a token has: 401
-    if it is forged, tampered or expired, 403 if the member has since left the
-    tenant. It needs no signing keys, so it is never a 503."""
+async def bearer_member(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> Member:
+    """The member a Bearer ID token signs in; 401/403/503 otherwise. The only
+    way to start a session (`POST /session`): a cookie can't mint a cookie."""
+    if credentials is None:
+        raise HTTPException(401, "sign in required", headers=_CHALLENGE)
+    with sign_in_refusals():
+        return await services_of(request).verifier.verify(credentials.credentials)
+
+
+async def cookie_member(request: Request, value: str) -> Member:
+    """The member a session cookie signs in, with the outcomes a token has
+    (`sign_in_refusals`). The account is looked up at most every
+    `SESSION_RECHECK_SECONDS` per session, and a failed lookup refuses."""
     codec: SessionCodec | None = request.app.state.session
     if codec is None:
         raise HTTPException(401, "sign in required", headers=_CHALLENGE)
-    try:
+    services = services_of(request)
+    with sign_in_refusals():
         member = codec.open(value)
-    except Unauthenticated as refused:
-        raise HTTPException(401, str(refused), headers=_CHALLENGE) from None
-    if not is_member(member.email, services_of(request).settings.members):
-        raise HTTPException(403, "not a member of this tenant")
+        if not is_member(member.email, services.settings.members):
+            raise NotAMember("not a member of this tenant")
+        await services.verifier.recheck(member, session=value)
     return member
 
 
@@ -126,7 +137,7 @@ async def current_member(
     header is never overridden by a cookie."""
     cookie = request.cookies.get(COOKIE_NAME)
     if credentials is None and cookie is not None:
-        return cookie_member(request, cookie)
+        return await cookie_member(request, cookie)
     return await bearer_member(request, credentials)
 
 

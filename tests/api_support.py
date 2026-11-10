@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509.oid import NameOID
 
 from compliance_rag.adapters.fakes import (
+    FakeAccountDirectory,
     FakeClauseStore,
     FakeGenerator,
     FakeGraphStore,
@@ -32,7 +33,7 @@ from compliance_rag.adapters.firebase_auth import (
     SigningKeySource,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import VerifierUnavailable
+from compliance_rag.adapters.interfaces import AccountDirectory, Member, VerifierUnavailable
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.graph.mappings import MappingSet
@@ -143,8 +144,12 @@ def api_settings(**overrides: Any) -> Settings:  # Any: settings field values
 def verifier_for(
     keys: Keys | None = None,
     now: list[float] | None = None,
+    accounts: AccountDirectory | None = None,
     **settings: Any,  # Any: settings field values
 ) -> FirebaseTokenVerifier:
+    """The real verifier over stand-in keys. `accounts` defaults to a directory
+    in which every account exists and is enabled, for tests that are not about
+    accounts; the ones that are pass their own."""
     configured = api_settings(**settings)
     clock = now if now is not None else [time.monotonic()]
     return FirebaseTokenVerifier(
@@ -152,8 +157,15 @@ def verifier_for(
         members=configured.members,
         sign_in_providers=configured.sign_in_providers,
         keys=keys or Keys(),
+        accounts=accounts or FakeAccountDirectory.all_enabled(),
         clock=lambda: clock[0],
     )
+
+
+def session_member(email: str = MEMBER, uid: str = "uid-123") -> Member:
+    """Who a session cookie is sealed for: signed in a minute ago, as a token
+    minted by `mint` is."""
+    return Member(uid=uid, email=email, auth_time=int(time.time()) - 60)
 
 
 def bearer(token: str) -> dict[str, str]:

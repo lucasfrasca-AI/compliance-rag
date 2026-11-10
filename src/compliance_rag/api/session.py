@@ -5,7 +5,8 @@ with Firebase (the vendored web SDK, `static/`), the page hands the ID token to
 `POST /session`, and the API swaps it for a cookie:
 
 - **signed**: `payload.signature`, HMAC-SHA256 under `Settings.session_secret`.
-  The payload holds the uid, the email and an expiry, nothing else;
+  The payload holds the uid, the email, an expiry and the token's `auth_time`
+  (what an account's revoked-since time is compared with, #319), nothing else;
 - **`HttpOnly`, `Secure`, `SameSite=Strict`**, named `__Host-session` so a
   browser also refuses one set with a `Domain` or from a sibling host;
 - **expiring no later than the token** it was made from, and in any case within
@@ -13,7 +14,10 @@ with Firebase (the vendored web SDK, `static/`), the page hands the ID token to
 
 `deps.current_member` accepts the cookie as well as the Bearer header, with the
 same outcomes. Membership is checked again when a cookie is read, so removing a
-member from `API_MEMBERS` ends their sessions at once rather than at expiry.
+member from `API_MEMBERS` ends their sessions at once rather than at expiry. The
+account is looked up again too, at most every `SESSION_RECHECK_SECONDS` per
+session (`TokenVerifier.recheck`), so a disabled account loses its sessions
+within that interval (#319).
 
 Every state-changing request that carries the cookie must also pass an Origin
 check (`OriginGuard`), on top of `SameSite=Strict`. Sign-in is always required;
@@ -87,7 +91,13 @@ class SessionCodec:
     def seal(self, member: Member, *, expires_at: int) -> str:
         """The cookie value for `member`, valid until `expires_at` (Unix seconds)."""
         body = json.dumps(
-            {"v": _VERSION, "uid": member.uid, "email": member.email, "exp": expires_at},
+            {
+                "v": _VERSION,
+                "uid": member.uid,
+                "email": member.email,
+                "exp": expires_at,
+                "auth_time": member.auth_time,
+            },
             separators=(",", ":"),
         )
         payload = _b64(body.encode())
@@ -120,6 +130,7 @@ class SessionCodec:
             raise Unauthenticated("invalid session")
         fields = cast("dict[str, object]", claims)
         uid, email, expires = fields.get("uid"), fields.get("email"), fields.get("exp")
+        signed_in = fields.get("auth_time")
         if (
             fields.get("v") != _VERSION
             or not isinstance(uid, str)
@@ -128,11 +139,15 @@ class SessionCodec:
             or not email
             or not isinstance(expires, int)
             or isinstance(expires, bool)
+            # The sign-in the account's revocation is checked against (#319). A
+            # cookie without it can't be checked, so it isn't a session.
+            or not isinstance(signed_in, int)
+            or isinstance(signed_in, bool)
         ):
             raise Unauthenticated("invalid session")
         if expires <= self._clock():
             raise Unauthenticated("session expired")
-        return Member(uid=uid, email=email, expires_at=expires)
+        return Member(uid=uid, email=email, expires_at=expires, auth_time=signed_in)
 
 
 def codec_for(secret: str) -> SessionCodec | None:

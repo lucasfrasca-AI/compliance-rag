@@ -317,6 +317,9 @@ class NoSignIn(TokenVerifier):
     async def verify(self, token: str) -> Member:
         raise Unauthenticated("the demo has no sign-in")
 
+    async def recheck(self, member: Member, *, session: str) -> None:
+        raise Unauthenticated("the demo has no sign-in")
+
     async def aclose(self) -> None:
         pass
 

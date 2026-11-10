@@ -1575,18 +1575,57 @@ class Member:
     """When the token that signed them in expires (Unix seconds), for a verifier
     that has one. A session made from the token ends no later (#280). Not part
     of who they are, so not compared."""
+    auth_time: int | None = field(default=None, compare=False)
+    """When they last signed in (Unix seconds), from the token. The sign-in is
+    what an account's `valid_since` revokes (#319), so a session cookie carries
+    it and is checked against the account again. Not compared."""
 
 
 class Unauthenticated(Exception):
-    """No valid sign-in token: 401."""
+    """No valid sign-in: 401. A bad, expired or revoked token or session, or an
+    account that no longer exists."""
+
+
+ACCOUNT_DISABLED = "this account is disabled"
+"""What a refusal for a disabled account says: the API's pages tell it apart
+from a person who is not a member (#319)."""
 
 
 class NotAMember(Exception):
-    """A valid token for someone not admitted to the tenant: 403."""
+    """A valid sign-in for someone not admitted to the tenant: 403. Not on the
+    member list, or the account is disabled."""
 
 
 class VerifierUnavailable(Exception):
-    """The signing keys can't be had, so no token can be checked: 503."""
+    """Something sign-in depends on can't be had right now (the signing keys,
+    the account lookup), so nobody can be checked: 503. Always a refusal, never
+    an admission (#319)."""
+
+
+@dataclass(frozen=True, slots=True)
+class AccountStatus:
+    """What the identity provider says about one account (#319). Nothing else
+    about it is read, kept or logged."""
+
+    disabled: bool
+    valid_since: int
+    """Unix seconds: a token whose sign-in (`auth_time`) is earlier than this
+    was revoked. 0 when the account's tokens were never revoked."""
+
+
+class AccountDirectory(ABC):
+    """The identity provider's own record of an account (#319), asked as the
+    runtime identity and never with a user's token. A token's signature says who
+    Google signed it for an hour ago; this says whether they may still sign in."""
+
+    @abstractmethod
+    async def lookup(self, uid: str) -> AccountStatus | None:
+        """The account's status, or `None` when there is no such account (it was
+        deleted). `VerifierUnavailable` when it can't be asked or the answer
+        isn't understood: a caller treats that as a refusal."""
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
 
 
 class TokenVerifier(ABC):
@@ -1598,6 +1637,13 @@ class TokenVerifier(ABC):
         """The member the token signs in, or `Unauthenticated` /
         `NotAMember` / `VerifierUnavailable`. Never a reason that echoes the
         token."""
+
+    @abstractmethod
+    async def recheck(self, member: Member, *, session: str) -> None:
+        """Whether a member who signed in earlier (a session cookie, `session`)
+        still may: `Unauthenticated` / `NotAMember` / `VerifierUnavailable`
+        otherwise. May answer from a check made within the last few minutes of
+        the same session, never longer (#319)."""
 
     @abstractmethod
     async def aclose(self) -> None: ...

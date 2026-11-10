@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI
 
 from compliance_rag.adapters.fakes import FakeLedgerStore
-from compliance_rag.adapters.interfaces import Member, Profile
+from compliance_rag.adapters.interfaces import Profile
 from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.api.session import COOKIE_NAME, SessionCodec
@@ -31,6 +31,7 @@ from tests.api_support import (
     bearer,
     fake_api_services,
     mint,
+    session_member,
 )
 
 SECRET = "s3cr3t-" + "k" * 40
@@ -75,7 +76,7 @@ async def _world(
 
 def _cookie(email: str) -> dict[str, str]:
     value = SessionCodec(SECRET).seal(
-        Member(uid="uid-1", email=email), expires_at=int(time.time()) + 600
+        session_member(email, "uid-1"), expires_at=int(time.time()) + 600
     )
     return {"Cookie": f"{COOKIE_NAME}={value}", "Origin": ORIGIN}
 

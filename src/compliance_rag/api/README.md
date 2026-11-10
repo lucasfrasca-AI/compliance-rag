@@ -16,8 +16,70 @@ Nothing about a session is stored on the server. That has consequences:
 - **Removing a member ends their sessions at once.** Membership (`API_MEMBERS`,
   the rule in `adapters.firebase_auth.is_member`, shared with the token verifier) is
   checked on every read, not only at sign-in.
+- **A disabled or deleted account ends its sessions within five minutes**, and one whose tokens
+  were revoked (`validSince` later than the sign-in) does too: see *Sign-in fails closed*.
 - **Rotating `SESSION_SECRET` ends everyone's sessions.** There is no per-session
   revocation; if that is ever needed it needs a store, which is a decision.
+
+## Sign-in fails closed (#319)
+
+The API is public (`--allow-unauthenticated` on a `run.app` URL) and so is the repository. **The
+control is `API_MEMBERS`, not the Firebase console.** A Firebase account that exists, verified or
+not, is admitted only if its verified email is on the list, so turning sign-up back on by accident
+admits no one new: a stranger's account is a 403 on every path, and is refused before the account
+is looked up.
+
+**Every refusal, and its status.** One rule for "can't check right now": `VerifierUnavailable`,
+which the API already mapped to **503**. A lookup that fails is never an admission.
+
+| Situation | Bearer / `POST /session` | Cookie | Page |
+|---|---|---|---|
+| No `Authorization` and no cookie; empty Bearer; malformed or empty cookie; forged or expired cookie | 401 | 401 | 303 to `/signin` |
+| Verified email not in `API_MEMBERS` (also: unverified email, untrusted provider); `API_MEMBERS` empty | 403 | 403 | 403 page |
+| Account disabled | 403 | 403 | 403 page saying the account can't be used here (a non-member's says "Not a member") |
+| Account deleted; tokens revoked since the sign-in (`validSince` > `auth_time`) | 401 | 401 | 303 to `/signin` |
+| Lookup times out, 5xx, 429, 403 permission error, malformed JSON, or an unexpected shape | 503 | 503 | 503 page |
+
+**The account lookup** (`adapters/firebase_auth.IdentityToolkitAccounts`, the `AccountDirectory`
+interface): `POST https://identitytoolkit.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/accounts:lookup`
+with `{"localId": [uid]}`, authorised by an OAuth2 access token for the **runtime identity** from
+Application Default Credentials (scope `https://www.googleapis.com/auth/cloud-platform`). No API
+key, no service-account key, and never a user's token. It reads `users[0].localId`, `.disabled` and
+`.validSince` and nothing else (the response also carries the account's email and providers).
+Timeout 5 s on the lookup, and 5 s on getting the access token (each request google-auth's
+refresh makes, and the whole call, the wait for its lock included; google-auth's own default is
+120 s): past either the sign-in is a 503. The record must carry `localId` equal to the uid and
+a string `createdAt` (always on a user record) or it is a 503; an absent `disabled` means enabled
+only in a record that passes that. A renamed `disabled` inside an otherwise whole record would
+still read as enabled, which only a live check against the real API can rule out. Its one call outside Australia, like the signing-key fetch, carries a uid and no
+document text, and is for the egress audit (PHASES.md Phase 3) to list.
+
+- **At sign-in and on every Bearer request** the verifier looks the account up, after membership.
+- **On the cookie path** the same lookup runs when a session is read, at most once per session per
+  `firebase_auth.SESSION_RECHECK_SECONDS` (300). That is the bound: a disabled account's cookie
+  works for up to five minutes, not the hour. Only a pass is remembered (in process, a hash of the
+  cookie, at most `MAX_REMEMBERED_SESSIONS`), so a refusal or a failed lookup is retried on the
+  next request. Several Cloud Run instances each keep their own, so the bound holds per instance.
+- **The cookie carries the token's `auth_time`** (payload field `auth_time`), because revocation is
+  `validSince` against the sign-in. A cookie without it (made before #319) is not a session; its
+  holder signs in again once.
+- **Telemetry** records no exception on these spans (nothing is raised inside them), so a cause
+  that names a uid or an email cannot reach a span event or a status description. It gets `auth.outcome` (`active`, `disabled`, `not_found`, `revoked`, `lookup_failed`)
+  and `auth.account_disabled` on `auth.check_account`, and `auth.lookup_outcome` on
+  `auth.lookup_account`. No email, uid or response body reaches a span or a log.
+- **Misconfiguration refuses.** An empty `API_MEMBERS` admits no one (every path above is a 403).
+  An unset `FIREBASE_PROJECT_ID` makes `build_app` raise before any store is opened, in every
+  environment, `ENV=cloud` included.
+
+**IAM the runtime identity needs.** `firebaseauth.users.get` on the project, which Google's
+predefined roles `roles/firebaseauth.viewer` (read-only, the least that holds it) and
+`roles/firebaseauth.admin` both include, granted to the Cloud Run service's runtime service account
+on the Firebase project. Verified against Google's reference for `projects.accounts.lookup`
+(required permission `firebaseauth.users.get`; scopes `identitytoolkit` or `cloud-platform`) and the
+Firebase predefined-roles page. **Granting it is a separate approval line the human pastes
+(`.claude/billable-approvals.txt`); #319 does not grant it.** Until it is granted, every sign-in is
+a 503: the fail-closed behaviour, not a bug. The Identity Toolkit API is the one Firebase
+Authentication already uses (SERVICES.md, "Firebase Authentication").
 
 ## Roles
 

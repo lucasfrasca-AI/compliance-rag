@@ -23,7 +23,6 @@ import httpx
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from compliance_rag.adapters.interfaces import Member
 from compliance_rag.api.app import create_app
 from compliance_rag.api.session import COOKIE_NAME, MAX_SESSION_SECONDS, SessionCodec
 from compliance_rag.api.sign_in import (
@@ -41,6 +40,7 @@ from tests.api_support import (
     bearer,
     fake_api_services,
     mint,
+    session_member,
     verifier_for,
 )
 
@@ -81,7 +81,7 @@ def sealed(
     expires_in: float = 600,
 ) -> str:
     return SessionCodec(secret).seal(
-        Member(uid="uid-123", email=email), expires_at=int(time.time() + expires_in)
+        session_member(email), expires_at=int(time.time() + expires_in)
     )
 
 
@@ -127,7 +127,7 @@ async def test_the_cookie_is_httponly_secure_samesite_strict_and_holds_only_uid_
     import json
 
     payload = json.loads(base64.urlsafe_b64decode(value.split(".")[0] + "=="))
-    assert set(payload) == {"v", "uid", "email", "exp"}
+    assert set(payload) == {"v", "uid", "email", "exp", "auth_time"}
 
 
 async def test_the_cookie_expires_no_later_than_the_token(client: httpx.AsyncClient) -> None:
@@ -659,7 +659,7 @@ def test_a_codec_refuses_a_short_or_empty_key(secret: str) -> None:
 
 def test_a_codec_accepts_a_key_of_the_minimum_length() -> None:
     codec = SessionCodec("k" * MIN_SESSION_SECRET_CHARS)
-    member = Member(uid="u", email=MEMBER)
+    member = session_member(MEMBER, "u")
     assert codec.open(codec.seal(member, expires_at=int(time.time()) + 60)).uid == "u"
 
 

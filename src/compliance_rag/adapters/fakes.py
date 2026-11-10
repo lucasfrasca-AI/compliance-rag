@@ -19,6 +19,8 @@ from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
+    AccountDirectory,
+    AccountStatus,
     AssessmentRecord,
     Candidate,
     Channel,
@@ -835,6 +837,43 @@ class FakeClauseStore(ClauseStore):
         for key in doomed_versions:
             self._source_html.pop(key, None)
             self._manifest_metadata.pop(key, None)
+
+
+class FakeAccountDirectory(AccountDirectory):
+    """An identity provider's accounts, in memory (#319). Strict by default: an
+    account nobody registered does not exist, so it is refused. `all_enabled`
+    is for tests that are not about accounts and need sign-in to work; the name
+    says what it admits."""
+
+    def __init__(
+        self,
+        accounts: Mapping[str, AccountStatus] | None = None,
+        *,
+        unregistered_enabled: bool = False,
+    ) -> None:
+        self.accounts = dict(accounts or {})
+        self._unregistered_enabled = unregistered_enabled
+        self.lookups = 0
+        self.failure: Exception | None = None
+        """When set, every lookup raises it (a timeout, a permission error)."""
+
+    @classmethod
+    def all_enabled(cls) -> FakeAccountDirectory:
+        return cls(unregistered_enabled=True)
+
+    def register(self, uid: str, *, disabled: bool = False, valid_since: int = 0) -> None:
+        self.accounts[uid] = AccountStatus(disabled=disabled, valid_since=valid_since)
+
+    async def lookup(self, uid: str) -> AccountStatus | None:
+        self.lookups += 1
+        if self.failure is not None:
+            raise self.failure
+        if uid in self.accounts:
+            return self.accounts[uid]
+        return AccountStatus(disabled=False, valid_since=0) if self._unregistered_enabled else None
+
+    async def aclose(self) -> None:
+        pass
 
 
 class FakeReranker(Reranker):

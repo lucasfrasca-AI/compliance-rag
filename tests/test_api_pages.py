@@ -42,7 +42,6 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     Generation,
     Generator,
-    Member,
     PrefixMeasure,
     TurnOutcome,
     UnreadableCitation,
@@ -75,6 +74,7 @@ from tests.api_support import (
     bearer,
     fake_api_services,
     mint,
+    session_member,
 )
 from tests.test_api_answers import (
     AS_OF,
@@ -310,10 +310,10 @@ async def test_the_turns_fragment_without_a_session_is_a_401_the_script_turns_in
 async def test_an_expired_or_forged_cookie_redirects_too() -> None:
     async with await client_for(FakeGenerator()) as client:
         expired = SessionCodec(SECRET).seal(
-            Member(uid=UID, email=MEMBER), expires_at=int(time.time()) - 5
+            session_member(MEMBER, UID), expires_at=int(time.time()) - 5
         )
         forged = SessionCodec("0ther-" + "z" * 40).seal(
-            Member(uid=UID, email=MEMBER), expires_at=int(time.time()) + 500
+            session_member(MEMBER, UID), expires_at=int(time.time()) + 500
         )
         for value in (expired, forged):
             response = await client.get("/chats", headers={"Cookie": f"{COOKIE_NAME}={value}"})
@@ -323,7 +323,7 @@ async def test_an_expired_or_forged_cookie_redirects_too() -> None:
 async def test_a_signed_in_non_member_gets_a_403_page_not_a_redirect_loop() -> None:
     async with await client_for(FakeGenerator()) as client:
         outsider = SessionCodec(SECRET).seal(
-            Member(uid="uid-x", email="outsider@elsewhere.example"),
+            session_member("outsider@elsewhere.example", "uid-x"),
             expires_at=int(time.time()) + 500,
         )
         response = await client.get("/chats", headers={"Cookie": f"{COOKIE_NAME}={outsider}"})
@@ -896,7 +896,7 @@ async def test_no_page_has_an_inline_script_handler_style_or_a_foreign_asset(quo
             headers={
                 "Cookie": f"{COOKIE_NAME}="
                 + SessionCodec(SECRET).seal(
-                    Member(uid="u", email="no@elsewhere.example"), expires_at=int(time.time()) + 99
+                    session_member("no@elsewhere.example", "u"), expires_at=int(time.time()) + 99
                 )
             },
         )
