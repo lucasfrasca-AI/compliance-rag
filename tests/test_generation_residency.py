@@ -39,6 +39,7 @@ from compliance_rag.corpus.models import (
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.golden_corpus import golden_chunks, golden_clauses
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
+from compliance_rag.settings import Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
 
 POLICY = "acme/retention-policy"
@@ -228,6 +229,34 @@ def test_in_sydney_tenant_text_is_not_checked() -> None:
     TenantTextGate("australia-southeast1", REGISTERED).check(
         "acme", ((f"{POLICY}:v2:1/1", "Real."),), what="clause to repair"
     )
+
+
+@pytest.mark.parametrize(
+    ("backend", "fields", "offshore"),
+    [
+        ("gemini", {"gemini_region": "us"}, True),
+        ("claude", {"vertex_claude_model": "m", "vertex_claude_region": "us"}, True),
+        # the other backend's region is not the active one's, whichever way round
+        ("claude", {"vertex_claude_model": "m", "gemini_region": "us"}, False),
+        ("gemini", {"vertex_claude_region": "us"}, False),
+        ("demo", {}, False),
+    ],
+)
+def test_the_gates_are_built_from_the_active_backends_region_and_no_others(
+    backend: str, fields: dict[str, str], offshore: bool
+) -> None:
+    """`Settings.generation` is the one value every gate reads. With
+    `GENERATION_BACKEND=claude` and `VERTEX_CLAUDE_REGION=us`, `GEMINI_REGION`
+    at its Sydney default must not turn the tenant-text gate off."""
+    settings = Settings(_env_file=None, generation_backend=backend, **fields)  # pyright: ignore[reportCallIssue, reportArgumentType]
+    gate = TenantTextGate.from_settings(settings)
+    assert gate.generation_region == settings.generation.region == settings.generation_region
+    unregistered = ((f"{POLICY}:v2:1/1", "Acme keeps payroll for 7 years."),)
+    if offshore:
+        with pytest.raises(GenerationResidencyError):
+            gate.check("acme", unregistered, what="clause to repair")
+    else:
+        gate.check("acme", unregistered, what="clause to repair")
 
 
 def test_a_tenant_text_gate_refuses_a_region_that_is_never_allowed() -> None:

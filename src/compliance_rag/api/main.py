@@ -110,10 +110,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     )
     # Before any store is opened: a deploy without a model fails now, not at
     # the first question.
-    if settings.generation_backend == "gemini" and not settings.gemini_model:
-        raise ValueError("GENERATION_BACKEND=gemini needs GEMINI_MODEL, which is empty")
-    if settings.generation_backend == "claude" and not settings.vertex_claude_model:
-        raise ValueError("GENERATION_BACKEND=claude needs VERTEX_CLAUDE_MODEL, which is empty")
+    generation = settings.generation
+    if generation.backend != "demo" and not generation.model:
+        variable = "GEMINI_MODEL" if generation.backend == "gemini" else "VERTEX_CLAUDE_MODEL"
+        raise ValueError(
+            f"GENERATION_BACKEND={generation.backend} needs {variable}, which is empty"
+        )
     telemetry.configure(settings)
     committed_incomplete_readings()  # refuses an unsigned reading file (D-01)
     graph = Neo4jGraph.open(settings)

@@ -560,6 +560,7 @@ def demo_settings(*, qdrant_url: str, fake_generator: bool, bucket: str | None =
             qdrant_url=qdrant_url,
             generation_backend="demo",
             gemini_region=REGION,
+            vertex_claude_region=REGION,
         )
     else:
         settings = Settings(tenant_id=DEMO_TENANT, qdrant_url=qdrant_url)

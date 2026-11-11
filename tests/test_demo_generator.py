@@ -219,6 +219,10 @@ def test_claude_is_built_through_the_same_gate_at_startup(
     with TestClient(app):
         pass
     assert built == [settings]
+    # and the app's tenant-text gate is offshore with it, though GEMINI_REGION
+    # is still Sydney: every gate reads the active backend's region
+    assert settings.gemini_region == REGION
+    assert app.state.services.pipeline.tenant_text.generation_region == "us"
 
 
 def test_a_model_backend_with_no_model_refuses_to_start(stores: None) -> None:

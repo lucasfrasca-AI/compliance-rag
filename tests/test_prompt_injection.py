@@ -283,7 +283,7 @@ async def test_a_malformed_reply_is_refused_whole_and_traced(
     assert (answer_span.attributes or {})["generation.schema_valid"] is False
 
 
-@pytest.mark.parametrize(
+MALFORMED_REPLIES = pytest.mark.parametrize(
     "reply",
     [
         '{"answer": "a", "citations": [], "extra": 1}',
@@ -295,6 +295,10 @@ async def test_a_malformed_reply_is_refused_whole_and_traced(
     ],
     ids=["extra-field", "bad-clause-id", "empty-quote", "empty-answer", "no-citations", "prose"],
 )
+"""The replies the strict parser refuses; the adapters' tests run the same set."""
+
+
+@MALFORMED_REPLIES
 def test_the_schema_refuses_a_malformed_draft(reply: str) -> None:
     with pytest.raises(MalformedGeneration):
         parse_draft(reply)

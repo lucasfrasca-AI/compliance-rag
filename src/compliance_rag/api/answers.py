@@ -232,7 +232,7 @@ def _answer_json(
     answer: Answer, shown: ChatAnswer, *, generator: GeneratorName
 ) -> dict[str, object]:
     common: dict[str, object] = {
-        # `gemini` (`claude` on a turn written before ADR-0057) or `demo`: a
+        # `gemini`, `claude` (dormant) or `demo`: a
         # client can tell a stand-in's answer from a model's, withheld or
         # verified (#292).
         "generator": generator,

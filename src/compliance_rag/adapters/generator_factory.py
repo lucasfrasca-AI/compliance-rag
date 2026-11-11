@@ -20,23 +20,21 @@ from compliance_rag.settings import Settings
 
 
 async def build_generator(settings: Settings, *, corpus: RetrievalAdmin) -> Generator:
-    if settings.generation_backend == "gemini":
+    generation = settings.generation
+    if generation.backend == "gemini":
         from compliance_rag.adapters.gemini_generator import GeminiGenerator
 
         return await GeminiGenerator.create(settings, corpus=corpus)
-    if settings.generation_backend == "claude":
+    if generation.backend == "claude":
         from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator
 
         return await VertexClaudeGenerator.create(settings, corpus=corpus)
     raise ValueError(
-        f"GENERATION_BACKEND={settings.generation_backend} builds no model: "
-        "only `gemini` and `claude` do"
+        f"GENERATION_BACKEND={generation.backend} builds no model: only `gemini` and `claude` do"
     )
 
 
 def generation_label(settings: Settings) -> str:
     """What generates, in a line for an operator: the model and where it runs."""
-    return (
-        f"{settings.generation_model or '(no model configured)'} "
-        f"at {settings.generation_region} (Vertex)"
-    )
+    generation = settings.generation
+    return f"{generation.model or '(no model configured)'} at {generation.region} (Vertex)"

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
@@ -40,6 +41,18 @@ model."""
 GeneratorName = GenerationBackend
 """What the ledger records with an answer turn (ledger 0020, 0022; #292): the
 backend's own name."""
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationConfig:
+    """The active generation backend, its model and where it is called: one
+    value, built in one place (`Settings.generation`), that every residency
+    gate and the factory read, so none of them can read another backend's
+    region by name."""
+
+    backend: GenerationBackend
+    model: str
+    region: str
 
 
 def _addresses(raw: str) -> frozenset[str]:
@@ -239,22 +252,25 @@ class Settings(BaseSettings):
         return self.generation_backend
 
     @property
-    def generation_region(self) -> str:
-        """The key the residency gates ask about, by backend: where the model
-        is called. The demo generator runs in this process, so Sydney (and
-        `Settings` refuses it beside an offshore region)."""
+    def generation(self) -> GenerationConfig:
+        """The active backend's model and region, the only place that chooses
+        between `GEMINI_*` and `VERTEX_CLAUDE_*`. The demo generator runs in
+        this process, so its region is Sydney (and `Settings` refuses it beside
+        an offshore one)."""
         if self.generation_backend == "claude":
-            return self.vertex_claude_region
+            return GenerationConfig("claude", self.vertex_claude_model, self.vertex_claude_region)
         if self.generation_backend == "demo":
-            return REGION
-        return self.gemini_region
+            return GenerationConfig("demo", "", REGION)
+        return GenerationConfig("gemini", self.gemini_model, self.gemini_region)
+
+    @property
+    def generation_region(self) -> str:
+        """The key the residency gates ask about: `generation.region`."""
+        return self.generation.region
 
     @property
     def generation_model(self) -> str:
-        """What is asked to generate, by backend."""
-        if self.generation_backend == "claude":
-            return self.vertex_claude_model
-        return self.gemini_model
+        return self.generation.model
 
     @property
     def ranking_api_allowed(self) -> bool:

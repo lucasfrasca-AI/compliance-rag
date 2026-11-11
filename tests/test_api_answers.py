@@ -360,6 +360,39 @@ async def test_law_outside_track_as_scope_never_reaches_the_model() -> None:
 OFFSHORE = {"gemini_region": BUILD_PHASE_OFFSHORE_REGION}
 
 
+OFFSHORE_CLAUDE = {
+    "generation_backend": "claude",
+    "vertex_claude_model": "claude-sonnet-5",
+    "vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION,
+}
+"""The dormant backend, offshore, with `GEMINI_REGION` left at its Sydney default:
+the gates must read the active backend's region, not Gemini's."""
+
+
+async def test_claude_offshore_a_non_tester_is_refused_before_the_model() -> None:
+    generator = FakeGenerator(_reply())
+    _, events = await _ask(generator, settings=api_settings(**OFFSHORE_CLAUDE))
+    assert [name for name, _ in events] == ["error"]
+    assert events[-1][1]["error"] == "residency" and generator.calls == []
+
+
+async def test_claude_offshore_a_policy_clause_the_registry_doesnt_vouch_for_is_refused() -> None:
+    """The tenant-text gate is built from `Settings` and must be offshore when
+    the active backend is: an unregistered prefix clause never reaches the
+    model, as with Gemini (ADR-0026, ADR-0032)."""
+    clauses = await golden_clause_store()
+    edited = next(c for c in golden_clauses() if c.instrument_id == "acme/privacy-policy")
+    real = "Acme keeps payroll records for seven years, then shreds them on site."
+    await clauses.put_clause(edited.model_copy(update={"canonical_text": real}))
+    settings = api_settings(**OFFSHORE_CLAUDE, offshore_generation_testers=MEMBER)
+    generator = FakeGenerator(_reply())
+    _, events = await _ask(generator, clauses=clauses, settings=settings)
+    assert [name for name, _ in events] == ["coverage", "error"]
+    error = events[-1][1]
+    assert error["error"] == "residency" and "CAG prefix" in error["message"]
+    assert generator.calls == []
+
+
 async def test_offshore_a_member_who_isnt_a_registered_tester_is_refused_before_the_model() -> None:
     """The question is the one input no store holds and no registry can
     vouch for: a member can type real customer data into it."""

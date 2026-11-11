@@ -131,7 +131,7 @@ class TenantTextGate:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> TenantTextGate:
-        return cls(settings.gemini_region, SyntheticRegistry.load())
+        return cls(settings.generation.region, SyntheticRegistry.load())
 
     def check(self, tenant_id: str, texts: Iterable[tuple[str, str]], *, what: str) -> None:
         """`texts`: `(clause id, text)` pairs owned by `tenant_id`, about to be

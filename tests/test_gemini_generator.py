@@ -48,7 +48,13 @@ from tests.gemini_support import (
     quota_exhausted_generator,
     refused,
 )
-from tests.test_prompt_injection import AS_OF, QUESTION, TENANT, pipeline_over
+from tests.test_prompt_injection import (
+    AS_OF,
+    MALFORMED_REPLIES,
+    QUESTION,
+    TENANT,
+    pipeline_over,
+)
 
 PREFIX = (
     "<tenant_policies boundary=x>\n[x clause acme/p:v1:1]\nPolicy.\n[x end]\n</tenant_policies>"
@@ -578,6 +584,18 @@ async def test_a_reply_the_schema_did_not_hold_is_still_refused_whole_on_the_gem
     generator = gemini_generator(
         lambda _: answered("Sure! Here's the answer: protect it."), _corpus(), region=REGION
     )
+    pipeline, _ = await pipeline_over(generator)
+    with pytest.raises(MalformedGeneration):
+        await pipeline.answer(QUESTION, TENANT, AS_OF, law=LIBRARY_QUESTION)
+
+
+@MALFORMED_REPLIES
+async def test_every_malformed_draft_is_refused_whole_through_the_gemini_adapter(
+    reply: str,
+) -> None:
+    """The schema asks; `parse_draft` decides. The same replies the parser is
+    held to in `test_prompt_injection.py`, arriving over the adapter's wire."""
+    generator = gemini_generator(lambda _: answered(reply), _corpus(), region=REGION)
     pipeline, _ = await pipeline_over(generator)
     with pytest.raises(MalformedGeneration):
         await pipeline.answer(QUESTION, TENANT, AS_OF, law=LIBRARY_QUESTION)

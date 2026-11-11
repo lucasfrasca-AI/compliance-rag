@@ -224,8 +224,8 @@ def _detail_row(turn: ChatTurn) -> Jsonb | None:
 
 def _generator_of_row(raw: object) -> GeneratorName | None:
     """The generator a turn was written under; the column's CHECK admits these three
-    and NULL (`claude` on turns written before ADR-0057), so anything else would be
-    a schema this code doesn't know."""
+    and NULL (`claude` is a dormant backend, and its earlier turns stay), so anything
+    else would be a schema this code doesn't know."""
     if raw is None:
         return None
     if raw == "claude":
