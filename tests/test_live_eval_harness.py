@@ -117,7 +117,7 @@ class _LiveEmbedder(FakeEmbedder):
         return await super().embed(texts)
 
 
-class _Offline:
+class _Opened:
     """What the patched live pipeline opened: its store, and the live embedder
     if one was built."""
 
@@ -133,8 +133,8 @@ class _Offline:
 
 
 @pytest.fixture
-def offline(monkeypatch: pytest.MonkeyPatch) -> _Offline:
-    opened = _Offline()
+def opened(monkeypatch: pytest.MonkeyPatch) -> _Opened:
+    opened = _Opened()
     dimensions = EmbeddingCache.load().dimensions
 
     @asynccontextmanager
@@ -193,14 +193,14 @@ async def _law_retrieved(pipeline: AssessmentPipeline, tenant_id: str) -> set[st
     }
 
 
-async def test_the_live_store_filters_by_the_ledger_the_verifier_uses(offline: _Offline) -> None:
+async def test_the_live_store_filters_by_the_ledger_the_verifier_uses(opened: _Opened) -> None:
     """The store's subscription filter reads the pipeline's own ledger — the
     one `answer()` and the verifier are built with — so subscribing a tenant
     there is what the store sees. Unsubscribed, Acme retrieves no law; once
     subscribed to the Act, it does."""
     async with live.live_answer_pipeline(_settings()) as pipeline:
-        assert offline.store.ledger is pipeline.ledger
-        assert offline.verifier_ledgers == [pipeline.ledger]
+        assert opened.store.ledger is pipeline.ledger
+        assert opened.verifier_ledgers == [pipeline.ledger]
         assert await _law_retrieved(pipeline, PUBLIC_TENANT_ID)  # the positive control
         assert await _law_retrieved(pipeline, POLICY_TENANT_ID) == set()
 
@@ -210,11 +210,11 @@ async def test_the_live_store_filters_by_the_ledger_the_verifier_uses(offline: _
 
         assert await _law_retrieved(pipeline, POLICY_TENANT_ID)
     # Golden mode embeds from the snapshot alone: no live client is built.
-    assert offline.live == []
+    assert opened.live == []
 
 
 async def test_golden_mode_subscribes_acme_to_no_law_since_no_acme_label_is_law(
-    offline: _Offline,
+    opened: _Opened,
 ) -> None:
     """Golden mode's subscriptions are what the signed golden set says Acme
     holds: its six policies and no law (queries.yaml's header), and no Acme
@@ -225,10 +225,10 @@ async def test_golden_mode_subscribes_acme_to_no_law_since_no_acme_label_is_law(
     assert all(c.startswith(f"{POLICY_TENANT_ID}/") for q in acme for c in q.expected_clause_ids)
     async with live.live_answer_pipeline(_settings()) as pipeline:
         assert await pipeline.ledger.subscribed_instruments(POLICY_TENANT_ID) == frozenset()
-        assert offline.store.ledger is pipeline.ledger
+        assert opened.store.ledger is pipeline.ledger
 
 
-async def test_environment_mode_applies_each_cases_subscriptions(offline: _Offline) -> None:
+async def test_environment_mode_applies_each_cases_subscriptions(opened: _Opened) -> None:
     """GE-01 as the live run met it: Acme subscribed to the Act, over the
     whole compilation. Before #333 nothing of the Act reached the model, so
     its `delivered` check failed live; now the Act's law does. Which clause
@@ -250,19 +250,19 @@ async def test_environment_mode_applies_each_cases_subscriptions(offline: _Offli
     assert any(c.startswith(f"{LAW_INSTRUMENT_ID}:") for c in row["delivered"]), row["delivered"]
     # The question isn't in the snapshot: it, and only what the snapshot
     # lacks, went to the live embedder.
-    (embedder,) = offline.live
+    (embedder,) = opened.live
     assert ge01.query in embedder.asked
     assert not EmbeddingCache.load().missing(tuple(c.text for c in golden_chunks()))
 
 
-async def test_the_injection_probe_is_embedded_live(offline: _Offline) -> None:
+async def test_the_injection_probe_is_embedded_live(opened: _Opened) -> None:
     """`--injection` builds: the poisoned chunk the snapshot can't hold is
     embedded by the live fallback, the only text that is, and an injection
     question retrieves it."""
     async with live.live_answer_pipeline(
         _settings(), extra_chunks=(POISON_CHUNK,), extra_clauses=(POISON_CLAUSE,)
     ) as pipeline:
-        (embedder,) = offline.live
+        (embedder,) = opened.live
         assert embedder.asked == [POISON_CHUNK.text]
         trace = await pipeline.retrieval.retrieve(
             INJECTION_QUESTIONS[0], POLICY_TENANT_ID, dt.date(2026, 10, 1), law=LIBRARY_QUESTION
@@ -271,12 +271,12 @@ async def test_the_injection_probe_is_embedded_live(offline: _Offline) -> None:
     assert POISON_CHUNK.synthetic and POISON_CHUNK.clause_id == POISON_CLAUSE.clause_id
 
 
-async def test_the_gate_store_reads_an_empty_ledger_of_its_own(offline: _Offline) -> None:
+async def test_the_gate_store_reads_an_empty_ledger_of_its_own(opened: _Opened) -> None:
     """The recall gates call `golden_store` with no ledger and no embedder:
     unchanged by #333, they get a fresh empty ledger and the snapshot alone."""
     async with harness.golden_store("http://unused", prefix="gate", chunks=golden_chunks()):
         pass
-    ledger = offline.store.ledger
+    ledger = opened.store.ledger
     assert isinstance(ledger, FakeLedgerStore)
     assert await ledger.subscribed_instruments(POLICY_TENANT_ID) == frozenset()
-    assert offline.live == []
+    assert opened.live == []
