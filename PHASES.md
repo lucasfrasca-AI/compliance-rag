@@ -1,6 +1,6 @@
 # PHASES
 
-Current phase: **1 — Corpus, retrieval, verifier** (update this line when a phase exits; the exit is a commit that changes it.)
+Current phase: **3 — The product** (Phase 1 exited 2026-11-11 on the live run on Gemini 3.5 Flash, ADR-0057; Phase 2 was already complete. Update this line when a phase exits; the exit is a commit that changes it.)
 
 Rules:
 - Work only on the current phase. Ideas for later phases go into GitHub Issues with the `later` label, not into code.
@@ -55,7 +55,9 @@ Exit criteria
   - **Targets don't hold this exit** (the human's decision on ADR-0043, #220). The criterion above stays unmet while a target is open, but a target is not a floor, and holding a phase for an improvement with no deadline is how phases never close. Phase 1 may exit with an open target. The floors are what the exit guarantees, enforced in every cell. Open at exit, and recorded as known gaps in `docs/handoffs/0002-phase1-close.md`: law cross-clause ranked recall@10, 4/9 against 0.8 (#200, #206, #212), and law fused paraphrase, 5/6 against the 0.95 target fusion gained the same day (GQ-10, #221). Each stays a strict xfail in CI
   - History: on 2026-10-08 this criterion was recorded as met on the excerpt (reranked cross-clause 0.896, ADR-0022). That was a category mean; its law half was 0.722, so the bar was never met for law. On the whole compilation the category means are paraphrase 0.889 fused / 1.000 reranked and cross-clause 0.729 / 0.729, the deployed collection's own numbers (#144)
 - Verifier pass rate 100% on the golden set, with at least one deliberately bad citation proven to block
+  - **Met 2026-11-11, live on Gemini 3.5 Flash at `us`** (`corpus/golden/answer_eval/2026-11-11-gemini-3.5-flash.json`, re-verified with no model on every build by `tests/test_recorded_answers.py`): **89/89 citations verified**, 25/25 schema-valid, 0 repairs. 24/25 answers verified: GQ-12 (what makes a business small enough to be exempt) is an uncited "the clauses I was given don't say", true of what it was given (s 6C(1)(a)–(d), not (e) or s 6D), so it is withheld, never shown as an answer; a retrieval-depth gap, not a verifier failure. The bad-citation block is proven in CI (the verifier tests, ADR-0003). Injection, live: the poisoned clause was retrieved in 3/3 probes and obeyed in 0/3, by text or citation (`…-injection.json`)
 - Cost per query logged; projected monthly under $60 at 2,000 queries
+  - **Met 2026-11-11:** mean $0.010318 a question over the 25 golden questions (4,269 input tokens, 2,080 of them served from cache, 643 output, thinking included), **$20.64 a month at 2,000**. Cache hits on the requests carrying Acme's policies: 8/10 (implicit caching; its minimum is 4,096 tokens, so a short prefix may not cache)
 - Reranker benchmark checked in (`docs/research/reranker-benchmark.md`): recall@10 and p95 latency for cross-encoder vs ColBERT vs no-rerank; the winner is the default, recorded in BUILD_LOG (ColBERT dropped from scope with #26; benchmarked instead: candidate count and a smaller cross-encoder)
 
 Sequencing: **nothing writes to Cloud Storage or Qdrant until #2, #3 and #4 are merged.** Those three shape `ClauseRecord` and the stable-ID grammar, so a parser run before them produces records that must be rewritten and embeddings that must be paid for twice. Order: #3 → #4 → #2 → format spike → parser → #6 → chunker → #5 → router.
