@@ -7,18 +7,13 @@ never deployed, and nothing in `src/` imports it.
         -e QDRANT__TELEMETRY_DISABLED=true qdrant/qdrant:v1.19.1
     uv run python -m scripts.demo_server --fake-generator \
         --bucket compliance-rag-508904-corpus              # no model is called
-    AWS_PROFILE=<profile> \
+    GEMINI_REGION=us OFFSHORE_GENERATION_TESTERS=you@example.com \
         uv run python -m scripts.demo_server --member you@example.com \
-        --bucket compliance-rag-508904-corpus      # Bedrock's Australian profile
-    GENERATION_BACKEND=vertex VERTEX_CLAUDE_MODEL=claude-sonnet-5 VERTEX_CLAUDE_REGION=us \
-    OFFSHORE_GENERATION_TESTERS=you@example.com \
-        uv run python -m scripts.demo_server --member you@example.com \
-        --bucket compliance-rag-508904-corpus      # the offshore build-phase path
+        --bucket compliance-rag-508904-corpus      # Gemini 3.5 Flash, offshore
 
-On Bedrock nothing leaves Australia (ADR-0056). The Vertex run sends the
-question offshore only with the member listed as a tester (ADR-0032); leave
-the list out, or ask as someone it doesn't name, and the page shows the
-gate's refusal instead. `--member` (default
+The real run sends the question offshore only with the member listed as a
+tester (ADR-0032); leave the list out, or ask as someone it doesn't name, and
+the page shows the gate's refusal instead. `--member` (default
 `local-demo@acme.example`) is who asks, lowercased as the sign-in verifier
 lowercases an email. Then open http://127.0.0.1:8765/. Needs a local Qdrant (`--qdrant-url`, the
 corpus is loaded into it at start), the reranker's ONNX model
@@ -56,9 +51,9 @@ is deployed (`refuse_unless_local`).
   the snapshot and evaluator `GraphTrackA` uses).
 - **Law source HTML:** the corpus bucket, read only, through
   `GCSClauseStore.get_source_html`.
-- **Generation:** Claude, built by `build_generator` (Bedrock's Australian
-  profile by default; on Vertex, `VertexClaudeGenerator.create`, so the
-  residency gate runs first, ADR-0023, ADR-0024). Offshore, ADR-0032 holds
+- **Generation:** Gemini 3.5 Flash on Vertex, built by `build_generator`
+  (`GeminiGenerator.create`, so the residency gate runs first, ADR-0023,
+  ADR-0057). Offshore, ADR-0032 holds
   as it does in production: the member's question is sent only if
   `OFFSHORE_GENERATION_TESTERS` names the `--member` email, which this server
   never adds for you; otherwise the page shows the residency gate's refusal.
@@ -68,7 +63,7 @@ is deployed (`refuse_unless_local`).
   failure, which the API reports only as `internal`, as it must, the page asks
   `/demo/failures/<trace id>` what failed and shows it plainly.
 - **`--fake-generator`:** the in-process stand-in the deployed API also builds
-  with `GENERATOR=demo` (`adapters/demo_generator.py`, #292): it quotes the
+  with `GENERATION_BACKEND=demo` (`adapters/demo_generator.py`, #292): it quotes the
   top-ranked retrieved clause and Acme's first policy clause verbatim, so the
   page can be exercised. It is never the default, and the page carries a "FAKE
   GENERATOR — not a real answer" banner whenever it is on. It runs in this
@@ -280,7 +275,7 @@ class RecordingGenerator(Generator):
                 system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
             )
         except Exception as error:
-            self._failures.record("generation (Claude on Vertex)", error)
+            self._failures.record("generation (Gemini on Vertex)", error)
             raise
 
 
@@ -557,14 +552,14 @@ def demo_settings(*, qdrant_url: str, fake_generator: bool, bucket: str | None =
     `bucket` if one is named (as the other operator scripts take `--bucket`).
     The fake generator runs in this process, so the gates are told generation
     is in Sydney: what they ask is where the generator runs."""
-    # `generator` too, so the production pages this app mounts carry the banner
+    # `generation_backend` too, so the production pages this app mounts carry the banner
     # and its answer events report "demo" (#292).
     if fake_generator:
         settings = Settings(
             tenant_id=DEMO_TENANT,
             qdrant_url=qdrant_url,
-            generator="demo",
-            vertex_claude_region=REGION,
+            generation_backend="demo",
+            gemini_region=REGION,
         )
     else:
         settings = Settings(tenant_id=DEMO_TENANT, qdrant_url=qdrant_url)

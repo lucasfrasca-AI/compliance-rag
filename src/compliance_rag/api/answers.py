@@ -31,7 +31,7 @@ The stream carries stages and a verified result, never unverified text
 - `answer`;
 - or `error`.
 
-Each `answer` event names the generator that wrote it (`"generator": "claude"`
+Each `answer` event names the generator that wrote it (`"generator": "gemini"`
 or `"demo"`, #292): the demo generator is an in-process stand-in that calls no
 model, and every page says so while it is on (`api/banner.py`).
 
@@ -232,8 +232,9 @@ def _answer_json(
     answer: Answer, shown: ChatAnswer, *, generator: GeneratorName
 ) -> dict[str, object]:
     common: dict[str, object] = {
-        # `claude` or `demo`: a client can tell a stand-in's answer from a
-        # model's, withheld or verified (#292).
+        # `gemini` (`claude` on a turn written before ADR-0057) or `demo`: a
+        # client can tell a stand-in's answer from a model's, withheld or
+        # verified (#292).
         "generator": generator,
         "verified": shown.outcome is TurnOutcome.VERIFIED,
         "blocked": [

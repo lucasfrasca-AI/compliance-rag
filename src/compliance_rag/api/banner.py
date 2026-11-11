@@ -39,7 +39,7 @@ _ENV = Environment(
 
 def banner_text(settings: Settings) -> str | None:
     """The words to show on every page, or `None` when a model is answering."""
-    return FAKE_BANNER if settings.generator == "demo" else None
+    return FAKE_BANNER if settings.generation_backend == "demo" else None
 
 
 def render_banner(words: str | None) -> str:

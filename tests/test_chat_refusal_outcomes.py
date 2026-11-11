@@ -43,12 +43,12 @@ from compliance_rag.corpus.models import PUBLIC_TENANT_ID, DocumentClass
 from compliance_rag.eval.golden_corpus import POLICY_TENANT_ID, golden_chunks, golden_clauses
 from compliance_rag.eval.harness import GOLDEN_VALID_FROM, golden_clause_store
 from tests.api_support import MEMBER, api_settings
+from tests.gemini_support import quota_exhausted_generator
 from tests.test_api_answers import GA05, OFFSHORE, QUESTION
 from tests.test_api_answers import _client as answers_client  # pyright: ignore[reportPrivateUsage]
 from tests.test_api_answers import _events as events_of  # pyright: ignore[reportPrivateUsage]
 from tests.test_api_answers import _ledger as acme_ledger  # pyright: ignore[reportPrivateUsage]
 from tests.test_api_answers import _reply as reply_of  # pyright: ignore[reportPrivateUsage]
-from tests.vertex_quota import quota_exhausted_generator
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 needs_postgres = pytest.mark.skipif(

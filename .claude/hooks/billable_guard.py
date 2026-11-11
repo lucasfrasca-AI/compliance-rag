@@ -248,8 +248,9 @@ def at_boundary(pattern: str) -> bool:
 
 
 # --- AWS (ADR-0056, #322) ---------------------------------------------------
-# SERVICES.md allows nothing on AWS but Bedrock generation and the IAM role it
-# runs under, and Claude Code is given no AWS access, so `aws` is default-deny:
+# SERVICES.md allows nothing on AWS (Bedrock was adopted by ADR-0056 and
+# withdrawn by ADR-0057: no AWS account), and Claude Code is given no AWS
+# access, so `aws` is default-deny:
 # every command is gated unless it is plainly a read (`get-`, `list-`,
 # `describe-`, `batch-get-`, `simulate-`, `lookup-`, `help`, `wait`; that
 # includes `sts get-caller-identity`). Gating those would block the checks that
@@ -301,15 +302,13 @@ def aws_gated(seg: str) -> bool:
 
 AWS_META = (
     "AWS",
-    "whatever the command names (IAM role or policy, Bedrock model access, quota, "
-    "Marketplace subscription, an invocation, or any other service)",
-    "ap-southeast-2 (Bedrock AU inference profile; IAM is global)",
-    "$0 for IAM and quota requests; Bedrock Claude Sonnet 5 bills per token "
-    "($2.20 in / $11.00 out per 1M, cache write $2.75, read $0.22); a Marketplace "
-    "subscription may add its own charge; any other AWS service is not allowed at all",
-    "SERVICES.md rows 'Amazon Bedrock — Claude Sonnet 5 via au.anthropic.claude-sonnet-5' "
-    "and 'AWS IAM role for web-identity federation' (ADR-0056, #322). Nothing else on AWS "
-    "is allowed. Read-only get-/list-/describe- commands are not gated.",
+    "whatever the command names (IAM, Bedrock model access, quota, a Marketplace "
+    "subscription, an invocation, or any other service)",
+    "any AWS Region",
+    "not estimated: nothing on AWS is allowed, so there is no approved spend",
+    "SERVICES.md's forbidden table: Amazon Bedrock is 'Not adopted: no AWS account' "
+    "(ADR-0057, which withdrew ADR-0056's Bedrock route; #322 added this guard). "
+    "Nothing on AWS is allowed. Read-only get-/list-/describe- commands are not gated.",
 )
 
 

@@ -54,7 +54,7 @@ from compliance_rag.eval.harness import golden_clause_store, law_source_html
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION, REGION, Settings
 from tests.api_support import api_settings, fake_api_services
-from tests.vertex_quota import PLACEHOLDER_TOKEN, SDK_WORDS, quota_exhausted_generator
+from tests.gemini_support import PLACEHOLDER_TOKEN, SDK_WORDS, quota_exhausted_generator
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTION = "What must Acme do to protect the personal information it holds from misuse and loss?"
@@ -168,10 +168,10 @@ def test_the_fake_generator_is_never_the_default() -> None:
     assert real.tenant_id == fake.tenant_id == DEMO_TENANT
     # The fake runs in process: the gates are told so. The real one keeps
     # whatever region is configured, offshore included.
-    assert fake.vertex_claude_region == REGION
+    assert fake.gemini_region == REGION
     # and the production pages the demo mounts say so, as the deployed API's do (#292)
-    assert (fake.generator, real.generator) == ("demo", "claude")
-    assert real.vertex_claude_region == Settings().vertex_claude_region
+    assert (fake.generator, real.generator) == ("demo", "gemini")
+    assert real.gemini_region == Settings().gemini_region
 
 
 def test_the_fake_banner_is_on_the_page_exactly_when_the_fake_generator_is() -> None:
@@ -359,20 +359,20 @@ async def test_an_unrecognised_generation_failure_is_shown_plainly_and_without_a
         found = (await c.get(f"/demo/failures/{response.headers['X-Trace-Id']}")).json()
         page = (await c.get("/")).text
     [failure] = found["failures"]
-    assert failure["where"] == "generation (Claude on Vertex)"
+    assert failure["where"] == "generation (Gemini on Vertex)"
     assert "connection to the model was reset" in failure["error"]
     assert "ya29" not in failure["error"] and "[redacted]" in failure["error"]
     assert BANNER_DIV not in page
 
 
-OFFSHORE = {"generation_backend": "vertex", "vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
+OFFSHORE = {"gemini_region": BUILD_PHASE_OFFSHORE_REGION}
 LISTED = "lucas.frasca@example.com"
 
 
 async def test_a_vertex_quota_refusal_is_shown_as_generation_unavailable_end_to_end() -> None:
     """A listed tester asks, and Vertex answers 429 `RESOURCE_EXHAUSTED` (#251):
-    the SDK's own client raises `RateLimitError` inside the real
-    `VertexClaudeGenerator`, wrapped as `demo_server` wraps it. The stream
+    the SDK's own client raises `ClientError` inside the real
+    `GeminiGenerator`, wrapped as `demo_server` wraps it. The stream
     ends in `generation_unavailable`, which the page renders as its own state,
     and none of the SDK's words reach the page by any route."""
     ledger = await demo_ledger()
@@ -462,8 +462,7 @@ def test_main_serves_as_the_member_it_was_given(
         pass
 
     monkeypatch.setattr(demo_server.telemetry, "configure", configured)
-    monkeypatch.setenv("GENERATION_BACKEND", "vertex")
-    monkeypatch.setenv("VERTEX_CLAUDE_REGION", BUILD_PHASE_OFFSHORE_REGION)
+    monkeypatch.setenv("GEMINI_REGION", BUILD_PHASE_OFFSHORE_REGION)
     monkeypatch.setenv("OFFSHORE_GENERATION_TESTERS", "")
     demo_server.main(["--member", "Lucas.Frasca@Example.COM"])
     assert served["member"] == Member(uid=DEMO_MEMBER.uid, email=LISTED)

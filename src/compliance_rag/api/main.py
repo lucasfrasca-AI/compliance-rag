@@ -6,26 +6,23 @@ one sink, D-16):
 - the Postgres ledger;
 - Track A over the deployed graph;
 - the corpus bucket;
-- `answer()` over Qdrant, the reranker and Claude (on Bedrock's Australian
-  inference profile by default, on Vertex with `GENERATION_BACKEND=vertex`).
+- `answer()` over Qdrant, the reranker and Gemini 3.5 Flash on Vertex (or
+  Claude on Vertex, dormant until it is approved).
 
 Tests build it with `create_app` and fakes instead.
 
-Which generator is `GENERATOR` (#292): `claude` (the default) or `demo`, the
-in-process stand-in that calls no model (`adapters/demo_generator.py`).
-`demo` never imports or constructs either Claude adapter, and needs
-`VERTEX_CLAUDE_REGION=australia-southeast1` (`Settings`).
-
-Which Claude is `GENERATION_BACKEND` (ADR-0056): `bedrock` (the default) or
-`vertex`. `bedrock` with neither `AWS_ROLE_ARN` (Cloud Run) nor `AWS_PROFILE`
-(local) refuses to start, as does `vertex` with no `VERTEX_CLAUDE_MODEL`.
+Which generator is `GENERATION_BACKEND` (ADR-0057, #292): `gemini` (the
+default), `claude` (dormant) or `demo`, the in-process stand-in that calls no
+model (`adapters/demo_generator.py`). `demo` never imports or constructs a
+model adapter, and needs both regions at `australia-southeast1`
+(`Settings`); `gemini` with no `GEMINI_MODEL`, or `claude` with no
+`VERTEX_CLAUDE_MODEL`, refuses to start.
 
 Two things run at startup, before anything is served:
 - the graph's connectivity check;
-- with `claude`, the generator, built by `build_generator`. On `vertex` that
-  runs the residency gate (ADR-0023), which asks whether the vector store
-  holds real tenant chunks; on `bedrock` there is nothing to ask, because the
-  Australian profile never leaves Australia.
+- with `gemini` or `claude`, the generator, built by `build_generator`, so the
+  residency gate (ADR-0023) runs first. That gate asks whether the vector store holds
+  real tenant chunks.
 
 Before either, the signed `incomplete.yaml` and `part_year.yaml` files are
 read (#211, ADR-0047, ADR-0052):
@@ -68,8 +65,8 @@ from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifie
 
 
 class GeneratorAtStartup(Generator):
-    """The Claude generator, built at startup rather than at import: its
-    constructor is async, because on Vertex the residency gate asks the store."""
+    """The model generator, built at startup rather than at import: its
+    constructor is async, because the residency gate asks the store."""
 
     def __init__(self, settings: Settings, *, corpus: RetrievalAdmin) -> None:
         self._settings = settings
@@ -92,10 +89,11 @@ class GeneratorAtStartup(Generator):
 def generator_for(
     settings: Settings, *, corpus: RetrievalAdmin
 ) -> tuple[Generator, tuple[Callable[[], Awaitable[None]], ...]]:
-    """The generator `GENERATOR` names, and the startup checks it needs. `demo`
-    is built here and imports no Claude adapter; `claude` is built at startup
-    by `build_generator`, through the residency gate on Vertex."""
-    if settings.generator == "demo":
+    """The generator `GENERATION_BACKEND` names, and the startup checks it
+    needs. `demo` is built here and imports no model adapter; `gemini` and
+    `claude` are built at startup by `build_generator`, through the residency
+    gate."""
+    if settings.generation_backend == "demo":
         return FakeDemoGenerator(), ()
     started = GeneratorAtStartup(settings, corpus=corpus)
     return started, (started.start,)
@@ -110,18 +108,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         keys=GoogleSigningKeys(),
         accounts=IdentityToolkitAccounts(project_id=settings.firebase_project_id),
     )
-    if settings.generator == "claude":
-        # Before any store is opened: a deploy without a model or credentials
-        # fails now, not at the first question.
-        if settings.generation_backend == "vertex" and not settings.vertex_claude_model:
-            raise ValueError("GENERATOR=claude needs VERTEX_CLAUDE_MODEL, which is empty")
-        if settings.generation_backend == "bedrock" and not (
-            settings.aws_role_arn or settings.aws_profile
-        ):
-            raise ValueError(
-                "GENERATION_BACKEND=bedrock needs AWS_ROLE_ARN (Cloud Run) or AWS_PROFILE "
-                "(local); both are empty"
-            )
+    # Before any store is opened: a deploy without a model fails now, not at
+    # the first question.
+    if settings.generation_backend == "gemini" and not settings.gemini_model:
+        raise ValueError("GENERATION_BACKEND=gemini needs GEMINI_MODEL, which is empty")
+    if settings.generation_backend == "claude" and not settings.vertex_claude_model:
+        raise ValueError("GENERATION_BACKEND=claude needs VERTEX_CLAUDE_MODEL, which is empty")
     telemetry.configure(settings)
     committed_incomplete_readings()  # refuses an unsigned reading file (D-01)
     graph = Neo4jGraph.open(settings)

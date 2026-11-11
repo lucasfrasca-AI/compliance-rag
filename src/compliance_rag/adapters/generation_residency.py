@@ -1,27 +1,18 @@
 """Where generation may run, and the gate that stops it running offshore the
 moment it would matter (ADR-0023, D-16).
 
-Claude on Vertex is not served from `australia-southeast1`. During the build
-phase — while the corpus is public law plus synthetic data — generation could
-run on `claude-sonnet-5` at the US multi-region endpoint (`us`, ADR-0024).
-Everything else (stores, telemetry) stays in Sydney unconditionally.
+Gemini 3.5 Flash is not served from `australia-southeast1`. During the build
+phase — while the corpus is public law plus synthetic data — generation runs
+on `gemini-3.5-flash` at the US multi-region endpoint (`us`, ADR-0023,
+ADR-0057, which replaced Claude's ADR-0024). Everything else (stores,
+telemetry) stays in Sydney unconditionally.
 
-Since ADR-0056 generation can also run on Bedrock's Australian geographic
-inference profile (`au.anthropic.claude-sonnet-5`) called from `ap-southeast-2`,
-whose only destinations are Sydney and Melbourne: every request is processed
-in Australia, so it is **not offshore** and none of the gates below fires.
-The gates are told where generation runs through one key,
-`Settings.generation_region`, which takes the backend into account: the Vertex
-region on `vertex`, `ap-southeast-2` on `bedrock`. `Settings` and
-`validate_bedrock_target` refuse any profile but the one exact Australian profile (`global.`, `us.`,
-`apac.` and the rest) and any other source Region, so that key can only mean Sydney.
-
-The Vertex exception is closed by a gate, not a note, at both ends:
+The exception is closed by a gate, not a note, at both ends:
 
 - **Startup and every request.** `assert_generation_allowed` refuses an
   offshore generation region if the retrieval store holds any chunk that
   isn't public law and isn't marked synthetic (tenant or user scope, #166).
-  `VertexClaudeGenerator` asks before building a client and again before
+  `GeminiGenerator` asks before building a client and again before
   every offshore request, so data written later — by another process, or a
   path that skips `CorpusLifecycle` — still closes it.
 - **Ingest.** `assert_upload_allowed` refuses to store a non-public chunk
@@ -36,8 +27,7 @@ The Vertex exception is closed by a gate, not a note, at both ends:
   (`AssessmentPipeline`, which can't be built without one).
 
 The `global` endpoint, and every region not listed here, is refused
-outright: it routes requests anywhere. So is any Bedrock inference profile
-that is not Australian.
+outright: it routes requests anywhere.
 """
 
 from __future__ import annotations
@@ -48,14 +38,7 @@ from dataclasses import dataclass
 
 from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
-from compliance_rag.settings import (
-    AUSTRALIAN_GENERATION_REGIONS,
-    BEDROCK_INFERENCE_PROFILE,
-    BEDROCK_REGION,
-    GENERATION_REGIONS,
-    VERTEX_GENERATION_REGIONS,
-    Settings,
-)
+from compliance_rag.settings import GENERATION_REGIONS, REGION, Settings
 
 
 class GenerationResidencyError(RuntimeError):
@@ -64,52 +47,18 @@ class GenerationResidencyError(RuntimeError):
 
 
 def validate_generation_region(region: str) -> str:
-    """The key the gates take: Sydney, Bedrock's Australian profile called from
-    Sydney (`ap-southeast-2`), or the US multi-region during the build phase.
-    `global` and every other region are refused outright."""
+    """Only Sydney, or the US multi-region during the build phase. `global`
+    and every other region are refused outright."""
     if region not in GENERATION_REGIONS:
         raise GenerationResidencyError(
             f"generation region {region!r} refused: only {sorted(GENERATION_REGIONS)} "
-            "are allowed, and never the global endpoint (ADR-0023, ADR-0024, ADR-0056)"
-        )
-    return region
-
-
-def validate_vertex_region(region: str) -> str:
-    """A region Vertex may be called at: Sydney, or the US multi-region. The
-    Bedrock key is not a Vertex region."""
-    if region not in VERTEX_GENERATION_REGIONS:
-        raise GenerationResidencyError(
-            f"generation region {region!r} refused: Vertex may be called only at "
-            f"{sorted(VERTEX_GENERATION_REGIONS)}, and never the global endpoint "
-            "(ADR-0023, ADR-0024)"
-        )
-    return region
-
-
-def validate_bedrock_target(*, region: str, inference_profile: str) -> str:
-    """Bedrock is Australian only when it is called from Sydney through the
-    Australian geographic profile (`BEDROCK_INFERENCE_PROFILE`, an exact match),
-    whose destinations are Sydney and Melbourne. Any other source Region or
-    profile (`global.`, `us.`, `apac.`, a bare model id, another `au.` model)
-    can route a request outside Australia, and is refused (ADR-0056). Returns
-    the gate's key."""
-    if region != BEDROCK_REGION:
-        raise GenerationResidencyError(
-            f"Bedrock region {region!r} refused: it is called from {BEDROCK_REGION} only (ADR-0056)"
-        )
-    if inference_profile != BEDROCK_INFERENCE_PROFILE:
-        raise GenerationResidencyError(
-            f"Bedrock inference profile {inference_profile!r} refused: only "
-            f"{BEDROCK_INFERENCE_PROFILE!r} is known to keep processing in Australia (ADR-0056)"
+            "are allowed, and never the global endpoint (ADR-0023, ADR-0057)"
         )
     return region
 
 
 def is_offshore(region: str) -> bool:
-    """Whether generation at `region` (a `Settings.generation_region`) leaves
-    Australia. Sydney and Bedrock's Australian profile do not."""
-    return validate_generation_region(region) not in AUSTRALIAN_GENERATION_REGIONS
+    return validate_generation_region(region) != REGION
 
 
 def is_real_customer_data(chunk: Chunk) -> bool:
@@ -182,7 +131,7 @@ class TenantTextGate:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> TenantTextGate:
-        return cls(settings.generation_region, SyntheticRegistry.load())
+        return cls(settings.gemini_region, SyntheticRegistry.load())
 
     def check(self, tenant_id: str, texts: Iterable[tuple[str, str]], *, what: str) -> None:
         """`texts`: `(clause id, text)` pairs owned by `tenant_id`, about to be

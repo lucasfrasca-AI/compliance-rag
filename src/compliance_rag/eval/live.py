@@ -1,4 +1,4 @@
-"""The live answer pipeline (#31): `answer()` with live Claude.
+"""The live answer pipeline (#31): `answer()` with live Gemini.
 
 Kept apart from `eval/harness.py` on purpose: the recall gates import the
 harness, and they must never load an LLM SDK
@@ -60,12 +60,11 @@ async def live_answer_pipeline(
     whole_compilation: bool = False,
 ) -> AsyncGenerator[AssessmentPipeline]:
     """`answer()` on the golden corpus with every real stage: Qdrant, cached
-    real embeddings, the int8 cross-encoder, **live Claude** (built only
-    through `build_generator`, so on Vertex the residency gate runs first —
-    ADR-0023/0024; Bedrock's Australian profile is ADR-0056), and the real
-    verifier against golden canonical text and a ledger with every golden
-    version recorded. Shared by the live eval and
-    the demo.
+    real embeddings, the int8 cross-encoder, **live Gemini 3.5 Flash**
+    (built only through `build_generator`, so the residency gate runs first —
+    ADR-0023, ADR-0057), and the real verifier against golden canonical text
+    and a ledger with every golden version recorded. Shared by the live eval
+    and the demo.
 
     `whole_compilation` puts it in place of the excerpt, in Qdrant and
     in the clause store alike, so the verifier can verify whatever is

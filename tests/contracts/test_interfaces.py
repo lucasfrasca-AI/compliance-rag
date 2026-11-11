@@ -703,8 +703,8 @@ async def test_embedder_returns_configured_dimensions() -> None:
 async def assert_generator_contract(generator: Generator) -> Generation:
     """The `Generator` contract itself, shared by every implementation: a
     generation has text, counts that are not negative, and says whether the
-    cached prefix was hit. The Bedrock adapter (`tests/test_bedrock_claude_
-    generator.py`) calls this same function with a stubbed transport, not a
+    cached prefix was hit. The Gemini adapter (`tests/test_gemini_generator.py`)
+    calls this same function over the SDK with a stubbed transport, not a
     second, independently written test. Returns the generation for the
     caller's own checks."""
     assert isinstance(generator, Generator)
