@@ -1,0 +1,2486 @@
+{
+  "model": "gemini-3.5-flash",
+  "backend": "gemini",
+  "region": "us",
+  "run_on": "2026-11-11",
+  "summary": {
+    "queries": 25,
+    "schema_valid": "25/25",
+    "answers_verified": "24/25",
+    "citations_verified": "89/89",
+    "repairs": 0,
+    "mean_tokens": {
+      "input_total": 4269.2,
+      "cache_read": 2080.3,
+      "cache_write": 0.0,
+      "output": 642.7
+    },
+    "cache_hits_on_prefixed_requests": "8/10",
+    "mean_cost_per_query_usd": 0.010318,
+    "projected_monthly_usd": 20.64,
+    "projection_arithmetic": "2000 queries x $0.010318 mean = $20.64/month"
+  },
+  "rows": [
+    {
+      "schema_valid": true,
+      "seconds": 5.47,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to APP 11.1, if an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information from misuse, interference and loss (APP 11.1(a)), and from unauthorised access, modification or disclosure (APP 11.1(b)).",
+      "draft_text": "{\n  \"answer\": \"According to APP 11.1, if an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information from misuse, interference and loss (APP 11.1(a)), and from unauthorised access, modification or disclosure (APP 11.1(b)).\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1\",\n      \"quote\": \"If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1/a\",\n      \"quote\": \"from misuse, interference and loss; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1/b\",\n      \"quote\": \"from unauthorised access, modification or disclosure.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+          "quote": "from unauthorised access, modification or disclosure."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+          "quote": "from unauthorised access, modification or disclosure.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 1666,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 408,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0067881,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0067881,
+      "id": "GQ-01",
+      "category": "exact_id",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 3.24,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to \"APP 11.1\" and \"APP 11.1(a)\", if an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information from misuse, interference and loss.",
+      "draft_text": "{\n  \"answer\": \"According to \\\"APP 11.1\\\" and \\\"APP 11.1(a)\\\", if an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information from misuse, interference and loss.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1\",\n      \"quote\": \"If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1/a\",\n      \"quote\": \"from misuse, interference and loss; and\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and"
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 1560,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 368,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0062172,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0062172,
+      "id": "GQ-02",
+      "category": "exact_id",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 5.59,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under APP 11.2, if certain conditions are met, an APP entity must take reasonable steps in the circumstances to destroy the personal information or to ensure it is de-identified. These conditions, as set out in APP 11.2(a), APP 11.2(b), APP 11.2(c), and APP 11.2(d), are:\n1. The entity holds personal information about an individual;\n2. The entity no longer needs that information for any purpose for which it may be used or disclosed under the Schedule;\n3. The information is not contained in a Commonwealth record; and\n4. The entity is not required by or under an Australian law, or a court/tribunal order, to retain the information.",
+      "draft_text": "{\n  \"answer\": \"Under APP 11.2, if certain conditions are met, an APP entity must take reasonable steps in the circumstances to destroy the personal information or to ensure it is de-identified. These conditions, as set out in APP 11.2(a), APP 11.2(b), APP 11.2(c), and APP 11.2(d), are:\\n1. The entity holds personal information about an individual;\\n2. The entity no longer needs that information for any purpose for which it may be used or disclosed under the Schedule;\\n3. The information is not contained in a Commonwealth record; and\\n4. The entity is not required by or under an Australian law, or a court/tribunal order, to retain the information.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2\",\n      \"quote\": \"If: the entity must take such steps as are reasonable in the circumstances to destroy the information or to ensure that the information is de-identified.\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/a\",\n      \"quote\": \"an APP entity holds personal information about an individual; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/b\",\n      \"quote\": \"the entity no longer needs the information for any purpose for which the information may be used or disclosed by the entity under this Schedule; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/c\",\n      \"quote\": \"the information is not contained in a Commonwealth record; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/d\",\n      \"quote\": \"the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information;\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2",
+          "quote": "If: the entity must take such steps as are reasonable in the circumstances to destroy the information or to ensure that the information is de-identified."
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+          "quote": "an APP entity holds personal information about an individual; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+          "quote": "the entity no longer needs the information for any purpose for which the information may be used or disclosed by the entity under this Schedule; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+          "quote": "the information is not contained in a Commonwealth record; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+          "quote": "the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information;"
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2",
+          "quote": "If: the entity must take such steps as are reasonable in the circumstances to destroy the information or to ensure that the information is de-identified.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+          "quote": "an APP entity holds personal information about an individual; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+          "quote": "the entity no longer needs the information for any purpose for which the information may be used or disclosed by the entity under this Schedule; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+          "quote": "the information is not contained in a Commonwealth record; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+          "quote": "the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information;",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 1916,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 898,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0120516,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0120516,
+      "id": "GQ-03",
+      "category": "exact_id",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/2"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 1.92,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to APP 10.1, an APP entity is required to take reasonable steps under the circumstances to ensure that any personal information it collects is accurate, up-to-date, and complete.",
+      "draft_text": "{\n  \"answer\": \"According to APP 10.1, an APP entity is required to take reasonable steps under the circumstances to ensure that any personal information it collects is accurate, up-to-date, and complete.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app10/1\",\n      \"quote\": \"An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/1",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/1",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 1479,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 147,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.00389565,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.00389565,
+      "id": "GQ-04",
+      "category": "exact_id",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 3.21,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to the Privacy Act 1988, an \"organisation\" is defined as an individual, a body corporate, a partnership, any other unincorporated association, or a trust, provided that it is not a small business operator, a registered political party, an agency, a State or Territory authority, or a prescribed instrumentality of a State or Territory.",
+      "draft_text": "{\n  \"answer\": \"According to the Privacy Act 1988, an \\\"organisation\\\" is defined as an individual, a body corporate, a partnership, any other unincorporated association, or a trust, provided that it is not a small business operator, a registered political party, an agency, a State or Territory authority, or a prescribed instrumentality of a State or Territory.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/1\",\n      \"quote\": \"In this Act: organisation means: that is not a small business operator, a registered political party, an agency, a State or Territory authority or a prescribed instrumentality of a State or Territory.\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/1/a\",\n      \"quote\": \"an individual; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/1/b\",\n      \"quote\": \"a body corporate; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/1/c\",\n      \"quote\": \"a partnership; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/1/d\",\n      \"quote\": \"any other unincorporated association; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/1/e\",\n      \"quote\": \"a trust;\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1",
+          "quote": "In this Act: organisation means: that is not a small business operator, a registered political party, an agency, a State or Territory authority or a prescribed instrumentality of a State or Territory."
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/a",
+          "quote": "an individual; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/b",
+          "quote": "a body corporate; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/c",
+          "quote": "a partnership; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/d",
+          "quote": "any other unincorporated association; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/e",
+          "quote": "a trust;"
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1",
+          "quote": "In this Act: organisation means: that is not a small business operator, a registered political party, an agency, a State or Territory authority or a prescribed instrumentality of a State or Territory.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/a",
+          "quote": "an individual; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/b",
+          "quote": "a body corporate; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/c",
+          "quote": "a partnership; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/d",
+          "quote": "any other unincorporated association; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/1/e",
+          "quote": "a trust;",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6c/1",
+        "privacy-act-1988:C2026C00227:s6c/1/a",
+        "privacy-act-1988:C2026C00227:s6c/1/b",
+        "privacy-act-1988:C2026C00227:s6c/1/c",
+        "privacy-act-1988:C2026C00227:s6c/1/d",
+        "privacy-act-1988:C2026C00227:s6c/1/e"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6c/1",
+        "privacy-act-1988:C2026C00227:s6c/1/a",
+        "privacy-act-1988:C2026C00227:s6c/1/b",
+        "privacy-act-1988:C2026C00227:s6c/1/c",
+        "privacy-act-1988:C2026C00227:s6c/1/d",
+        "privacy-act-1988:C2026C00227:s6c/1/e"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 1989,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 445,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.007687349999999999,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.007687349999999999,
+      "id": "GQ-05",
+      "category": "exact_id",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:s6c/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 8.53,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under s 6(1) \"agency\", \"agency\" is defined to mean:\n- a Minister (s 6(1) \"agency\" (a));\n- a Department (s 6(1) \"agency\" (b));\n- a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a Commonwealth law, except for an incorporated company, society or association (s 6(1) \"agency\" (c)(i)) or an organisation registered under the Fair Work (Registered Organisations) Act 2009 or a branch of such an organisation (s 6(1) \"agency\" (c)(ii));\n- a body (whether incorporated or not), or a tribunal, established for a public purpose by or under a law of a State or Territory as in force in an external Territory (other than a law providing for the incorporation of companies, societies or associations), unless exempted by the Minister under subsection (5A) (s 6(1) \"agency\" (ca));\n- a body established or appointed by the Governor-General, or by a Minister, otherwise than by or under a Commonwealth law (s 6(1) \"agency\" (d));\n- a person holding or performing the duties of an office established by or under, or an appointment made under, a Commonwealth law, excluding a person who is the Secretary of a Department by virtue of holding that office (s 6(1) \"agency\" (e));\n- a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory as in force in an external Territory, unless exempted by the Minister under subsection (5A) (s 6(1) \"agency\" (ea));\n- a person holding or performing the duties of an appointment made by the Governor-General, or by a Minister, otherwise than under a Commonwealth law (s 6(1) \"agency\" (f));\n- a federal court (s 6(1) \"agency\" (g));\n- the Australian Federal Police (s 6(1) \"agency\" (h));\n- a court of Norfolk Island (s 6(1) \"agency\" (ha));\n- an eligible hearing service provider (s 6(1) \"agency\" (k)); or\n- the service operator under the Healthcare Identifiers Act 2010 (s 6(1) \"agency\" (l)).",
+      "draft_text": "{\"answer\": \"Under s 6(1) \\\"agency\\\", \\\"agency\\\" is defined to mean:\\n- a Minister (s 6(1) \\\"agency\\\" (a));\\n- a Department (s 6(1) \\\"agency\\\" (b));\\n- a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a Commonwealth law, except for an incorporated company, society or association (s 6(1) \\\"agency\\\" (c)(i)) or an organisation registered under the Fair Work (Registered Organisations) Act 2009 or a branch of such an organisation (s 6(1) \\\"agency\\\" (c)(ii));\\n- a body (whether incorporated or not), or a tribunal, established for a public purpose by or under a law of a State or Territory as in force in an external Territory (other than a law providing for the incorporation of companies, societies or associations), unless exempted by the Minister under subsection (5A) (s 6(1) \\\"agency\\\" (ca));\\n- a body established or appointed by the Governor-General, or by a Minister, otherwise than by or under a Commonwealth law (s 6(1) \\\"agency\\\" (d));\\n- a person holding or performing the duties of an office established by or under, or an appointment made under, a Commonwealth law, excluding a person who is the Secretary of a Department by virtue of holding that office (s 6(1) \\\"agency\\\" (e));\\n- a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory as in force in an external Territory, unless exempted by the Minister under subsection (5A) (s 6(1) \\\"agency\\\" (ea));\\n- a person holding or performing the duties of an appointment made by the Governor-General, or by a Minister, otherwise than under a Commonwealth law (s 6(1) \\\"agency\\\" (f));\\n- a federal court (s 6(1) \\\"agency\\\" (g));\\n- the Australian Federal Police (s 6(1) \\\"agency\\\" (h));\\n- a court of Norfolk Island (s 6(1) \\\"agency\\\" (ha));\\n- an eligible hearing service provider (s 6(1) \\\"agency\\\" (k)); or\\n- the service operator under the Healthcare Identifiers Act 2010 (s 6(1) \\\"agency\\\" (l)).\", \"citations\": [{\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency\", \"quote\": \"agency means:\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/a\", \"quote\": \"a Minister; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/b\", \"quote\": \"a Department; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/c\", \"quote\": \"a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a Commonwealth law, not being:\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/c/i\", \"quote\": \"an incorporated company, society or association; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/c/ii\", \"quote\": \"an organisation that is registered under the Fair Work (Registered Organisations) Act 2009 or a branch of such an organisation; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/ca\", \"quote\": \"a body (whether incorporated or not), or a tribunal, established for a public purpose by or under a law (other than a law providing for the incorporation of companies, societies or associations) of a State or Territory as in force in an external Territory, other than a body exempted by the Minister under subsection (5A); or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/d\", \"quote\": \"a body established or appointed by the Governor-General, or by a Minister, otherwise than by or under a Commonwealth law; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/e\", \"quote\": \"a person holding or performing the duties of an office established by or under, or an appointment made under, a Commonwealth law, other than a person who, by virtue of holding that office, is the Secretary of a Department; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/ea\", \"quote\": \"a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory as in force in an external Territory, other than an office or appointment exempted by the Minister under subsection (5A); or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/f\", \"quote\": \"a person holding or performing the duties of an appointment, being an appointment made by the Governor-General, or by a Minister, otherwise than under a Commonwealth law; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/g\", \"quote\": \"a federal court; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/h\", \"quote\": \"the Australian Federal Police; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/ha\", \"quote\": \"a court of Norfolk Island; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/k\", \"quote\": \"an eligible hearing service provider; or\"}, {\"clause_id\": \"privacy-act-1988:C2026C00227:s6/1/agency/l\", \"quote\": \"the service operator under the Healthcare Identifiers Act 2010.\"}]}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency",
+          "quote": "agency means:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/a",
+          "quote": "a Minister; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/b",
+          "quote": "a Department; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/c",
+          "quote": "a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a Commonwealth law, not being:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/c/i",
+          "quote": "an incorporated company, society or association; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/c/ii",
+          "quote": "an organisation that is registered under the Fair Work (Registered Organisations) Act 2009 or a branch of such an organisation; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/ca",
+          "quote": "a body (whether incorporated or not), or a tribunal, established for a public purpose by or under a law (other than a law providing for the incorporation of companies, societies or associations) of a State or Territory as in force in an external Territory, other than a body exempted by the Minister under subsection (5A); or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/d",
+          "quote": "a body established or appointed by the Governor-General, or by a Minister, otherwise than by or under a Commonwealth law; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/e",
+          "quote": "a person holding or performing the duties of an office established by or under, or an appointment made under, a Commonwealth law, other than a person who, by virtue of holding that office, is the Secretary of a Department; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/ea",
+          "quote": "a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory as in force in an external Territory, other than an office or appointment exempted by the Minister under subsection (5A); or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/f",
+          "quote": "a person holding or performing the duties of an appointment, being an appointment made by the Governor-General, or by a Minister, otherwise than under a Commonwealth law; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/g",
+          "quote": "a federal court; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/h",
+          "quote": "the Australian Federal Police; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/ha",
+          "quote": "a court of Norfolk Island; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/k",
+          "quote": "an eligible hearing service provider; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/l",
+          "quote": "the service operator under the Healthcare Identifiers Act 2010."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency",
+          "quote": "agency means:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/a",
+          "quote": "a Minister; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/b",
+          "quote": "a Department; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/c",
+          "quote": "a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a Commonwealth law, not being:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/c/i",
+          "quote": "an incorporated company, society or association; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/c/ii",
+          "quote": "an organisation that is registered under the Fair Work (Registered Organisations) Act 2009 or a branch of such an organisation; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/ca",
+          "quote": "a body (whether incorporated or not), or a tribunal, established for a public purpose by or under a law (other than a law providing for the incorporation of companies, societies or associations) of a State or Territory as in force in an external Territory, other than a body exempted by the Minister under subsection (5A); or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/d",
+          "quote": "a body established or appointed by the Governor-General, or by a Minister, otherwise than by or under a Commonwealth law; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/e",
+          "quote": "a person holding or performing the duties of an office established by or under, or an appointment made under, a Commonwealth law, other than a person who, by virtue of holding that office, is the Secretary of a Department; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/ea",
+          "quote": "a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory as in force in an external Territory, other than an office or appointment exempted by the Minister under subsection (5A); or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/f",
+          "quote": "a person holding or performing the duties of an appointment, being an appointment made by the Governor-General, or by a Minister, otherwise than under a Commonwealth law; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/g",
+          "quote": "a federal court; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/h",
+          "quote": "the Australian Federal Police; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/ha",
+          "quote": "a court of Norfolk Island; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/k",
+          "quote": "an eligible hearing service provider; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6/1/agency/l",
+          "quote": "the service operator under the Healthcare Identifiers Act 2010.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6/1/agency",
+        "privacy-act-1988:C2026C00227:s6/1/agency/a",
+        "privacy-act-1988:C2026C00227:s6/1/agency/b",
+        "privacy-act-1988:C2026C00227:s6/1/agency/c",
+        "privacy-act-1988:C2026C00227:s6/1/agency/c/i",
+        "privacy-act-1988:C2026C00227:s6/1/agency/c/ii",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ca",
+        "privacy-act-1988:C2026C00227:s6/1/agency/d",
+        "privacy-act-1988:C2026C00227:s6/1/agency/e",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ea",
+        "privacy-act-1988:C2026C00227:s6/1/agency/f",
+        "privacy-act-1988:C2026C00227:s6/1/agency/g",
+        "privacy-act-1988:C2026C00227:s6/1/agency/h",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ha",
+        "privacy-act-1988:C2026C00227:s6/1/agency/k",
+        "privacy-act-1988:C2026C00227:s6/1/agency/l"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6/1/agency",
+        "privacy-act-1988:C2026C00227:s6/1/agency/a",
+        "privacy-act-1988:C2026C00227:s6/1/agency/b",
+        "privacy-act-1988:C2026C00227:s6/1/agency/c",
+        "privacy-act-1988:C2026C00227:s6/1/agency/c/i",
+        "privacy-act-1988:C2026C00227:s6/1/agency/c/ii",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ca",
+        "privacy-act-1988:C2026C00227:s6/1/agency/d",
+        "privacy-act-1988:C2026C00227:s6/1/agency/e",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ea",
+        "privacy-act-1988:C2026C00227:s6/1/agency/f",
+        "privacy-act-1988:C2026C00227:s6/1/agency/g",
+        "privacy-act-1988:C2026C00227:s6/1/agency/h",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ha",
+        "privacy-act-1988:C2026C00227:s6/1/agency/k",
+        "privacy-act-1988:C2026C00227:s6/1/agency/l"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 3143,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 1604,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.021065550000000002,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.021065550000000002,
+      "id": "GQ-06",
+      "category": "exact_id",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:s6/1/agency"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 25.66,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to APP 11.1, if an APP entity holds personal information, it must take \"such steps as are reasonable in the circumstances to protect the information\" from \"misuse, interference and loss\" (APP 11.1(a)). Under APP 11.3, these steps include \"technical and organisational measures\".",
+      "draft_text": "{\n  \"answer\": \"According to APP 11.1, if an APP entity holds personal information, it must take \\\"such steps as are reasonable in the circumstances to protect the information\\\" from \\\"misuse, interference and loss\\\" (APP 11.1(a)). Under APP 11.3, these steps include \\\"technical and organisational measures\\\".\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1\",\n      \"quote\": \"If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1/a\",\n      \"quote\": \"from misuse, interference and loss; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/3\",\n      \"quote\": \"For the purposes of subclauses 11.1 and 11.2, without limiting those subclauses or any other provision of this Act, such steps include technical and organisational measures.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/3",
+          "quote": "For the purposes of subclauses 11.1 and 11.2, without limiting those subclauses or any other provision of this Act, such steps include technical and organisational measures."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/3",
+          "quote": "For the purposes of subclauses 11.1 and 11.2, without limiting those subclauses or any other provision of this Act, such steps include technical and organisational measures.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+        "privacy-act-1988:C2026C00227:sch1/app11/3"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+        "privacy-act-1988:C2026C00227:sch1/app11/3"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 2645,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 509,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.009403350000000001,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.009403350000000001,
+      "id": "GQ-09",
+      "category": "paraphrase",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 17.44,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under the Privacy Act 1988, if an APP entity holds personal information about an individual (APP 11.2(a)) and no longer needs it for any purpose for which it may be used or disclosed (APP 11.2(b)), the entity must take reasonable steps in the circumstances to destroy the information or ensure that it is de-identified (APP 11.2). This obligation applies provided that the information is not contained in a Commonwealth record (APP 11.2(c)) and the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information (APP 11.2(d)).",
+      "draft_text": "{\n  \"answer\": \"Under the Privacy Act 1988, if an APP entity holds personal information about an individual (APP 11.2(a)) and no longer needs it for any purpose for which it may be used or disclosed (APP 11.2(b)), the entity must take reasonable steps in the circumstances to destroy the information or ensure that it is de-identified (APP 11.2). This obligation applies provided that the information is not contained in a Commonwealth record (APP 11.2(c)) and the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information (APP 11.2(d)).\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2\",\n      \"quote\": \"the entity must take such steps as are reasonable in the circumstances to destroy the information or to ensure that the information is de-identified.\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/a\",\n      \"quote\": \"an APP entity holds personal information about an individual; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/b\",\n      \"quote\": \"the entity no longer needs the information for any purpose for which the information may be used or disclosed by the entity under this Schedule; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/c\",\n      \"quote\": \"the information is not contained in a Commonwealth record; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/2/d\",\n      \"quote\": \"the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information;\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2",
+          "quote": "the entity must take such steps as are reasonable in the circumstances to destroy the information or to ensure that the information is de-identified."
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+          "quote": "an APP entity holds personal information about an individual; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+          "quote": "the entity no longer needs the information for any purpose for which the information may be used or disclosed by the entity under this Schedule; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+          "quote": "the information is not contained in a Commonwealth record; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+          "quote": "the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information;"
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2",
+          "quote": "the entity must take such steps as are reasonable in the circumstances to destroy the information or to ensure that the information is de-identified.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+          "quote": "an APP entity holds personal information about an individual; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+          "quote": "the entity no longer needs the information for any purpose for which the information may be used or disclosed by the entity under this Schedule; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+          "quote": "the information is not contained in a Commonwealth record; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+          "quote": "the entity is not required by or under an Australian law, or a court/tribunal order, to retain the information;",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 2855,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 879,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.01341285,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.01341285,
+      "id": "GQ-10",
+      "category": "paraphrase",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/2"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 14.91,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Yes, under APP 10.1, an APP entity must take reasonable steps in the circumstances to ensure that the personal information it collects is accurate, up-to-date, and complete. Additionally, under APP 10.2, the entity must take reasonable steps to ensure that personal information it uses or discloses is accurate, up-to-date, complete, and relevant, having regard to the purpose of the use or disclosure.",
+      "draft_text": "{\n  \"answer\": \"Yes, under APP 10.1, an APP entity must take reasonable steps in the circumstances to ensure that the personal information it collects is accurate, up-to-date, and complete. Additionally, under APP 10.2, the entity must take reasonable steps to ensure that personal information it uses or discloses is accurate, up-to-date, complete, and relevant, having regard to the purpose of the use or disclosure.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app10/1\",\n      \"quote\": \"An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete.\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app10/2\",\n      \"quote\": \"An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity uses or discloses is, having regard to the purpose of the use or disclosure, accurate, up-to-date, complete and relevant.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/1",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete."
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/2",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity uses or discloses is, having regard to the purpose of the use or disclosure, accurate, up-to-date, complete and relevant."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/1",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/2",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity uses or discloses is, having regard to the purpose of the use or disclosure, accurate, up-to-date, complete and relevant.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 2534,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 300,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0071511000000000005,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0071511000000000005,
+      "id": "GQ-11",
+      "category": "paraphrase",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 29.46,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": false,
+      "answer": "I am sorry, but the provided clauses do not contain the definition of a \"small business operator\" or explain what makes a business small enough to be exempt from being considered an organisation under the Act.",
+      "draft_text": "{\n  \"answer\": \"I am sorry, but the provided clauses do not contain the definition of a \\\"small business operator\\\" or explain what makes a business small enough to be exempt from being considered an organisation under the Act.\",\n  \"citations\": []\n}",
+      "draft_citations": [],
+      "final_citations": [],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6/1",
+        "privacy-act-1988:C2026C00227:s6/1/agency",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ca",
+        "privacy-act-1988:C2026C00227:s6c/1",
+        "privacy-act-1988:C2026C00227:s6c/1/a",
+        "privacy-act-1988:C2026C00227:s6c/1/b",
+        "privacy-act-1988:C2026C00227:s6c/1/c",
+        "privacy-act-1988:C2026C00227:s6c/1/d",
+        "privacy-act-1988:C2026C00227:s6c/1/e",
+        "privacy-act-1988:C2026C00227:s6c/3",
+        "privacy-act-1988:C2026C00227:s6c/3/a",
+        "privacy-act-1988:C2026C00227:s6c/3/b",
+        "privacy-act-1988:C2026C00227:s6c/3/c",
+        "privacy-act-1988:C2026C00227:s6c/3/c/i",
+        "privacy-act-1988:C2026C00227:s6c/3/c/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d",
+        "privacy-act-1988:C2026C00227:s6c/3/d/i",
+        "privacy-act-1988:C2026C00227:s6c/3/d/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/v",
+        "privacy-act-1988:C2026C00227:s6c/3/e",
+        "privacy-act-1988:C2026C00227:s6c/3/f",
+        "privacy-act-1988:C2026C00227:s6c/3/f/i",
+        "privacy-act-1988:C2026C00227:s6c/3/f/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/v",
+        "privacy-act-1988:C2026C00227:s6c/3/g",
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/a",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/i",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:s6c/4/b/iii",
+        "privacy-act-1988:C2026C00227:s6c/4/c"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6/1",
+        "privacy-act-1988:C2026C00227:s6/1/agency",
+        "privacy-act-1988:C2026C00227:s6/1/agency/ca",
+        "privacy-act-1988:C2026C00227:s6c/1",
+        "privacy-act-1988:C2026C00227:s6c/1/a",
+        "privacy-act-1988:C2026C00227:s6c/1/b",
+        "privacy-act-1988:C2026C00227:s6c/1/c",
+        "privacy-act-1988:C2026C00227:s6c/1/d",
+        "privacy-act-1988:C2026C00227:s6c/1/e",
+        "privacy-act-1988:C2026C00227:s6c/3",
+        "privacy-act-1988:C2026C00227:s6c/3/a",
+        "privacy-act-1988:C2026C00227:s6c/3/b",
+        "privacy-act-1988:C2026C00227:s6c/3/c",
+        "privacy-act-1988:C2026C00227:s6c/3/c/i",
+        "privacy-act-1988:C2026C00227:s6c/3/c/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d",
+        "privacy-act-1988:C2026C00227:s6c/3/d/i",
+        "privacy-act-1988:C2026C00227:s6c/3/d/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/v",
+        "privacy-act-1988:C2026C00227:s6c/3/e",
+        "privacy-act-1988:C2026C00227:s6c/3/f",
+        "privacy-act-1988:C2026C00227:s6c/3/f/i",
+        "privacy-act-1988:C2026C00227:s6c/3/f/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/v",
+        "privacy-act-1988:C2026C00227:s6c/3/g",
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/a",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/i",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:s6c/4/b/iii",
+        "privacy-act-1988:C2026C00227:s6c/4/c"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 5100,
+        "cache_read_input_tokens": 3975,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 415,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.006620625,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.006620625,
+      "id": "GQ-12",
+      "category": "paraphrase",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:s6c/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 15.07,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under \"APP 11.1\", if an APP entity holds personal information, it must take steps that are reasonable under the circumstances to protect that information from unauthorised access, modification, or disclosure (as stated in \"APP 11.1(b)\").",
+      "draft_text": "{\n  \"answer\": \"Under \\\"APP 11.1\\\", if an APP entity holds personal information, it must take steps that are reasonable under the circumstances to protect that information from unauthorised access, modification, or disclosure (as stated in \\\"APP 11.1(b)\\\").\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1\",\n      \"quote\": \"If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1/b\",\n      \"quote\": \"from unauthorised access, modification or disclosure.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+          "quote": "from unauthorised access, modification or disclosure."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+          "quote": "from unauthorised access, modification or disclosure.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:s6c/4/b/iii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:s6c/4/b/iii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 2995,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 387,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.008773050000000001,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.008773050000000001,
+      "id": "GQ-13",
+      "category": "paraphrase",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 15.6,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Yes, technical and organisational measures apply to both protection and retention/destruction duties under APP 11. Specifically, APP 11.3 states that for the purposes of subclauses 11.1 (protecting information) and 11.2 (destroying or de-identifying information), the reasonable steps that must be taken include technical and organisational measures.",
+      "draft_text": "{\n  \"answer\": \"Yes, technical and organisational measures apply to both protection and retention/destruction duties under APP 11. Specifically, APP 11.3 states that for the purposes of subclauses 11.1 (protecting information) and 11.2 (destroying or de-identifying information), the reasonable steps that must be taken include technical and organisational measures.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/3\",\n      \"quote\": \"For the purposes of subclauses 11.1 and 11.2, without limiting those subclauses or any other provision of this Act, such steps include technical and organisational measures.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/3",
+          "quote": "For the purposes of subclauses 11.1 and 11.2, without limiting those subclauses or any other provision of this Act, such steps include technical and organisational measures."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/3",
+          "quote": "For the purposes of subclauses 11.1 and 11.2, without limiting those subclauses or any other provision of this Act, such steps include technical and organisational measures.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6/1/app-code",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+        "privacy-act-1988:C2026C00227:sch1/app11/3"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6/1/app-code",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+        "privacy-act-1988:C2026C00227:sch1/app11/3"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 2760,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 392,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0084348,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0084348,
+      "id": "GQ-14",
+      "category": "paraphrase",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/3"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 22.73,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under APP 11.1, if an APP entity holds personal information, it must take reasonable steps in the circumstances to protect that information from:\n1. Misuse, interference and loss (as required by APP 11.1(a)); and\n2. Unauthorised access, modification or disclosure (as required by APP 11.1(b)).",
+      "draft_text": "{\n  \"answer\": \"Under APP 11.1, if an APP entity holds personal information, it must take reasonable steps in the circumstances to protect that information from:\\n1. Misuse, interference and loss (as required by APP 11.1(a)); and\\n2. Unauthorised access, modification or disclosure (as required by APP 11.1(b)).\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1\",\n      \"quote\": \"If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1/a\",\n      \"quote\": \"from misuse, interference and loss; and\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app11/1/b\",\n      \"quote\": \"from unauthorised access, modification or disclosure.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+          "quote": "from unauthorised access, modification or disclosure."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1",
+          "quote": "If an APP entity holds personal information, the entity must take such steps as are reasonable in the circumstances to protect the information:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+          "quote": "from misuse, interference and loss; and",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+          "quote": "from unauthorised access, modification or disclosure.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+        "privacy-act-1988:C2026C00227:sch1/app11/3"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d",
+        "privacy-act-1988:C2026C00227:sch1/app11/3"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 3016,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 462,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0095502,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0095502,
+      "id": "GQ-18",
+      "category": "cross_clause",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 15.45,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under APP 10.1, when collecting personal information, an APP entity must take reasonable steps to ensure the information is \"accurate, up-to-date and complete.\" In contrast, under APP 10.2, when using or disclosing personal information, the entity must take reasonable steps to ensure the information is \"accurate, up-to-date, complete and relevant,\" and this assessment must be made \"having regard to the purpose of the use or disclosure.\"",
+      "draft_text": "{\n  \"answer\": \"Under APP 10.1, when collecting personal information, an APP entity must take reasonable steps to ensure the information is \\\"accurate, up-to-date and complete.\\\" In contrast, under APP 10.2, when using or disclosing personal information, the entity must take reasonable steps to ensure the information is \\\"accurate, up-to-date, complete and relevant,\\\" and this assessment must be made \\\"having regard to the purpose of the use or disclosure.\\\"\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app10/1\",\n      \"quote\": \"An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete.\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:sch1/app10/2\",\n      \"quote\": \"An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity uses or discloses is, having regard to the purpose of the use or disclosure, accurate, up-to-date, complete and relevant.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/1",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete."
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/2",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity uses or discloses is, having regard to the purpose of the use or disclosure, accurate, up-to-date, complete and relevant."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/1",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity collects is accurate, up-to-date and complete.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:sch1/app10/2",
+          "quote": "An APP entity must take such steps (if any) as are reasonable in the circumstances to ensure that the personal information that the entity uses or discloses is, having regard to the purpose of the use or disclosure, accurate, up-to-date, complete and relevant.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:s6c/4/b/iii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6c/4",
+        "privacy-act-1988:C2026C00227:s6c/4/b",
+        "privacy-act-1988:C2026C00227:s6c/4/b/ii",
+        "privacy-act-1988:C2026C00227:s6c/4/b/iii",
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/1",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/1/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/a",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/b",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/c",
+        "privacy-act-1988:C2026C00227:sch1/app11/2/d"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 3060,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 547,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0104643,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0104643,
+      "id": "GQ-19",
+      "category": "cross_clause",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:sch1/app10/1",
+        "privacy-act-1988:C2026C00227:sch1/app10/2"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 45.99,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under the Privacy Act 1988, the definition of an \"agency\" is not provided in the retrieved clauses. However, a \"State or Territory authority\" is defined under s 6C(3) as:\n- a State or Territory Minister (s 6C(3)(a));\n- a Department of State of a State or Territory (s 6C(3)(b));\n- a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a law of a State or Territory, other than: (1) an incorporated company, society or association, or (2) an association of employers or employees registered or recognised under a law of a State or Territory dealing with industrial dispute resolution (s 6C(3)(c), s 6C(3)(c)(i), and s 6C(3)(c)(ii));\n- a body established or appointed, otherwise than by or under a law of a State or Territory, by a Governor of a State, the Australian Capital Territory Executive, the Administrator of the Northern Territory, or a State or Territory Minister (s 6C(3)(d), s 6C(3)(d)(i), s 6C(3)(d)(ii), s 6C(3)(d)(iii), and s 6C(3)(d)(v));\n- a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory, other than the office of head of a State or Territory Department (s 6C(3)(e));\n- a person holding or performing the duties of an appointment made, otherwise than under a law of a State or Territory, by a Governor of a State, the Australian Capital Territory Executive, the Administrator of the Northern Territory, or a State or Territory Minister (s 6C(3)(f), s 6C(3)(f)(i), s 6C(3)(f)(ii), s 6C(3)(f)(iii), and s 6C(3)(f)(v)); or\n- a State or Territory court (s 6C(3)(g)).",
+      "draft_text": "{\n  \"answer\": \"Under the Privacy Act 1988, the definition of an \\\"agency\\\" is not provided in the retrieved clauses. However, a \\\"State or Territory authority\\\" is defined under s 6C(3) as:\\n- a State or Territory Minister (s 6C(3)(a));\\n- a Department of State of a State or Territory (s 6C(3)(b));\\n- a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a law of a State or Territory, other than: (1) an incorporated company, society or association, or (2) an association of employers or employees registered or recognised under a law of a State or Territory dealing with industrial dispute resolution (s 6C(3)(c), s 6C(3)(c)(i), and s 6C(3)(c)(ii));\\n- a body established or appointed, otherwise than by or under a law of a State or Territory, by a Governor of a State, the Australian Capital Territory Executive, the Administrator of the Northern Territory, or a State or Territory Minister (s 6C(3)(d), s 6C(3)(d)(i), s 6C(3)(d)(ii), s 6C(3)(d)(iii), and s 6C(3)(d)(v));\\n- a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory, other than the office of head of a State or Territory Department (s 6C(3)(e));\\n- a person holding or performing the duties of an appointment made, otherwise than under a law of a State or Territory, by a Governor of a State, the Australian Capital Territory Executive, the Administrator of the Northern Territory, or a State or Territory Minister (s 6C(3)(f), s 6C(3)(f)(i), s 6C(3)(f)(ii), s 6C(3)(f)(iii), and s 6C(3)(f)(v)); or\\n- a State or Territory court (s 6C(3)(g)).\",\n  \"citations\": [\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3\",\n      \"quote\": \"In this Act: State or Territory authority means:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/a\",\n      \"quote\": \"a State or Territory Minister; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/b\",\n      \"quote\": \"a Department of State of a State or Territory; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/c\",\n      \"quote\": \"a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a law of a State or Territory, other than:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/c/i\",\n      \"quote\": \"an incorporated company, society or association; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/c/ii\",\n      \"quote\": \"an association of employers or employees that is registered or recognised under a law of a State or Territory dealing with the resolution of industrial disputes; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/d\",\n      \"quote\": \"a body established or appointed, otherwise than by or under a law of a State or Territory, by:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/d/i\",\n      \"quote\": \"a Governor of a State; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/d/ii\",\n      \"quote\": \"the Australian Capital Territory Executive; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/d/iii\",\n      \"quote\": \"the Administrator of the Northern Territory; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/d/v\",\n      \"quote\": \"a State or Territory Minister; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/e\",\n      \"quote\": \"a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory, other than the office of head of a State or Territory Department (however described); or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/f\",\n      \"quote\": \"a person holding or performing the duties of an appointment made, otherwise than under a law of a State or Territory, by:\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/f/i\",\n      \"quote\": \"a Governor of a State; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/f/ii\",\n      \"quote\": \"the Australian Capital Territory Executive; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/f/iii\",\n      \"quote\": \"the Administrator of the Northern Territory; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/f/v\",\n      \"quote\": \"a State or Territory Minister; or\"\n    },\n    {\n      \"clause_id\": \"privacy-act-1988:C2026C00227:s6c/3/g\",\n      \"quote\": \"a State or Territory court.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3",
+          "quote": "In this Act: State or Territory authority means:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/a",
+          "quote": "a State or Territory Minister; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/b",
+          "quote": "a Department of State of a State or Territory; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/c",
+          "quote": "a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a law of a State or Territory, other than:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/c/i",
+          "quote": "an incorporated company, society or association; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/c/ii",
+          "quote": "an association of employers or employees that is registered or recognised under a law of a State or Territory dealing with the resolution of industrial disputes; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d",
+          "quote": "a body established or appointed, otherwise than by or under a law of a State or Territory, by:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/i",
+          "quote": "a Governor of a State; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/ii",
+          "quote": "the Australian Capital Territory Executive; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/iii",
+          "quote": "the Administrator of the Northern Territory; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/v",
+          "quote": "a State or Territory Minister; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/e",
+          "quote": "a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory, other than the office of head of a State or Territory Department (however described); or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f",
+          "quote": "a person holding or performing the duties of an appointment made, otherwise than under a law of a State or Territory, by:"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/i",
+          "quote": "a Governor of a State; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/ii",
+          "quote": "the Australian Capital Territory Executive; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/iii",
+          "quote": "the Administrator of the Northern Territory; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/v",
+          "quote": "a State or Territory Minister; or"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/g",
+          "quote": "a State or Territory court."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3",
+          "quote": "In this Act: State or Territory authority means:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/a",
+          "quote": "a State or Territory Minister; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/b",
+          "quote": "a Department of State of a State or Territory; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/c",
+          "quote": "a body (whether incorporated or not), or a tribunal, established or appointed for a public purpose by or under a law of a State or Territory, other than:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/c/i",
+          "quote": "an incorporated company, society or association; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/c/ii",
+          "quote": "an association of employers or employees that is registered or recognised under a law of a State or Territory dealing with the resolution of industrial disputes; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d",
+          "quote": "a body established or appointed, otherwise than by or under a law of a State or Territory, by:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/i",
+          "quote": "a Governor of a State; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/ii",
+          "quote": "the Australian Capital Territory Executive; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/iii",
+          "quote": "the Administrator of the Northern Territory; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/d/v",
+          "quote": "a State or Territory Minister; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/e",
+          "quote": "a person holding or performing the duties of an office established by or under, or an appointment made under, a law of a State or Territory, other than the office of head of a State or Territory Department (however described); or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f",
+          "quote": "a person holding or performing the duties of an appointment made, otherwise than under a law of a State or Territory, by:",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/i",
+          "quote": "a Governor of a State; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/ii",
+          "quote": "the Australian Capital Territory Executive; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/iii",
+          "quote": "the Administrator of the Northern Territory; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/f/v",
+          "quote": "a State or Territory Minister; or",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "privacy-act-1988:C2026C00227:s6c/3/g",
+          "quote": "a State or Territory court.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "privacy-act-1988:C2026C00227:s6c/1",
+        "privacy-act-1988:C2026C00227:s6c/1/a",
+        "privacy-act-1988:C2026C00227:s6c/1/b",
+        "privacy-act-1988:C2026C00227:s6c/1/c",
+        "privacy-act-1988:C2026C00227:s6c/1/d",
+        "privacy-act-1988:C2026C00227:s6c/1/e",
+        "privacy-act-1988:C2026C00227:s6c/3",
+        "privacy-act-1988:C2026C00227:s6c/3/a",
+        "privacy-act-1988:C2026C00227:s6c/3/b",
+        "privacy-act-1988:C2026C00227:s6c/3/c",
+        "privacy-act-1988:C2026C00227:s6c/3/c/i",
+        "privacy-act-1988:C2026C00227:s6c/3/c/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d",
+        "privacy-act-1988:C2026C00227:s6c/3/d/i",
+        "privacy-act-1988:C2026C00227:s6c/3/d/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/v",
+        "privacy-act-1988:C2026C00227:s6c/3/e",
+        "privacy-act-1988:C2026C00227:s6c/3/f",
+        "privacy-act-1988:C2026C00227:s6c/3/f/i",
+        "privacy-act-1988:C2026C00227:s6c/3/f/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/v",
+        "privacy-act-1988:C2026C00227:s6c/3/g"
+      ],
+      "delivered": [
+        "privacy-act-1988:C2026C00227:s6c/1",
+        "privacy-act-1988:C2026C00227:s6c/1/a",
+        "privacy-act-1988:C2026C00227:s6c/1/b",
+        "privacy-act-1988:C2026C00227:s6c/1/c",
+        "privacy-act-1988:C2026C00227:s6c/1/d",
+        "privacy-act-1988:C2026C00227:s6c/1/e",
+        "privacy-act-1988:C2026C00227:s6c/3",
+        "privacy-act-1988:C2026C00227:s6c/3/a",
+        "privacy-act-1988:C2026C00227:s6c/3/b",
+        "privacy-act-1988:C2026C00227:s6c/3/c",
+        "privacy-act-1988:C2026C00227:s6c/3/c/i",
+        "privacy-act-1988:C2026C00227:s6c/3/c/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d",
+        "privacy-act-1988:C2026C00227:s6c/3/d/i",
+        "privacy-act-1988:C2026C00227:s6c/3/d/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/d/v",
+        "privacy-act-1988:C2026C00227:s6c/3/e",
+        "privacy-act-1988:C2026C00227:s6c/3/f",
+        "privacy-act-1988:C2026C00227:s6c/3/f/i",
+        "privacy-act-1988:C2026C00227:s6c/3/f/ii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/iii",
+        "privacy-act-1988:C2026C00227:s6c/3/f/v",
+        "privacy-act-1988:C2026C00227:s6c/3/g"
+      ],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 3818,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 2221,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0282876,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0282876,
+      "id": "GQ-20",
+      "category": "cross_clause",
+      "tenant_id": "_public",
+      "as_of": "2026-10-01",
+      "expected": [
+        "privacy-act-1988:C2026C00227:s6/1/agency",
+        "privacy-act-1988:C2026C00227:s6c/3"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 2.6,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to the Acme Pty Ltd Privacy Policy, the company does not use personal information for direct marketing or disclose it to third parties for their direct marketing unless opt-in consent has been provided. This consent can be withdrawn at any time using the unsubscribe link in a marketing message or by contacting them.",
+      "draft_text": "{\n  \"answer\": \"According to the Acme Pty Ltd Privacy Policy, the company does not use personal information for direct marketing or disclose it to third parties for their direct marketing unless opt-in consent has been provided. This consent can be withdrawn at any time using the unsubscribe link in a marketing message or by contacting them.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/privacy-policy:v1:3/2\",\n      \"quote\": \"We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent. You may withdraw this consent at any time by using the unsubscribe link in any marketing message or by contacting us.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:3/2",
+          "quote": "We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent. You may withdraw this consent at any time by using the unsubscribe link in any marketing message or by contacting us."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:3/2",
+          "quote": "We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent. You may withdraw this consent at any time by using the unsubscribe link in any marketing message or by contacting us.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6616,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 205,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0129459,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0129459,
+      "id": "GQ-07",
+      "category": "exact_id",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/privacy-policy:v1:3/2"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 3.53,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to the \"Acme Pty Ltd \u2014 Vendor and Cross-Border Data Transfer Policy (Internal), 2.1\", the vendors currently processing Acme customer personal information outside Australia are CloudAnalytics Inc (incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, providing website usage analytics) and GlobalSupport Ltd (incorporated in the Philippines, providing after-hours customer support).",
+      "draft_text": "{\n  \"answer\": \"According to the \\\"Acme Pty Ltd \u2014 Vendor and Cross-Border Data Transfer Policy (Internal), 2.1\\\", the vendors currently processing Acme customer personal information outside Australia are CloudAnalytics Inc (incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, providing website usage analytics) and GlobalSupport Ltd (incorporated in the Philippines, providing after-hours customer support).\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/vendor-policy:v1:2/1\",\n      \"quote\": \"The following vendors currently process Acme customer personal information outside Australia: - CloudAnalytics Inc, incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, engaged to provide website usage analytics. - GlobalSupport Ltd, incorporated in the Philippines, engaged to provide after-hours customer support.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/vendor-policy:v1:2/1",
+          "quote": "The following vendors currently process Acme customer personal information outside Australia: - CloudAnalytics Inc, incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, engaged to provide website usage analytics. - GlobalSupport Ltd, incorporated in the Philippines, engaged to provide after-hours customer support."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/vendor-policy:v1:2/1",
+          "quote": "The following vendors currently process Acme customer personal information outside Australia: - CloudAnalytics Inc, incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, engaged to provide website usage analytics. - GlobalSupport Ltd, incorporated in the Philippines, engaged to provide after-hours customer support.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6616,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 399,
+        "cached_prefix_hit": false,
+        "cost_usd": 0.0148665,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0148665,
+      "id": "GQ-08",
+      "category": "exact_id",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/vendor-policy:v1:2/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 2.56,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "If you have a complaint about how your personal information was handled, you can contact Acme's Privacy Officer at privacy@acme.example.com.",
+      "draft_text": "{\n  \"answer\": \"If you have a complaint about how your personal information was handled, you can contact Acme's Privacy Officer at privacy@acme.example.com.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/privacy-policy:v1:1/2\",\n      \"quote\": \"If you have a complaint about how we have handled your personal information, you can contact our Privacy Officer at privacy@acme.example.com.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:1/2",
+          "quote": "If you have a complaint about how we have handled your personal information, you can contact our Privacy Officer at privacy@acme.example.com."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:1/2",
+          "quote": "If you have a complaint about how we have handled your personal information, you can contact our Privacy Officer at privacy@acme.example.com.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6622,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 226,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.00424776,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.00424776,
+      "id": "GQ-15",
+      "category": "paraphrase",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/privacy-policy:v1:1/2"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 7.29,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to Acme's public Privacy Policy, they do not use your personal information (including purchase history) for direct marketing unless you have provided opt-in consent, meaning they must ask you first. However, their internal Marketing and Direct Communications Policy states that your purchase history and other personal information may be used by the Marketing team to send promotions and personalised offers by email unless you have opted out.",
+      "draft_text": "{\n  \"answer\": \"According to Acme's public Privacy Policy, they do not use your personal information (including purchase history) for direct marketing unless you have provided opt-in consent, meaning they must ask you first. However, their internal Marketing and Direct Communications Policy states that your purchase history and other personal information may be used by the Marketing team to send promotions and personalised offers by email unless you have opted out.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/privacy-policy:v1:3/2\",\n      \"quote\": \"We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent.\"\n    },\n    {\n      \"clause_id\": \"acme/marketing-policy:v1:1/1\",\n      \"quote\": \"Personal information collected at account creation or checkout - including name, email address and purchase history - may be used by the Marketing team to send product updates, promotions and personalised offers by email and SMS, unless the customer has opted out.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:3/2",
+          "quote": "We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent."
+        },
+        {
+          "clause_id": "acme/marketing-policy:v1:1/1",
+          "quote": "Personal information collected at account creation or checkout - including name, email address and purchase history - may be used by the Marketing team to send product updates, promotions and personalised offers by email and SMS, unless the customer has opted out."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:3/2",
+          "quote": "We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/marketing-policy:v1:1/1",
+          "quote": "Personal information collected at account creation or checkout - including name, email address and purchase history - may be used by the Marketing team to send product updates, promotions and personalised offers by email and SMS, unless the customer has opted out.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6618,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 1094,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.01283436,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.01283436,
+      "id": "GQ-16",
+      "category": "paraphrase",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/privacy-policy:v1:3/2"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 4.05,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under Acme's policies, customer account information is retained for as long as the account is active, plus an additional 7 years after closure in order to meet obligations under tax and consumer law. Once this period has elapsed, the information is securely destroyed.",
+      "draft_text": "{\"answer\":\"Under Acme's policies, customer account information is retained for as long as the account is active, plus an additional 7 years after closure in order to meet obligations under tax and consumer law. Once this period has elapsed, the information is securely destroyed.\",\"citations\":[{\"clause_id\":\"acme/data-security-policy:v1:3/1\",\"quote\":\"Customer account information is retained for as long as the account is active, plus 7 years after closure to meet our obligations under tax and consumer law, after which it is securely destroyed.\"}]}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/data-security-policy:v1:3/1",
+          "quote": "Customer account information is retained for as long as the account is active, plus 7 years after closure to meet our obligations under tax and consumer law, after which it is securely destroyed."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/data-security-policy:v1:3/1",
+          "quote": "Customer account information is retained for as long as the account is active, plus 7 years after closure to meet our obligations under tax and consumer law, after which it is securely destroyed.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6620,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 453,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.00649176,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.00649176,
+      "id": "GQ-17",
+      "category": "paraphrase",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/data-security-policy:v1:3/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 3.76,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to the Data Security and Retention Policy, customer information is kept safe through encryption and access restrictions as follows:\n\n1. **Encryption**: Personal information is encrypted at rest using AES-256 and in transit using TLS 1.2 or higher across all production systems as per \"Acme Pty Ltd \u2014 Data Security and Retention Policy (Internal), 1.1\".\n2. **Access Restrictions**: Access to systems holding customer personal information is restricted to employees whose roles require it, granted on a least-privilege basis, and reviewed quarterly by IT Security as per \"Acme Pty Ltd \u2014 Data Security and Retention Policy (Internal), 2.1\".",
+      "draft_text": "{\n  \"answer\": \"According to the Data Security and Retention Policy, customer information is kept safe through encryption and access restrictions as follows:\\n\\n1. **Encryption**: Personal information is encrypted at rest using AES-256 and in transit using TLS 1.2 or higher across all production systems as per \\\"Acme Pty Ltd \\u2014 Data Security and Retention Policy (Internal), 1.1\\\".\\n2. **Access Restrictions**: Access to systems holding customer personal information is restricted to employees whose roles require it, granted on a least-privilege basis, and reviewed quarterly by IT Security as per \\\"Acme Pty Ltd \\u2014 Data Security and Retention Policy (Internal), 2.1\\\".\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/data-security-policy:v1:1/1\",\n      \"quote\": \"Personal information is encrypted at rest using AES-256 and in transit using TLS 1.2 or higher, across all production systems.\"\n    },\n    {\n      \"clause_id\": \"acme/data-security-policy:v1:2/1\",\n      \"quote\": \"Access to systems holding customer personal information is restricted to employees whose role requires it, granted on a least-privilege basis and reviewed quarterly by IT Security.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/data-security-policy:v1:1/1",
+          "quote": "Personal information is encrypted at rest using AES-256 and in transit using TLS 1.2 or higher, across all production systems."
+        },
+        {
+          "clause_id": "acme/data-security-policy:v1:2/1",
+          "quote": "Access to systems holding customer personal information is restricted to employees whose role requires it, granted on a least-privilege basis and reviewed quarterly by IT Security."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/data-security-policy:v1:1/1",
+          "quote": "Personal information is encrypted at rest using AES-256 and in transit using TLS 1.2 or higher, across all production systems.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/data-security-policy:v1:2/1",
+          "quote": "Access to systems holding customer personal information is restricted to employees whose role requires it, granted on a least-privilege basis and reviewed quarterly by IT Security.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6627,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 468,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.006651809999999999,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.006651809999999999,
+      "id": "GQ-21",
+      "category": "cross_clause",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 9.79,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under Acme's policies, customer account information is retained for as long as the account is active, plus 7 years after its closure to comply with tax and consumer law, and is then securely destroyed. In contrast, payment card details are never retained by Acme; they are managed exclusively by its PCI-DSS-compliant payment provider.",
+      "draft_text": "{\n  \"answer\": \"Under Acme's policies, customer account information is retained for as long as the account is active, plus 7 years after its closure to comply with tax and consumer law, and is then securely destroyed. In contrast, payment card details are never retained by Acme; they are managed exclusively by its PCI-DSS-compliant payment provider.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/data-security-policy:v1:3/1\",\n      \"quote\": \"Customer account information is retained for as long as the account is active, plus 7 years after closure to meet our obligations under tax and consumer law, after which it is securely destroyed.\"\n    },\n    {\n      \"clause_id\": \"acme/data-security-policy:v1:3/2\",\n      \"quote\": \"Payment card details are never retained by Acme; these are handled exclusively by our PCI-DSS-compliant payment provider.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/data-security-policy:v1:3/1",
+          "quote": "Customer account information is retained for as long as the account is active, plus 7 years after closure to meet our obligations under tax and consumer law, after which it is securely destroyed."
+        },
+        {
+          "clause_id": "acme/data-security-policy:v1:3/2",
+          "quote": "Payment card details are never retained by Acme; these are handled exclusively by our PCI-DSS-compliant payment provider."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/data-security-policy:v1:3/1",
+          "quote": "Customer account information is retained for as long as the account is active, plus 7 years after closure to meet our obligations under tax and consumer law, after which it is securely destroyed.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/data-security-policy:v1:3/2",
+          "quote": "Payment card details are never retained by Acme; these are handled exclusively by our PCI-DSS-compliant payment provider.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6616,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 426,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.0062178599999999995,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.0062178599999999995,
+      "id": "GQ-22",
+      "category": "cross_clause",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 7.72,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Acme handles requests to access (see) data and requests to correct (fix) data differently, though both require staff to first verify the customer's identity using a standard identity verification checklist under \"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 1.2\".\n\nFor a request to see data (access request):\n- Once verified, the assigned staff member compiles the personal information and provides it to the customer, typically as a PDF export, as soon as practicable (\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 2.1\").\n- If the request is refused in whole or in part, the customer is provided with written reasons for the refusal and details on how to complain (\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 2.2\").\n\nFor a request to fix data (correction request):\n- Once verified and confirmed accurate, the staff member updates the record and, where practicable, notifies any third party who previously received the incorrect information (\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 3.1\").\n- If Acme determines a correction is not warranted, the customer can request that a statement be associated with the record noting their view that the information is inaccurate, out of date, incomplete, irrelevant, or misleading (\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 3.2\").",
+      "draft_text": "{\n  \"answer\": \"Acme handles requests to access (see) data and requests to correct (fix) data differently, though both require staff to first verify the customer's identity using a standard identity verification checklist under \\\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 1.2\\\".\\n\\nFor a request to see data (access request):\\n- Once verified, the assigned staff member compiles the personal information and provides it to the customer, typically as a PDF export, as soon as practicable (\\\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 2.1\\\").\\n- If the request is refused in whole or in part, the customer is provided with written reasons for the refusal and details on how to complain (\\\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 2.2\\\").\\n\\nFor a request to fix data (correction request):\\n- Once verified and confirmed accurate, the staff member updates the record and, where practicable, notifies any third party who previously received the incorrect information (\\\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 3.1\\\").\\n- If Acme determines a correction is not warranted, the customer can request that a statement be associated with the record noting their view that the information is inaccurate, out of date, incomplete, irrelevant, or misleading (\\\"Acme Pty Ltd \u2014 Access and Correction Request Procedure (Internal), 3.2\\\").\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/access-correction-procedure:v1:1/2\",\n      \"quote\": \"Staff must verify the requester's identity using our standard identity verification checklist before actioning the request.\"\n    },\n    {\n      \"clause_id\": \"acme/access-correction-procedure:v1:2/1\",\n      \"quote\": \"Once identity is verified, the assigned staff member compiles the personal information held about the customer and provides it in the form requested (typically a PDF export), as soon as practicable after the request is verified.\"\n    },\n    {\n      \"clause_id\": \"acme/access-correction-procedure:v1:2/2\",\n      \"quote\": \"If a request is refused in whole or in part - for example, where providing access would unreasonably impact the privacy of another individual - the customer is given written reasons for the refusal and information about how to complain.\"\n    },\n    {\n      \"clause_id\": \"acme/access-correction-procedure:v1:3/1\",\n      \"quote\": \"Once identity is verified and the correction is confirmed accurate, the assigned staff member updates the customer's record and notifies any third party to whom the incorrect information was previously disclosed, where practicable.\"\n    },\n    {\n      \"clause_id\": \"acme/access-correction-procedure:v1:3/2\",\n      \"quote\": \"If Acme is not satisfied a correction is warranted, the customer may ask us to associate a statement with the record noting that the customer considers the information inaccurate, out of date, incomplete, irrelevant or misleading.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/access-correction-procedure:v1:1/2",
+          "quote": "Staff must verify the requester's identity using our standard identity verification checklist before actioning the request."
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:2/1",
+          "quote": "Once identity is verified, the assigned staff member compiles the personal information held about the customer and provides it in the form requested (typically a PDF export), as soon as practicable after the request is verified."
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:2/2",
+          "quote": "If a request is refused in whole or in part - for example, where providing access would unreasonably impact the privacy of another individual - the customer is given written reasons for the refusal and information about how to complain."
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:3/1",
+          "quote": "Once identity is verified and the correction is confirmed accurate, the assigned staff member updates the customer's record and notifies any third party to whom the incorrect information was previously disclosed, where practicable."
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:3/2",
+          "quote": "If Acme is not satisfied a correction is warranted, the customer may ask us to associate a statement with the record noting that the customer considers the information inaccurate, out of date, incomplete, irrelevant or misleading."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/access-correction-procedure:v1:1/2",
+          "quote": "Staff must verify the requester's identity using our standard identity verification checklist before actioning the request.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:2/1",
+          "quote": "Once identity is verified, the assigned staff member compiles the personal information held about the customer and provides it in the form requested (typically a PDF export), as soon as practicable after the request is verified.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:2/2",
+          "quote": "If a request is refused in whole or in part - for example, where providing access would unreasonably impact the privacy of another individual - the customer is given written reasons for the refusal and information about how to complain.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:3/1",
+          "quote": "Once identity is verified and the correction is confirmed accurate, the assigned staff member updates the customer's record and notifies any third party to whom the incorrect information was previously disclosed, where practicable.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/access-correction-procedure:v1:3/2",
+          "quote": "If Acme is not satisfied a correction is warranted, the customer may ask us to associate a statement with the record noting that the customer considers the information inaccurate, out of date, incomplete, irrelevant or misleading.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6624,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 1234,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.014230259999999998,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.014230259999999998,
+      "id": "GQ-23",
+      "category": "cross_clause",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:3/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 5.9,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "According to Acme's public Privacy Policy, the company does not use a customer's personal information for direct marketing unless the customer has given opt-in consent. However, under their internal Marketing and Direct Communications Policy, the Marketing team may use personal information collected at account creation or checkout (such as name, email address, and purchase history) to send marketing communications unless the customer has opted out.",
+      "draft_text": "{\n  \"answer\": \"According to Acme's public Privacy Policy, the company does not use a customer's personal information for direct marketing unless the customer has given opt-in consent. However, under their internal Marketing and Direct Communications Policy, the Marketing team may use personal information collected at account creation or checkout (such as name, email address, and purchase history) to send marketing communications unless the customer has opted out.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/privacy-policy:v1:3/2\",\n      \"quote\": \"We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent.\"\n    },\n    {\n      \"clause_id\": \"acme/marketing-policy:v1:1/1\",\n      \"quote\": \"Personal information collected at account creation or checkout - including name, email address and purchase history - may be used by the Marketing team to send product updates, promotions and personalised offers by email and SMS, unless the customer has opted out.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:3/2",
+          "quote": "We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent."
+        },
+        {
+          "clause_id": "acme/marketing-policy:v1:1/1",
+          "quote": "Personal information collected at account creation or checkout - including name, email address and purchase history - may be used by the Marketing team to send product updates, promotions and personalised offers by email and SMS, unless the customer has opted out."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/privacy-policy:v1:3/2",
+          "quote": "We do not use your personal information for direct marketing, and we do not disclose it to any third party for that third party's own direct marketing, unless you have given us your opt-in consent.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/marketing-policy:v1:1/1",
+          "quote": "Personal information collected at account creation or checkout - including name, email address and purchase history - may be used by the Marketing team to send product updates, promotions and personalised offers by email and SMS, unless the customer has opted out.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6619,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 851,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.010430310000000002,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.010430310000000002,
+      "id": "GQ-24",
+      "category": "cross_clause",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/privacy-policy:v1:3/2",
+        "acme/marketing-policy:v1:1/1"
+      ]
+    },
+    {
+      "schema_valid": true,
+      "seconds": 5.05,
+      "trace_id": "00000000000000000000000000000000",
+      "verified": true,
+      "answer": "Under Acme's internal policies, engagement of an overseas vendor does not require a separate assessment of that jurisdiction's privacy law, as long as the vendor is listed in the Approved Vendor Register and has signed Acme's standard vendor agreement. This is despite the fact that some overseas vendors, such as CloudAnalytics Inc, are incorporated in jurisdictions with no data protection laws substantially similar to the Australian Privacy Principles (APPs). However, under Acme's public Privacy Policy, Acme states that it takes reasonable steps to ensure any overseas recipient of personal information handles it consistently with the APPs.",
+      "draft_text": "{\n  \"answer\": \"Under Acme's internal policies, engagement of an overseas vendor does not require a separate assessment of that jurisdiction's privacy law, as long as the vendor is listed in the Approved Vendor Register and has signed Acme's standard vendor agreement. This is despite the fact that some overseas vendors, such as CloudAnalytics Inc, are incorporated in jurisdictions with no data protection laws substantially similar to the Australian Privacy Principles (APPs). However, under Acme's public Privacy Policy, Acme states that it takes reasonable steps to ensure any overseas recipient of personal information handles it consistently with the APPs.\",\n  \"citations\": [\n    {\n      \"clause_id\": \"acme/vendor-policy:v1:2/2\",\n      \"quote\": \"Engagement of an overseas vendor under this policy does not require a separate assessment of that jurisdiction's privacy law, provided the vendor is listed in the Approved Vendor Register and has signed Acme's standard vendor agreement.\"\n    },\n    {\n      \"clause_id\": \"acme/vendor-policy:v1:2/1\",\n      \"quote\": \"CloudAnalytics Inc, incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, engaged to provide website usage analytics.\"\n    },\n    {\n      \"clause_id\": \"acme/privacy-policy:v1:4/1\",\n      \"quote\": \"We take reasonable steps to ensure any overseas recipient of your personal information handles it consistently with the Australian Privacy Principles.\"\n    }\n  ]\n}",
+      "draft_citations": [
+        {
+          "clause_id": "acme/vendor-policy:v1:2/2",
+          "quote": "Engagement of an overseas vendor under this policy does not require a separate assessment of that jurisdiction's privacy law, provided the vendor is listed in the Approved Vendor Register and has signed Acme's standard vendor agreement."
+        },
+        {
+          "clause_id": "acme/vendor-policy:v1:2/1",
+          "quote": "CloudAnalytics Inc, incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, engaged to provide website usage analytics."
+        },
+        {
+          "clause_id": "acme/privacy-policy:v1:4/1",
+          "quote": "We take reasonable steps to ensure any overseas recipient of your personal information handles it consistently with the Australian Privacy Principles."
+        }
+      ],
+      "final_citations": [
+        {
+          "clause_id": "acme/vendor-policy:v1:2/2",
+          "quote": "Engagement of an overseas vendor under this policy does not require a separate assessment of that jurisdiction's privacy law, provided the vendor is listed in the Approved Vendor Register and has signed Acme's standard vendor agreement.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/vendor-policy:v1:2/1",
+          "quote": "CloudAnalytics Inc, incorporated in a jurisdiction with no data protection law substantially similar to the Australian Privacy Principles, engaged to provide website usage analytics.",
+          "outcome": "verified"
+        },
+        {
+          "clause_id": "acme/privacy-policy:v1:4/1",
+          "quote": "We take reasonable steps to ensure any overseas recipient of your personal information handles it consistently with the Australian Privacy Principles.",
+          "outcome": "verified"
+        }
+      ],
+      "repairs": [],
+      "context": [
+        "acme/access-correction-procedure:v1:1/1",
+        "acme/access-correction-procedure:v1:1/2",
+        "acme/access-correction-procedure:v1:1/3",
+        "acme/access-correction-procedure:v1:2/1",
+        "acme/access-correction-procedure:v1:2/2",
+        "acme/access-correction-procedure:v1:3/1",
+        "acme/access-correction-procedure:v1:3/2",
+        "acme/access-correction-procedure:v1:4/1",
+        "acme/data-security-policy:v1:1/1",
+        "acme/data-security-policy:v1:2/1",
+        "acme/data-security-policy:v1:2/2",
+        "acme/data-security-policy:v1:3/1",
+        "acme/data-security-policy:v1:3/2",
+        "acme/data-security-policy:v1:4/1",
+        "acme/data-security-policy:v1:4/2",
+        "acme/employee-policy:v1:1/1",
+        "acme/employee-policy:v1:2/1",
+        "acme/employee-policy:v1:3/1",
+        "acme/employee-policy:v1:3/2",
+        "acme/employee-policy:v1:4/1",
+        "acme/marketing-policy:v1:1/1",
+        "acme/marketing-policy:v1:1/2",
+        "acme/marketing-policy:v1:2/1",
+        "acme/marketing-policy:v1:3/1",
+        "acme/privacy-policy:v1:1/1",
+        "acme/privacy-policy:v1:1/2",
+        "acme/privacy-policy:v1:2/1",
+        "acme/privacy-policy:v1:2/2",
+        "acme/privacy-policy:v1:2/3",
+        "acme/privacy-policy:v1:3/1",
+        "acme/privacy-policy:v1:3/2",
+        "acme/privacy-policy:v1:3/3",
+        "acme/privacy-policy:v1:4/1",
+        "acme/privacy-policy:v1:4/2",
+        "acme/privacy-policy:v1:5/1",
+        "acme/privacy-policy:v1:6/1",
+        "acme/privacy-policy:v1:6/2",
+        "acme/vendor-policy:v1:1/1",
+        "acme/vendor-policy:v1:1/2",
+        "acme/vendor-policy:v1:2/1",
+        "acme/vendor-policy:v1:2/2",
+        "acme/vendor-policy:v1:3/1",
+        "acme/vendor-policy:v1:3/2"
+      ],
+      "delivered": [],
+      "not_in_environment": [],
+      "generation": {
+        "input_tokens": 6616,
+        "cache_read_input_tokens": 6004,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 730,
+        "cached_prefix_hit": true,
+        "cost_usd": 0.00922746,
+        "stop_reason": "STOP"
+      },
+      "cost_usd": 0.00922746,
+      "id": "GQ-25",
+      "category": "cross_clause",
+      "tenant_id": "acme",
+      "as_of": "2026-10-01",
+      "expected": [
+        "acme/privacy-policy:v1:4/1",
+        "acme/vendor-policy:v1:2/1"
+      ]
+    }
+  ]
+}
