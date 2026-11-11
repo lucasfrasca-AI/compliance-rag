@@ -59,7 +59,12 @@ only the model, token counts, cache use and cost.
 **Errors** leave here in our words (the SDK's exception is the `__cause__`, for
 the server's log, and its text never reaches a member):
 
-- HTTP 429 or `RESOURCE_EXHAUSTED` is `GenerationUnavailable(QUOTA)`;
+- HTTP 429 or `RESOURCE_EXHAUSTED` is `GenerationUnavailable(QUOTA)`, but only
+  after the SDK's own retry (`http_options`, #329) has sent the request
+  `RETRY_ATTEMPTS` times with exponential backoff: on Standard PayGo a 429 is
+  Google's "try again later", not a fixed quota (ADR-0057). 503 is retried the
+  same way and, if it never clears, raised as it is. The attempts made are
+  `generator.attempts` and `generator.retry_attempts` on the span;
 - HTTP 401/403 or `PERMISSION_DENIED`/`UNAUTHENTICATED` is
   `GenerationUnavailable(ACCESS)`;
 - anything else is raised as it is, and the API reports it as `internal`.
@@ -70,8 +75,10 @@ fake that returns real `google.genai.types.GenerateContentResponse` objects.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Protocol, cast
 
+import httpx
 from google.genai import types
 from google.genai.errors import APIError
 
@@ -117,6 +124,67 @@ a reply cut off by the model's own thinking would be unparseable."""
 
 _THINKING_LEVEL = types.ThinkingLevel.LOW
 _TIMEOUT_MS = 300_000
+
+RETRY_HTTP_STATUS_CODES = (429, 503)
+"""Retried, because Google's guidance for both on pay-as-you-go is to back off
+and try again: a 429 on Standard PayGo "doesn't indicate that you've hit a
+fixed quota" (ADR-0057). Never 400, 401, 403 or 404 (the request or the
+access is wrong, and sending it again won't change that), nor the SDK's other
+defaults (408, 500, 502, 504)."""
+RETRY_ATTEMPTS = 5
+"""Including the first request: four retries."""
+RETRY_INITIAL_DELAY_S = 2.0
+RETRY_MAX_DELAY_S = 20.0
+RETRY_JITTER_S = 1.0
+"""The SDK waits `initial * 2**n + uniform(0, jitter)` seconds before retry
+n+1, capped at the max: 2, 4, 8 and 16 s plus jitter, so a member waits at most
+about 34 s in total on top of the requests themselves before `quota` is shown
+(#329). The SDK reads a `0` for any of these as unset and uses its own
+default, so an override is a small positive number, never 0."""
+
+_ATTEMPTS: ContextVar[list[int] | None] = ContextVar("gemini_attempts", default=None)
+
+
+async def _count_attempt(request: httpx.Request) -> None:
+    """httpx `request` hook: one more HTTP request made for the `generate` call
+    in progress. The SDK's own retry loop gives no count back, so the transport
+    is where an attempt is seen; `ContextVar` keeps concurrent calls apart."""
+    del request
+    counter = _ATTEMPTS.get()
+    if counter is not None:
+        counter[0] += 1
+
+
+def http_options(
+    *,
+    retry_initial_delay: float = RETRY_INITIAL_DELAY_S,
+    retry_max_delay: float = RETRY_MAX_DELAY_S,
+    retry_jitter: float = RETRY_JITTER_S,
+    httpx_async_client: httpx.AsyncClient | None = None,
+) -> types.HttpOptions:
+    """The one place the client's timeout and retry policy are set: `create`
+    builds the real client from it and the tests build theirs from it, so both
+    run the same attempts and status codes. Only the delays and the HTTP client
+    can be overridden, so a test runs with near-zero waits over a stub
+    transport (`httpx_async_client`), which gets the attempt counter too."""
+    retry = types.HttpRetryOptions(
+        attempts=RETRY_ATTEMPTS,
+        initial_delay=retry_initial_delay,
+        max_delay=retry_max_delay,
+        jitter=retry_jitter,
+        http_status_codes=list(RETRY_HTTP_STATUS_CODES),
+    )
+    if httpx_async_client is None:
+        return types.HttpOptions(
+            timeout=_TIMEOUT_MS,
+            retry_options=retry,
+            async_client_args={"event_hooks": {"request": [_count_attempt]}},
+        )
+    hooks = httpx_async_client.event_hooks
+    httpx_async_client.event_hooks = {**hooks, "request": [*hooks["request"], _count_attempt]}
+    return types.HttpOptions(
+        timeout=_TIMEOUT_MS, retry_options=retry, httpx_async_client=httpx_async_client
+    )
 
 
 def price_usd(*, uncached_input: int, cached_input: int, output: int) -> float:
@@ -247,7 +315,7 @@ class GeminiGenerator(Generator):
             vertexai=True,
             project=settings.gcp_project_id,
             location=region,
-            http_options=types.HttpOptions(timeout=_TIMEOUT_MS),
+            http_options=http_options(),
         )
         # `generate_content` accepts a broad contents union whose list members
         # are invariant, so it isn't structurally a `_ModelsLike` by pyright's
@@ -292,6 +360,8 @@ class GeminiGenerator(Generator):
                 "generator.cache_mode": "implicit",
             },
         ) as current:
+            attempts = [0]
+            token = _ATTEMPTS.set(attempts)
             try:
                 response = await self._models.generate_content(
                     model=self._model,
@@ -307,6 +377,11 @@ class GeminiGenerator(Generator):
                     raise
                 current.set_attribute("generator.unavailable", reason.value)
                 raise GenerationUnavailable(reason) from refused
+            finally:
+                _ATTEMPTS.reset(token)
+                # Requests actually sent, the SDK's retries of a 429 or 503 included.
+                current.set_attribute("generator.attempts", attempts[0])
+                current.set_attribute("generator.retry_attempts", max(attempts[0] - 1, 0))
             usage = response.usage_metadata or types.GenerateContentResponseUsageMetadata()
             prompt_tokens = usage.prompt_token_count or 0
             cached = min(usage.cached_content_token_count or 0, prompt_tokens)

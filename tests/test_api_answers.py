@@ -28,6 +28,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.gemini_generator import RETRY_ATTEMPTS
 from compliance_rag.adapters.generation_residency import GenerationResidencyError, TenantTextGate
 from compliance_rag.adapters.interfaces import (
     Generator,
@@ -450,7 +451,7 @@ async def test_a_vertex_quota_refusal_is_generation_unavailable_with_no_sdk_text
     )
     settings = api_settings(**OFFSHORE, offshore_generation_testers=MEMBER)
     response, events = await _ask(generator, ledger=ledger, settings=settings)
-    assert len(requests) == 1  # the model was asked, and refused
+    assert len(requests) == RETRY_ATTEMPTS  # the model was asked, retried, and refused
     assert [name for name, _ in events] == ["coverage", "retrieval", "error"]
     error = events[-1][1]
     assert error == {
