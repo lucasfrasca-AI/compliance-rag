@@ -2,7 +2,7 @@
 and chunked exactly as ingest does it. Two of them, one law corpus each, both
 with the six synthetic policies as `acme`'s own documents:
 
-- **The gate corpus** (`gate_chunks()`): the whole compilation's 779 selected
+- **The gate corpus** (`gate_chunks()`): the whole compilation's 1023 selected
   clauses as library law under `_public` — what production retrieves over. The
   recall gates (`tests/test_recall_gate.py`, `tests/test_recall_gate_reranked.py`)
   load it into a real Qdrant server and measure retrieval against the labels.
@@ -140,7 +140,7 @@ def golden_texts() -> tuple[str, ...]:
 @cache
 def gate_law_clauses() -> tuple[ClauseRecord, ...]:
     """The whole compilation's selected clauses, from the committed parser
-    output (`eval/compilation_clauses.py`). Read once per process: 779 records."""
+    output (`eval/compilation_clauses.py`). Read once per process: 1023 records."""
     return load_compilation_clauses().clauses
 
 

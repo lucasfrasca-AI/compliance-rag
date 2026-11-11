@@ -160,18 +160,20 @@ def test_on_the_whole_compilation_only_s6_1_holds_clauses_outside_its_provision(
 def test_what_a_ranked_clause_can_bring_on_the_whole_compilation_is_pinned() -> None:
     """Delivered recall counts every clause a ranked one brings, so what it
     can bring may not widen unseen (ADR-0045): a looser provision rule would
-    raise recall with no better ranking. On C2026C00227, 497 clauses have a
-    chapeau (two at most) and 152 have paragraphs (22 at most, "enforcement
-    body"): 593 pairs. A change here is a decision, re-recorded deliberately."""
+    raise recall with no better ranking. On C2026C00227, 675 clauses have a
+    chapeau (two at most) and 213 have paragraphs (22 at most, "enforcement
+    body"): 813 pairs. A change here is a decision, re-recorded deliberately:
+    #282's 244 added clauses (s 7A, s 16C, Part IIIC Divs 1-3) took it from
+    593 pairs (497 and 152) with the provision rule unchanged."""
     ids = {c.clause_id for c in gate_law_clauses()}
     pairs = [
         (a, c) for c in ids for a in clause_ancestors(c) if a in ids and in_same_provision(a, c)
     ]
     chapeaux = Counter(c for _, c in pairs)
     paragraphs = Counter(a for a, _ in pairs)
-    assert len(pairs) == 593
-    assert (len(chapeaux), max(chapeaux.values())) == (497, 2)
-    assert (len(paragraphs), max(paragraphs.values())) == (152, 22)
+    assert len(pairs) == 813
+    assert (len(chapeaux), max(chapeaux.values())) == (675, 2)
+    assert (len(paragraphs), max(paragraphs.values())) == (213, 22)
     assert paragraphs.most_common(1) == [
         (f"{LAW_INSTRUMENT_ID}:C2026C00227:s6/1/enforcement-body", 22)
     ]
@@ -278,8 +280,9 @@ def test_a_reading_ends_at_the_last_whole_paragraph_inside_the_budget() -> None:
 def test_every_clause_of_the_compilation_read_in_its_provision_fits_the_reranker_window() -> None:
     """The chunk budget (`CHUNK_MAX_TOKENS`, by the reranker's own tokenizer)
     holds for what the cross-encoder reads, so the service never refuses a
-    candidate for its length (ADR-0045). A clause after its chapeaux is 115 at
-    most on C2026C00227, so the budget only ever stops paragraphs. Read whole,
+    candidate for its length (ADR-0045). A clause after its chapeaux is 118 at
+    most on C2026C00227 (s 26WQ(9)(b), selected in #282; 115 before, s
+    6E(1A)(a)), so the budget only ever stops paragraphs. Read whole,
     APP 8.2 is the longest at 388 of 420, and APP 5.2 is the one provision too
     long to read whole: it is read to its last paragraph that fits."""
     clauses = gate_law_clauses()
@@ -290,7 +293,7 @@ def test_every_clause_of_the_compilation_read_in_its_provision_fits_the_reranker
     heads = [
         " ".join((*(h.text for h in chapeaux_of(c, as_candidates)), c.text)) for c in as_candidates
     ]
-    assert max(count_reranker_tokens(head) for head in heads) <= 115
+    assert max(count_reranker_tokens(head) for head in heads) <= 118
     readings = {c.clause_id: read_in_provision(c, as_candidates) for c in as_candidates}
     assert max(count_reranker_tokens(r) for r in readings.values()) <= CHUNK_MAX_TOKENS
     whole = {

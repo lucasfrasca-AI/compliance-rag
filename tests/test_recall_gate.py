@@ -1,7 +1,7 @@
 """The regression gate (issues #28, #180): recall@10 over the signed golden
 set, through `route()` on a real Qdrant server, on every build.
 
-The corpus is the gate corpus: the whole compilation's 779 selected clauses
+The corpus is the gate corpus: the whole compilation's 1023 selected clauses
 and the six Acme policies (`gate_chunks()`), not the 75-clause excerpt — the
 excerpt was an easier problem than production (ADR-0043). Dense vectors are
 real `gemini-embedding-001` output served from the checked-in cache

@@ -15,7 +15,8 @@ runs live.
 **What a case checks** (`check_case`), on one live answer:
 
 - **flagged**: `not_in_environment` names each instrument the case lists, by
-  the register's name, whatever the model wrote. Deterministic.
+  the register's name, whatever the model wrote; for a case that lists none
+  (a question naming a held part, GE-03 since #282), it is empty. Deterministic.
 - **delivered**: each expected clause is in what the model was given (the
   delivered list, ADR-0045). Deterministic.
 - **and one of the two answers the human accepts**, measured by a plain-text
@@ -80,9 +81,10 @@ class EnvironmentCase(_Strict):
     subscribes: tuple[str, ...] = ()
     """The library instruments the tenant subscribes to for this case."""
     as_of: dt.date
-    not_in_environment: tuple[str, ...] = Field(min_length=1)
+    not_in_environment: tuple[str, ...] = ()
     """The register's name (`known_as`) of each instrument the answer's
-    `not_in_environment` must name."""
+    `not_in_environment` must name. Empty for a question that names only
+    what the tenant holds (GE-03 since #282): its answer must carry no flag."""
     expected_clause_ids: tuple[str, ...] = ()
     """Clauses that must be in what the model is given (the delivered list)."""
     cites_instead: str = Field(min_length=1)
@@ -259,7 +261,10 @@ def check_case(
     )
     cited_ids = list(cited)
     return CaseCheck(
-        flagged=all(name in known for name in case.not_in_environment),
+        # A case that expects no flag is held to carrying none.
+        flagged=all(name in known for name in case.not_in_environment)
+        if case.not_in_environment
+        else not known,
         delivered=set(case.expected_clause_ids) <= set(delivered),
         says_not_in_environment=says,
         names_held_instrument=_mentions(text, case.cites_instead),
