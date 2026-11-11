@@ -134,6 +134,24 @@ async def test_a_clause_id_query_with_no_matching_chunk_returns_an_empty_trace()
     assert reranker.rerank_calls == 0
 
 
+async def test_a_search_that_finds_nothing_returns_an_empty_trace_without_reranking() -> None:
+    """A search with no candidate is an empty trace, as the clause-id path's
+    miss is (#331): the reranker service refuses an empty list with a 400,
+    so nothing is sent to it, and "nothing retrieved" reaches the caller as
+    an empty trace, not an HTTP error."""
+    reranker = FakeReranker()
+    pipeline = RetrievalPipeline(FakeRetrievalStore((), ledger=FakeLedgerStore()), reranker)
+    question = "what steps must be taken to protect personal information"
+
+    for trace in (
+        await pipeline.retrieve(question, "_public", TODAY, law=ALL_LAW),
+        await pipeline.route(question, "_public", TODAY, law=ALL_LAW),
+    ):
+        assert trace.fused == () and trace.reranked == ()
+        assert trace.delivered() == () and trace.top_candidate() is None
+    assert reranker.rerank_calls == 0
+
+
 async def test_answer_routes_a_clause_id_question_to_the_keyword_channel(
     public_chunk: Chunk,
 ) -> None:

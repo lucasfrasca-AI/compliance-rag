@@ -1487,7 +1487,9 @@ class Reranker(ABC):
         *,
         top_k: int,
     ) -> tuple[ScoredDocument, ...]:
-        """Score documents against the query, returning the top `top_k`."""
+        """Score documents against the query, returning the top `top_k`.
+        `documents` is never empty: the service refuses an empty list (a
+        400), so a caller with nothing to score doesn't call (#331)."""
 
 
 class Embedder(ABC):

@@ -259,6 +259,13 @@ class RetrievalPipeline:
             for channel, candidates in result.per_channel.items():
                 current.set_attribute(f"retrieval.channel.{channel.value}", scored(candidates))
             current.set_attribute("retrieval.fused", scored(result.fused))
+            if not result.fused:
+                # Nothing to rank, as when the router's lookup misses: an
+                # empty trace, never a reranker call with nothing to score,
+                # which the service refuses (#331). A tenant with no law
+                # subscribed and every document in the prefix gets here.
+                current.set_attribute("retrieval.rerank_scores", [])
+                return RetrievalTrace(per_channel=result.per_channel, fused=(), reranked=())
 
             # One read of the fused candidates' provisions (ADR-0045): what
             # the cross-encoder reads each library-law candidate in, and what

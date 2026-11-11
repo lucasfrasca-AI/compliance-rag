@@ -893,6 +893,10 @@ class FakeReranker(Reranker):
         top_k: int,
     ) -> tuple[ScoredDocument, ...]:
         self.rerank_calls += 1
+        if not documents:
+            # As the service refuses one (its 400), so no composition passes
+            # here by calling with nothing that would fail live (#331).
+            raise ValueError("documents must not be empty")
         q = set(canonicalise(query).lower().split())
         scored = [
             ScoredDocument(
