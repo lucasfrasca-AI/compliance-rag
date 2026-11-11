@@ -65,7 +65,7 @@ from compliance_rag.eval.golden_corpus import golden_chunks, golden_clauses
 from compliance_rag.eval.harness import golden_clause_store, law_source_html
 from compliance_rag.graph.mappings import load_mapping_set
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
-from compliance_rag.settings import Settings
+from compliance_rag.settings import REGION, Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
 from tests.api_support import (
     MEMBER,
@@ -77,7 +77,7 @@ from tests.api_support import (
     mint,
     session_member,
 )
-from tests.bedrock_support import bedrock_generator, refused
+from tests.gemini_support import SDK_WORDS, gemini_generator, quota_exhausted_generator, refused
 from tests.test_api_answers import (
     AS_OF,
     NOT_RETRIEVED,
@@ -99,7 +99,6 @@ from tests.test_api_not_in_environment import (
     _reply as spam_reply,  # pyright: ignore[reportPrivateUsage]
 )
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
-from tests.vertex_quota import SDK_WORDS, quota_exhausted_generator
 
 SECRET = "s3cr3t-" + "k" * 40
 ORIGIN = "https://api"
@@ -524,20 +523,24 @@ async def test_generation_unavailable_is_its_own_state_with_no_sdk_words() -> No
     )
 
 
-async def test_bedrock_access_denied_is_unavailable_not_internal_and_reads_back_as_such() -> None:
-    """Bedrock's AccessDeniedException (#322): the stream says
+async def test_vertex_permission_denied_is_unavailable_not_internal_and_reads_back_as_such() -> (
+    None
+):
+    """Vertex's 403 `PERMISSION_DENIED` (#322, #326): the stream says
     `generation_unavailable` with reason `access`, not `internal`; the ledger
     keeps the reason and none of the provider's words; the reloaded card says
-    the operator has to restore access. The member is no tester, and the
-    question still reaches the model: on the Australian profile no offshore
-    gate stands in the way."""
+    the operator has to restore access. Generation runs in Sydney here, so the
+    member needs no tester listing for the question to reach the model."""
     ledger = await acme_ledger()
     requests: list[httpx.Request] = []
-    provider = "User: arn:aws:sts::123456789012:assumed-role/x is not authorized (ya29.TOKEN)"
-    generator = bedrock_generator(
-        lambda _: refused(403, provider, "AccessDeniedException"), requests
+    provider = "Permission denied on resource project p (ya29.TOKEN)"
+    generator = gemini_generator(
+        lambda _: refused(403, provider, "PERMISSION_DENIED"),
+        FakeRetrievalStore(ledger=ledger),
+        requests,
+        region=REGION,
     )
-    settings = page_settings()  # bedrock by default, and MEMBER is no tester
+    settings = page_settings()  # Sydney by default, and MEMBER is no tester
     async with await client_for(generator, ledger=ledger, settings=settings) as client:
         await sign_in(client)
         events, fragment = await ask(client)
@@ -550,7 +553,7 @@ async def test_bedrock_access_denied_is_unavailable_not_internal_and_reads_back_
     assert outcomes(fragment) == ["generation_unavailable"]
     words = text_of(fragment)
     assert "refused access" in words and "quota" not in words
-    for leaked in ("arn:aws", "ya29", "AccessDenied", "Traceback"):
+    for leaked in ("Permission denied", "PERMISSION_DENIED", "ya29", "ClientError", "Traceback"):
         assert leaked not in fragment and leaked not in recorded.text
     assert outcomes(recorded.text) == ["generation_unavailable"]
     assert text_of(recorded.text) == words
@@ -558,7 +561,7 @@ async def test_bedrock_access_denied_is_unavailable_not_internal_and_reads_back_
     assert api["turns"][1]["reason"] == "access"
     stored = await ledger.chat_turns(TENANT, UID, chat_id)
     assert stored[1].unavailable is Unavailability.ACCESS
-    assert "arn:aws" not in repr(stored)
+    assert "ya29" not in repr(stored)
 
 
 async def test_a_policy_corpus_over_the_cap_is_its_own_state_with_its_numbers() -> None:

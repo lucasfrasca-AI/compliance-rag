@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REGION = "australia-southeast1"
@@ -18,8 +19,10 @@ build-phase generation stays here (D-07, D-15, D-16, ADR-0023)."""
 
 BUILD_PHASE_OFFSHORE_REGION = "us"
 """The US multi-region endpoint (`aiplatform.us.rep.googleapis.com`), where
-`claude-sonnet-5` is served and enabled for this project (ADR-0024; it has no
-Sydney or Singapore endpoint). Allowed for generation only, and only while
+`gemini-3.5-flash` is served for this project (ADR-0057; the model has no
+Sydney endpoint), and where `claude-sonnet-5` is served too, once Claude is
+approved on this project (ADR-0024; dormant). Allowed for generation only,
+and only while
 the corpus is public law plus synthetic data —
 `adapters/generation_residency.py` enforces that (ADR-0023)."""
 
@@ -27,36 +30,29 @@ MIN_SESSION_SECRET_CHARS = 32
 """A session secret shorter than this is refused: the cookie's signature is
 only as strong as the key (#280)."""
 
-BEDROCK_REGION = "ap-southeast-2"
-"""Sydney, the only Region the Bedrock backend is called from (ADR-0056). Its
-`au.` geographic inference profile processes every request in Sydney or
-Melbourne, so it is the gate's key for generation that stays in Australia."""
+GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
 
-BEDROCK_INFERENCE_PROFILE = "au.anthropic.claude-sonnet-5"
-"""The one inference profile the Bedrock backend may name: the Australian
-geographic profile, whose destinations are Sydney and Melbourne only. An exact
-allowlist, not a prefix: `global.`, `us.`, `apac.` route outside Australia, and
-a prefix alone is not proof of where a request goes (ADR-0056). Adding a model
-means adding its profile here, after reading its destinations."""
+GenerationBackend = Literal["gemini", "claude", "demo"]
+"""What `GENERATION_BACKEND` can name (ADR-0057, #292): `gemini` is Gemini 3.5
+Flash on Vertex (the default); `claude` is Claude on Vertex, dormant until it is
+approved on this project; `demo` is the in-process stand-in that calls no
+model."""
 
-VERTEX_GENERATION_REGIONS = frozenset({REGION, BUILD_PHASE_OFFSHORE_REGION})
-"""What `VERTEX_CLAUDE_REGION` may be. Unchanged from the build phase (ADR-0023,
-ADR-0024)."""
+GeneratorName = GenerationBackend
+"""What the ledger records with an answer turn (ledger 0020, 0022; #292): the
+backend's own name."""
 
-AUSTRALIAN_GENERATION_REGIONS = frozenset({REGION, BEDROCK_REGION})
-"""Where generation runs inside Australia, and so where no offshore gate
-fires: Vertex in Sydney, or Bedrock's `au.` profile called from Sydney."""
 
-GENERATION_REGIONS = VERTEX_GENERATION_REGIONS | {BEDROCK_REGION}
-"""Every key the residency gates accept: `Settings.generation_region` is one of
-these, whichever backend is in use."""
+@dataclass(frozen=True, slots=True)
+class GenerationConfig:
+    """The active generation backend, its model and where it is called: one
+    value, built in one place (`Settings.generation`), that every residency
+    gate and the factory read, so none of them can read another backend's
+    region by name."""
 
-GenerationBackend = Literal["bedrock", "vertex"]
-"""`GENERATION_BACKEND`: which provider serves Claude (ADR-0056)."""
-
-GeneratorName = Literal["claude", "demo"]
-"""What `GENERATOR` can name, and what the ledger records with an answer turn
-(ledger 0020, #292)."""
+    backend: GenerationBackend
+    model: str
+    region: str
 
 
 def _addresses(raw: str) -> frozenset[str]:
@@ -87,47 +83,26 @@ class Settings(BaseSettings):
     gcp_log_bucket: str = "compliance-rag-logs"
 
     # --- Vertex ------------------------------------------------------------
-    generator: GeneratorName = "claude"
-    """`GENERATOR`: which `Generator` the API builds (#292). `claude` is Claude
-    through `GENERATION_BACKEND` (Bedrock's Australian profile by default; on
-    `vertex`, `VERTEX_CLAUDE_MODEL` is required and the residency gate runs);
-    `demo` is the in-process stand-in that calls no model
-    (`adapters/demo_generator.py`), which runs in Sydney and so requires
-    `VERTEX_CLAUDE_REGION=australia-southeast1`. While it is `demo`, every
-    page the API serves carries a banner saying so, and every answer event
-    reports it."""
-    generation_backend: GenerationBackend = "bedrock"
-    """`GENERATION_BACKEND` (ADR-0056): `bedrock` is Claude Sonnet 5 through
-    Bedrock's Australian inference profile, called from Sydney, so every
-    request is processed in Australia; `vertex` is the build-phase path
-    (`VERTEX_CLAUDE_*`), kept until it is removed. Only `GENERATOR=claude`
-    uses either."""
+    generation_backend: GenerationBackend = "gemini"
+    """`GENERATION_BACKEND`: which `Generator` the API builds (ADR-0057, #292).
+    `gemini` is Gemini 3.5 Flash on Vertex, built through the residency gate
+    (`GEMINI_MODEL` required); `claude` is Claude on Vertex through the same
+    gate (`VERTEX_CLAUDE_MODEL` required), dormant until Claude is approved on
+    this project; `demo` is the in-process stand-in that calls no model
+    (`adapters/demo_generator.py`), which runs in Sydney and so requires both
+    regions below to be `australia-southeast1`. While it is `demo`, every page
+    the API serves carries a banner saying so, and every answer event reports
+    it."""
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_region: str = REGION
+    """Sydney by default — fail closed. The build phase opts into the US
+    multi-region explicitly (`GEMINI_REGION=us`, ADR-0023, ADR-0057). Read only
+    with `GENERATION_BACKEND=gemini`."""
     vertex_claude_model: str = ""
     vertex_claude_region: str = REGION
     """Sydney by default — fail closed. The build phase opts into the US
     multi-region explicitly (`VERTEX_CLAUDE_REGION=us`, ADR-0024). Read only
-    with `GENERATION_BACKEND=vertex`."""
-
-    # --- Bedrock -----------------------------------------------------------
-    bedrock_region: str = BEDROCK_REGION
-    """The Region Bedrock is called from: Sydney only (ADR-0056)."""
-    bedrock_inference_profile: str = BEDROCK_INFERENCE_PROFILE
-    """The Australian geographic inference profile, whose destinations are
-    Sydney and Melbourne only. Anything but that exact profile is refused."""
-    aws_role_arn: str = ""
-    """`AWS_ROLE_ARN`: on Cloud Run, the role the runtime service account's
-    Google ID token is exchanged for (STS `AssumeRoleWithWebIdentity`). No AWS
-    key exists anywhere (`adapters/aws_credentials.py`)."""
-    aws_profile: str = ""
-    """`AWS_PROFILE`: locally, a named profile (IAM Identity Center or SSO).
-    Set this or `AWS_ROLE_ARN`, not both."""
-    aws_web_identity_audience: str = "sts.amazonaws.com"
-    """The audience asked of Google for the ID token, which the role's trust
-    policy pins as `accounts.google.com:oaud` (docs/setup/aws-bedrock.md)."""
-    aws_bearer_token_bedrock: SecretStr = SecretStr("")
-    """`AWS_BEARER_TOKEN_BEDROCK`, which the Anthropic SDK would otherwise pick
-    up from the environment on its own: a long-lived Bedrock API key. Read here
-    only to refuse it."""
+    with `GENERATION_BACKEND=claude`."""
     vertex_embedding_model: str = "gemini-embedding-001"
     vertex_embedding_dims: int = 1536
     vertex_ranking_model: str = "semantic-ranker-default"
@@ -225,50 +200,15 @@ class Settings(BaseSettings):
             raise ValueError(f"gcp_region must be {REGION} (D-07); got {v!r}")
         return v
 
-    @field_validator("vertex_claude_region")
+    @field_validator("gemini_region", "vertex_claude_region")
     @classmethod
-    def _generation_region(cls, v: str) -> str:
-        if v not in VERTEX_GENERATION_REGIONS:
+    def _generation_region(cls, v: str, info: ValidationInfo) -> str:
+        if v not in GENERATION_REGIONS:
             raise ValueError(
-                f"vertex_claude_region must be one of {sorted(VERTEX_GENERATION_REGIONS)} — "
-                f"never `global` or any other region (ADR-0023); got {v!r}"
+                f"{info.field_name} must be one of {sorted(GENERATION_REGIONS)} — never "
+                f"`global` or any other region (ADR-0023); got {v!r}"
             )
         return v
-
-    @field_validator("bedrock_region")
-    @classmethod
-    def _bedrock_region_is_sydney(cls, v: str) -> str:
-        if v != BEDROCK_REGION:
-            raise ValueError(
-                f"bedrock_region must be {BEDROCK_REGION}: the Australian inference profile is "
-                f"called from Sydney only (ADR-0056); got {v!r}"
-            )
-        return v
-
-    @field_validator("bedrock_inference_profile")
-    @classmethod
-    def _bedrock_profile_is_australian(cls, v: str) -> str:
-        if v != BEDROCK_INFERENCE_PROFILE:
-            raise ValueError(
-                f"bedrock_inference_profile must be {BEDROCK_INFERENCE_PROFILE!r}, the Australian "
-                "geographic profile; `global.`, `us.`, `apac.` and any other profile can route "
-                f"outside Australia (ADR-0056); got {v!r}"
-            )
-        return v
-
-    @model_validator(mode="after")
-    def _no_long_lived_aws_credentials(self) -> Settings:
-        # The SDK reads this variable by itself, and a bearer key would then
-        # replace the federated credentials without a word.
-        if (
-            self.generation_backend == "bedrock"
-            and self.aws_bearer_token_bedrock.get_secret_value()
-        ):
-            raise ValueError(
-                "AWS_BEARER_TOKEN_BEDROCK is a long-lived Bedrock API key and is refused: "
-                "credentials come from web-identity federation or a named profile (ADR-0056)"
-            )
-        return self
 
     @model_validator(mode="after")
     def _demo_generator_runs_in_sydney(self) -> Settings:
@@ -276,11 +216,16 @@ class Settings(BaseSettings):
         # runs in this process, so they must be told Sydney: an offshore
         # region beside it would say the question leaves Australia when it
         # doesn't, and would let a tester list decide what it must not (#292).
-        if self.generator == "demo" and self.vertex_claude_region != REGION:
-            raise ValueError(
-                f"GENERATOR=demo runs in this process, so vertex_claude_region must be "
-                f"{REGION}; got {self.vertex_claude_region!r}"
-            )
+        if self.generation_backend == "demo":
+            for name, region in (
+                ("gemini_region", self.gemini_region),
+                ("vertex_claude_region", self.vertex_claude_region),
+            ):
+                if region != REGION:
+                    raise ValueError(
+                        f"GENERATION_BACKEND=demo runs in this process, so {name} must be "
+                        f"{REGION}; got {region!r}"
+                    )
         return self
 
     @field_validator("session_secret")
@@ -301,22 +246,31 @@ class Settings(BaseSettings):
         return v
 
     @property
+    def generator(self) -> GeneratorName:
+        """What the ledger records an answer turn as having been written by:
+        the backend's own name."""
+        return self.generation_backend
+
+    @property
+    def generation(self) -> GenerationConfig:
+        """The active backend's model and region, the only place that chooses
+        between `GEMINI_*` and `VERTEX_CLAUDE_*`. The demo generator runs in
+        this process, so its region is Sydney (and `Settings` refuses it beside
+        an offshore one)."""
+        if self.generation_backend == "claude":
+            return GenerationConfig("claude", self.vertex_claude_model, self.vertex_claude_region)
+        if self.generation_backend == "demo":
+            return GenerationConfig("demo", "", REGION)
+        return GenerationConfig("gemini", self.gemini_model, self.gemini_region)
+
+    @property
     def generation_region(self) -> str:
-        """The key the residency gates ask about, by backend: Bedrock's `au.`
-        profile called from Sydney (`bedrock_region`, already refused unless
-        `ap-southeast-2`), or the Vertex region. A Bedrock request is processed
-        in Sydney or Melbourne, so its key is not offshore (ADR-0056)."""
-        if self.generation_backend == "bedrock":
-            return self.bedrock_region
-        return self.vertex_claude_region
+        """The key the residency gates ask about: `generation.region`."""
+        return self.generation.region
 
     @property
     def generation_model(self) -> str:
-        """What is asked to generate, by backend: the Vertex model, or the
-        Bedrock inference profile."""
-        if self.generation_backend == "bedrock":
-            return self.bedrock_inference_profile
-        return self.vertex_claude_model
+        return self.generation.model
 
     @property
     def ranking_api_allowed(self) -> bool:

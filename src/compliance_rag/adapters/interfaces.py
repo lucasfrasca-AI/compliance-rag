@@ -1507,13 +1507,12 @@ class Unavailability(StrEnum):
 
     QUOTA = "quota"
     """The provider refused it for quota: Vertex's 429 `RESOURCE_EXHAUSTED`,
-    which is every request while a model's quota is zero; Bedrock's
-    `ThrottlingException` or a service quota (#322)."""
+    which is every request while a model's quota is zero."""
     ACCESS = "access"
-    """The provider refused the caller, not the load: access denied, the model
-    not enabled for the account, the first-time-use form or the Marketplace
-    subscription not completed, or credentials the provider won't accept
-    (#322). Nothing the member can fix; the operator can."""
+    """The provider refused the caller, not the load: Vertex's 403
+    `PERMISSION_DENIED` (the model not enabled for the project, the account
+    not allowed to call it) or credentials it won't accept (#322, #326).
+    Nothing the member can fix; the operator can."""
 
 
 class GenerationUnavailable(RuntimeError):
@@ -1528,8 +1527,8 @@ class GenerationUnavailable(RuntimeError):
 
 
 class Generator(ABC):
-    """Claude, on Bedrock's Australian inference profile or on Vertex. Never
-    authors a citation (D-02)."""
+    """Gemini 3.5 Flash on Vertex (ADR-0057), or Claude on Vertex while it is
+    dormant. Never authors a citation (D-02)."""
 
     @abstractmethod
     async def generate(

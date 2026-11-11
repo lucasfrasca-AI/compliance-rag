@@ -22,7 +22,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import Candidate, Generation
+from compliance_rag.adapters.interfaces import Candidate, Generation, Generator
 from compliance_rag.assessment import prompt
 from compliance_rag.assessment.draft import MalformedGeneration, parse_draft
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
@@ -80,7 +80,7 @@ def _clause(path: str, text: str) -> ClauseRecord:
     )
 
 
-async def _pipeline(generator: FakeGenerator) -> tuple[AssessmentPipeline, SpyRetrievalStore]:
+async def _pipeline(generator: Generator) -> tuple[AssessmentPipeline, SpyRetrievalStore]:
     clauses = (
         _clause("1/1", "Acme must protect personal information from misuse and loss."),
         _clause("1/2", f"Protect personal information. {POISON}"),
@@ -117,6 +117,12 @@ async def _pipeline(generator: FakeGenerator) -> tuple[AssessmentPipeline, SpyRe
         tenant_text=TenantTextGate(REGION, SyntheticRegistry.load()),
     )
     return pipeline, store
+
+
+async def pipeline_over(generator: Generator) -> tuple[AssessmentPipeline, SpyRetrievalStore]:
+    """The poisoned-corpus pipeline over any generator, for the adapters' own
+    injection tests."""
+    return await _pipeline(generator)
 
 
 class ObeyingGenerator(FakeGenerator):
@@ -277,7 +283,7 @@ async def test_a_malformed_reply_is_refused_whole_and_traced(
     assert (answer_span.attributes or {})["generation.schema_valid"] is False
 
 
-@pytest.mark.parametrize(
+MALFORMED_REPLIES = pytest.mark.parametrize(
     "reply",
     [
         '{"answer": "a", "citations": [], "extra": 1}',
@@ -289,6 +295,10 @@ async def test_a_malformed_reply_is_refused_whole_and_traced(
     ],
     ids=["extra-field", "bad-clause-id", "empty-quote", "empty-answer", "no-citations", "prose"],
 )
+"""The replies the strict parser refuses; the adapters' tests run the same set."""
+
+
+@MALFORMED_REPLIES
 def test_the_schema_refuses_a_malformed_draft(reply: str) -> None:
     with pytest.raises(MalformedGeneration):
         parse_draft(reply)

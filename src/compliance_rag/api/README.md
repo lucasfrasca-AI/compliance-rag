@@ -162,18 +162,22 @@ and the config that keeps it inside the CSP).
   failure, an unrecorded exchange, sign-out); the tests make the same requests in the same
   order.
 
-## The generator, and the demo (`GENERATOR`, #292)
+## The generator, and the demo (`GENERATION_BACKEND`, #292, #326)
 
-`GENERATOR` chooses what writes the answer, and nothing else about the pipeline changes (the
-same retrieval, the same verifier, the same ledger):
+`GENERATION_BACKEND` chooses what writes the answer, and nothing else about the pipeline changes
+(the same retrieval, the same verifier, the same ledger):
 
-- `claude` (the default): Claude, built at startup by `GENERATION_BACKEND` (below).
+- `gemini` (the default): Gemini 3.5 Flash on Vertex (`adapters/gemini_generator.py`), built at
+  startup through the residency gate (below).
+- `claude` (dormant): Claude on Vertex (`adapters/vertex_claude_generator.py`), built at startup
+  through the same gate. Claude is not yet approved on this project, so nothing runs it;
+  `VERTEX_CLAUDE_MODEL` is required when it is chosen.
 - `demo`: `adapters/demo_generator.FakeDemoGenerator`, in process, no model called. It quotes
   the top retrieved clause and Acme's first policy clause verbatim, so the citations, the
   verifier and click-to-clause work; a question containing "withhold" makes it misquote, so
-  the answer is withheld. `build_app` never imports a Claude adapter for it. It runs in
-  Sydney, so `Settings` refuses `VERTEX_CLAUDE_REGION` anything but `australia-southeast1`
-  with it.
+  the answer is withheld. `build_app` never imports a model adapter for it. It runs in
+  Sydney, so `Settings` refuses `GEMINI_REGION` and `VERTEX_CLAUDE_REGION` anything but
+  `australia-southeast1` with it.
 
 **The banner** ("FAKE GENERATOR — not a real answer") is written by the server, never by
 `ask.js`, from one partial (`templates/_banner.html`) and one stylesheet (`static/banner.css`);
@@ -184,56 +188,44 @@ It is a `role="note"`, not an alert. Two rules decide where it shows:
   new-chat and chat pages, and the error page.
 - **An answer turn** carries it when the ledger says the demo wrote that turn
   (`chat.generator`, ledger 0020), **whatever the deployment runs now**, whether the turn is
-  verified, withheld or failed. So a chat read back after a switch to Claude still labels the
-  stand-in's answers, and a Claude turn is never labelled, even on a page that is itself
+  verified, withheld or failed. So a chat read back after a switch to a model still labels the
+  stand-in's answers, and a model's turn is never labelled, even on a page that is itself
   bannered because the deployment is back on `demo`. A turn written before the column holds
   NULL and shows none.
 
-Every `answer` event reports `"generator"` (`"demo"` or `"claude"`), and each answer turn of
+Every `answer` event reports `"generator"` (`"gemini"`, `"claude"` or `"demo"`), and each answer turn of
 `GET /v1/chats/{id}` reports the one recorded with it (`null` for an old turn).
 
 **Exempt: the source pages** (`/v1/sources/{instrument_id}/{version_id}`, the citation panel's
 iframe). They show stored law and policy text, never generated text, so they carry no banner
 even while the deployment is `demo`; `tests/test_demo_generator.py` pins that.
 
-## Which Claude (`GENERATION_BACKEND`, #322, ADR-0056)
+## Gemini on Vertex (`GENERATION_BACKEND=gemini`, #326, ADR-0057)
 
-With `GENERATOR=claude`, `GENERATION_BACKEND` chooses the provider; the pipeline, the verifier
-and the prompts are the same either way.
+Gemini 3.5 Flash (`GEMINI_MODEL`, default `gemini-3.5-flash`) at the Vertex location
+`GEMINI_REGION`: Sydney by default (fail closed) and the US multi-region (`us`) in the build
+phase, the only two accepted (`global` and every other region are refused at startup). The
+model has no Sydney endpoint, so a working deployment sets `GEMINI_REGION=us`, and `us` is
+offshore: the gates of ADR-0023 and ADR-0032 apply exactly as they did for Claude (the store
+is asked at startup and before every request; a non-tester's question and unregistered tenant
+text are refused; `OFFSHORE_GENERATION_TESTERS`). Claude on Vertex, if it is ever enabled
+(`GENERATION_BACKEND=claude`, `VERTEX_CLAUDE_MODEL`, `VERTEX_CLAUDE_REGION`), goes through the
+same gates. Credentials are Application Default Credentials, as the embedder's: no key exists.
 
-- `bedrock` (the default): Claude Sonnet 5 on Amazon Bedrock's Australian geographic inference
-  profile, `au.anthropic.claude-sonnet-5`, called from `ap-southeast-2`
-  (`adapters/bedrock_claude_generator.py`). The profile's only destinations are Sydney and
-  Melbourne, so every request is processed in Australia and the offshore gates (ADR-0023,
-  ADR-0032) do not fire: a non-tester's question and unregistered tenant text go through.
-  `BEDROCK_REGION` other than `ap-southeast-2`, or a `BEDROCK_INFERENCE_PROFILE` that is not
-  exactly `au.anthropic.claude-sonnet-5` (an allowlist, not a prefix: `global.`, `us.`,
-  `apac.`, another `au.` model), refuses to start. The endpoint is built from the validated
-  Region, so `ANTHROPIC_BEDROCK_BASE_URL` in the environment changes nothing.
-- `vertex`: the build-phase path, unchanged (ADR-0023, ADR-0024, ADR-0032): `VERTEX_CLAUDE_MODEL`
-  is required and `VERTEX_CLAUDE_REGION` (`us`, or Sydney) feeds the residency gates. It stays
-  until the Bedrock path replaces it.
-
-**Credentials: no AWS key exists anywhere** (`adapters/aws_credentials.py`).
-
-- **On Cloud Run** set `AWS_ROLE_ARN`. The runtime service account's Google-signed ID token
-  (audience `AWS_WEB_IDENTITY_AUDIENCE`, default `sts.amazonaws.com`) comes from the metadata
-  server and is exchanged at STS's Sydney endpoint (`AssumeRoleWithWebIdentity`, unsigned) for
-  that role. The role's trust policy names `accounts.google.com` and the service account's
-  unique id. The one-hour session is renewed five minutes before it lapses. Setup:
-  `docs/setup/aws-bedrock.md`.
-- **Locally** set `AWS_PROFILE` to an IAM Identity Center (SSO) profile and run
-  `aws sso login --profile <name>`. botocore resolves and refreshes it.
-- Set one, not both. Neither refuses to start; nothing falls back to the default credential
-  chain, and a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`) is refused.
-
-**When Bedrock says no**, the member sees "unavailable", never "internal" or the provider's
-words: throttling or a service quota is `generation_unavailable` with reason `quota`; access
-denied, the model not enabled, the first-time-use form or the Marketplace subscription not
-completed, or credentials AWS refuses is `generation_unavailable` with reason `access` (ledger
-0021 admits it); anything else is `internal`. The span carries `generator.region`,
-`generator.inference_profile`, tokens, cache use, cost and `generator.price_table`
-(`claude-sonnet-5-bedrock-au-geo-2026-11-10`), never prompt text.
+- **Cached prefix: implicit caching.** The system prompt is the system instruction and the
+  policy prefix leads the user turn, so a tenant's requests share their leading bytes. A hit
+  is read from `usage_metadata.cached_content_token_count`, never assumed; a prefix that was
+  sent and not hit says so on the span (`generator.prefix_not_cached`). Google's minimum is
+  4,096 tokens, so a small prefix never hits. Explicit `cachedContents` is not built.
+- **Structured output:** `response_mime_type=application/json` with a schema for the answer
+  and repair shapes; `assessment/draft.py` still validates strictly.
+- **Thinking** is held at `thinking_level=LOW`, `max_output_tokens` is `max_tokens` plus
+  2,048 of headroom for it, and thinking tokens are billed as output and counted as such.
+- **When Vertex says no**, the member sees "unavailable", never "internal" or the provider's
+  words: HTTP 429 or `RESOURCE_EXHAUSTED` is `generation_unavailable` with reason `quota`;
+  403 or `PERMISSION_DENIED` (and 401) is reason `access` (ledger 0021 admits it); anything
+  else is `internal`. The span carries `generator.region`, tokens, cache use, cost and
+  `generator.price_table` (`gemini-3.5-flash-vertex-us-2026-11-11`), never prompt text.
 
 ## The container (`docker/api.Dockerfile`)
 
@@ -254,13 +246,12 @@ build time with `HF_HUB_OFFLINE=1`, so nothing is downloaded at request time. It
 against the paths the code reads.
 
 Configuration is environment only. Names: `ENV`, `PORT` (Cloud Run injects it), `TENANT_ID`,
-`GENERATOR`, `GCP_PROJECT_ID`, `CORPUS_BUCKET`, `RERANKER_URL`, `QDRANT_URL`, `QDRANT_API_KEY`
+`GENERATION_BACKEND`, `GCP_PROJECT_ID`, `CORPUS_BUCKET`, `RERANKER_URL`, `QDRANT_URL`, `QDRANT_API_KEY`
 (secret), `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` (secret), `NEO4J_DATABASE`,
 `DATABASE_URL` (secret), `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, `API_MEMBERS`,
-`SESSION_SECRET` (secret), and for `claude`: `GENERATION_BACKEND`, then on `bedrock`
-`BEDROCK_REGION`, `BEDROCK_INFERENCE_PROFILE`, `AWS_ROLE_ARN` (Cloud Run) or `AWS_PROFILE`
-(local) and `AWS_WEB_IDENTITY_AUDIENCE`, or on `vertex` `VERTEX_CLAUDE_MODEL`,
-`VERTEX_CLAUDE_REGION` and `OFFSHORE_GENERATION_TESTERS`. None of them is a key.
+`SESSION_SECRET` (secret), and for the model: `GEMINI_MODEL`, `GEMINI_REGION` and
+`OFFSHORE_GENERATION_TESTERS` (or, for `claude`, `VERTEX_CLAUDE_MODEL` and
+`VERTEX_CLAUDE_REGION`). None of them is a key.
 
 ## The admin panel (`admin.py`, `templates/subscriptions.html`, `static/admin.js`)
 

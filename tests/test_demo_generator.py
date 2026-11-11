@@ -1,11 +1,12 @@
-"""The demo generator and `GENERATOR` (issue #292).
+"""The demo generator and `GENERATION_BACKEND` (issues #292, #326).
 
 - the generator's own behaviour, at its home in `adapters/demo_generator.py`:
   quotes that pass the verifier, "withhold" gives a withheld answer, a repair
   never repairs;
-- `Settings`: `GENERATOR=demo` refuses an offshore `VERTEX_CLAUDE_REGION`;
-- `build_app`: `demo` never imports or constructs `VertexClaudeGenerator`, and
-  `claude` with no model refuses to start;
+- `Settings`: `GENERATION_BACKEND=demo` refuses an offshore `GEMINI_REGION` or
+  `VERTEX_CLAUDE_REGION`;
+- `build_app`: `demo` never imports or constructs either model adapter, and
+  `gemini` or `claude` with no model refuses to start;
 - the banner on every server-rendered page and every turn fragment, withheld
   and failed turns included, and on none when a model is answering;
 - `"generator"` on each answer event;
@@ -25,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from compliance_rag.adapters import vertex_claude_generator
+from compliance_rag.adapters import gemini_generator, vertex_claude_generator
 from compliance_rag.adapters.demo_generator import FAKE_BANNER, FakeDemoGenerator
 from compliance_rag.adapters.fakes import (
     FakeClauseStore,
@@ -61,7 +62,7 @@ from tests.test_api_pages import (
     text_of,
 )
 
-DEMO = {"generator": "demo"}
+DEMO = {"generation_backend": "demo"}
 WITHHOLD = f"{QUESTION} Please withhold this one."
 
 
@@ -72,33 +73,42 @@ def demo_settings() -> Settings:
 # ---- Settings -----------------------------------------------------------------------------
 
 
-def test_the_generator_is_claude_unless_demo_is_asked_for() -> None:
-    assert Settings(_env_file=None).generator == "claude"  # pyright: ignore[reportCallIssue]
-    assert api_settings(generator="demo").generator == "demo"
+def test_the_generator_is_gemini_unless_demo_is_asked_for() -> None:
+    assert Settings(_env_file=None).generator == "gemini"  # pyright: ignore[reportCallIssue]
+    assert api_settings(generation_backend="demo").generator == "demo"
 
 
 def test_settings_refuse_the_demo_generator_with_an_offshore_region() -> None:
-    with pytest.raises(ValidationError, match="GENERATOR=demo"):
-        api_settings(generator="demo", vertex_claude_region=BUILD_PHASE_OFFSHORE_REGION)
+    with pytest.raises(ValidationError, match="GENERATION_BACKEND=demo"):
+        api_settings(generation_backend="demo", gemini_region=BUILD_PHASE_OFFSHORE_REGION)
+    with pytest.raises(ValidationError, match="vertex_claude_region"):
+        api_settings(generation_backend="demo", vertex_claude_region=BUILD_PHASE_OFFSHORE_REGION)
     # In Sydney, explicitly or by default, it is accepted: what the gates ask
     # is where the generator runs.
-    assert api_settings(generator="demo", vertex_claude_region=REGION).generator == "demo"
-    assert api_settings(generator="demo").vertex_claude_region == REGION
+    assert api_settings(generation_backend="demo", gemini_region=REGION).generator == "demo"
+    assert api_settings(generation_backend="demo").gemini_region == REGION
 
 
-def test_claude_may_still_run_offshore_and_nothing_else_is_a_generator() -> None:
-    offshore = api_settings(generator="claude", vertex_claude_region=BUILD_PHASE_OFFSHORE_REGION)
-    assert offshore.vertex_claude_region == BUILD_PHASE_OFFSHORE_REGION
-    with pytest.raises(ValidationError):
-        api_settings(generator="gpt")
+def test_gemini_and_claude_may_run_offshore_and_nothing_else_is_a_generator() -> None:
+    offshore = api_settings(generation_backend="gemini", gemini_region=BUILD_PHASE_OFFSHORE_REGION)
+    assert offshore.generation_region == BUILD_PHASE_OFFSHORE_REGION
+    dormant = api_settings(
+        generation_backend="claude", vertex_claude_region=BUILD_PHASE_OFFSHORE_REGION
+    )
+    assert dormant.generation_region == BUILD_PHASE_OFFSHORE_REGION
+    # each backend's gates read its own region, never the other's
+    assert api_settings(generation_backend="claude", gemini_region="us").generation_region == REGION
+    for gone in ("gpt", "bedrock", "vertex"):
+        with pytest.raises(ValidationError):
+            api_settings(generation_backend=gone)
 
 
 def test_the_generator_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GENERATOR", "demo")
-    monkeypatch.setenv("VERTEX_CLAUDE_REGION", REGION)
+    monkeypatch.setenv("GENERATION_BACKEND", "demo")
+    monkeypatch.setenv("GEMINI_REGION", REGION)
     assert Settings(_env_file=None).generator == "demo"  # pyright: ignore[reportCallIssue]
-    monkeypatch.setenv("VERTEX_CLAUDE_REGION", BUILD_PHASE_OFFSHORE_REGION)
-    with pytest.raises(ValidationError, match="GENERATOR=demo"):
+    monkeypatch.setenv("GEMINI_REGION", BUILD_PHASE_OFFSHORE_REGION)
+    with pytest.raises(ValidationError, match="GENERATION_BACKEND=demo"):
         Settings(_env_file=None)  # pyright: ignore[reportCallIssue]
 
 
@@ -145,17 +155,22 @@ def stores(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api_main.telemetry, "configure", _no_telemetry)
 
 
-def test_with_the_demo_generator_build_app_never_imports_or_constructs_vertex(
+def test_with_the_demo_generator_build_app_never_imports_or_constructs_gemini(
     monkeypatch: pytest.MonkeyPatch, stores: None
 ) -> None:
     # Importing the module, or building the class, would now fail loudly.
+    monkeypatch.setitem(sys.modules, "compliance_rag.adapters.gemini_generator", None)
     monkeypatch.setitem(sys.modules, "compliance_rag.adapters.vertex_claude_generator", None)
 
     def constructed(*_: object, **__: object) -> None:
-        raise AssertionError("VertexClaudeGenerator was built")
+        raise AssertionError("a model generator was built")
 
-    monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", constructed)
-    monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "__init__", constructed)
+    for adapter in (
+        gemini_generator.GeminiGenerator,
+        vertex_claude_generator.VertexClaudeGenerator,
+    ):
+        monkeypatch.setattr(adapter, "create", constructed)
+        monkeypatch.setattr(adapter, "__init__", constructed)
     app = api_main.build_app(demo_settings())
     # Starting it (the lifespan runs the startup checks) builds nothing either,
     # and it answers.
@@ -165,7 +180,27 @@ def test_with_the_demo_generator_build_app_never_imports_or_constructs_vertex(
     assert isinstance(generator, FakeDemoGenerator)
 
 
-def test_with_claude_the_generator_is_built_through_the_gate_at_startup(
+def test_with_gemini_the_generator_is_built_through_the_gate_at_startup(
+    monkeypatch: pytest.MonkeyPatch, stores: None
+) -> None:
+    built: list[Settings] = []
+
+    async def create(settings: Settings, **_: object) -> FakeGenerator:
+        built.append(settings)
+        return FakeGenerator()
+
+    monkeypatch.setattr(gemini_generator.GeminiGenerator, "create", create)
+    settings = api_settings(gemini_model="gemini-3.5-flash", gemini_region="us")
+    app = api_main.build_app(settings)
+    assert built == []  # not at import or build: at startup, where the gate can ask the store
+    with TestClient(app):
+        pass
+    assert built == [settings]
+    generator = app.state.services.pipeline.generator
+    assert isinstance(generator, api_main.GeneratorAtStartup)
+
+
+def test_claude_is_built_through_the_same_gate_at_startup(
     monkeypatch: pytest.MonkeyPatch, stores: None
 ) -> None:
     built: list[Settings] = []
@@ -176,24 +211,25 @@ def test_with_claude_the_generator_is_built_through_the_gate_at_startup(
 
     monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", create)
     settings = api_settings(
-        generation_backend="vertex",
+        generation_backend="claude",
         vertex_claude_model="claude-sonnet-5",
         vertex_claude_region="us",
     )
     app = api_main.build_app(settings)
-    assert built == []  # not at import or build: at startup, where the gate can ask the store
     with TestClient(app):
         pass
     assert built == [settings]
-    generator = app.state.services.pipeline.generator
-    assert isinstance(generator, api_main.GeneratorAtStartup)
+    # and the app's tenant-text gate is offshore with it, though GEMINI_REGION
+    # is still Sydney: every gate reads the active backend's region
+    assert settings.gemini_region == REGION
+    assert app.state.services.pipeline.tenant_text.generation_region == "us"
 
 
-def test_claude_with_no_model_refuses_to_start(stores: None) -> None:
+def test_a_model_backend_with_no_model_refuses_to_start(stores: None) -> None:
+    with pytest.raises(ValueError, match="GEMINI_MODEL"):
+        api_main.build_app(api_settings(generation_backend="gemini", gemini_model=""))
     with pytest.raises(ValueError, match="VERTEX_CLAUDE_MODEL"):
-        api_main.build_app(
-            api_settings(generator="claude", generation_backend="vertex", vertex_claude_model="")
-        )
+        api_main.build_app(api_settings(generation_backend="claude", vertex_claude_model=""))
     # `demo` needs no model.
     api_main.build_app(demo_settings())
 
@@ -295,7 +331,9 @@ async def test_every_page_and_turn_fragment_carries_the_banner_while_the_demo_is
 async def test_no_page_says_fake_while_a_model_is_answering(
     generator: FakeGenerator, question: str
 ) -> None:
-    async with await client_for(generator, settings=page_settings(generator="claude")) as client:
+    async with await client_for(
+        generator, settings=page_settings(generation_backend="gemini")
+    ) as client:
         signin = (await client.get("/signin")).text
         await sign_in(client)
         response = await client.post("/v1/answers", json={"question": question, "as_of": AS_OF})
@@ -320,7 +358,7 @@ def test_the_banner_is_written_by_the_server_not_by_the_script() -> None:
 # ---- the banner follows the turn, not the setting ---------------------------------------------
 
 
-async def test_a_turn_the_demo_wrote_keeps_its_banner_when_the_deployment_runs_claude() -> None:
+async def test_a_turn_the_demo_wrote_keeps_its_banner_when_the_deployment_runs_gemini() -> None:
     """The ledger records which generator wrote an answer turn (0020): after a
     switch to a model, the stand-in's answers are still labelled, and a page's
     own banner is gone."""
@@ -330,7 +368,7 @@ async def test_a_turn_the_demo_wrote_keeps_its_banner_when_the_deployment_runs_c
         response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
         chat = events_of(response.text)[0][1]["chat_id"]
     async with await client_for(
-        FakeGenerator(), ledger=ledger, settings=page_settings(generator="claude")
+        FakeGenerator(), ledger=ledger, settings=page_settings(generation_backend="gemini")
     ) as c:
         await sign_in(c)
         fragment = (await c.get(f"/chats/{chat}/turns")).text
@@ -338,23 +376,25 @@ async def test_a_turn_the_demo_wrote_keeps_its_banner_when_the_deployment_runs_c
         chats = (await c.get("/chats")).text
         read_back = (await c.get(f"/v1/chats/{chat}")).json()
     assert FAKE_BANNER in text_of(fragment) and len(banners(fragment)) == 1
-    assert len(banners(page)) == 1  # the turn's own: the page has none, the deployment is claude
+    assert len(banners(page)) == 1  # the turn's own: the page has none, the deployment is gemini
     assert banners(chats) == []
     assert [t.get("generator") for t in read_back["turns"]] == [None, "demo"]
 
 
-async def test_a_claude_turn_under_claude_carries_no_banner() -> None:
-    async with await client_for(FakeGenerator(), settings=page_settings(generator="claude")) as c:
+async def test_a_gemini_turn_under_gemini_carries_no_banner() -> None:
+    async with await client_for(
+        FakeGenerator(), settings=page_settings(generation_backend="gemini")
+    ) as c:
         await sign_in(c)
         response = await c.post("/v1/answers", json={"question": QUESTION, "as_of": AS_OF})
         chat = events_of(response.text)[0][1]["chat_id"]
         fragment = (await c.get(f"/chats/{chat}/turns")).text
         read_back = (await c.get(f"/v1/chats/{chat}")).json()
     assert outcomes(fragment) and banners(fragment) == [] and "FAKE" not in fragment
-    assert [t.get("generator") for t in read_back["turns"]] == [None, "claude"]
+    assert [t.get("generator") for t in read_back["turns"]] == [None, "gemini"]
 
 
-async def test_a_claude_turn_read_back_under_the_demo_is_not_labelled_fake() -> None:
+async def test_a_gemini_turn_read_back_under_the_demo_is_not_labelled_fake() -> None:
     ledger = await acme_ledger()
     async with await client_for(FakeGenerator(), ledger=ledger, settings=page_settings()) as c:
         await sign_in(c)
@@ -439,7 +479,7 @@ async def test_a_source_page_is_exempt_because_it_holds_no_generated_text() -> N
     [
         pytest.param(FakeDemoGenerator(), DEMO, QUESTION, True, id="demo-verified"),
         pytest.param(FakeDemoGenerator(), DEMO, WITHHOLD, False, id="demo-withheld"),
-        pytest.param(FakeGenerator(), {}, QUESTION, False, id="claude-uncited"),
+        pytest.param(FakeGenerator(), {}, QUESTION, False, id="gemini-uncited"),
     ],
 )
 async def test_each_answer_event_names_its_generator(
@@ -450,7 +490,7 @@ async def test_each_answer_event_names_its_generator(
         response = await client.post("/v1/answers", json={"question": question, "as_of": AS_OF})
     answer = events_of(response.text)[-1][1]
     assert answer["verified"] is verified
-    assert answer["generator"] == settings.get("generator", "claude")
+    assert answer["generator"] == settings.get("generation_backend", "gemini")
 
 
 # ---- the root ------------------------------------------------------------------------------------

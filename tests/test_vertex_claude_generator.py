@@ -158,6 +158,7 @@ def _settings(region: str = "us") -> Settings:
     return Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
         gcp_project_id="p",
+        generation_backend="claude",
         vertex_claude_model="claude-test",
         vertex_claude_region=region,
     )

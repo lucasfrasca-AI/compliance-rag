@@ -2,13 +2,13 @@
 versioned citation out, opening at the clause.
 
 Runs `answer()` live on the golden corpus (`eval/harness.live_answer_pipeline`
-— real retrieval, the cross-encoder, live Claude behind the residency gate,
+— real retrieval, the cross-encoder, live Gemini behind the residency gate,
 the real verifier). Prints the answer and each verified citation — its display
 form, version, the canonical text the user is shown (never the model's
 words), and a link that opens the stored source HTML at the clause's
 synthesized anchor (ADR-0019). Blocked citations are listed as blocked.
 
-    QDRANT_URL=http://localhost:6333 AWS_PROFILE=<profile> \\
+    QDRANT_URL=http://localhost:6333 GEMINI_REGION=us \\
     uv run python scripts/demo_answer.py \\
         "What must an entity do with personal information it no longer needs?"
 """

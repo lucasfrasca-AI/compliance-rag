@@ -3,8 +3,8 @@ drives it: a PreToolUse payload on stdin, a decision (or silence) on stdout.
 Each test gets its own project directory, so the real approvals file is never
 read or written.
 
-#322 added AWS, default-deny: SERVICES.md allows nothing on AWS but Bedrock
-generation and its IAM role, so every `aws` command is gated at a shell-segment
+#322 added AWS, default-deny, and #326 kept it when Bedrock was withdrawn
+(ADR-0057): SERVICES.md allows nothing on AWS, so every `aws` command is gated at a shell-segment
 boundary, like gcloud, unless it is a read (`get-`, `list-`, `describe-`,
 `batch-get-`, `simulate-`, `lookup-`, `help`, `wait`, which includes `sts
 get-caller-identity`). The segmenter reads through quoting, continuations,
@@ -246,8 +246,8 @@ DEFAULT_DENY_AWS = [
 def test_aws_is_default_deny_for_every_service_but_the_read_only_verbs(
     command: str, project: pathlib.Path
 ) -> None:
-    """SERVICES.md allows nothing on AWS but Bedrock generation and its IAM
-    role, so a service the guard has never heard of is gated too."""
+    """SERVICES.md allows nothing on AWS (Bedrock is not adopted, ADR-0057),
+    so a service the guard has never heard of is gated too."""
     reason = denied(command, project)
     assert "BILLABLE" in reason and "AWS" in reason
 

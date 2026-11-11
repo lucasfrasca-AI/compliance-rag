@@ -33,7 +33,7 @@ from compliance_rag import telemetry
 from compliance_rag.adapters.generation_residency import (
     assert_generation_allowed,
     is_offshore,
-    validate_vertex_region,
+    validate_generation_region,
 )
 from compliance_rag.adapters.interfaces import (
     Generation,
@@ -90,7 +90,7 @@ class VertexClaudeGenerator(Generator):
             raise ValueError("no Claude model configured (VERTEX_CLAUDE_MODEL)")
         self._messages = messages
         self._model = model
-        self._region = validate_vertex_region(region)
+        self._region = validate_generation_region(region)
         self._corpus = corpus
 
     async def _assert_still_allowed(self) -> None:
@@ -107,7 +107,12 @@ class VertexClaudeGenerator(Generator):
         `Settings` (`global` and anything but Sydney or the US multi-region refused), and
         an offshore region is refused outright while `corpus` holds any real
         tenant data. Async because the gate asks the store."""
-        region = validate_vertex_region(settings.vertex_claude_region)
+        generation = settings.generation
+        if generation.backend != "claude":
+            raise ValueError(
+                f"VertexClaudeGenerator built for GENERATION_BACKEND={generation.backend}"
+            )
+        region = validate_generation_region(generation.region)
         if is_offshore(region):
             assert_generation_allowed(
                 generation_region=region,
@@ -116,9 +121,7 @@ class VertexClaudeGenerator(Generator):
         from anthropic.lib.vertex import AsyncAnthropicVertex  # only the real path needs it
 
         client = AsyncAnthropicVertex(region=region, project_id=settings.gcp_project_id)
-        return cls(
-            client.messages, model=settings.vertex_claude_model, region=region, corpus=corpus
-        )
+        return cls(client.messages, model=generation.model, region=region, corpus=corpus)
 
     async def generate(
         self,

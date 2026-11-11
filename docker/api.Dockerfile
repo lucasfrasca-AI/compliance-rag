@@ -1,7 +1,7 @@
 # The product API (issue #292): `compliance_rag.api.main:build_app` on Cloud Run
 # as `compliance-rag-api`, australia-southeast1. FastAPI + uvicorn, CPU, no model
 # in the image: the reranker is its own service (docker/reranker.Dockerfile),
-# generation is Claude on Vertex or, with GENERATOR=demo, the in-process stand-in.
+# generation is Gemini on Vertex (or Claude, dormant) or, with GENERATION_BACKEND=demo, the in-process stand-in.
 #
 # Build context must be the repo root. Built for linux/amd64 (Cloud Run's
 # architecture; an arm64 build from an Apple-silicon laptop fails there with
@@ -14,7 +14,7 @@
 # stderr; every setting is an environment variable, `.env` is never copied in):
 #
 #   docker run --rm -p 8080:8080 -e PORT=8080 -e ENV=local \
-#       -e GENERATOR=demo -e DATABASE_URL=... -e QDRANT_URL=... -e NEO4J_URI=... \
+#       -e GENERATION_BACKEND=demo -e DATABASE_URL=... -e QDRANT_URL=... -e NEO4J_URI=... \
 #       -e FIREBASE_PROJECT_ID=... compliance-rag-api
 #
 # What is in the image, and why nothing else is:

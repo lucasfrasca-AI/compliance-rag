@@ -7,13 +7,13 @@ the citations and click-to-clause can all be exercised. A question containing
 (ADR-0003).
 
 It runs in this process. Nothing it handles goes anywhere, so the residency
-gates are told generation is in Sydney (`GENERATOR=demo` requires
-`VERTEX_CLAUDE_REGION=australia-southeast1`, `Settings`). Because it is not a
+gates are told generation is in Sydney (`GENERATION_BACKEND=demo` requires
+both model regions at `australia-southeast1`, `Settings`). Because it is not a
 model, every page the API serves says so while it is on (`api/banner.py`), and
 every answer event reports `"generator": "demo"`.
 
 The throwaway local demo (#247, under `scripts/`) and the deployed API
-(`GENERATOR=demo`, `api/main.py`) build the same class. Nothing here imports
+(`GENERATION_BACKEND=demo`, `api/main.py`) build the same class. Nothing here imports
 the script: it imports this.
 """
 

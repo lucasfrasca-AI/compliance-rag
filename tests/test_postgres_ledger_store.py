@@ -168,11 +168,14 @@ async def test_the_database_refuses_a_flag_on_a_question_or_a_failed_request(
 async def test_the_generator_is_a_column_only_an_answer_turn_holds_and_old_rows_read_none(
     ledger: PostgresLedgerStore,
 ) -> None:
-    """Ledger 0020 (#292): `claude` or `demo` on an answer turn, whatever writes
-    the row; a question and any other word are refused; a row without one (every
-    row before the column) reads back `None`."""
+    """Ledger 0020 and 0022 (#292, #326): `claude`, `gemini` or `demo` on an answer
+    turn, whatever writes the row; a question and any other word are refused; a
+    row without one (every row before the column) reads back `None`."""
     await ledger.put_profile(Profile("acme"))
     await ledger.record_chat_exchange(an_exchange("c1", generator="demo"))
+    await ledger.record_chat_exchange(an_exchange("c2", generator="gemini"))
+    (_, gemini_turn) = await ledger.chat_turns("acme", "uid-1", "c2")
+    assert gemini_turn.generator == "gemini"
     for turn_index, value in ((0, "demo"), (1, "gpt")):
         async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
             with pytest.raises(psycopg.errors.CheckViolation, match="chat_generator"):

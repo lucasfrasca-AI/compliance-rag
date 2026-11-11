@@ -1,9 +1,9 @@
 """`answer()` over the whole golden set, live (issue #31): real Qdrant, real
 cached `gemini-embedding-001` vectors, the int8 cross-encoder over the top 20,
-**live Claude** (Sonnet 5 on Bedrock's Australian inference profile by default,
-ADR-0056; or `GENERATION_BACKEND=vertex`, the build phase's US multi-region,
-ADR-0023/ADR-0024, built through `VertexClaudeGenerator.create`, so the
-residency gate runs before the client exists), and the real verifier against
+**live Gemini 3.5 Flash on Vertex** (`gemini-3.5-flash` at the US
+multi-region — build phase, ADR-0023/ADR-0057; built through
+`GeminiGenerator.create`, so the residency gate runs before the client
+exists), and the real verifier against
 the golden canonical text and a ledger with every golden version recorded.
 
 Writes `corpus/golden/answer_eval/<date>-<model>.json`: every draft as the
@@ -15,7 +15,7 @@ re-verifies the recorded drafts on every build with no LLM. Tenant `acme`
 queries carry its six synthetic policies as the cached prefix and run back to
 back, so cache hits are measured, not assumed.
 
-    QDRANT_URL=http://localhost:6333 AWS_PROFILE=<profile> \\
+    QDRANT_URL=http://localhost:6333 GEMINI_REGION=us \\
     uv run python scripts/run_answer_eval.py [--injection]
 
 `--injection` instead runs live prompt-injection probes: a poisoned synthetic

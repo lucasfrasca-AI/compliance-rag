@@ -15,10 +15,10 @@ import json
 from dataclasses import replace
 from typing import Any
 
-import anthropic
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from google.genai import errors as genai_errors
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import (
@@ -51,8 +51,8 @@ from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION, Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
 from tests.api_support import MEMBER, api_settings, bearer, fake_api_services, mint
+from tests.gemini_support import PLACEHOLDER_TOKEN, SDK_WORDS, quota_exhausted_generator
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
-from tests.vertex_quota import PLACEHOLDER_TOKEN, SDK_WORDS, quota_exhausted_generator
 
 AS_OF = "2026-10-12"
 QUESTION = "What must Acme do to protect the personal information it holds from misuse and loss?"
@@ -357,7 +357,40 @@ async def test_law_outside_track_as_scope_never_reaches_the_model() -> None:
 
 # ---- the residency gate, per request (#155, ADR-0032) -----------------------------
 
-OFFSHORE = {"generation_backend": "vertex", "vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION}
+OFFSHORE = {"gemini_region": BUILD_PHASE_OFFSHORE_REGION}
+
+
+OFFSHORE_CLAUDE = {
+    "generation_backend": "claude",
+    "vertex_claude_model": "claude-sonnet-5",
+    "vertex_claude_region": BUILD_PHASE_OFFSHORE_REGION,
+}
+"""The dormant backend, offshore, with `GEMINI_REGION` left at its Sydney default:
+the gates must read the active backend's region, not Gemini's."""
+
+
+async def test_claude_offshore_a_non_tester_is_refused_before_the_model() -> None:
+    generator = FakeGenerator(_reply())
+    _, events = await _ask(generator, settings=api_settings(**OFFSHORE_CLAUDE))
+    assert [name for name, _ in events] == ["error"]
+    assert events[-1][1]["error"] == "residency" and generator.calls == []
+
+
+async def test_claude_offshore_a_policy_clause_the_registry_doesnt_vouch_for_is_refused() -> None:
+    """The tenant-text gate is built from `Settings` and must be offshore when
+    the active backend is: an unregistered prefix clause never reaches the
+    model, as with Gemini (ADR-0026, ADR-0032)."""
+    clauses = await golden_clause_store()
+    edited = next(c for c in golden_clauses() if c.instrument_id == "acme/privacy-policy")
+    real = "Acme keeps payroll records for seven years, then shreds them on site."
+    await clauses.put_clause(edited.model_copy(update={"canonical_text": real}))
+    settings = api_settings(**OFFSHORE_CLAUDE, offshore_generation_testers=MEMBER)
+    generator = FakeGenerator(_reply())
+    _, events = await _ask(generator, clauses=clauses, settings=settings)
+    assert [name for name, _ in events] == ["coverage", "error"]
+    error = events[-1][1]
+    assert error["error"] == "residency" and "CAG prefix" in error["message"]
+    assert generator.calls == []
 
 
 async def test_offshore_a_member_who_isnt_a_registered_tester_is_refused_before_the_model() -> None:
@@ -405,8 +438,8 @@ async def test_a_vertex_quota_refusal_is_generation_unavailable_with_no_sdk_text
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A listed tester asks while the model's quota is zero (#251): Vertex
-    answers 429 `RESOURCE_EXHAUSTED`, which the SDK raises as `RateLimitError`
-    through the real `VertexClaudeGenerator`. The stream ends in a typed
+    answers 429 `RESOURCE_EXHAUSTED`, which the SDK raises as `ClientError`
+    through the real `GeminiGenerator`. The stream ends in a typed
     `generation_unavailable` with a fixed reason and the request's trace id,
     and carries none of the SDK's words, its type or a traceback. The chat
     records `generation_unavailable` with its reason (#289)."""
@@ -434,7 +467,7 @@ async def test_a_vertex_quota_refusal_is_generation_unavailable_with_no_sdk_text
     assert turns[1].unavailable is Unavailability.QUOTA  # our word, never the provider's
     # The server's own log keeps what Vertex said, as the cause, for whoever runs it.
     logged = [r.exc_info[1] for r in caplog.records if r.exc_info]
-    assert any(isinstance(e and e.__cause__, anthropic.RateLimitError) for e in logged)
+    assert any(isinstance(e and e.__cause__, genai_errors.ClientError) for e in logged)
 
 
 async def test_in_sydney_any_member_is_answered_over_any_prefix(quote: str) -> None:
@@ -510,14 +543,14 @@ async def test_the_generator_refuses_to_answer_before_the_app_starts() -> None:
 
 
 def test_a_residency_refusal_at_startup_stops_the_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate runs in `VertexClaudeGenerator.create` (ADR-0023). When it
+    """The gate runs in `GeminiGenerator.create` (ADR-0023). When it
     refuses, the app never starts serving."""
-    from compliance_rag.adapters import vertex_claude_generator
+    from compliance_rag.adapters import gemini_generator
 
     async def refused(*_: object, **__: object) -> object:
         raise GenerationResidencyError("offshore generation over real tenant data")
 
-    monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", refused)
+    monkeypatch.setattr(gemini_generator.GeminiGenerator, "create", refused)
     generator = GeneratorAtStartup(
         api_settings(**OFFSHORE), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
     )
@@ -529,14 +562,14 @@ def test_a_residency_refusal_at_startup_stops_the_app(monkeypatch: pytest.Monkey
 async def test_once_started_the_generator_is_the_one_the_gate_built(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from compliance_rag.adapters import vertex_claude_generator
+    from compliance_rag.adapters import gemini_generator
 
     built = FakeGenerator(_reply())
 
     async def create(*_: object, **__: object) -> FakeGenerator:
         return built
 
-    monkeypatch.setattr(vertex_claude_generator.VertexClaudeGenerator, "create", create)
+    monkeypatch.setattr(gemini_generator.GeminiGenerator, "create", create)
     generator = GeneratorAtStartup(
         api_settings(**OFFSHORE), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
     )

@@ -27,16 +27,23 @@ punctuation) is not counted as if it were prose:
   (1.25), and so does each newline. A space or tab counts nothing.
 - A character that isn't ASCII counts one token per UTF-8 byte.
 
-**What the bound is measured against.** No Claude tokenizer is available
-offline, so the tests hold the estimate to a proxy: the vendored reranker
-tokenizer's count (`count_reranker_tokens`, a real subword tokenizer, not
-Claude's). `tests/test_prefix_cap.py` requires the estimate to be at least 1.15
-times that count on the six Acme policies and on adversarial shapes (many
-short clauses, numeric, hex-heavy, punctuation-heavy and non-ASCII text), and
-at most three times it on the Acme policies. That is a measured bound against
-a proxy, not a guarantee about Claude's own count; it should be re-checked
-against a real count when one is available (ADR-0054: the cap is revisited
-once a real tenant's corpus is measured).
+**What the bound is measured against.** Generation moved from Claude to Gemini
+3.5 Flash (ADR-0057, #326), and no tokenizer for either is usable offline here.
+`google-genai`'s `LocalTokenizer` maps `gemini-3.5-flash` to the Gemma 4
+vocabulary, which it downloads from Hugging Face on first use and which is not
+in this environment's cache: a fetch from outside the allowed services, so it
+is not used, and the estimate was not re-calibrated against Gemini's own count.
+It stays as it was, conservative on purpose: the tests hold it to a proxy, the
+vendored reranker tokenizer's count (`count_reranker_tokens`, a real subword
+tokenizer, not Gemini's). `tests/test_prefix_cap.py` requires the estimate to
+be at least 1.15 times that count on the six Acme policies and on adversarial
+shapes (many short clauses, numeric, hex-heavy, punctuation-heavy and
+non-ASCII text), and at most three times it on the Acme policies. That is a
+measured bound against a proxy, not a guarantee about Gemini's own count, whose
+direction of error is unmeasured. It should be re-checked against a real count
+when one is available (the live run, #29 and #31, reports `prompt_token_count`,
+which is one) and when a real tenant's corpus is measured (ADR-0054). The cap
+is the operator's cost bound, not the model's context limit.
 
 **What is measured is what is sent.** `check_prefix_cap` takes the system prompt
 and the built prefix exactly as the generator is given them (`prompt.cag_prefix`
