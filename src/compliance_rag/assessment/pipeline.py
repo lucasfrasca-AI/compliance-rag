@@ -168,6 +168,11 @@ class Answer:
     pipeline, never by the model, and carried whether the answer verified or
     was withheld, so no answer about such an instrument reaches a reader
     without it."""
+    context: frozenset[str] = frozenset()
+    """Every clause id this request showed the model and the verifier checked
+    citations against: the policies, the delivered whole provisions and the
+    exceptions and qualifiers delivered beside them (#335). The very set
+    `check_all` received, so a recording of it can't drift from the pipeline."""
 
     @property
     def incomplete(self) -> tuple[IncompleteCitation, ...]:
@@ -429,6 +434,7 @@ class AssessmentPipeline:
                 qualifiers=qualifiers,
                 titles=titles,
                 not_in_environment=absent,
+                context=context,
             )
             current.set_attribute("verifier.result", result.verified)
             current.set_attribute(

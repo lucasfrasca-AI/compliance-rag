@@ -123,7 +123,6 @@ async def _answer(
         )
     except MalformedGeneration as exc:
         return {"schema_valid": False, "error": str(exc)[:500]}
-    retrieved = {c.clause_id for c in result.retrieval.ranked_candidates()}
     return {
         "schema_valid": True,
         "seconds": round(time.perf_counter() - start, 2),
@@ -143,7 +142,8 @@ async def _answer(
             for c in (*result.citations, *result.blocked)
         ],
         "repairs": [_usage(r) | {"text": r.text} for r in result.repairs],
-        "context": sorted(retrieved | {p.clause_id for p in policies}),
+        # What the verifier checked against, from the pipeline, never recomputed (#335).
+        "context": sorted(result.context),
         "delivered": sorted({c.clause_id for c in result.retrieval.delivered()}),
         "not_in_environment": [n.json() for n in result.not_in_environment],
         "generation": _usage(result.generation),
