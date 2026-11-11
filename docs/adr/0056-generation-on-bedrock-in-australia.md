@@ -1,6 +1,9 @@
 # ADR-0056 — Generation runs on Claude Sonnet 5 through Bedrock, in Australia
 
-- Status: accepted. The human decided on 2026-11-10 (quoted below).
+- Status: superseded by ADR-0057 (2026-11-11): the human has no AWS account; Bedrock withdrawn.
+  (Accepted 2026-11-10, quoted below. The Bedrock adapter, #322 / PR #325,
+  was built in code only; no AWS resource was ever created. #323 is closed as
+  not planned, and #326 removes the adapter.)
 - Date: 2026-11-10
 - Decision IDs: amends `D-07` and `D-16` (`DECISIONS.md`)
 - Supersedes: ADR-0024's platform and region (Vertex, the US multi-region
