@@ -138,3 +138,46 @@ assert not any(m.startswith(("anthropic", "botocore", "boto3")) for m in names)
         [sys.executable, "-c", program], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr[-2000:]
+
+
+# ---- one place a generation region and model come from ------------------------------------
+
+PER_BACKEND_FIELDS = frozenset(
+    {"gemini_model", "gemini_region", "vertex_claude_model", "vertex_claude_region"}
+)
+
+
+def test_nothing_reads_a_per_backend_field_outside_settings_py() -> None:
+    """`Settings.generation` (a `GenerationConfig`: backend, model, region) is
+    the one place the active backend's model and region come from. Every gate
+    (startup, per-question tester check, tenant-text gate, upload and ingest),
+    the factory, the banner, `api/main.py` and the live scripts read it; none
+    reads `gemini_region` or `vertex_claude_region` (or the models) by name, so
+    none can read the wrong backend's. Scans every attribute access in `src/`
+    and `scripts/`, so a new reader fails here."""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).parents[1]
+    offenders: list[str] = []
+    for folder in ("src", "scripts"):
+        for path in sorted((root / folder).rglob("*.py")):
+            if path == root / "src" / "compliance_rag" / "settings.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Attribute) and node.attr in PER_BACKEND_FIELDS:
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno} .{node.attr}")
+    assert offenders == []
+
+
+def test_each_adapter_refuses_to_be_built_for_the_other_backend() -> None:
+    import asyncio
+
+    from compliance_rag.adapters.gemini_generator import GeminiGenerator
+    from compliance_rag.adapters.vertex_claude_generator import VertexClaudeGenerator
+
+    claude = api_settings(generation_backend="claude", vertex_claude_model="claude-sonnet-5")
+    with pytest.raises(ValueError, match="GeminiGenerator built for GENERATION_BACKEND=claude"):
+        asyncio.run(GeminiGenerator.create(claude, corpus=_corpus()))
+    with pytest.raises(ValueError, match="VertexClaudeGenerator built for"):
+        asyncio.run(VertexClaudeGenerator.create(api_settings(), corpus=_corpus()))

@@ -232,7 +232,10 @@ class GeminiGenerator(Generator):
         `corpus` holds any real tenant data. Async because the gate asks the
         store. Application Default Credentials, as the embedder's client: no
         key exists anywhere."""
-        region = validate_generation_region(settings.gemini_region)
+        generation = settings.generation
+        if generation.backend != "gemini":
+            raise ValueError(f"GeminiGenerator built for GENERATION_BACKEND={generation.backend}")
+        region = validate_generation_region(generation.region)
         if is_offshore(region):
             assert_generation_allowed(
                 generation_region=region,
@@ -251,7 +254,7 @@ class GeminiGenerator(Generator):
         # rules — but this module only ever passes `list[types.Content]`.
         return cls(
             cast("_ModelsLike", client.aio.models),
-            model=settings.gemini_model,
+            model=generation.model,
             region=region,
             corpus=corpus,
             sdk_client=client,
