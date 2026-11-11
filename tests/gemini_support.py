@@ -17,10 +17,9 @@ from typing import Any, cast
 
 import httpx
 from google import genai
-from google.genai import types
 from google.oauth2.credentials import Credentials
 
-from compliance_rag.adapters.gemini_generator import GeminiGenerator
+from compliance_rag.adapters.gemini_generator import GeminiGenerator, http_options
 from compliance_rag.adapters.interfaces import RetrievalAdmin
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
 
@@ -36,6 +35,9 @@ QUOTA_BODY = {"error": {"code": 429, "message": QUOTA_MESSAGE, "status": "RESOUR
 SDK_WORDS = ("RESOURCE_EXHAUSTED", "Quota exceeded", "ClientError", "429 RESOURCE")
 """What the SDK's exception says, and its type's name: none of it may reach a client."""
 PLACEHOLDER_TOKEN = "ya29.not-a-real-token"
+RETRY_TEST_DELAY_S = 0.001
+"""The wait between retries in tests: a millisecond, so a request retried to
+exhaustion doesn't slow the suite."""
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -90,8 +92,13 @@ def gemini_client(handler: Handler, requests: list[httpx.Request] | None = None)
         project="test-project",
         location=BUILD_PHASE_OFFSHORE_REGION,
         credentials=Credentials(token=PLACEHOLDER_TOKEN),
-        http_options=types.HttpOptions(
-            httpx_async_client=httpx.AsyncClient(transport=httpx.MockTransport(recording))
+        # The adapter's own timeout, retry policy and attempt counter, with
+        # the waits made near-zero (never 0: the SDK reads that as unset).
+        http_options=http_options(
+            retry_initial_delay=RETRY_TEST_DELAY_S,
+            retry_max_delay=RETRY_TEST_DELAY_S,
+            retry_jitter=RETRY_TEST_DELAY_S,
+            httpx_async_client=httpx.AsyncClient(transport=httpx.MockTransport(recording)),
         ),
     )
 

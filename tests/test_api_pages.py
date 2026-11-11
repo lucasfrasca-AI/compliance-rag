@@ -35,6 +35,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.gemini_generator import RETRY_ATTEMPTS
 from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import (
     ChatAnswer,
@@ -507,7 +508,7 @@ async def test_generation_unavailable_is_its_own_state_with_no_sdk_words() -> No
         recorded = await client.get(f"/chats/{chat_id}/turns")  # as read back later
         chat_page = await client.get(f"/chats/{chat_id}")
         api = (await client.get(f"/v1/chats/{chat_id}")).json()
-    assert events[-1][1]["error"] == "generation_unavailable" and len(requests) == 1
+    assert events[-1][1]["error"] == "generation_unavailable" and len(requests) == RETRY_ATTEMPTS
     assert outcomes(fragment) == ["generation_unavailable"]
     assert "isn't taking requests right now" in text_of(fragment)
     for leaked in (*SDK_WORDS, "Traceback"):

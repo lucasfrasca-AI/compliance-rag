@@ -6,6 +6,7 @@ errors are the ones the SDK itself raises."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -19,8 +20,14 @@ from compliance_rag.adapters.gemini_generator import (
     IMPLICIT_CACHE_MIN_TOKENS,
     PRICE_TABLE,
     REPLY_SCHEMA,
+    RETRY_ATTEMPTS,
+    RETRY_HTTP_STATUS_CODES,
+    RETRY_INITIAL_DELAY_S,
+    RETRY_JITTER_S,
+    RETRY_MAX_DELAY_S,
     THINKING_HEADROOM_TOKENS,
     GeminiGenerator,
+    http_options,
     price_usd,
     unavailability_of,
 )
@@ -42,6 +49,7 @@ from tests.gemini_support import (
     PLACEHOLDER_TOKEN,
     QUOTA_BODY,
     SDK_WORDS,
+    Handler,
     answered,
     body_of,
     gemini_generator,
@@ -372,7 +380,8 @@ async def test_vertex_refusing_for_quota_is_generation_unavailable_in_our_words(
     assert isinstance(cause, genai_errors.ClientError) and cause.code == 429
     assert cause.details == QUOTA_BODY  # pyright: ignore[reportUnknownMemberType] — as the SDK parsed it
     assert not any(word in str(raised.value) for word in SDK_WORDS)
-    assert len(requests) == 1 and requests[0].url.path.endswith(f"{MODEL}:generateContent")
+    assert len(requests) == RETRY_ATTEMPTS  # a 429 is retried before it is quota (#329)
+    assert all(r.url.path.endswith(f"{MODEL}:generateContent") for r in requests)
     attributes = _generate_span(span_exporter)
     assert attributes["generator.unavailable"] == "quota"
     assert attributes["generator.provider_status"] == 429
@@ -408,11 +417,10 @@ async def test_quota_and_access_refusals_are_generation_unavailable(
     "response",
     [
         refused(500, "Internal error", "INTERNAL"),
-        refused(503, "The service is unavailable", "UNAVAILABLE"),
         refused(400, "Request contains an invalid argument", "INVALID_ARGUMENT"),
         refused(404, "Publisher Model was not found", "NOT_FOUND"),
     ],
-    ids=["500", "503", "400", "404"],
+    ids=["500", "400", "404"],
 )
 async def test_anything_else_is_raised_as_it_is_and_is_not_marked_unavailable(
     response: httpx.Response, span_exporter: InMemorySpanExporter
@@ -438,6 +446,156 @@ def test_unavailability_of_reads_the_code_or_the_status() -> None:
     )
     assert unavailability_of(genai_errors.ClientError(403, {})) is Unavailability.ACCESS
     assert unavailability_of(genai_errors.ServerError(500, {})) is None
+
+
+# ---- a 429 or 503 is retried before quota is reported (#329) -----------------------------
+
+
+def _sequence(*responses: httpx.Response) -> Handler:
+    """Answers the requests in order, the last answer repeating."""
+    remaining = list(responses)
+    return lambda _: remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+
+async def test_a_429_answered_twice_then_a_200_succeeds_and_the_span_shows_the_retries(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    requests: list[httpx.Request] = []
+    generator = gemini_generator(
+        _sequence(refused(429), refused(429), answered()), _ok_corpus(), requests
+    )
+    generation = await generator.generate(
+        system="sys", cached_prefix=PREFIX, user="q", max_tokens=64
+    )
+    assert generation.text == '{"answer": "a", "citations": []}'
+    assert len(requests) == 3
+    assert len({r.content for r in requests}) == 1  # the same request, sent again
+    attributes = _generate_span(span_exporter)
+    assert attributes["generator.attempts"] == 3
+    assert attributes["generator.retry_attempts"] == 2
+    assert "generator.unavailable" not in attributes
+
+
+async def test_a_request_that_succeeds_first_time_records_one_attempt_and_no_retries(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    generator = gemini_generator(lambda _: answered(), _ok_corpus())
+    await generator.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=64)
+    attributes = _generate_span(span_exporter)
+    assert attributes["generator.attempts"] == 1
+    assert attributes["generator.retry_attempts"] == 0
+
+
+async def test_a_429_on_every_attempt_is_quota_after_exactly_the_configured_attempts(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    requests: list[httpx.Request] = []
+    generator = quota_exhausted_generator(_ok_corpus(), requests)
+    with pytest.raises(GenerationUnavailable) as raised:
+        await generator.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=64)
+    assert raised.value.reason is Unavailability.QUOTA
+    assert len(requests) == RETRY_ATTEMPTS
+    attributes = _generate_span(span_exporter)
+    assert attributes["generator.attempts"] == RETRY_ATTEMPTS
+    assert attributes["generator.retry_attempts"] == RETRY_ATTEMPTS - 1
+    assert attributes["generator.unavailable"] == "quota"
+
+
+async def test_a_503_is_retried_and_is_not_quota_when_it_never_clears(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    requests: list[httpx.Request] = []
+    generator = gemini_generator(
+        lambda _: refused(503, "The service is unavailable", "UNAVAILABLE"),
+        _ok_corpus(),
+        requests,
+    )
+    with pytest.raises(genai_errors.ServerError) as raised:
+        await generator.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=64)
+    assert raised.value.code == 503
+    assert len(requests) == RETRY_ATTEMPTS
+    attributes = _generate_span(span_exporter)
+    assert attributes["generator.retry_attempts"] == RETRY_ATTEMPTS - 1
+    assert "generator.unavailable" not in attributes
+
+
+@pytest.mark.parametrize(
+    ("response", "outcome"),
+    [
+        (refused(400, "bad", "INVALID_ARGUMENT"), genai_errors.ClientError),
+        (refused(401, "bad", "UNAUTHENTICATED"), GenerationUnavailable),
+        (refused(403, "bad", "PERMISSION_DENIED"), GenerationUnavailable),
+        (refused(404, "bad", "NOT_FOUND"), genai_errors.ClientError),
+        (refused(500, "bad", "INTERNAL"), genai_errors.ServerError),
+    ],
+    ids=["400", "401", "403", "404", "500"],
+)
+async def test_nothing_but_a_429_or_a_503_is_retried(
+    response: httpx.Response, outcome: type[Exception], span_exporter: InMemorySpanExporter
+) -> None:
+    requests: list[httpx.Request] = []
+    generator = gemini_generator(lambda _: response, _ok_corpus(), requests)
+    with pytest.raises(outcome):
+        await generator.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=64)
+    assert len(requests) == 1
+    attributes = _generate_span(span_exporter)
+    assert attributes["generator.attempts"] == 1
+    assert attributes["generator.retry_attempts"] == 0
+
+
+async def test_concurrent_requests_count_their_own_attempts(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """The count is per request: a neighbour's retries are not this span's."""
+    flaky = gemini_generator(_sequence(refused(429), answered()), _ok_corpus())
+    steady = gemini_generator(lambda _: answered(), _ok_corpus())
+    await asyncio.gather(
+        flaky.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=64),
+        steady.generate(system="sys", cached_prefix=PREFIX, user="q", max_tokens=64),
+    )
+    counts = sorted(
+        int((s.attributes or {})["generator.attempts"])  # pyright: ignore[reportArgumentType]
+        for s in span_exporter.get_finished_spans()
+        if s.name == "generator.generate"
+    )
+    assert counts == [1, 2]
+
+
+def test_the_retry_settings_are_bounded_to_about_a_minute_in_total() -> None:
+    retry = http_options().retry_options
+    assert retry is not None
+    assert retry.attempts == RETRY_ATTEMPTS
+    assert retry.http_status_codes == list(RETRY_HTTP_STATUS_CODES) == [429, 503]
+    assert (retry.initial_delay, retry.max_delay, retry.jitter) == (
+        RETRY_INITIAL_DELAY_S,
+        RETRY_MAX_DELAY_S,
+        RETRY_JITTER_S,
+    )
+    # the SDK waits initial * base**n plus up to `jitter`, capped at `max_delay`, between attempts
+    waits = [
+        min(RETRY_INITIAL_DELAY_S * 2**n + RETRY_JITTER_S, RETRY_MAX_DELAY_S)
+        for n in range(RETRY_ATTEMPTS - 1)
+    ]
+    assert 30 <= sum(waits) <= 60
+
+
+def test_the_delays_are_overridable() -> None:
+    retry = http_options(
+        retry_initial_delay=0.001, retry_max_delay=0.002, retry_jitter=0.001
+    ).retry_options
+    assert retry is not None and retry.initial_delay == 0.001 and retry.attempts == RETRY_ATTEMPTS
+
+
+async def test_create_builds_the_client_with_the_adapters_own_http_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = _patch_client(monkeypatch)
+    await GeminiGenerator.create(_settings(), corpus=_ok_corpus())
+    options = built["http_options"]
+    expected = http_options()
+    assert options.retry_options == expected.retry_options
+    assert options.timeout == expected.timeout
+    assert options.async_client_args  # the attempt counter rides on the real client
 
 
 # ---- residency (ADR-0023, ADR-0032): `us` is offshore, as it was for Claude --------------

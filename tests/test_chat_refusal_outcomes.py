@@ -29,6 +29,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.fakes import FakeGenerator, FakeRetrievalStore
+from compliance_rag.adapters.gemini_generator import RETRY_ATTEMPTS
 from compliance_rag.adapters.interfaces import (
     ChatAnswer,
     ChatExchange,
@@ -87,7 +88,9 @@ async def _refused_for_quota(ledger: LedgerStore) -> dict[str, Any]:  # Any: JSO
         generator, ledger, await golden_clause_store(), settings=settings
     ) as client:
         events = await _ask(client)
-        assert len(requests) == 1 and events[-1][1]["error"] == "generation_unavailable"
+        assert (
+            len(requests) == RETRY_ATTEMPTS and events[-1][1]["error"] == "generation_unavailable"
+        )
         read = await client.get(f"/v1/chats/{events[-1][1]['chat_id']}")
     assert read.status_code == 200
     assert PROVIDER_TOKEN not in read.text and "Quota exceeded" not in read.text

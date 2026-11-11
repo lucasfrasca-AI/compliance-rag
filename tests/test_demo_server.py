@@ -37,6 +37,7 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
+from compliance_rag.adapters.gemini_generator import RETRY_ATTEMPTS
 from compliance_rag.adapters.interfaces import Embedder, Generation, Generator, Member
 from compliance_rag.api import deps
 from compliance_rag.api.app import create_app
@@ -387,7 +388,7 @@ async def test_a_vertex_quota_refusal_is_shown_as_generation_unavailable_end_to_
         member=demo_member_as(LISTED),
     )
     response, events = await _ask(app)
-    assert len(requests) == 1
+    assert len(requests) == RETRY_ATTEMPTS
     assert [name for name, _ in events] == ["coverage", "retrieval", "error"]
     error = events[-1][1]
     assert error["error"] == "generation_unavailable" and error["reason"] == "quota"
