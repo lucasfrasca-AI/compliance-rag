@@ -150,6 +150,48 @@ async def test_the_router_leaves_out_the_prefix_on_both_of_its_paths() -> None:
     assert POLICY not in await found(TEXT, sent) and LAW in await found(TEXT, sent)
 
 
+async def test_a_tenant_whose_whole_environment_is_the_prefix_is_answered_unretrieved() -> None:
+    """#331, what the live answer eval hit on GQ-15: Acme subscribes to no
+    law, and every clause of its own is in the prefix, so a question that
+    isn't a clause id has no candidate left to retrieve. That is an empty
+    retrieval, never a reranker call with nothing to score (the service
+    refuses one with a 400): the question is answered from the prefix."""
+    from compliance_rag.adapters.fakes import FakeGenerator, FakeReranker
+    from compliance_rag.adapters.generation_residency import TenantTextGate
+    from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
+    from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
+    from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
+
+    question = next(q for q in load_golden_set().queries if q.id == "GQ-15")
+    ledger, clauses = await golden_ledger(), await golden_clause_store()
+    assert await ledger.subscribed_instruments(POLICY_TENANT_ID) == frozenset()
+    policies = await tenant_policies(
+        ledger, clauses, tenant_id=POLICY_TENANT_ID, as_of=question.as_of
+    )
+    own = {c.clause_id for c in golden_chunks() if c.tenant_id == POLICY_TENANT_ID}
+    assert own and own <= {p.clause_id for p in policies}
+    reranker, generator = FakeReranker(), FakeGenerator()
+    pipeline = AssessmentPipeline(
+        RetrievalPipeline(FakeRetrievalStore(golden_chunks(), ledger=ledger), reranker),
+        generator,
+        Verifier(clauses, ledger, CanonicalCitationVerifier()),
+        ledger,
+        tenant_text=TenantTextGate("us", SyntheticRegistry.load()),
+    )
+
+    answer = await pipeline.answer(
+        question.query,
+        POLICY_TENANT_ID,
+        question.as_of,
+        law=LIBRARY_QUESTION,
+        policies=policies,
+    )
+
+    assert answer.retrieval.fused == () and answer.retrieval.delivered() == ()
+    assert reranker.rerank_calls == 0
+    assert generator.calls and generator.calls[0]["cached_prefix"]
+
+
 # ---- the number it changes: law in the top ten --------------------------------
 
 

@@ -692,6 +692,15 @@ async def test_reranker_is_a_reranker_and_truncates_to_top_k() -> None:
     await assert_reranker_contract(FakeReranker())
 
 
+async def test_the_fake_reranker_refuses_an_empty_list_as_the_service_does() -> None:
+    """The service answers an empty `documents` with a 400
+    (`test_empty_documents_is_rejected`). A fake that scored nothing as `()`
+    let a composition calling it with nothing pass every fake-backed test
+    and fail only live (#331)."""
+    with pytest.raises(ValueError, match="documents must not be empty"):
+        await FakeReranker().rerank("protect the information", (), top_k=10)
+
+
 async def test_embedder_returns_configured_dimensions() -> None:
     embedder = FakeEmbedder(dimensions=1536)
     assert isinstance(embedder, Embedder)
