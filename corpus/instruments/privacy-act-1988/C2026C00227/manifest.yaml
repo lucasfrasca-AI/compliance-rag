@@ -20,9 +20,23 @@
 # 2026-10-12: s6da/, s6ea/ and s15 reviewed and approved by Lucas Frasca (who
 # merges as GitHub `lucasfrasca-AI` — CONTEXT.md, "Human reviewer"). The
 # original 2026-09-24 selection was single-author reviewed by Lucas Frasca.
-author: "model: Claude Opus 5.5 — added s6da/, s6ea/ and s15 to Lucas Frasca's 2026-09-24 selection"
+#
+# 2026-11-11 (#282, ADR-0053 items 20 and 22): s 7A, s 16C and Part IIIC
+# Divisions 1-3 (ss 26WB-26WT, the Notifiable Data Breaches scheme's
+# obligations) join the selection: 244 clauses. The human chose the groups
+# (#282, signed 2026-11-11: groups 1-5, "the selection holds clauses that can
+# bind a tenant, not the whole Part"); the model drafted the entries below
+# (ADR-0052: deciding the groups is not writing the paths). Not selected:
+# Div 4's s 26WU (the Commissioner's powers) and Div 5's ss 26X-26XH
+# (ministerial declarations), and never s 26W, which is Part IIIB.
+# Each entry is a bare section path, not `<section>/`: a bare entry selects
+# the section's own clause and everything under it, never a sibling
+# (`s26wb` never selects `s26wba`). Six of these sections (26WD, 26WG, 26WJ,
+# 26WM, 26WN, 26WS) hold a chapeau clause at the bare path itself, which a
+# `/` prefix would miss (238 clauses, not the 244 the human signed).
+author: "model: Claude Opus 5.5 — drafted s6da/, s6ea/, s15 (2026-10-12) and the s7a, s16c and s26wb-s26wt entries (#282, 2026-11-11), added to Lucas Frasca's 2026-09-24 selection"
 reviewed_by: "Lucas Frasca"
-date: 2026-10-12
+date: 2026-11-11
 
 # Phase 1 scope (issue #19 acceptance criteria): Schedule 1 (the Australian
 # Privacy Principles) plus ss 6, 6C, 6D and 6E of the main body. Each
@@ -39,3 +53,27 @@ prefixes:
   - s6e/
   - s6ea/
   - s15
+  # s 7A (8): "Acts of certain agencies treated as acts of organisation"
+  - s7a
+  # s 16C (8): "Acts and practices of overseas recipients of personal information"
+  - s16c
+  # Part IIIC Div 1 (18): ss 26WB-26WD
+  - s26wb
+  - s26wc
+  - s26wd
+  # Part IIIC Div 2 (86): ss 26WE-26WJ
+  - s26we
+  - s26wf
+  - s26wg
+  - s26wh
+  - s26wj
+  # Part IIIC Div 3 (124): ss 26WK-26WT
+  - s26wk
+  - s26wl
+  - s26wm
+  - s26wn
+  - s26wp
+  - s26wq
+  - s26wr
+  - s26ws
+  - s26wt

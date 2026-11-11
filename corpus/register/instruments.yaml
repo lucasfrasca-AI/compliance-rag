@@ -24,10 +24,23 @@
 # kept the Interactive Gambling Act (APP 7.8(aa) names it) and dropped the bare
 # "Part IIIC" alias: it appears in ordinary discussion of the Privacy Act
 # itself, so flagging a question that merely mentions it would be noise.
+#
+# 2026-11-11 (#282): the NDB entry's `paths` tightened from `s26w` to the
+# sections C2026C00227's selection now holds, ss 26WB-26WT (Part IIIC
+# Divisions 1-3). `s26w` as a string prefix also matched s 26W, which is Part
+# IIIB (APP code review), and Div 4's s 26WU and Div 5's ss 26X-26XH aren't
+# selected. Each path below is a plain string prefix that can match none of
+# `s26w/…`, `s26wu…` or `s26x…`. The human decided the tightening on #282
+# ("The register's path list is tightened to s26wb…s26wt"), the model wrote
+# the list, and the human signed it the same day. Consequence the human
+# recorded: once any of Part IIIC is selected the scheme is held (ADR-0051
+# decides "held" per part, by path overlap), so a question naming the scheme
+# is answered from the held clauses, not flagged, including one about the
+# Commissioner's powers in Div 4 or Div 5.
 
-author: "model: Claude Opus 5.5 — drafted for #252 at Lucas Frasca's request"
+author: "model: Claude Opus 5.5 — drafted for #252 at Lucas Frasca's request; NDB paths tightened for #282"
 reviewed_by: "Lucas Frasca"
-date: "2026-10-21"
+date: "2026-11-11"
 
 instruments:
   - known_as: "Privacy Act 1988"
@@ -54,7 +67,27 @@ instruments:
 
   - known_as: "Notifiable Data Breaches scheme (Part IIIC of the Privacy Act 1988)"
     part_of: privacy-act-1988
-    paths: ["s26w"]
+    paths:
+      # Division 1: ss 26WB-26WD
+      - s26wb
+      - s26wc
+      - s26wd
+      # Division 2: ss 26WE-26WJ
+      - s26we
+      - s26wf
+      - s26wg
+      - s26wh
+      - s26wj
+      # Division 3: ss 26WK-26WT
+      - s26wk
+      - s26wl
+      - s26wm
+      - s26wn
+      - s26wp
+      - s26wq
+      - s26wr
+      - s26ws
+      - s26wt
     aliases:
       - "Notifiable Data Breaches scheme"
       - "Notifiable Data Breach scheme"

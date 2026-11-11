@@ -22,12 +22,20 @@
 #   - GE-02 names an instrument neither the register nor the Act pattern knows,
 #     so the gap in #261 is visible in the eval instead of invisible: it is
 #     expected to fail the flag check until #261 lands.
-#   - GE-03 exercises `part_of`: a part of a held instrument (the Privacy Act's
-#     Part IIIC) that the selection doesn't include.
+#   - GE-03 exercised `part_of`: a part of a held instrument (the Privacy Act's
+#     Part IIIC) that the selection didn't include.
+#
+# GE-03 was re-drafted by the model for #282 (ADR-0053 item 20) and signed by
+# Lucas Frasca in the chat on 2026-11-11 ("sign 3"). Once C2026C00227's
+# selection holds Part IIIC Divisions 1-3 the register's NDB entry is held, so
+# the case no longer expects the flag: it expects none (`not_in_environment:
+# []`, which the check holds to an answer carrying no flag at all) and the two
+# clauses the answer turns on. Its question, tenant and `cites_instead` are
+# unchanged.
 
-author: "model: Claude Opus 5.5 — expectations and label drafted for #252; GE-01's question is Lucas Frasca's"
+author: "model: Claude Opus 5.5 — expectations and label drafted for #252, GE-03 re-drafted for #282; GE-01's question is Lucas Frasca's"
 reviewed_by: "Lucas Frasca"
-date: "2026-10-21"
+date: "2026-11-11"
 
 cases:
   - id: GE-01
@@ -65,10 +73,18 @@ cases:
     tenant_id: acme
     subscribes: [privacy-act-1988]
     as_of: 2026-10-21
-    not_in_environment: ["Notifiable Data Breaches scheme (Part IIIC of the Privacy Act 1988)"]
+    not_in_environment: []
+    expected_clause_ids:
+      - "privacy-act-1988:C2026C00227:s26we/2/b"
+      - "privacy-act-1988:C2026C00227:s26wk/2"
     cites_instead: "Privacy Act 1988"
     notes: >
-      Exercises part_of: Acme holds the Privacy Act, but its selection doesn't
-      include Part IIIC, so the scheme is flagged as a part of a held instrument
-      that isn't in this environment. The answer may cite APP 11 (security),
-      never the scheme's notification rules.
+      Exercises a held part (#282): C2026C00227's selection holds Part IIIC
+      Divisions 1-3, so the register's NDB entry is held wherever the Act is,
+      and the question is not flagged. s 26WE(2)(b) is the loss limb of an
+      eligible data breach (information lost where unauthorised access or
+      disclosure is likely and would likely result in serious harm: the stolen
+      laptop); s 26WK(2) is the duty to prepare a statement and give a copy to
+      the Commissioner as soon as practicable. The answer carries no flag and
+      answers from the Privacy Act. Until #282 this case expected the
+      out-of-environment flag (signed 2026-10-21).

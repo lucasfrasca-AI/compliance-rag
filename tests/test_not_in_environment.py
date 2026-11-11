@@ -248,11 +248,19 @@ def test_the_register_names_what_the_pattern_finds_and_what_it_cant(tmp_path: Pa
 def test_a_part_the_selection_doesnt_hold_is_flagged_though_its_instrument_is(
     tmp_path: Path,
 ) -> None:
-    """Part IIIC is inside the Privacy Act, and the committed selection holds
-    none of it: a tenant holding the Act doesn't hold the scheme."""
-    register = _register(tmp_path)
+    """Part IIIC is inside the Privacy Act. With a selection that holds none of
+    it (C2026C00227's before #282), a tenant holding the Act doesn't hold the
+    scheme."""
+    unselected = tmp_path / "unselected"
+    (unselected / LAW / "v8").mkdir(parents=True)
+    (unselected / LAW / "v8" / "manifest.yaml").write_text(
+        'author: "Lucas Frasca"\nreviewed_by: "Lucas Frasca"\ndate: 2026-10-21\n'
+        "prefixes:\n  - sch1/\n  - s6/\n  - s15\n",
+        encoding="utf-8",
+    )
+    register = _register(tmp_path, root=unselected)
     (ndb,) = (e for e in register.entries if e.part_of is not None)
-    assert not part_selected(ndb)
+    assert not part_selected(ndb, unselected)
     assert not_in_environment("Do we need to report under the NDB scheme?", HELD, register) == (
         NotInEnvironment(
             "NDB scheme", known_as="Notifiable Data Breaches scheme", part_of="Privacy Act 1988"
@@ -310,6 +318,35 @@ def test_a_malformed_register_is_refused(tmp_path: Path, change: tuple[str, str]
 def test_the_committed_register_loads() -> None:
     """Refused while pending, so an unsigned register stops the build."""
     assert isinstance(committed_instrument_register(), InstrumentRegister)
+
+
+NDB = "Notifiable Data Breaches scheme (Part IIIC of the Privacy Act 1988)"
+PART_IIIC_SELECTED = tuple(f"s26w{s}" for s in "bcdefghjklmnpqrst")
+"""ss 26WB-26WT: Part IIIC Divisions 1-3, the human's groups 3-5 (#282)."""
+
+
+def test_the_committed_selection_holds_the_ndb_scheme_and_its_paths_are_exact() -> None:
+    """#282: C2026C00227's selection holds Part IIIC Divisions 1-3, so a
+    tenant holding the Act holds the scheme (ADR-0051 decides "held" per part,
+    by path overlap) and the question isn't flagged. Its paths name exactly
+    ss 26WB-26WT: never Part IIIB's s26W (`s26w/…`), Div 4's s26WU or Div 5's
+    ss 26X-26XH, as the old `s26w` prefix did."""
+    register = committed_instrument_register()
+    (ndb,) = (e for e in register.entries if e.part_of is not None)
+    assert ndb.known_as == NDB
+    assert ndb.paths == PART_IIIC_SELECTED
+    for outside in ("s26w", "s26w/1", "s26wa", "s26wu", "s26wu/1", "s26x", "s26x/1", "s26xa/1"):
+        assert not any(outside.startswith(p) for p in ndb.paths), outside
+    assert NDB in register.selected_parts
+    assert not_in_environment("Do we need to report under the NDB scheme?", HELD, register) == ()
+    # A tenant that doesn't hold the Act still gets the flag, naming the Act.
+    assert [
+        (a.known_as, a.part_of) for a in not_in_environment("the NDB scheme", {}, register)
+    ] == [(NDB, "Privacy Act 1988")]
+    # Every selected clause under those paths is in the scheme's Divisions 1-3.
+    selected = {c.clause_path.split("/")[0] for c in gate_law_clauses()}
+    covered = {s for s in selected if any(s.startswith(p) for p in ndb.paths)}
+    assert covered == set(PART_IIIC_SELECTED)
 
 
 # ---- the prompt -------------------------------------------------------------------------
