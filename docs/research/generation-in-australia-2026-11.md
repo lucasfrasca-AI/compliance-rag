@@ -100,7 +100,7 @@ Every quotation below was copied from the raw page, downloaded with `curl -sL` o
 |---|---|
 | Model ID `gemini-3.5-flash`. "Launch stage: GA", "Release date: May 19, 2026", "Retirement date†: May 19, 2027 or later" | Model page, https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-flash |
 | Standard PayGo locations: "Global: global" and "Multi-region: us, eu". ML processing lists "Multi-region: us, eu" | Same page |
-| Consumption options: Pay-as-you-go is "Standard PayGo with Usage Tiers, Flex PayGo, Priority PayGo", Supported; "Fixed quota", Not supported | Same page |
+| Consumption options table: the row "Pay-as-you-go" lists "Standard PayGo with Usage Tiers, Flex PayGo, Priority PayGo" as "Supported"; the row "Fixed quota" reads "Not supported" | Same page |
 | Capabilities: system instructions, structured output, and "Implicit context caching, explicit context caching" are all Supported. Context window 1,048,576 tokens, maximum output 65,536 | Same page |
 | Security controls for online prediction and for context caching: data residency, CMEK, VPC-SC and AXT all marked Supported | Same page |
 | The `us` endpoint's host: "Multi-region endpoints (such as us and eu on aiplatform.us.rep.googleapis.com and aiplatform.eu.rep.googleapis.com) constrain machine learning processing to specific jurisdictional boundaries." | Standard PayGo, https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/standard-paygo |
@@ -118,7 +118,7 @@ Every quotation below was copied from the raw page, downloaded with `curl -sL` o
 | The only setup the Gemini 3.5 Flash guide names: "Before you begin, you must authenticate to Agent Platform using Application Default Credentials (ADC) or an API key." There is no Model Garden enablement step, unlike a partner model such as Claude. The model page adds that its example app "requires a Google Cloud project with billing and Agent Platform API enabled" | Gemini 3.5 Flash guide, https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-5-flash; model page |
 | Checked live, read-only, 2026-11-11: `aiplatform.googleapis.com` is enabled on `compliance-rag-508904` (the embeddings already use it), and the project's parent is an organization (`812386781552`), which is what usage tiers are computed over | `gcloud services list --enabled`, `gcloud projects describe` |
 
-**Reading.** Nothing has to be requested: no quota increase, no model enablement, no form. That is the difference from Claude on Vertex, whose quota was never granted.
+**Reading.** Nothing has to be requested: no quota increase, no model enablement, no form. That is the difference from Claude on Vertex, whose quota request is still pending after three weeks.
 
 Two things can't be read from the documentation:
 

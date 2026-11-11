@@ -4,14 +4,16 @@
 - Date: 2026-11-11
 - Decision IDs: amends `D-07` and `D-16` (`DECISIONS.md`)
 - Supersedes: ADR-0056 entirely (Claude Sonnet 5 on Amazon Bedrock in
-  Australia), and ADR-0024's choice of model (`claude-sonnet-5`). ADR-0024's
+  Australia), and ADR-0024's choice of model (`claude-sonnet-5`) as the
+  default; Claude on Vertex stays a dormant configuration. ADR-0024's
   stance continues, now for Gemini: build-phase generation at the US
   multi-region endpoint, `global` refused. ADR-0023's gate and ADR-0032's
   tester gate, which ADR-0056 retired, stand again.
 - Evidence: `docs/research/generation-in-australia-2026-11.md`, section
   *2026-11-11: Gemini at `us`*
-- Issues: #326 (the Gemini adapter; removes the Bedrock and Vertex Claude
-  adapters). #323 (removing the offshore paths) is closed as not planned.
+- Issues: #326 (the Gemini adapter; removes the Bedrock adapter and its AWS
+  code, and keeps the Vertex Claude adapter as a dormant configuration). #323
+  (removing the offshore paths) is closed as not planned.
 
 ## The human's decision
 
@@ -22,37 +24,38 @@ On 2026-11-10, the fallback recorded in ADR-0056:
 > Unblocking Phase 1 beats waiting, and the offshore gate already handles it
 > honestly.
 
-On 2026-11-11:
+On 2026-11-11, after saying that nothing was ever built in AWS, only GCP:
 
-> nothign was ever built in aws only GCP … we were going to use a Claude
-> model in GCP but it hasnt gottena pproval so we are using a google gemini
-> model instead [sic]
+> we were going to use a Claude model in GCP but it hasnt gottena pproval so
+> we are using a google gemini model instead [sic]
 
 ## Context
 
-- **Claude on Vertex never got its quota.** ADR-0024 chose `claude-sonnet-5`
+- **Claude on Vertex hasn't got its quota.** ADR-0024 chose `claude-sonnet-5`
   at the Vertex US multi-region endpoint. The first live call on 2026-10-10
   returned 429 on a request quota that is effectively zero for this project,
   and in three weeks the increase never moved. Phase 1's last exit
-  criterion, the live run, has waited on it since.
+  criterion, the live run, has waited on it since. The request is pending,
+  not refused: in the human's words, it "hasnt gottena pproval" [sic].
 - **Gemini in Sydney is a reservation, not a price per token.**
   `gemini-3.5-flash` is sold in `australia-southeast1` only as Single Zone
   Provisioned Throughput: 1 GSU minimum, about $2,970 a month on a 1-month
   commitment, about fifteen times the $200 ceiling. Its Standard PayGo is
   `global`, `us` and `eu` only.
-- **Bedrock is withdrawn, and choosing it was the model's error.** ADR-0056
-  moved generation to Claude on Amazon Bedrock through its Australian
-  inference profile. That route was Claude Code's suggestion, not the
-  human's, and it was chosen without first checking that the human had an
-  AWS account. The human has none and keeps this build on GCP only. The
+- **Bedrock is withdrawn.** ADR-0056 moved generation to Claude on Amazon
+  Bedrock through its Australian inference profile. Claude Code proposed
+  Bedrock; the human accepted it on that proposal (2026-11-10: "If Bedrock
+  gives pay-per-token Claude in Australia … we take it"); Claude Code didn't
+  check whether the human had an AWS account before choosing it — that was
+  the error. The human has none and keeps this build on GCP only. The
   Bedrock adapter was built in code only (#322, PR #325); no AWS account,
   role, subscription or other AWS resource was ever created, and nothing was
-  billed. The model should have asked before writing the ADR, not after the
-  adapter merged.
+  billed.
 - **Gemini 3.5 Flash at `us` needs nothing requested.** Verified against
   Google's raw pages on 2026-11-11:
   - GA, released May 19, 2026, and sold at `us` as Standard PayGo with usage
-    tiers. The model page says "Fixed quota: Not supported".
+    tiers. In the model page's consumption-options table, the row "Fixed
+    quota" reads "Not supported".
   - There is no per-project quota to raise and no Model Garden enablement:
     a usage tier is assigned automatically from the organization's 30-day
     spend, and a 429 "doesn't indicate that you've hit a fixed quota", only
@@ -87,10 +90,14 @@ On 2026-11-11:
     build-phase tester is refused, and so is any tenant text read from the
     bucket (the CAG prefix, a clause to repair) that isn't registered
     synthetic.
-- **The Vertex Claude adapter and the Bedrock adapter are removed** by #326,
-  with their settings and AWS credentials. Claude doesn't come back on this
-  project without a new decision. The billable guard's `aws` rules stay:
-  they cost nothing and still protect.
+- **Only the Bedrock and AWS code is removed** by #326: the Bedrock adapter,
+  its AWS credentials and its settings. The billable guard's `aws` rules
+  stay: they cost nothing and still protect.
+- **Claude on Vertex stays in the code as a dormant configuration.** The
+  Vertex Claude adapter (`claude-sonnet-5` at `us`, ADR-0024) is kept,
+  selectable with `GENERATION_BACKEND=claude`, behind the same offshore
+  gates. It isn't called while Gemini is the default. If the quota is ever
+  granted, switching back is the human's decision, recorded then by an ADR.
 - **Caching: implicit is recommended**, and #326 confirms the choice and
   records why in its PR. Implicit caching is on by default, bills the cache
   write at the plain input price and stores nothing that has to be created.
@@ -105,12 +112,14 @@ On 2026-11-11:
 - **The build-phase offshore exception is kept.** D-16 goes back to its
   wording before ADR-0056, with Gemini in place of Claude: generation is the
   single exception to residency, only while the corpus is public law plus
-  synthetic data, and only behind ADR-0023's and ADR-0032's gates. D-07 names
-  Gemini 3.5 Flash at `us`. Aura Free stays under D-09's build exception, as
-  before. *Build-phase tester* is a current term again in `CONTEXT.md`.
+  synthetic data, and only behind ADR-0023's and ADR-0032's gates. Aura Free
+  stays under D-09's separate build exception, as before. D-07 names Gemini
+  3.5 Flash at `us` and says the same. *Build-phase tester* is a current term
+  again in `CONTEXT.md`.
 - **AWS is not adopted.** Bedrock goes back to `SERVICES.md`'s forbidden
   table as "Not adopted: no AWS account". The Bedrock and IAM role rows are
-  removed.
+  removed. The Vertex Claude row stays, marked dormant until the human
+  decides otherwise.
 - **"Gemini for generation" is no longer forbidden.** That row ("allowed only
   as an explicit A/B in the eval harness, never as the default") is replaced
   by the Gemini 3.5 Flash row and a note pointing here.

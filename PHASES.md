@@ -44,7 +44,7 @@ Deliverables
 - Router: clause-ID regex → keyword lookup, skip rerank; else hybrid → rerank
 - **Reranker service** on Cloud Run (`australia-southeast1`): FastAPI + ONNX Runtime, `POST /rerank {query, documents[]}` → scores; models benchmarked: `BAAI/bge-reranker-v2-m3` (default), `mixedbread-ai/mxbai-rerank-base-v2`, `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - **ColBERT rescoring** in Qdrant (multivector, HNSW off) as the A/B; Vertex Ranking API adapter kept for CI only, hard-gated to `TENANT_ID == dev-tenant`
-- Generator adapter (Gemini 3.5 Flash on Vertex at the `us` multi-region endpoint during build, behind the offshore gate, ADR-0023/ADR-0032/ADR-0057, #326; it replaces Claude on Vertex at `us`, ADR-0024, whose quota was never granted) with structured output; prompt caching on the system prefix
+- Generator adapter (Gemini 3.5 Flash on Vertex at the `us` multi-region endpoint during build, behind the offshore gate, ADR-0023/ADR-0032/ADR-0057, #326; it replaces Claude on Vertex at `us`, ADR-0024, as the default while that quota is pending; Claude stays a dormant configuration, `GENERATION_BACKEND=claude`) with structured output; prompt caching on the system prefix
 - **Citation verifier**: canonical-form comparison against Cloud Storage; fail → targeted repair
 - **Eval harness**: 25 labelled queries to start (exact ID, paraphrase, cross-clause) — enough to catch a regression, expanded when a real failure shows a gap rather than padded to a count; recall@k per channel and fused; verifier pass rate; runs in CI as a regression gate
 
