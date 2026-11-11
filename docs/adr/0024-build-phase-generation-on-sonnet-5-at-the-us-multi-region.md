@@ -1,6 +1,6 @@
 # ADR-0024 — Build-phase generation on Sonnet 5 at the US multi-region endpoint
 
-- Status: accepted; platform and region superseded by ADR-0056 (Sonnet 5 on Bedrock's AU geographic profile, after this quota went unanswered for three weeks)
+- Status: accepted; model superseded as the default by ADR-0057 (2026-11-11: Gemini 3.5 Flash at the same `us` multi-region endpoint, after this quota went unanswered for three weeks). `claude-sonnet-5` at `us` stays a dormant configuration while the quota is pending; switching back is the human's decision by ADR. The US multi-region offshore stance, `global` refused, continues for Gemini. ADR-0056 (Sonnet 5 on Bedrock's AU profile) had superseded its platform and region on 2026-11-10, and was itself superseded by ADR-0057 the next day
 - Date: 2026-10-10
 - Decision IDs: amends `D-07` and `D-16` (`DECISIONS.md`); supersedes ADR-0023's choice of model and region, and keeps its gate unchanged
 
