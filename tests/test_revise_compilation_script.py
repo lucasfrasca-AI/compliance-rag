@@ -112,6 +112,7 @@ async def test_amend_points_at_phase_4_and_reads_nothing(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(revise_compilation, "Settings", _settings)
     monkeypatch.setattr(revise_compilation, "pinned_source", touched)
+    monkeypatch.setattr(revise_compilation, "pinned_completions", touched)
     arguments = parse_arguments(["--bucket", "b", "--mode", "amend"])
     with pytest.raises(SystemExit, match=f"Phase 4, {revise_compilation.AMEND_ISSUE}"):
         await revise_compilation.main(arguments)
@@ -167,6 +168,7 @@ async def test_an_apply_from_an_uncommitted_checkout_is_refused_before_anything_
     monkeypatch.setattr(revise_compilation, "Settings", _settings)
     monkeypatch.setattr(revise_compilation, "resolve_source_version", uncommitted)
     monkeypatch.setattr(revise_compilation, "pinned_source", touched)
+    monkeypatch.setattr(revise_compilation, "pinned_completions", touched)
     arguments = argparse.Namespace(
         mode=None, apply=True, finish=True, html=None, bucket="b", no_ledger=True, show_text=False
     )

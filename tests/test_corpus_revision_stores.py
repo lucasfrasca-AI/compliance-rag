@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 from qdrant_client import AsyncQdrantClient
+from scripts.ingest_compilation import PDF_SHA256, SECOND_SOURCES
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.corpus_revision import CorpusRevision, PlannedRevision, RevisionReport
@@ -100,6 +101,7 @@ from tests.test_neo4j_graph import cypher, needs_neo4j
 from tests.test_neo4j_graph import (
     graph as plain_graph,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
+from tests.test_s6da_2_formula import LEAD_IN, SIGNED, cut_completions, signed
 
 SINCE, EFFECTIVE, NOV = dt.date(1989, 1, 1), dt.date(2026, 6, 4), dt.date(2026, 11, 1)
 DEPLOYED_CODE = SourceVersion(SourceKind.CORPUS, sha="a" * 40, tag="corpus-2026.10.11")
@@ -1189,3 +1191,164 @@ async def test_the_graph_refuses_a_marked_clause_over_an_unmarked_node_outside_a
                 effective=EFFECTIVE,
                 supersedes=None,
             )
+
+
+# ---- completing s6da/2 from a second source (#338, ADR-0058) --------------------
+#
+# The deployed state is C2026C00227 as it stands: s6DA's clauses from the
+# constructs fixture, s6da/2 marked incomplete (the formula is an image in the
+# ePub). The correction parses the same ePub and completes s6da/2 from the
+# PDF's formula (here read from the committed cut of its page), against the
+# signed form.
+
+WHY_338 = "#338: s 6DA(2)'s formula, from the PDF compilation against the signed form"
+COMPLETE_ACK = RevisionAcknowledgement(
+    clause_ids=frozenset({S6DA_2}), by=BY, reason=WHY_338, findings_citing=0
+)
+
+
+async def deploy_marked(stores: Stores) -> None:
+    await ingest_compilation(
+        source(),
+        instrument_id=INSTRUMENT,
+        version_id=VERSION,
+        tenant_id=PUBLIC_TENANT_ID,
+        scope=Scope.PUBLIC,
+        selection=S6DA,
+        store=stores.clauses,
+    )
+    await deploy(stores, marked())
+
+
+async def plan_completed(stores: Stores, revision: CorpusRevision) -> PlannedRevision:
+    return await revision.plan(
+        source(),
+        instrument_id=INSTRUMENT,
+        version_id=VERSION,
+        selection=S6DA,
+        completions=cut_completions(),
+    )
+
+
+async def complete_s6da(
+    stores: Stores, revision: CorpusRevision, **kwargs: Any
+) -> Any:  # Any: the report, or what a test passes through
+    return await revision.correct(
+        await plan_completed(stores, revision),
+        COMPLETE_ACK,
+        pinned_source_sha256=PIN,
+        pinned_second_sources=kwargs.pop("second", SECOND_SOURCES),
+        corpus_version=FIXED_CODE,
+        instrument_since=SINCE,
+        effective=EFFECTIVE,
+    )
+
+
+@needs_neo4j
+async def test_s6da_2_is_completed_in_every_store_and_its_incomplete_state_is_on_record(
+    stores: Stores,
+) -> None:
+    await deploy_marked(stores)
+    revision = stores.revision()
+    planned = await plan_completed(stores, revision)
+    # The plan shows exactly one clause: s6da/2, its text and its state.
+    [change] = planned.plan.changed
+    assert change.new_clause_id == S6DA_2 and planned.plan.acknowledgeable == {S6DA_2}
+    assert (change.text_changed, change.old_incomplete, change.new_incomplete) == (
+        True,
+        (FORMULA_NOT_TEXT,),
+        (),
+    )
+    assert change.new_text == SIGNED and change.old_text == LEAD_IN
+    assert not (planned.plan.added or planned.plan.removed)
+    assert [s.clause_path for s in planned.plan.second_sources] == ["s6da/2"]
+
+    report = await complete_s6da(stores, revision)
+
+    record = report.record
+    assert (record.by, record.reason, record.findings_citing) == (BY, WHY_338, 0)
+    old_sha, new_sha = canonical_sha256(LEAD_IN), canonical_sha256(SIGNED)
+    reasons = incomplete_json((FORMULA_NOT_TEXT,))
+    second = {"sha256": PDF_SHA256, "url": signed().source.url, "locator": "page 62"}
+    # The bucket: the record keeps the previous hash and the incomplete state,
+    # and names the second source beside the ePub's.
+    manifest = json.loads(stores.bucket.objects[f"{INSTRUMENT}/{VERSION}/manifest.json"])
+    assert manifest["clause_paths"]["s6da/2"] == new_sha
+    assert "s6da/2" not in manifest.get("incomplete", {})
+    (on_record,) = manifest["revisions"]
+    assert on_record["clauses"] == {
+        "s6da/2": {"previous_sha256": old_sha, "sha256": new_sha, "previous_incomplete": reasons}
+    }
+    assert on_record["source_sha256"] == PIN
+    assert on_record["second_sources"] == {"s6da/2": second}
+    stored = await stores.clauses.get_clause(S6DA_2, tenant_id=PUBLIC_TENANT_ID)
+    assert stored is not None and (stored.canonical_text, stored.incomplete) == (SIGNED, ())
+    # The graph: complete, and the trail keeps what it was.
+    rows = await cypher(
+        stores.graph,
+        "MATCH (c:Clause) RETURN c.stable_id AS id, c.canonical_sha256 AS sha, "
+        "c.incomplete_reasons AS r, coalesce(c.corrections, []) AS trail",
+    )
+    by_id = {str(row["id"]): row for row in rows}
+    assert (by_id[S6DA_2]["sha"], by_id[S6DA_2]["r"]) == (new_sha, None)
+    (entry,) = [json.loads(e) for e in by_id[S6DA_2]["trail"]]
+    assert entry["previous"] == {"canonical_sha256": old_sha, "incomplete": reasons}
+    assert entry["second_source"] == second
+    assert all(not row["trail"] for i, row in by_id.items() if i != S6DA_2)
+    # Qdrant (or the fake): the one chunk's text, complete.
+    assert (await stores.texts())[S6DA_2] == SIGNED
+    held = await stores.retrieval.stored_chunk_incomplete(
+        instrument_id=INSTRUMENT, tenant_id=PUBLIC_TENANT_ID, version_id=VERSION
+    )
+    assert not any(held.values())
+    assert report.chunks_revised == 1
+    # Finished; a re-run plans nothing.
+    assert not (await revision.status(planned)).unfinished
+    assert (await plan_completed(stores, stores.revision())).plan.empty
+
+
+@needs_neo4j
+@pytest.mark.parametrize("stores", ["fake"], indirect=True)
+@pytest.mark.parametrize(
+    "second",
+    [{}, {"s6da/2": "0" * 64}, {**SECOND_SOURCES, "s6da/1": PDF_SHA256}],
+    ids=["unpinned", "other-bytes", "extra-clause"],
+)
+async def test_a_completion_the_version_doesnt_pin_is_refused_before_any_write(
+    stores: Stores, second: dict[str, str]
+) -> None:
+    await deploy_marked(stores)
+    before = await snapshot(stores)
+    with pytest.raises(RevisionRefused, match="second source"):
+        await complete_s6da(stores, stores.revision(), second=second)
+    assert await snapshot(stores) == before
+
+
+@needs_neo4j
+@pytest.mark.parametrize("stores", ["fake"], indirect=True)
+async def test_finishing_a_completion_needs_the_second_source(stores: Stores) -> None:
+    """A completion that stopped after its commit is finished only from the
+    same two sources: a parse of the ePub alone doesn't reproduce it."""
+    await deploy_marked(stores)
+    revision = stores.revision()
+    planned = await plan_completed(stores, revision)
+
+    async def no_qdrant(*_: object, **__: object) -> None:
+        raise RuntimeError("Qdrant went away")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(stores.retrieval, "revise_chunks", no_qdrant)
+        with pytest.raises(RuntimeError, match="went away"):
+            await complete_s6da(stores, revision)
+    assert (await revision.status(planned)).unfinished
+    with pytest.raises(RevisionRefused, match="second source"):
+        await revision.finish(
+            await plan_s6da(stores, revision),
+            corpus_version=FIXED_CODE,
+            instrument_since=SINCE,
+            effective=EFFECTIVE,
+        )
+    report = await revision.finish(
+        planned, corpus_version=FIXED_CODE, instrument_since=SINCE, effective=EFFECTIVE
+    )
+    assert report is not None and (await stores.texts())[S6DA_2] == SIGNED

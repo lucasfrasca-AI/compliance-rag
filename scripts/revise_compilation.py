@@ -8,7 +8,12 @@ citing those clauses, where the latest revision stands in each store, and the
 exact acknowledgement an `--apply` needs:
 
     uv run python -m scripts.revise_compilation \\
-        --bucket compliance-rag-508904-corpus [--html path/to/document_1.html] [--show-text]
+        --bucket compliance-rag-508904-corpus [--html path/to/document_1.html] \\
+        [--pdf path/to/C2026C00227.pdf] [--show-text]
+
+The parse is the version's whole parse: the ePub, and each clause it completes
+from the PDF compilation against the signed form (`formula.yaml`, ADR-0058),
+each source refused unless its bytes are the pin.
 
 `--apply --mode correct` applies a parse correction in place: the bucket's
 clause objects and manifest hashes (with the revision's record on the
@@ -19,7 +24,7 @@ state is set in each store, with no re-embedding when its text is the same.
 Only when the acknowledgement names exactly the changed clauses:
 
     uv run python -m scripts.revise_compilation --bucket compliance-rag-508904-corpus \\
-        --html path/to/document_1.html --apply --mode correct \\
+        --html path/to/document_1.html --pdf path/to/C2026C00227.pdf --apply --mode correct \\
         --acknowledge CLAUSE_ID [CLAUSE_ID ...] --by NAME --reason WHY \\
         --acknowledge-findings N
 
@@ -69,8 +74,10 @@ from compliance_rag.settings import Settings
 from scripts.ingest_compilation import (
     INSTRUMENT_ID,
     MANIFEST,
+    SECOND_SOURCES,
     SOURCE_SHA256,
     VERSION_ID,
+    pinned_completions,
     pinned_source,
 )
 from scripts.load_graph_structure import EFFECTIVE, INSTRUMENT_SINCE
@@ -110,6 +117,10 @@ def render_plan(plan: RevisionPlan, *, show_text: bool = False) -> str:
             if plan.source_html_sha256 == plan.stored_source_html_sha256
             else f"DIFFERS ({plan.source_html_sha256} vs {plan.stored_source_html_sha256})"
         ),
+    ]
+    lines += [
+        f"second source for {s.clause_path}: sha256 {s.sha256}, {s.locator} of {s.url}"
+        for s in plan.second_sources
     ]
     if plan.changed:
         rows = [("clause id", "old (opening words)", "new (opening words)")]
@@ -223,6 +234,7 @@ async def main(arguments: argparse.Namespace) -> None:
         raise SystemExit("no corpus bucket: set CORPUS_BUCKET, or pass --bucket")
     selection = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8"))
     source = pinned_source(arguments.html)
+    completions = pinned_completions(arguments.pdf)
     ledger, ledger_location = await _ledger(settings, no_ledger=arguments.no_ledger)
     embedder: Embedder = (
         VertexEmbedder.from_settings(settings)
@@ -240,7 +252,11 @@ async def main(arguments: argparse.Namespace) -> None:
         )
         try:
             planned = await revision.plan(
-                source, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID, selection=selection
+                source,
+                instrument_id=INSTRUMENT_ID,
+                version_id=VERSION_ID,
+                selection=selection,
+                completions=completions,
             )
             await _report_or_apply(revision, planned, arguments, corpus_version, ledger_location)
         except (RevisionRefused, RevisionDrift) as refused:
@@ -290,6 +306,7 @@ async def _report_or_apply(
                 findings_citing=arguments.acknowledge_findings,
             ),
             pinned_source_sha256=SOURCE_SHA256,
+            pinned_second_sources=SECOND_SOURCES,
             corpus_version=corpus_version,
             instrument_since=INSTRUMENT_SINCE,
             effective=EFFECTIVE,
@@ -312,6 +329,7 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--bucket", default=None, help="the corpus bucket; CORPUS_BUCKET (Settings) if not given"
     )
     parser.add_argument("--html", type=Path, default=None)
+    parser.add_argument("--pdf", type=Path, default=None, help="the pinned PDF compilation")
     parser.add_argument("--show-text", action="store_true", help="print both texts in full")
     parser.add_argument("--apply", action="store_true", help="write; without it nothing is")
     parser.add_argument("--mode", choices=("correct", "amend"), default=None)

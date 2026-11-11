@@ -364,10 +364,11 @@ async def test_a_start_date_holds_from_the_date_itself(admin: World) -> None:
     assert response.status_code == 200
     (row,) = await rows(admin, "business_started_on")
     assert row.value == dt.date(2015, 3, 2) and row.period == Period(dt.date(2015, 3, 2))
-    # knowing it opens the years it decides: each financial year since, bar the part year
+    # knowing it opens the years it decides: each financial year since, the one it
+    # started in too, now that s6DA(2)'s formula is in the corpus (#338, ADR-0058)
     page = page_of(response.text)
     years = {s for f, s in page.open_questions() if f == "annual_turnover_aud"}
-    assert {"fy2015", "fy2016", "fy2025"} <= years and "fy2014" not in years
+    assert {"fy2014", "fy2015", "fy2016", "fy2025"} <= years and "fy2013" not in years
     assert ("business_started_on", "state") not in page.open_questions()
 
 
@@ -540,10 +541,14 @@ async def test_a_field_the_law_never_reads_cannot_be_asked_about_by_naming_it(
 
 async def test_a_year_before_the_business_started_is_not_asked(admin: World) -> None:
     await answer(admin, "business_started_on", "state", "2015-03-02")
-    for slot in ("fy2013", "fy2014"):  # before it began, and the year it began in
-        response = await answer(admin, "annual_turnover_aud", slot, "1000")
-        assert "isn't open" in words(response.text)
+    response = await answer(admin, "annual_turnover_aud", "fy2013", "1000")  # before it began
+    assert "isn't open" in words(response.text)
     assert await rows(admin, "annual_turnover_aud") == []
+    # The year it began in is asked: its figure is worked out by s6DA(2)'s formula,
+    # which the corpus holds since #338 (ADR-0058), as the question says.
+    response = await answer(admin, "annual_turnover_aud", "fy2014", "1000")
+    assert "isn't open" not in words(response.text)
+    assert [r.value for r in await rows(admin, "annual_turnover_aud")] == [1000]
 
 
 # ---- AC2: a correction supersedes ----------------------------------------------------------
