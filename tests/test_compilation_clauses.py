@@ -18,7 +18,13 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from scripts.ingest_compilation import INSTRUMENT_ID, SOURCE_SHA256, VERSION_ID
+from scripts.ingest_compilation import (
+    INSTRUMENT_ID,
+    SECOND_SOURCES,
+    SOURCE_SHA256,
+    VERSION_ID,
+    pinned_completions,
+)
 
 from compliance_rag.corpus.models import PUBLIC_TENANT_ID, ClauseRecord, canonicalise
 from compliance_rag.corpus.parser import parse_compilation
@@ -31,6 +37,7 @@ from compliance_rag.eval.compilation_clauses import (
     selection_manifest,
 )
 from compliance_rag.eval.golden_corpus import gate_law_clauses, golden_clauses
+from tests.test_s6da_2_formula import cut_completions
 
 FIXTURES = Path(__file__).resolve().parents[1] / "docs" / "research" / "fixtures"
 
@@ -47,6 +54,7 @@ def test_the_file_is_the_pinned_compilations_selected_clauses(
     the full-compilation parser test pins (test_parser_full_compilation.py)."""
     assert (committed.instrument_id, committed.version_id) == (INSTRUMENT_ID, VERSION_ID)
     assert committed.source_sha256 == SOURCE_SHA256
+    assert {s.clause_path: s.sha256 for s in committed.second_sources} == SECOND_SOURCES
     assert committed.selection == selection_manifest().prefixes
     counts = Counter(c.clause_path.split("/")[0] for c in committed.clauses)
     assert counts == {
@@ -77,7 +85,10 @@ def test_the_file_is_exactly_what_the_export_script_renders(
 ) -> None:
     """No hand edit to its form: re-rendering what it holds reproduces it."""
     rendered = render_compilation_clauses(
-        committed.clauses, source_sha256=committed.source_sha256, selection=committed.selection
+        committed.clauses,
+        source_sha256=committed.source_sha256,
+        selection=committed.selection,
+        second_sources=committed.second_sources,
     )
     assert rendered == COMPILATION_CLAUSES_PATH.read_text(encoding="utf-8")
 
@@ -110,10 +121,18 @@ def test_every_clause_a_fixture_also_holds_is_its_fresh_parse(
     """Every fixture is cut verbatim from the pinned compilation, so where it
     holds a selected clause, today's parser must produce the committed record
     exactly. A parser change that moves one of these ~170 clauses fails in CI,
-    not only where the full source is at hand."""
-    parsed = parse_compilation(
-        fixture.read_text(encoding="utf-8"), instrument_id=INSTRUMENT_ID, version_id=VERSION_ID
-    )
+    not only where the full source is at hand. A fixture that holds s6da/2 is
+    completed from the committed cut of the PDF page, as the file is from the
+    PDF (ADR-0058)."""
+    html = fixture.read_text(encoding="utf-8")
+    parsed = parse_compilation(html, instrument_id=INSTRUMENT_ID, version_id=VERSION_ID)
+    if any(c.clause_path in SECOND_SOURCES for c in parsed.clauses):
+        parsed = parse_compilation(
+            html,
+            instrument_id=INSTRUMENT_ID,
+            version_id=VERSION_ID,
+            completions=cut_completions(),
+        )
     fresh: dict[str, ClauseRecord] = {c.clause_path: c for c in parsed.clauses}
     shared = [c for c in committed.clauses if c.clause_path in fresh]
     assert len(shared) == OVERLAP[fixture.name.split(".")[1]]
@@ -135,8 +154,12 @@ def test_the_excerpt_is_a_subset_of_the_gate_corpus() -> None:
 
 
 @pytest.mark.skipif(
-    not os.environ.get("PRIVACY_ACT_COMPILATION_HTML"),
-    reason="PRIVACY_ACT_COMPILATION_HTML not set — the full 2.3 MB compilation",
+    not (
+        os.environ.get("PRIVACY_ACT_COMPILATION_HTML")
+        and os.environ.get("PRIVACY_ACT_COMPILATION_PDF")
+    ),
+    reason="PRIVACY_ACT_COMPILATION_HTML and _PDF not both set — the full compilation's two "
+    "renderings",
 )
 def test_a_fresh_parse_of_the_pinned_compilation_is_the_committed_file() -> None:
     """The file is the parser's output, not an edit of it. After a parser or
@@ -145,10 +168,18 @@ def test_a_fresh_parse_of_the_pinned_compilation_is_the_committed_file() -> None
     raw = Path(os.environ["PRIVACY_ACT_COMPILATION_HTML"]).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == SOURCE_SHA256, "a different compilation file"
     selection = selection_manifest()
+    completions = pinned_completions(Path(os.environ["PRIVACY_ACT_COMPILATION_PDF"]))
     fresh = select_compilation_clauses(
-        raw.decode("utf-8"), instrument_id=INSTRUMENT_ID, version_id=VERSION_ID, selection=selection
+        raw.decode("utf-8"),
+        instrument_id=INSTRUMENT_ID,
+        version_id=VERSION_ID,
+        selection=selection,
+        completions=completions,
     )
     rendered = render_compilation_clauses(
-        fresh, source_sha256=SOURCE_SHA256, selection=selection.prefixes
+        fresh,
+        source_sha256=SOURCE_SHA256,
+        selection=selection.prefixes,
+        second_sources=tuple(c.source for c in completions),
     )
     assert rendered == COMPILATION_CLAUSES_PATH.read_text(encoding="utf-8")

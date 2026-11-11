@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 
@@ -88,6 +88,7 @@ from compliance_rag.corpus.revision import (
     plan_revision,
     record_of,
 )
+from compliance_rag.corpus.second_source import ClauseCompletion
 from compliance_rag.corpus.selection_manifest import SelectionManifest
 from compliance_rag.corpus.vector_load import load_version_vectors, read_version_source
 from compliance_rag.graph.loader import (
@@ -218,11 +219,14 @@ class CorpusRevision:
         version_id: str,
         selection: SelectionManifest,
         stored_version_id: str | None = None,
+        completions: Sequence[ClauseCompletion] = (),
     ) -> PlannedRevision:
         """Parse `source_html` as `version_id`, keep what `selection` keeps,
         and compare it with what the bucket holds for `stored_version_id`
         (`version_id` itself for a correction, the version an amendment
-        retires otherwise). Reads the bucket; writes nothing anywhere."""
+        retires otherwise). `completions` complete clauses from a second
+        source of the same compilation (ADR-0058); the plan names each
+        source. Reads the bucket; writes nothing anywhere."""
         stored_version = stored_version_id or version_id
         with telemetry.span(
             "corpus_revision.plan",
@@ -232,7 +236,10 @@ class CorpusRevision:
             },
         ) as span:
             parsed = parse_compilation(
-                source_html, instrument_id=instrument_id, version_id=version_id
+                source_html,
+                instrument_id=instrument_id,
+                version_id=version_id,
+                completions=completions,
             )
             fresh = selection.select(parsed.clauses)
             metadata = await self._clauses.get_manifest_metadata(
@@ -267,6 +274,7 @@ class CorpusRevision:
                 stored_incomplete=await self._clauses.get_incomplete(
                     instrument_id, stored_version, tenant_id=PUBLIC_TENANT_ID
                 ),
+                second_sources=tuple(c.source for c in completions),
             )
             span.set_attribute("revision.mode", plan.mode.value)
             span.set_attribute("revision.changed", [c.new_clause_id for c in plan.changed])
@@ -349,11 +357,14 @@ class CorpusRevision:
         corpus_version: SourceVersion,
         instrument_since: dt.date,
         effective: dt.date,
+        pinned_second_sources: Mapping[str, str] | None = None,
     ) -> RevisionReport:
         """Apply a parse correction (module docstring). Every refusal comes
         before the first write. `corpus_version` is the commit the fresh parse
         came from (ADR-0034); `instrument_since` and `effective` are the
-        version's own dates in the graph, which a correction doesn't change."""
+        version's own dates in the graph, which a correction doesn't change.
+        `pinned_second_sources` pins each clause the parse completed from a
+        second source (clause path to sha256, ADR-0058)."""
         plan = planned.plan
         with telemetry.span(
             "corpus_revision.correct",
@@ -362,7 +373,11 @@ class CorpusRevision:
                 "revision.by": acknowledgement.by,
             },
         ) as span:
-            check_correction(plan, pinned_source_sha256=pinned_source_sha256)
+            check_correction(
+                plan,
+                pinned_source_sha256=pinned_source_sha256,
+                pinned_second_sources=pinned_second_sources,
+            )
             status = await self.status(planned)
             if status.unfinished:
                 raise RevisionRefused(status.described)
@@ -416,6 +431,11 @@ class CorpusRevision:
                 raise RevisionRefused(
                     f"revision {record.revision_id} was parsed from source sha256 "
                     f"{record.source_sha256}, not {plan.source_sha256}"
+                )
+            if plan.second_sources != record.second_sources:
+                raise RevisionRefused(
+                    f"revision {record.revision_id} completed {_described(record)} from a second "
+                    f"source; this parse completed {_described(plan)}"
                 )
             fresh = {c.clause_path: c for c in planned.clauses}
             for path, sha in record.written.items():
@@ -650,6 +670,10 @@ class CorpusRevision:
                 supersedes=old,
             )
             return RevisionReport(record, 0, True, load.written)
+
+
+def _described(held: RevisionPlan | RevisionRecord) -> str:
+    return str({s.clause_path: s.sha256 for s in held.second_sources})
 
 
 _Form = tuple[str | None, Incomplete]

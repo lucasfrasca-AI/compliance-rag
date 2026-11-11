@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import html as html_module
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from compliance_rag.corpus.models import (
@@ -68,6 +69,7 @@ from compliance_rag.corpus.models import (
     clause_anchor_id,
     definition_slug,
 )
+from compliance_rag.corpus.second_source import ClauseCompletion, apply_completions
 
 # --------------------------------------------------------------------------
 # Block scanning: the source has no nested <p> (issue #9 spike), so a
@@ -685,8 +687,13 @@ def parse_compilation(
     version_id: str,
     tenant_id: str = "_public",
     scope: Scope = Scope.PUBLIC,
+    completions: Sequence[ClauseCompletion] = (),
 ) -> ParsedCompilation:
     """Legislation.gov.au ePub HTML to clause records (issue #17).
+
+    `completions` complete a clause from a second source of the same
+    compilation (ADR-0058): applied after the parse, refused unless each fits
+    it (`apply_completions`). The anchored HTML is the ePub's either way.
 
     Pure function: no network call, no store write. Handles the whole
     compilation — Schedule and main-body sections alike — via the container
@@ -726,4 +733,6 @@ def parse_compilation(
         insertion_point = block.open_tag_start + len("<p")
         annotated = annotated[:insertion_point] + f' id="{anchor_id}"' + annotated[insertion_point:]
 
-    return ParsedCompilation(clauses=tuple(ctx.clauses), annotated_html=annotated)
+    return ParsedCompilation(
+        clauses=apply_completions(ctx.clauses, completions), annotated_html=annotated
+    )

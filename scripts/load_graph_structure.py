@@ -20,10 +20,12 @@ again once it holds the kind. A load that fails after its first write stays
 open, and blocks another load of the same kind, and any assessment, until
 someone abandons it, and then until a load finishes.
 
-    uv run python -m scripts.load_graph_structure [--html path/to/document_1.html]
+    uv run python -m scripts.load_graph_structure [--html path/to/document_1.html] \\
+        [--pdf path/to/C2026C00227.pdf]
     uv run python -m scripts.load_graph_structure --abandon LOAD_ID --by NAME --reason WHY
 
-Run as a module: it reuses `scripts/ingest_compilation.py`'s pinned source.
+Run as a module: it reuses `scripts/ingest_compilation.py`'s pinned sources, the
+ePub and the PDF its signed formula is completed from (ADR-0058).
 """
 
 from __future__ import annotations
@@ -45,7 +47,14 @@ from compliance_rag.graph.loader import (
     write_instrument_version,
 )
 from compliance_rag.settings import Settings
-from scripts.ingest_compilation import INSTRUMENT_ID, MANIFEST, START, VERSION_ID, pinned_source
+from scripts.ingest_compilation import (
+    INSTRUMENT_ID,
+    MANIFEST,
+    START,
+    VERSION_ID,
+    pinned_completions,
+    pinned_source,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 INSTRUMENT_SINCE = dt.date(1989, 1, 1)
@@ -56,13 +65,16 @@ EFFECTIVE = dt.date.fromisoformat(START)
 loaded, so nothing is superseded."""
 
 
-async def main(html_path: Path | None) -> None:
+async def main(html_path: Path | None, pdf_path: Path | None = None) -> None:
     try:
         version = resolve_source_version(SourceKind.CORPUS, repo=REPO)
     except UncommittedSource as refused:
         raise SystemExit(f"not loaded: {refused}") from None
     parsed = parse_compilation(
-        pinned_source(html_path), instrument_id=INSTRUMENT_ID, version_id=VERSION_ID
+        pinned_source(html_path),
+        instrument_id=INSTRUMENT_ID,
+        version_id=VERSION_ID,
+        completions=pinned_completions(pdf_path),
     )
     selected = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8")).select(parsed.clauses)
     print(f"loading corpus version {version.described}")
@@ -100,6 +112,7 @@ async def abandon(load_id: str, by: str, reason: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--html", type=Path, default=None)
+    parser.add_argument("--pdf", type=Path, default=None)
     parser.add_argument(
         "--abandon",
         metavar="LOAD_ID",
@@ -112,4 +125,4 @@ if __name__ == "__main__":
     if args.abandon:
         asyncio.run(abandon(str(args.abandon), str(args.by), str(args.reason)))
     else:
-        asyncio.run(main(args.html))
+        asyncio.run(main(args.html, args.pdf))

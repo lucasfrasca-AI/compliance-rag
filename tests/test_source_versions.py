@@ -736,6 +736,7 @@ async def test_an_uncommitted_corpus_refuses_the_load_before_anything_is_read_or
 
     monkeypatch.setattr(load_graph_structure, "resolve_source_version", uncommitted)
     monkeypatch.setattr(load_graph_structure, "pinned_source", touched)
+    monkeypatch.setattr(load_graph_structure, "pinned_completions", touched)
     monkeypatch.setattr(load_graph_structure.Neo4jGraph, "from_settings", touched)
     with pytest.raises(SystemExit, match="no SHA could name it"):
         await load_graph_structure.main(None)

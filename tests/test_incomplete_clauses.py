@@ -28,6 +28,7 @@ from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.interfaces import ClauseStore
 from compliance_rag.assessment.prompt import SYSTEM_PROMPT, SourceClause, fence
 from compliance_rag.corpus.chunker import chunk_clause
+from compliance_rag.corpus.incomplete_reading import IncompleteReadings
 from compliance_rag.corpus.ingest import IngestDriftError, ingest_compilation
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -58,6 +59,11 @@ from compliance_rag.corpus.revision import (
 from compliance_rag.corpus.selection_manifest import SelectionManifest
 from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.eval.golden_corpus import gate_chunks, gate_clauses, gate_law_clauses
+from tests.before_338 import (
+    gate_chunks_before_338,
+    gate_clauses_before_338,
+)
+from tests.before_338 import readings_before_338 as readings_before_338
 from tests.test_api_answers import (
     AS_OF,
     QUESTION,
@@ -146,13 +152,14 @@ def test_no_acme_policy_clause_is_incomplete(policy: str) -> None:
     assert clauses and not [c for c in clauses if c.incomplete]
 
 
-def test_the_committed_gate_corpus_marks_s6da_2_alone() -> None:
-    """`clauses.json` is the parser's output for the 779 selected clauses: of
-    them, only s6da/2 is incomplete (no table or penalty is selected)."""
+def test_the_committed_gate_corpus_marks_no_clause_since_338() -> None:
+    """`clauses.json` is the parser's output for the 779 selected clauses. Of
+    them only s6da/2 was incomplete (no table or penalty is selected), and #338
+    completed it from the PDF compilation (ADR-0058): none is now."""
     committed = load_compilation_clauses()
     assert len(committed.clauses) == 779
-    marked = {c.clause_path: c.incomplete for c in committed.clauses if c.incomplete}
-    assert marked == {"s6da/2": (FORMULA_NOT_TEXT,)}
+    assert {c.clause_path: c.incomplete for c in committed.clauses if c.incomplete} == {}
+    assert [s.clause_path for s in committed.second_sources] == ["s6da/2"]
 
 
 # ---- the parser, on the whole pinned compilation -----------------------------
@@ -666,7 +673,9 @@ def test_a_clause_held_complete_moves_one_already_marked_is_done_another_state_i
 # ---- the prompt and the answer ------------------------------------------------
 
 
-def test_an_incomplete_clause_is_marked_in_its_fence_and_the_boundary_covers_it() -> None:
+def test_an_incomplete_clause_is_marked_in_its_fence_and_the_boundary_covers_it(
+    readings_before_338: IncompleteReadings,
+) -> None:
     """The marker shows the signed words for s6da/2's formula (#211)."""
     plain = SourceClause(S6DA_2, "using the formula:")
     marked = SourceClause(S6DA_2, "using the formula:", incomplete=(FORMULA_NOT_TEXT,))
@@ -680,26 +689,28 @@ async def _ask_the_gate_corpus(
     generator: FakeGenerator, question: str
 ) -> tuple[httpx.Response, list[tuple[str, dict[str, Any]]]]:  # Any: JSON
     """`test_api_answers`'s request, over the whole selected compilation (the
-    committed parser output, so s6da/2 as the parser marks it) and Acme's
-    policies, in the fake clause and retrieval stores."""
+    committed parser output, with s6da/2 as it stood before #338: incomplete)
+    and Acme's policies, in the fake clause and retrieval stores."""
     ledger = await _ledger()
     clauses = FakeClauseStore()
-    for clause in gate_clauses():
+    for clause in gate_clauses_before_338():
         await clauses.put_clause(clause)
-    store = FakeRetrievalStore(gate_chunks(), ledger=ledger)
+    store = FakeRetrievalStore(gate_chunks_before_338(), ledger=ledger)
     return await _ask(generator, ledger=ledger, clauses=clauses, store=store, question=question)
 
 
 TURNOVER = "How is annual turnover worked out for a business carried on for only part of a year?"
 
 
-async def test_an_answer_citing_s6da_2_carries_the_flag_to_the_model_and_the_client() -> None:
+async def test_an_answer_citing_s6da_2_carries_the_flag_to_the_model_and_the_client(
+    readings_before_338: IncompleteReadings,
+) -> None:
     """End to end through the API: the fake graph's Track A scopes the law to
     GA-05's citation chain, which includes s6da/2; the real stores' fakes
     hold the committed corpus; the real verifier checks the quote against
     the stored text. The quote verifies, and the answer still says the clause
     isn't all of the law."""
-    text = next(c.canonical_text for c in gate_law_clauses() if c.clause_id == S6DA_2)
+    text = next(c.canonical_text for c in gate_clauses_before_338() if c.clause_id == S6DA_2)
     generator = FakeGenerator(_reply((S6DA_2, text[:60]), answer="It is worked out by formula."))
     response, events = await _ask_the_gate_corpus(generator, TURNOVER)
     assert response.status_code == 200
@@ -732,26 +743,26 @@ async def test_an_answer_citing_only_complete_clauses_carries_no_flag() -> None:
 
 
 async def _gate_clause_store(*, complete: bool = False) -> FakeClauseStore:
-    """The gate corpus's clause store: s6da/2 as the parser marks it, or, with
-    `complete`, as a later corpus revision would leave it."""
+    """The gate corpus's clause store: s6da/2 as it stood before #338, or, with
+    `complete`, as #338's corpus revision leaves it (ADR-0058)."""
     clauses = FakeClauseStore()
-    for clause in gate_clauses():
-        await clauses.put_clause(
-            clause.model_copy(update={"incomplete": ()}) if complete else clause
-        )
+    for clause in gate_clauses() if complete else gate_clauses_before_338():
+        await clauses.put_clause(clause)
     return clauses
 
 
-async def test_a_chat_read_back_shows_an_incomplete_clauses_flag_as_the_answer_did() -> None:
+async def test_a_chat_read_back_shows_an_incomplete_clauses_flag_as_the_answer_did(
+    readings_before_338: IncompleteReadings,
+) -> None:
     """The member asks, is shown s6da/2 with its flag, and reopens the chat:
     the same flag, with its reason, on the citation and at the top, as the
     answer event carried it. Then the corpus moves on (s6da/2 is completed by
     a revision) and a fresh app over the same ledger reads the chat back: the
     flag is what they were shown, not what the corpus says today."""
-    text = next(c.canonical_text for c in gate_law_clauses() if c.clause_id == S6DA_2)
+    text = next(c.canonical_text for c in gate_clauses_before_338() if c.clause_id == S6DA_2)
     generator = FakeGenerator(_reply((S6DA_2, text[:60]), answer="It is worked out by formula."))
     ledger = await _ledger()
-    store = FakeRetrievalStore(gate_chunks(), ledger=ledger)
+    store = FakeRetrievalStore(gate_chunks_before_338(), ledger=ledger)
     async with await _client(generator, ledger, await _gate_clause_store(), store) as c:
         response = await c.post("/v1/answers", json={"question": TURNOVER, "as_of": AS_OF})
         shown = dict(_events(response.text))["answer"]

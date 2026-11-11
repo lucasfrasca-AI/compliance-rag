@@ -3,6 +3,13 @@
  "instrument_id": "privacy-act-1988",
  "version_id": "C2026C00227",
  "source_sha256": "6d0a43e5da103d1eeb5317ae9ac213c5b51acab2357dc01b981a91e1052c5c3b",
+ "second_sources": {
+  "s6da/2": {
+   "sha256": "443e895f1e1536763af78e4553d469b0857a84553ca0c011ed796a623f954e38",
+   "url": "https://www.legislation.gov.au/C2004A03712/2026-06-04/2026-06-04/text/original/pdf",
+   "locator": "page 62"
+  }
+ },
  "selection": [
   "sch1/",
   "s6/",
@@ -3658,15 +3665,9 @@
   {
    "clause_path": "s6da/2",
    "heading": null,
-   "text": "However, if a business has been carried on for only part of a financial year, its annual turnover for the financial year is the amount worked out using the formula:",
-   "canonical_text": "However, if a business has been carried on for only part of a financial year, its annual turnover for the financial year is the amount worked out using the formula:",
-   "canonicalisation_version": 2,
-   "incomplete": [
-    {
-     "reason": "image_not_text",
-     "detail": "the formula is not available in text form"
-    }
-   ]
+   "text": "However, if a business has been carried on for only part of a financial year, its annual turnover for the financial year is the amount worked out using the formula: Amount that would be the annual turnover of the business under subsection (1) if the part were a whole financial year × (Number of days in the whole financial year ÷ Number of days in the part)",
+   "canonical_text": "However, if a business has been carried on for only part of a financial year, its annual turnover for the financial year is the amount worked out using the formula: Amount that would be the annual turnover of the business under subsection (1) if the part were a whole financial year × (Number of days in the whole financial year ÷ Number of days in the part)",
+   "canonicalisation_version": 2
   },
   {
    "clause_path": "s6e/1",

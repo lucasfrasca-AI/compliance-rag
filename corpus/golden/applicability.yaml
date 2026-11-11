@@ -21,6 +21,17 @@
 # s 6DA(2) too; its outcomes and questions don't move). Re-signed by Lucas
 # Frasca, 2026-10-20.
 #
+# 2026-11-11 (#338, ADR-0058): s6DA(2) is complete, its formula read from the
+# PDF compilation against the form Lucas Frasca signed. The signed mapping's
+# three turnover conditions already ask for a part year's figure "by the
+# s6DA(2) formula", so a part year is now decided from its figure like any
+# other. Run on the fake and on Neo4j, only GA-04 moves, back to what it was
+# before 2026-10-20: FY2014-15's $400,000 is read, Acme was never over
+# $3,000,000, so it is a small business operator and its 35 APPs don't apply;
+# app-entity and organisation are false; APP 11.1 cites s6E(1) and s6EA(1)
+# again, not s6D(4)(a) and s6DA(2). Drafted by the model; PENDING Lucas
+# Frasca's signature, and refused by the gate until then.
+#
 # Acme Pty Ltd is the synthetic company of docs/research/fixtures/
 # synthetic-policies/. Its facts here (when it started, its turnover each year,
 # what it answered) are invented for the cases: the policies say nothing
@@ -32,8 +43,8 @@
 # 2 March 2015.
 
 author: "model: Claude Opus 5.5 — labels drafted for #117/#118 from C2026C00227"
-reviewed_by: "Lucas Frasca"
-date: "2026-10-20"
+reviewed_by: "PENDING — Lucas Frasca"
+date: "PENDING"
 compilations:
   "privacy-act-1988:C2026C00227": 2026-06-04
 
@@ -183,14 +194,15 @@ cases:
 
   - id: GA-04
     description: >
-      Acme at $2.5M with every question answered no — but it started on
-      2 March 2015, so FY2014-15, the first year s6D(4)(a) reads, is a part
-      year, whose annual turnover s6DA(2)'s formula sets, and the formula is
-      an image with no text form in the corpus (ADR-0047). Whether it was ever
-      over $3,000,000 can't be settled, and no answer settles it, so whether it
-      is a small business operator, and the APPs, are unassessable; the
-      agency-only two still don't apply. (Until 2026-10-20 this was "the APPs
-      don't apply to you": every year read from its figure.)
+      Acme at $2.5M with every question answered no: a small business operator,
+      so not an organisation, and the APPs don't bind it — "the APPs don't
+      apply to you", cited just as fully as "they do". (Only the APPs: small
+      business status doesn't switch off the rest of the Act, such as the TFN
+      rules or the Schedule 2 statutory tort, which this corpus doesn't hold.)
+      It started on 2 March 2015, so FY2014-15, the first year s6D(4)(a)
+      reads, is a part year: its figure is the one s6DA(2)'s formula works out,
+      as the question asks. From 2026-10-20 to #338 (ADR-0058) the formula was
+      not in the corpus and this case was unassessable.
     tenant_id: acme
     as_of: 2026-10-12
     facts:
@@ -229,11 +241,10 @@ cases:
       - {field: opted_in_under_s6ea, value: false, since: 2015-03-02}
     expected:
       obligation_count: 37
-      outcomes: {not_applicable: [OB-PA-APP3-1, OB-PA-APP12-7]}
-      otherwise: unassessable
+      otherwise: not_applicable
       acts_as:
-        privacy-act-1988/actor/app-entity: unknown
-        privacy-act-1988/actor/organisation: unknown
+        privacy-act-1988/actor/app-entity: "false"
+        privacy-act-1988/actor/organisation: "false"
         privacy-act-1988/actor/agency: "false"
       questions: []
       cites:
@@ -244,9 +255,9 @@ cases:
           - privacy-act-1988:C2026C00227:s6d/3
           - privacy-act-1988:C2026C00227:s6d/3/a
           - privacy-act-1988:C2026C00227:s6d/4
-          - privacy-act-1988:C2026C00227:s6d/4/a
           - privacy-act-1988:C2026C00227:s6d/9
-          - privacy-act-1988:C2026C00227:s6da/2
+          - privacy-act-1988:C2026C00227:s6e/1
+          - privacy-act-1988:C2026C00227:s6ea/1
 
   - id: GA-05
     description: >
