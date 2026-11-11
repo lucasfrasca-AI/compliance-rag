@@ -19,7 +19,7 @@ import httpx
 from pydantic import SecretStr
 
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeLedgerStore
-from compliance_rag.adapters.interfaces import Embedder
+from compliance_rag.adapters.interfaces import Embedder, LedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
 from compliance_rag.adapters.reranker_client import RerankerClient
 from compliance_rag.adapters.reranker_http_client import build_reranker_http_client
@@ -54,17 +54,20 @@ async def golden_store(
     chunks: tuple[Chunk, ...],
     api_key: SecretStr | None = None,
     embedder: Embedder | None = None,
+    ledger: LedgerStore | None = None,
 ) -> AsyncGenerator[QdrantRetrievalStore]:
     """`chunks` on a throwaway collection, with the real
     `gemini-embedding-001` snapshot as its embedder: `gate_chunks()` to
     measure recall, `golden_chunks()` for the answer eval. `api_key` only for
     the one-off run on the deployed cluster (#144); the gates pass none.
     `embedder` only for a live run that may ask what the snapshot lacks
-    (`eval/live.py`); the gates pass none."""
+    (`eval/live.py`); the gates pass none. `ledger` is where the store reads
+    subscriptions: a live run passes the ledger `answer()` and its verifier
+    use (#333); the gates pass none, and get an empty one of their own."""
     async with QdrantRetrievalStore.ephemeral(
         qdrant_url,
         embedder=embedder or CachedEmbedder(EmbeddingCache.load()),
-        ledger=FakeLedgerStore(),
+        ledger=ledger if ledger is not None else FakeLedgerStore(),
         prefix=prefix,
         api_key=api_key,
     ) as store:

@@ -69,14 +69,24 @@ async def live_answer_pipeline(
     `whole_compilation` puts it in place of the excerpt, in Qdrant and
     in the clause store alike, so the verifier can verify whatever is
     retrieved; and embeds a question the snapshot lacks with the live model.
-    The out-of-environment cases need it: APP 7 isn't in the excerpt."""
+    The out-of-environment cases need it: APP 7 isn't in the excerpt.
+
+    One ledger for every stage (#333): the store's subscription filter reads
+    the ledger `answer()` and the verifier use, so a tenant subscribed there
+    retrieves the law it subscribes to. It holds no subscription to start
+    with: the golden set's Acme holds its own policies and no law, and no Acme
+    golden query expects a law clause (`corpus/golden/queries.yaml`). The
+    environment mode subscribes each case's tenant as the case says.
+
+    `extra_chunks` (the injection probe) are embedded live too: the snapshot
+    can't hold a chunk invented for one run."""
     clauses = await golden_clause_store(whole_compilation=whole_compilation)
     for clause in extra_clauses:
         await clauses.put_clause(clause)
     ledger = await golden_ledger()
     embedder = (
         LiveFallbackEmbedder(EmbeddingCache.load(), VertexEmbedder.from_settings(settings))
-        if whole_compilation
+        if whole_compilation or extra_chunks
         else None
     )
     async with (
@@ -88,6 +98,7 @@ async def live_answer_pipeline(
             prefix="answer",
             chunks=gate_chunks() if whole_compilation else golden_chunks(),
             embedder=embedder,
+            ledger=ledger,
         ) as store,
         in_process_reranker(RerankerModel()) as reranker,
     ):
