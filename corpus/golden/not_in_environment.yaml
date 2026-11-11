@@ -79,12 +79,9 @@ cases:
       - "privacy-act-1988:C2026C00227:s26wk/2"
     cites_instead: "Privacy Act 1988"
     notes: >
-      Exercises a held part (#282): C2026C00227's selection holds Part IIIC
-      Divisions 1-3, so the register's NDB entry is held wherever the Act is,
-      and the question is not flagged. s 26WE(2)(b) is the loss limb of an
-      eligible data breach (information lost where unauthorised access or
-      disclosure is likely and would likely result in serious harm: the stolen
-      laptop); s 26WK(2) is the duty to prepare a statement and give a copy to
-      the Commissioner as soon as practicable. The answer carries no flag and
-      answers from the Privacy Act. Until #282 this case expected the
-      out-of-environment flag (signed 2026-10-21).
+      Part IIIC is in the selection (#282), so the scheme is held and the
+      question is not flagged. A stolen laptop is information "lost in
+      circumstances where" unauthorised access is likely (s 26WE(2)(b)); if a
+      reasonable person would conclude serious harm is likely, it is an
+      eligible data breach, and the entity must prepare a statement and give
+      it to the Commissioner as soon as practicable (s 26WK(2)).
