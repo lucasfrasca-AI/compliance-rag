@@ -382,6 +382,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         reason="test",
     )
     await record("beta/iso-extract", "v1", JAN, DocumentClass.EXTERNAL_UPLOAD)
+    await record("beta/proposal", "v1", JAN, DocumentClass.SUBMITTED_DOCUMENT)
     await record("beta/remote-work", "v1", next_year)
     await record("beta/acceptable-use", "v1", JAN)
     # In force, not withdrawn or purged, an internal policy, sorted by instrument.
@@ -421,6 +422,7 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
     for instrument_id, document_class in (
         ("beta/handbook", DocumentClass.INTERNAL_POLICY),
         ("beta/iso-extract", DocumentClass.EXTERNAL_UPLOAD),
+        ("beta/proposal", DocumentClass.SUBMITTED_DOCUMENT),
     ):
         assert (
             await ledger.document_class(tenant_id="beta-corp", instrument_id=instrument_id)
@@ -431,6 +433,12 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         is DocumentClass.LIBRARY_LAW
     )
     assert await ledger.document_class(tenant_id="beta-corp", instrument_id="beta/none") is None
+    # A submitted document is never an internal policy, though it is in force,
+    # unwithdrawn and the tenant's: not in the cached prefix (D-11), however
+    # late it is asked for.
+    for as_of in (mar, JUN, jul, next_year):
+        in_force = await ledger.policy_versions("beta-corp", as_of=as_of)
+        assert all(v.instrument_id != "beta/proposal" for v in in_force)
     # The class is the instrument's, and library law is `_public`'s alone.
     with pytest.raises(ValueError, match="internal_policy, not external_upload"):
         await record("beta/handbook", "v3", next_year, DocumentClass.EXTERNAL_UPLOAD)
@@ -804,6 +812,15 @@ async def assert_environment_titles_contract(ledger: LedgerStore) -> None:
         tenant_id="acme", instrument_id="acme/withdrawn", version_id="v1", withdrawn_by="u"
     )
     await record("other-corp", "other-corp/policy", "v1", "Their Policy")
+    # A submitted document is the subject of a check, never part of the
+    # environment (ADR-0053 U1): in force and unwithdrawn, and still not there.
+    await record(
+        "acme",
+        "acme/customer-insights-proposal",
+        "v1",
+        "Customer insights programme",
+        document_class=DocumentClass.SUBMITTED_DOCUMENT,
+    )
     await ledger.subscribe(tenant_id="acme", instrument_id=LAW, subscribed_by="setup")
 
     held = {

@@ -29,6 +29,7 @@ from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, ClauseRecord, 
 from compliance_rag.corpus.parser import parse_compilation
 from compliance_rag.corpus.policy_parser import parse_policy
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
+from compliance_rag.corpus.submitted_parser import SubmittedFormat, segment_submitted_document
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.eval.golden import load_golden_set
@@ -41,6 +42,11 @@ LAW_TITLE = "Privacy Act 1988"
 """The Act's title as the fixture's own `<title>` gives it (ADR-0049)."""
 POLICY_TENANT_ID = "acme"
 POLICY_VERSION_ID = "v1"
+
+SUBMITTED_FIXTURES = FIXTURES / "synthetic-submitted"
+SUBMITTED_FIXTURE_FORMATS = {".md": SubmittedFormat.MARKDOWN, ".txt": SubmittedFormat.TEXT}
+"""The synthetic submitted documents (#296): every file here with one of these
+extensions, a Markdown or plain-text document of tenant `acme`."""
 
 POLICY_INSTRUMENT_IDS = {
     "acme-privacy-policy.md": "acme/privacy-policy",
@@ -120,6 +126,39 @@ def synthetic_fixture_chunks() -> tuple[Chunk, ...]:
 def synthetic_fixture_clauses() -> tuple[ClauseRecord, ...]:
     """The six Acme policies' clauses, registered alongside their chunks."""
     return tuple(c for c in golden_clauses() if c.scope is Scope.TENANT)
+
+
+def submitted_fixture_files() -> tuple[Path, ...]:
+    """Every synthetic submitted document, by name (the folder's README is its
+    provenance note, not a document)."""
+    return tuple(
+        sorted(
+            p
+            for p in SUBMITTED_FIXTURES.iterdir()
+            if p.suffix in SUBMITTED_FIXTURE_FORMATS and p.name != "README.md"
+        )
+    )
+
+
+def submitted_fixture_clauses() -> tuple[ClauseRecord, ...]:
+    """The passages of every synthetic submitted document, as `acme`'s: what the
+    operator registers as synthetic (`scripts/register_synthetic_fixtures.py`),
+    so `CorpusLifecycle.submit_document` lets a byte-identical document through
+    the residency gate while generation is offshore (#296). Never chunked: a
+    submitted document has no chunks to register. The registry keys on tenant
+    and text, so the owner given here is a stand-in."""
+    return tuple(
+        passage
+        for path in submitted_fixture_files()
+        for passage in segment_submitted_document(
+            path.read_text(encoding="utf-8"),
+            document_format=SUBMITTED_FIXTURE_FORMATS[path.suffix],
+            instrument_id=f"{POLICY_TENANT_ID}/{path.stem}",
+            version_id=POLICY_VERSION_ID,
+            tenant_id=POLICY_TENANT_ID,
+            user_id="fixture-submitter",
+        )
+    )
 
 
 def golden_chunks() -> tuple[Chunk, ...]:

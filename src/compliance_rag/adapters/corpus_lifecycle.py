@@ -40,6 +40,7 @@ from dataclasses import dataclass
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.generation_residency import (
+    TenantTextGate,
     assert_upload_allowed,
     validate_generation_region,
 )
@@ -73,11 +74,18 @@ from compliance_rag.corpus.models import (
     sha256_hex,
     validate_title,
 )
+from compliance_rag.corpus.submitted_parser import SubmittedFormat, segment_submitted_document
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 
 _CONCURRENT_READS = 16
 """Clause-store reads in flight at once while a publish compares what is
 stored with what it was given: one object per clause."""
+
+
+_SUBMITTED_NEVER_CHUNKED = (
+    "a submitted document is never chunked: it is stored by submit_document, and the paths "
+    "that publish, complete or replace a version chunk it (ADR-0053 U1)"
+)
 
 
 class RemovalRefused(PermissionError):
@@ -258,6 +266,97 @@ class CorpusLifecycle:
             title=title,
         )
 
+    async def submit_document(
+        self,
+        source: str,
+        *,
+        document_format: SubmittedFormat,
+        instrument_id: str,
+        tenant_id: str,
+        version_id: str,
+        submitted_on: dt.date,
+        submitted_by: str,
+        title: str,
+    ) -> None:
+        """Store a document a member submits to be checked (#296, ADR-0053 U1,
+        ADR-0059): a version of its own class, `submitted_document`, so
+        versioning, the manifest, the position map, withdraw and purge are
+        ADR-0021's, and **never chunked, never retrieved**. This method has no
+        tokenizer and calls no retrieval method (`tests/test_synthetic_registry`
+        proves it by reading this body), so nothing of the document can reach a
+        vector store.
+
+        `source` is cut into passages with character offsets by the segmenter
+        here, never taken from the caller, so what the residency gate checks
+        is exactly what is stored. They are private to `submitted_by`
+        (`Scope.USER`, ADR-0036): the clause store gives them to nobody else.
+        Written clause store first, as `publish_version` does (ADR-0048): the
+        passages, then the manifest and the source, then the ledger's record,
+        which is the commit point (until it exists the verifier blocks every
+        citation of the version). A run that stopped part-way is finished by
+        running it again.
+
+        Refused before anything is written: a title that isn't one; a class
+        that isn't the instrument's; a version already submitted (a changed
+        document is a new `version_id`, and an earlier version is never
+        retired, because an assessment keeps the document it judged,
+        ADR-0034); a document with no words; and, while generation is offshore,
+        any passage the synthetic registry doesn't vouch for. That last check
+        is `TenantTextGate`'s, because the text never reaches the vector store
+        the store-based gate (`assert_generation_allowed`) reads."""
+        with telemetry.span(
+            "corpus_lifecycle.submit_document",
+            **{
+                "lifecycle.version": f"{instrument_id}:{version_id}",
+                "lifecycle.document_class": DocumentClass.SUBMITTED_DOCUMENT.value,
+                "lifecycle.retrieval_calls": 0,
+            },
+        ) as span:
+            validate_title(title)
+            await self._check_class(
+                tenant_id, instrument_id, DocumentClass.SUBMITTED_DOCUMENT, submitting=True
+            )
+            passages = segment_submitted_document(
+                source,
+                document_format=document_format,
+                instrument_id=instrument_id,
+                version_id=version_id,
+                tenant_id=tenant_id,
+                user_id=submitted_by,
+            )
+            span.set_attribute("lifecycle.passages", len(passages))
+            TenantTextGate(self._generation_region, self._synthetic_registry).check(
+                tenant_id,
+                ((p.clause_id, p.canonical_text) for p in passages),
+                what="passage(s) of a submitted document",
+            )
+            if (
+                await self._ledger.version_validity(
+                    tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
+                )
+                is not None
+            ):
+                raise ValueError(
+                    f"{instrument_id}:{version_id} is already submitted; a changed document is "
+                    "a new version_id"
+                )
+            await self._store_clauses(
+                passages,
+                instrument_id=instrument_id,
+                tenant_id=tenant_id,
+                version_id=version_id,
+                source_html=source,
+            )
+            await self._record(
+                instrument_id=instrument_id,
+                tenant_id=tenant_id,
+                version_id=version_id,
+                effective_from=submitted_on,
+                supersedes=None,
+                document_class=DocumentClass.SUBMITTED_DOCUMENT,
+                title=title,
+            )
+
     async def check_publishable(
         self,
         clauses: tuple[ClauseRecord, ...],
@@ -407,8 +506,18 @@ class CorpusLifecycle:
         )
 
     async def _check_class(
-        self, tenant_id: str, instrument_id: str, document_class: DocumentClass
+        self,
+        tenant_id: str,
+        instrument_id: str,
+        document_class: DocumentClass,
+        *,
+        submitting: bool = False,
     ) -> None:
+        """The class checks every write makes. A submitted document is never
+        chunked (ADR-0053 U1), and every path but `submit_document` chunks, so
+        only `submitting` may name its class."""
+        if (document_class is DocumentClass.SUBMITTED_DOCUMENT) != submitting:
+            raise ValueError(_SUBMITTED_NEVER_CHUNKED)
         check_document_class(tenant_id, document_class)
         recorded = await self._ledger.document_class(
             tenant_id=tenant_id, instrument_id=instrument_id
@@ -708,6 +817,8 @@ class CorpusLifecycle:
         recorded = await self._ledger.document_class(
             tenant_id=tenant_id, instrument_id=instrument_id
         )
+        if recorded is DocumentClass.SUBMITTED_DOCUMENT:
+            raise ValueError(_SUBMITTED_NEVER_CHUNKED)
         if recorded is not None:
             # With no class recorded the instrument is no policy, so it is not
             # in the cached prefix (the ledger lists the prefix by class).

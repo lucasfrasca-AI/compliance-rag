@@ -620,6 +620,10 @@ class FakeLedgerStore(LedgerStore):
             )
             if (
                 seen
+                # A submitted document is the subject of a check, never part of
+                # the environment (ADR-0051, ADR-0053 U1).
+                and self._classes.get((tenant, instrument_id))
+                is not DocumentClass.SUBMITTED_DOCUMENT
                 and valid_from <= as_of
                 and (valid_to is None or as_of < valid_to)
                 and key not in self.withdrawn
