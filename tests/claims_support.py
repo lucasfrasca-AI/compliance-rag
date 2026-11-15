@@ -8,8 +8,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+
+import pytest
 
 from compliance_rag.adapters.fakes import FakeGenerator, FakeLedgerStore
 from compliance_rag.adapters.generation_residency import TenantTextGate
@@ -19,6 +21,7 @@ from compliance_rag.adapters.interfaces import (
     Profile,
     ReplyKind,
 )
+from compliance_rag.assessment import prompt
 from compliance_rag.assessment.claims import ClaimExtractor
 from compliance_rag.assessment.coverage import Outcome
 from compliance_rag.assessment.obligation_digest import ObligationDigest
@@ -192,3 +195,14 @@ def extractor_over(
     return ClaimExtractor(
         generator, ledger, tenant_text=TenantTextGate(region, SyntheticRegistry.load())
     )
+
+
+def fix_boundary(monkeypatch: pytest.MonkeyPatch, boundary: str) -> None:
+    """Every fence's boundary is `boundary` from now on: how a test makes a
+    document that contains the boundary meant to fence it, which a hash of the
+    document otherwise cannot."""
+
+    def fixed(_clauses: Sequence[SourceClause]) -> str:
+        return boundary
+
+    monkeypatch.setattr(prompt, "_boundary", fixed)

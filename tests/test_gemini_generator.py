@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.gemini_generator import (
+    CLAIMS_SCHEMA,
     IMPLICIT_CACHE_MIN_TOKENS,
     PRICE_TABLE,
     REPLY_SCHEMA,
@@ -32,7 +33,14 @@ from compliance_rag.adapters.gemini_generator import (
     unavailability_of,
 )
 from compliance_rag.adapters.generation_residency import GenerationResidencyError
-from compliance_rag.adapters.interfaces import Generation, GenerationUnavailable, Unavailability
+from compliance_rag.adapters.interfaces import (
+    MAX_CLAIMS,
+    Generation,
+    GenerationUnavailable,
+    ReplyKind,
+    Unavailability,
+)
+from compliance_rag.assessment.claims import ClaimReply, ExtractedClaim
 from compliance_rag.assessment.draft import (
     DraftAnswer,
     DraftCitation,
@@ -757,3 +765,41 @@ async def test_every_malformed_draft_is_refused_whole_through_the_gemini_adapter
     pipeline, _ = await pipeline_over(generator)
     with pytest.raises(MalformedGeneration):
         await pipeline.answer(QUESTION, TENANT, AS_OF, law=LIBRARY_QUESTION)
+
+
+# ---- the claims schema is the claim models' ----------------------------------------------
+
+
+def test_the_claims_schema_names_exactly_the_fields_the_claim_models_require() -> None:
+    """As the reply schema is held to the draft's: if a claim model gains a field,
+    this fails until the schema does (#298)."""
+    assert set(CLAIMS_SCHEMA.properties or {}) == set(ClaimReply.model_fields)
+    assert set(CLAIMS_SCHEMA.required or []) == set(ClaimReply.model_fields)
+    claims = (CLAIMS_SCHEMA.properties or {})["claims"]
+    assert claims.max_items == MAX_CLAIMS
+    claim = claims.items
+    assert claim is not None
+    assert set(claim.properties or {}) == set(ExtractedClaim.model_fields)
+    assert set(claim.required or []) == set(ExtractedClaim.model_fields)
+
+
+async def test_a_claims_call_asks_for_the_claims_shape_and_an_answer_call_for_the_answers() -> None:
+    claims_request: list[httpx.Request] = []
+    generator = gemini_generator(lambda _: answered(), _ok_corpus(), claims_request)
+    await generator.generate(
+        system="s", cached_prefix=None, user="u", max_tokens=64, reply=ReplyKind.CLAIMS
+    )
+    answer_request: list[httpx.Request] = []
+    generator = gemini_generator(lambda _: answered(), _ok_corpus(), answer_request)
+    await generator.generate(system="s", cached_prefix=None, user="u", max_tokens=64)
+    claims_schema = body_of(claims_request[0])["generationConfig"]["responseSchema"]
+    answer_schema = body_of(answer_request[0])["generationConfig"]["responseSchema"]
+    assert claims_schema["required"] == ["claims"] and "anyOf" not in claims_schema
+    assert claims_schema["properties"]["claims"]["items"]["required"] == [
+        "passage",
+        "quote",
+        "summary",
+        "obligation_ids",
+        "policy_clause_ids",
+    ]
+    assert "anyOf" in answer_schema  # unchanged: a call that does not say wants an answer

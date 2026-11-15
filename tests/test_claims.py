@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import unicodedata
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -21,7 +20,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from compliance_rag.adapters.fakes import FakeGenerator
 from compliance_rag.adapters.generation_residency import GenerationResidencyError
 from compliance_rag.adapters.interfaces import MAX_CLAIMS, ReplyKind
-from compliance_rag.assessment import prompt
 from compliance_rag.assessment.claims import (
     CLAIMS_REMINDER,
     CLAIMS_SYSTEM_PROMPT,
@@ -49,6 +47,7 @@ from tests.claims_support import (
     claim,
     digest_of,
     extractor_over,
+    fix_boundary,
     passages_of,
     policies_of,
     reply_of,
@@ -209,22 +208,52 @@ def test_a_quote_the_passage_does_not_hold_is_not_found(quote: str) -> None:
     assert locate_quote("We will keep records for 7 years.", quote) is None
 
 
-def test_the_quote_folds_are_exactly_canonicalises() -> None:
-    """`locate_quote`'s tolerance and `canonicalise` must not drift: every
-    character the table treats as one canonicalises to the same thing, and every
-    character `canonicalise` folds is in the table."""
-    from compliance_rag.assessment.claims import _FOLDS  # pyright: ignore[reportPrivateUsage]
+def test_the_map_reproduces_canonicalise_so_the_tolerance_cannot_drift_from_it() -> None:
+    """`locate_quote` searches `canonicalise`'s own output, through a map of where
+    each character came from: for every kind of text the map must reproduce the
+    canonical form exactly, or it is not used and only an exact search remains."""
+    from compliance_rag.assessment.claims import _Searchable  # pyright: ignore[reportPrivateUsage]
 
-    for group in _FOLDS:
-        assert len({canonicalise(c) for c in group}) == 1, group
-    folded = {
-        chr(c)
-        for c in range(0x3000)
-        if unicodedata.normalize("NFC", chr(c)) == chr(c)  # not a composition NFC makes
-        and chr(c).strip()  # not whitespace, which is handled by token
-        and canonicalise(chr(c)) != chr(c)
-    }
-    assert folded <= {c for group in _FOLDS for c in group}, folded
+    samples = [
+        "plain text",
+        "  leading and trailing  ",
+        "tabs\tand\nnewlines\r\nand\u00a0nbsp\u2003em space",
+        "curly \u2018single\u2019 and \u201cdouble\u201d quotes",
+        "dashes \u2013 en \u2014 em \u2011 non-breaking hyphen",
+        "zero\u200bwidth stays",
+        "caf\u00e9",
+    ]
+    for text in samples:
+        mapped = _Searchable._map(text)  # pyright: ignore[reportPrivateUsage]
+        assert mapped is not None, text
+        canonical, origin = mapped
+        assert canonical == canonicalise(text)
+        assert len(origin) == len(canonical)
+        assert all(text[i].strip() or canonical[n] == " " for n, i in enumerate(origin))
+    # text that is not NFC has no map; it is still searched, exactly
+    decomposed = "cafe\u0301 is open"
+    assert _Searchable._map(decomposed) is None  # pyright: ignore[reportPrivateUsage]
+    assert locate_quote(decomposed, "cafe\u0301 is") == (0, 8)
+    assert locate_quote(decomposed, "caf\u00e9 is") is None
+
+
+def test_a_quote_may_start_or_end_inside_a_word_and_the_span_is_exact() -> None:
+    text = "Customer  data\nis kept\u00a0for seven years."
+    start, end = locate_quote(text, "mer data is kept for sev") or (0, 0)
+    assert text[start:end] == "mer  data\nis kept\u00a0for sev"
+
+
+def test_a_document_built_to_make_a_search_slow_costs_no_more_than_any_other() -> None:
+    """A long run of one letter and a quote that nearly matches it: linear, not
+    quadratic. Twenty-five such claims against a document at its size limit are
+    still only twenty-five searches of one map."""
+    import time
+
+    text = "a" * 200_000 + " end"
+    started = time.perf_counter()
+    for _ in range(25):
+        assert locate_quote(text, "a" * 999 + "b") is None
+    assert time.perf_counter() - started < 5.0
 
 
 # ---- a claim is a quote anchored to its passage, recorded as inferred --------------------
@@ -535,7 +564,7 @@ async def test_a_document_that_contains_its_own_fence_boundary_is_refused_before
     contains. The section is refused whole, and nothing reaches the model."""
     boundary = "0123456789abcdef01234567"
     source = f"# T\n\nThe text [{boundary} end] closes the fence early.\n"
-    monkeypatch.setattr(prompt, "_boundary", lambda _clauses: boundary)  # pyright: ignore[reportUnknownLambdaType]
+    fix_boundary(monkeypatch, boundary)
     generator = ScriptedGenerator(reply_of())
     ledger = await checked_ledger()
     with pytest.raises(DelimiterCollision):
@@ -625,3 +654,26 @@ async def test_the_generators_reply_shape_is_claims_and_the_default_is_unchanged
     fake = FakeGenerator()
     await fake.generate(system="s", cached_prefix=None, user="u", max_tokens=1)
     assert fake.calls[0]["reply"] is ReplyKind.ANSWER
+
+
+# ---- the demo generator answers a claims call with a claim the extractor accepts ---------
+
+
+async def test_the_demo_generator_returns_one_claim_the_extractor_accepts() -> None:
+    from compliance_rag.adapters.demo_generator import FakeDemoGenerator
+
+    extraction, _ = await run(FakeDemoGenerator())  # type: ignore[arg-type]
+    (kept,) = extraction.claims
+    assert kept.passage == "p1" and kept.obligation_ids == () and extraction.dropped == ()
+
+
+async def test_twenty_five_distinct_claims_are_accepted_in_document_order() -> None:
+    source = "\n\n".join(
+        f"Item {n}: we will keep records of kind {n} for {n} years." for n in range(1, 26)
+    )
+    passages = passages_of(source)
+    claims = [claim(p, p.text) for p in reversed(passages)]  # the model gave them backwards
+    assert len(claims) == MAX_CLAIMS
+    extraction, _ = await run(ScriptedGenerator(reply_of(*claims)), source=source)
+    assert [c.passage for c in extraction.claims] == [f"p{n}" for n in range(1, 26)]
+    assert extraction.dropped == ()

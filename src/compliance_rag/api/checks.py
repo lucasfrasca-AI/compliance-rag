@@ -3,8 +3,9 @@
 `POST /v1/checks` takes a Markdown or plain-text document from a member and
 stores it as a `submitted_document` through `CorpusLifecycle.submit_document`
 and nothing else (#296: no store is written from here), then records the check
-in the ledger. **No model is called**: claim extraction (#298), findings (#299)
-and the report (#300) are later tickets. `GET /v1/checks/{id}` reads the stored
+in the ledger. **No model is called**: claim extraction is its own request
+(`check_claims.py`, #298), and findings (#299) and the report (#300) are later
+tickets. `GET /v1/checks/{id}` reads the stored
 document back, passage by passage. The pages are `check_pages.py`'s.
 
 **The request has no `synthetic` field** (#78, ADR-0026). The body is

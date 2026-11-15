@@ -26,6 +26,8 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatTurn,
     CheckRecord,
+    ClaimExtractionRecord,
+    ClaimRecord,
     LedgerStore,
     PolicyVersion,
     PrefixMeasure,
@@ -956,6 +958,117 @@ async def assert_check_contract(ledger: LedgerStore) -> None:
             await ledger.record_check(a_check(**{"check_id": "1" * 32, **change}))
     assert await ledger.get_check("acme", "1" * 32) is None
     assert await ledger.check_of_version("acme", "acme/check-3", "v1") is None
+
+
+def a_claim(index: int = 1, **changes: Any) -> ClaimRecord:  # Any: record fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "claim_index": index,
+        "passage": f"p{index}",
+        "quote_start": 10 * index,
+        "quote_end": 10 * index + 7,
+        "quote_sha256": "ab" * 32,
+        "summary": "Profiles are kept for 7 years.",
+        "obligation_ids": ("OB-PA-APP11-1", "OB-PA-APP11-2"),
+        "policy_clause_ids": (),
+    }
+    fields.update(changes)
+    return ClaimRecord(**fields)
+
+
+def an_extraction(*claims: ClaimRecord, **changes: Any) -> ClaimExtractionRecord:  # Any: fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "tenant_id": "acme",
+        "check_id": "c" * 32,
+        "as_of": JUN,
+        "trace_id": "a" * 32,
+        "claims_dropped": 1,
+        "claims": claims
+        or (a_claim(1), a_claim(2, obligation_ids=(), policy_clause_ids=("a:v:1",))),
+    }
+    fields.update(changes)
+    return ClaimExtractionRecord(**fields)
+
+
+async def assert_claims_contract(ledger: LedgerStore) -> None:
+    """The claims extracted from a check's document (#298): written once with the
+    extraction, whole, as `inferred`, to a check the tenant holds; read by tenant
+    and in order; never replaced. The ledger holds a claim's span and hash, never
+    its words."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+    for instrument_id in ("acme/check-1", "acme/check-2", "acme/check-3"):
+        await ledger.record_version(
+            tenant_id="acme",
+            instrument_id=instrument_id,
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.SUBMITTED_DOCUMENT,
+            title="A document",
+        )
+
+    # ---- nothing before it is recorded; a check the tenant holds is needed
+    assert await ledger.get_claims("acme", "c" * 32) is None
+    with pytest.raises(ValueError, match="holds no check"):
+        await ledger.record_claims(an_extraction())
+    assert await ledger.get_claims("acme", "c" * 32) is None
+
+    # ---- recorded whole, stamped by the ledger, numbered in order
+    await ledger.record_check(a_check())
+    await ledger.record_claims(an_extraction())
+    stored = await ledger.get_claims("acme", "c" * 32)
+    assert stored is not None and stored.created_at is not None
+    assert stored == an_extraction(created_at=stored.created_at)
+    assert [c.claim_index for c in stored.claims] == [1, 2]
+    assert stored.claims[0].obligation_ids == ("OB-PA-APP11-1", "OB-PA-APP11-2")  # in order
+    assert stored.claims[1].obligation_ids == ()
+    assert stored.claims[1].policy_clause_ids == ("a:v:1",)
+    assert {c.provenance.value for c in stored.claims} == {"inferred"}
+    assert (stored.as_of, stored.trace_id, stored.claims_dropped) == (JUN, "a" * 32, 1)
+
+    # ---- tenant-keyed: another tenant's read finds nothing
+    assert await ledger.get_claims("other-corp", "c" * 32) is None
+    assert await ledger.get_claims("acme", "d" * 32) is None
+
+    # ---- once per check: never replaced, and nothing of a refused write remains
+    with pytest.raises(ValueError, match="already extracted"):
+        await ledger.record_claims(an_extraction(a_claim(1, summary="Replaced.")))
+    assert await ledger.get_claims("acme", "c" * 32) == stored
+
+    # ---- an extraction with no claim is recorded too, so a check is extracted once
+    await ledger.record_check(a_check(check_id="e" * 32, instrument_id="acme/check-2"))
+    await ledger.record_claims(an_extraction(check_id="e" * 32, claims=(), claims_dropped=0))
+    empty = await ledger.get_claims("acme", "e" * 32)
+    assert empty is not None and empty.claims == () and empty.claims_dropped == 0
+    with pytest.raises(ValueError, match="already extracted"):
+        await ledger.record_claims(an_extraction(check_id="e" * 32, claims=()))
+
+    # ---- what an extraction names, refused before anything is written
+    await ledger.record_check(a_check(check_id="f" * 32, instrument_id="acme/check-3"))
+    for changes, reason in (
+        ({"trace_id": " "}, "trace_id"),
+        ({"claims_dropped": -1}, "not negative"),
+        ({"claims": tuple(a_claim(n) for n in range(1, 27))}, "at most 25"),
+        ({"claims": (a_claim(2),)}, "numbered"),
+        ({"claims": (a_claim(1), a_claim(3))}, "numbered"),
+        ({"claims": (a_claim(1, provenance=EvidenceProvenance.ASSERTED),)}, "inferred"),
+        ({"claims": (a_claim(1, passage="3"),)}, "passage path"),
+        ({"claims": (a_claim(1, passage="p0"),)}, "passage path"),
+        ({"claims": (a_claim(1, quote_end=10),)}, "span"),
+        ({"claims": (a_claim(1, quote_start=-1),)}, "span"),
+        ({"claims": (a_claim(1, quote_sha256="xyz"),)}, "sha256"),
+        ({"claims": (a_claim(1, summary="two\nlines"),)}, "one non-blank line"),
+        ({"claims": (a_claim(1, summary="  "),)}, "one non-blank line"),
+    ):
+        with pytest.raises(ValueError, match=reason):
+            await ledger.record_claims(an_extraction(check_id="f" * 32, **changes))
+    assert await ledger.get_claims("acme", "f" * 32) is None
+    await ledger.record_claims(an_extraction(check_id="f" * 32))  # and the check was not spent
+    assert await ledger.get_claims("acme", "f" * 32) is not None
+
+
+async def test_the_fake_ledger_satisfies_the_claims_contract() -> None:
+    await assert_claims_contract(FakeLedgerStore())
 
 
 async def test_the_fake_ledger_satisfies_the_check_contract() -> None:

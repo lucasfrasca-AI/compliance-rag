@@ -259,42 +259,74 @@ def parse_claims(text: str) -> ClaimReply:
 
 # ---- finding a quote in its passage --------------------------------------------------
 
-_FOLDS: Final = (
-    "'\N{LEFT SINGLE QUOTATION MARK}\N{RIGHT SINGLE QUOTATION MARK}",
-    '"\N{LEFT DOUBLE QUOTATION MARK}\N{RIGHT DOUBLE QUOTATION MARK}',
-    "-\N{EN DASH}\N{EM DASH}\N{NON-BREAKING HYPHEN}",
-)
-"""The characters `canonicalise` treats as one (curly and straight quotes; the
-hyphen, en and em dashes and the non-breaking hyphen): a quote the model wrote
-with one finds the document's other. Whitespace is handled apart, by token.
-`tests/test_claims.py` holds this to `canonicalise`, so they cannot drift."""
-_CLASS_OF: Final = {c: group for group in _FOLDS for c in group}
 
+class _Searchable:
+    """A passage's text and its canonical form, with the place in the text each
+    canonical character came from, so a quote found in the canonical form (as a
+    citation's is found in a clause, ADR-0003) is a span of the document's own
+    characters. Built once per passage and searched with `str.find`, which is
+    linear: a document built to make a search quadratic (a long run of one letter
+    and a quote that nearly matches it) costs no more than any other."""
 
-def _spelling(char: str) -> str:
-    group = _CLASS_OF.get(char)
-    return re.escape(char) if group is None else "[" + "".join(re.escape(c) for c in group) + "]"
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._canonical = ""
+        self._origin: list[int] = []
+        mapped = self._map(text)
+        if mapped is not None:
+            self._canonical, self._origin = mapped
+
+    @staticmethod
+    def _map(text: str) -> tuple[str, list[int]] | None:
+        """The canonical form and, for each of its characters, its index in
+        `text`; None where the two cannot be put side by side (text that is not
+        already NFC, so a character may change length), which leaves only an
+        exact search. The map must reproduce `canonicalise` exactly, or it is not
+        used."""
+        if unicodedata.normalize("NFC", text) != text:
+            return None
+        chars: list[str] = []
+        origin: list[int] = []
+        gap = False  # whitespace seen since the last character kept
+        for index, char in enumerate(text):
+            folded = canonicalise(char)  # "" for whitespace, else the char's fold
+            if not folded:
+                gap = bool(chars)
+                continue
+            if len(folded) != 1:
+                return None
+            if gap:
+                chars.append(" ")
+                origin.append(index)
+                gap = False
+            chars.append(folded)
+            origin.append(index)
+        canonical = "".join(chars)
+        return (canonical, origin) if canonical == canonicalise(text) else None
+
+    def find(self, quote: str) -> tuple[int, int] | None:
+        wanted = canonicalise(quote)
+        if not wanted:
+            return None
+        if not self._origin:
+            found = self._text.find(quote)  # the text has no canonical map: exactly, or not at all
+            return None if found < 0 else (found, found + len(quote))
+        at = self._canonical.find(wanted)
+        if at < 0:
+            return None
+        start, end = self._origin[at], self._origin[at + len(wanted) - 1] + 1
+        # The citation check itself, on the span that is kept.
+        return (start, end) if canonicalise(self._text[start:end]) == wanted else None
 
 
 def locate_quote(text: str, quote: str) -> tuple[int, int] | None:
     """Where `quote` is in `text`, as a span of `text` itself, or None. The
-    comparison is a citation's (ADR-0003): the same folds as `canonicalise`, so
-    "a  b" and "a\\nb" match "a b" and a straight quote matches a curly one, and
-    nothing else matches. The span is the document's own characters, so what a
-    claim keeps is what the document said. The first match, and only if the
-    span's canonical form equals the quote's, which is the citation check
-    itself."""
-    tokens = unicodedata.normalize("NFC", quote).split()
-    if not tokens:
-        return None
-    pattern = r"\s+".join("".join(_spelling(c) for c in token) for token in tokens)
-    found = re.search(pattern, text)
-    if found is None:
-        return None
-    start, end = found.span()
-    if canonicalise(text[start:end]) != canonicalise(quote):
-        return None
-    return start, end
+    comparison is a citation's (ADR-0003), `canonicalise`'s own: any run of
+    whitespace matches one space, a straight quote matches a curly one, a hyphen
+    an en or em dash, and nothing else matches.
+    The span is the document's own characters, so what a claim keeps is what the
+    document said. The first match."""
+    return _Searchable(text).find(quote)
 
 
 # ---- the prompt ----------------------------------------------------------------------
@@ -351,7 +383,7 @@ class Extraction:
     trace_id: str
 
 
-_BOUNDARY = re.compile(r"[0-9a-f]{24}")
+_BOUNDARY = re.compile(r"boundary=([0-9a-f]{24})")
 
 
 def _sha256(text: str) -> str:
@@ -487,11 +519,12 @@ def _validated(
     """Each claim of a schema-valid reply, checked by code: the ones that pass,
     numbered in document order, and the ones that do not, with why."""
     by_id = {p.clause_id: p for p in passages}
+    searchable: dict[str, _Searchable] = {}  # built when a claim first names the passage
     found: list[tuple[int, int, ClaimRecord]] = []  # (start, reply position, claim)
     dropped: list[DroppedClaim] = []
     seen: set[tuple[str, int, int]] = set()
     for position, claim in enumerate(reply.claims, start=1):
-        reason, record = _check(claim, by_id, obligation_ids, clause_ids, boundaries)
+        reason, record = _check(claim, by_id, searchable, obligation_ids, clause_ids, boundaries)
         if record is not None:
             key = (record.passage, record.quote_start, record.quote_end)
             if key in seen:
@@ -521,6 +554,7 @@ def _validated(
 def _check(
     claim: ExtractedClaim,
     by_id: dict[str, ClauseRecord],
+    searchable: dict[str, _Searchable],
     obligation_ids: frozenset[str],
     clause_ids: frozenset[str],
     boundaries: frozenset[str],
@@ -528,7 +562,10 @@ def _check(
     passage = by_id.get(claim.passage)
     if passage is None:
         return DropReason.UNKNOWN_PASSAGE, None
-    span_in_passage = locate_quote(passage.text, claim.quote)
+    index = searchable.get(claim.passage)
+    if index is None:
+        index = searchable[claim.passage] = _Searchable(passage.text)
+    span_in_passage = index.find(claim.quote)
     if span_in_passage is None:
         return DropReason.QUOTE_NOT_FOUND, None
     if any(i not in obligation_ids for i in claim.obligation_ids):
