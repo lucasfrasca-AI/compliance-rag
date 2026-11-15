@@ -39,6 +39,7 @@ from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.eval.golden_corpus import gate_clauses
 from compliance_rag.eval.harness import golden_ledger
 from compliance_rag.graph.mappings import load_mapping_set
+from compliance_rag.telemetry import span
 from tests.claims_support import Prompt
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
 
@@ -301,7 +302,9 @@ class CheckModel(FakeGenerator):
         reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         async def proceed() -> Generation:
-            return await self._scripted(system, cached_prefix, user, max_tokens, reply)
+            # As the real adapter does: its span is a child of whatever called it
+            with span("generator.generate", **{"generator.reply": reply.value}):
+                return await self._scripted(system, cached_prefix, user, max_tokens, reply)
 
         return await self.intercept(reply, proceed)
 

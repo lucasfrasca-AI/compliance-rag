@@ -94,6 +94,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Final
 
+from opentelemetry.trace import Span
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -111,6 +112,7 @@ from compliance_rag.adapters.interfaces import (
     BlockedCitation,
     ClaimExtractionRecord,
     ClaimRecord,
+    FailureReason,
     FindingCitation,
     FindingOutcome,
     FindingRecord,
@@ -137,6 +139,7 @@ from compliance_rag.assessment.coverage import (
     Outcome,
 )
 from compliance_rag.assessment.draft import DraftCitation, MalformedGeneration, unfenced
+from compliance_rag.assessment.evidence import Evidence, FactsSnapshot
 from compliance_rag.assessment.obligation_digest import ObligationDigest
 from compliance_rag.assessment.pipeline import AssessmentPipeline, OwedClauseUndelivered
 from compliance_rag.assessment.prefix_cap import check_prefix_cap
@@ -205,12 +208,9 @@ words.
 - "conflicts": doing what the claim describes would breach the clause, on the claim's own words.
 - "not_addressed": the clause applies to what the claim describes, and the claim says nothing \
 that meets or breaches it.
-- "ambiguous": the verdict turns on a fact or judgement that neither the claim nor the clauses \
-settle. Say in "settle_by", in one line of at most {MAX_SETTLE_BY_CHARS} characters, what would \
-settle it. Never resolve an ambiguity under an assumption of your own: a standard such as \
-"reasonable" that the claim does not meet or breach on its own words is ambiguous, not \
-consistent.
-Judge only what the quote says. Do not assume facts it does not state.
+- "ambiguous": the verdict turns on a fact or judgement neither the claim nor the corpus \
+settles. Every ambiguous finding names what would settle it, in "settle_by", in one line of at \
+most {MAX_SETTLE_BY_CHARS} characters. Never resolve ambiguity under an assumption of your own.
 
 Cite every clause a finding relies on, each as {{"clause_id": "<id>", "quote": "<text>"}}:
 - Cite only clause ids that appear in the policy or law sections above, never the digest, the \
@@ -241,11 +241,21 @@ FINDINGS_REMINDER: Final = (
 # ---- the reply -----------------------------------------------------------------------
 
 
+class TargetKind(StrEnum):
+    """What a finding is against. The values are what the API names them."""
+
+    LAW = "law"
+    """An obligation of the law."""
+    POLICY = "policy"
+    """A clause of the tenant's own policy."""
+
+
 @dataclass(frozen=True, slots=True)
 class Target:
-    """What a finding is against: an obligation of the law, or a policy clause."""
+    """What a finding is against: an obligation of the law (its id), or a policy
+    clause (its stable id)."""
 
-    kind: str  # "obligation" or "policy"
+    kind: TargetKind
     id: str
 
 
@@ -292,9 +302,9 @@ class ExtractedFinding(BaseModel):
     @property
     def target(self) -> Target:
         if self.obligation_id is not None:
-            return Target("obligation", self.obligation_id)
+            return Target(TargetKind.LAW, self.obligation_id)
         assert self.policy_clause_id is not None  # `_one_target`
-        return Target("policy", self.policy_clause_id)
+        return Target(TargetKind.POLICY, self.policy_clause_id)
 
 
 class FindingsEnvelope(BaseModel):
@@ -339,7 +349,10 @@ def parse_findings(text: str) -> tuple[ParsedItem, ...]:
     items: list[ParsedItem] = []
     for position, raw in enumerate(envelope.findings, start=1):
         named: list[Target] = []
-        for key, kind in (("obligation_id", "obligation"), ("policy_clause_id", "policy")):
+        for key, kind in (
+            ("obligation_id", TargetKind.LAW),
+            ("policy_clause_id", TargetKind.POLICY),
+        ):
             value = raw.get(key)
             if isinstance(value, str):
                 named.append(Target(kind, value))
@@ -593,13 +606,13 @@ def _new_id() -> str:
     return uuid.uuid4().hex
 
 
-def _failed(claim: int, target: Target, reason: WithheldReason) -> FindingRecord:
+def _failed(claim: int, target: Target, reason: FailureReason) -> FindingRecord:
     return FindingRecord(
         finding_id=_new_id(),
         claim_index=claim,
         outcome=FindingOutcome.FAILED,
-        obligation_id=target.id if target.kind == "obligation" else None,
-        policy_clause_id=target.id if target.kind == "policy" else None,
+        obligation_id=target.id if target.kind is TargetKind.LAW else None,
+        policy_clause_id=target.id if target.kind is TargetKind.POLICY else None,
         detail=reason,
     )
 
@@ -626,14 +639,17 @@ class FindingsAssessor:
         policies: Sequence[SourceClause],
         corpus: SourceVersion,
         mapping: SourceVersion,
+        evidence: Sequence[Evidence],
     ) -> FindingsRun:
         """The findings of one check's claims, recorded. `extraction` is the
         check's claims and the date their picks were made on, `coverage` Track A
-        on that date and the tenant's facts now, `policies` the tenant's in force
-        then; `corpus` and `mapping` are what the graph holds, resolved by the
-        caller (ADR-0034). `asker` is who the assessment names (their email, as a
-        coverage assessment does), `member_uid` whose private clauses the verifier
-        may read (ADR-0036).
+        on that date over `evidence`, the tenant's facts as the ledger held them when
+        the coverage was computed (recorded with the assessment, ADR-0034: it records
+        what was read, and does not reconstruct facts as of a past date, #123),
+        `policies` the tenant's in force then; `corpus` and `mapping` are what the graph
+        holds, resolved by the caller (ADR-0034). `asker` is who the assessment names
+        (their email, as a coverage assessment does), `member_uid` whose private
+        clauses the verifier may read (ADR-0036).
 
         Refused before anything is built or sent: offshore, a passage, the document
         or a policy clause the registry does not vouch for
@@ -658,6 +674,7 @@ class FindingsAssessor:
             policies=tuple(policies),
             corpus=corpus,
             mapping=mapping,
+            facts=FactsSnapshot.of(evidence),
         ).go()
 
 
@@ -679,7 +696,9 @@ class _Run:
         policies: tuple[SourceClause, ...],
         corpus: SourceVersion,
         mapping: SourceVersion,
+        facts: FactsSnapshot,
     ) -> None:
+        self._facts = facts
         self._pipeline = pipeline
         self._tenant_id = tenant_id
         self._check_id = check_id
@@ -748,7 +767,7 @@ class _Run:
             works = [self._plan(c, quotes[c.claim_index], skipped) for c in self._extraction.claims]
             current.set_attribute("findings.skipped", skipped)
             prepared = list(
-                await asyncio.gather(*(self._prepare(w) for w in works if self._asks(w)))
+                await asyncio.gather(*(self._prepare_bounded(w) for w in works if self._asks(w)))
             )
             asking = [p for p in prepared if p.user is not None]
             current.set_attribute("findings.calls", len(asking))
@@ -770,6 +789,7 @@ class _Run:
                     as_of=self._as_of,
                     trace_id=current_trace_id(),
                     check_id=self._check_id,
+                    facts=self._facts,
                 ),
                 coverage=tuple(
                     sorted(
@@ -861,6 +881,11 @@ class _Run:
     def _asks(work: _Work) -> bool:
         return bool(work.obligations or work.policy_clauses)
 
+    async def _prepare_bounded(self, work: _Work) -> _Prepared:
+        """`_prepare` at the gate: its lookups are bounded as the model calls are."""
+        async with self._gate:
+            return await self._prepare(work)
+
     async def _prepare(self, work: _Work) -> _Prepared:
         """The law for a claim's obligations, and the prompt. An obligation whose
         clauses, or whose exceptions and qualifiers, cannot be delivered fails and
@@ -875,8 +900,8 @@ class _Run:
                 failed.append(
                     _failed(
                         index,
-                        Target("obligation", row.obligation_id),
-                        WithheldReason.CLAUSE_UNAVAILABLE,
+                        Target(TargetKind.LAW, row.obligation_id),
+                        FailureReason.CLAUSE_UNAVAILABLE,
                     )
                 )
             else:
@@ -896,14 +921,14 @@ class _Run:
                 else None
             )
         except DelimiterCollision:
-            targets = [Target("obligation", r.obligation_id) for r, _ in delivered]
-            targets += [Target("policy", c) for c in work.policy_clauses]
+            targets = [Target(TargetKind.LAW, r.obligation_id) for r, _ in delivered]
+            targets += [Target(TargetKind.POLICY, c) for c in work.policy_clauses]
             return _Prepared(
                 work,
                 (),
                 (),
                 None,
-                (*failed, *(_failed(index, t, WithheldReason.BOUNDARY_COLLISION) for t in targets)),
+                (*failed, *(_failed(index, t, FailureReason.BOUNDARY_COLLISION) for t in targets)),
             )
         return _Prepared(work, tuple(r for r, _ in delivered), law_clauses, user, tuple(failed))
 
@@ -943,27 +968,50 @@ class _Run:
     # -- asking ----------------------------------------------------------------------
 
     async def _ask_all(self, asking: Sequence[_Prepared]) -> list[FindingRecord]:
-        """The first call alone, then the rest in parallel (ADR-0054): the first
-        writes the cache the rest read. The first claim's own verification and
-        repair run beside the rest."""
+        """The first claim's call alone, then every other claim's in parallel
+        (ADR-0054): the first writes the cache the rest read. The rest start once
+        the first call has returned; its own verification and repair run beside them."""
         if not asking:
             return []
         first, rest = asking[0], asking[1:]
-        warm = await self._ask(first, warm_up=True)
+        warmed = asyncio.Event()
+        warm = asyncio.ensure_future(self._claim(first, warmed))
+        woken = asyncio.ensure_future(warmed.wait())
+        await asyncio.wait({warm, woken}, return_when=asyncio.FIRST_COMPLETED)
+        woken.cancel()
+        if not warmed.is_set():
+            return warm.result()  # the first call failed: nothing else was started
         outcomes = await asyncio.gather(
-            self._settle(warm),
-            *(self._ask_and_settle(p) for p in rest),
-            return_exceptions=True,
+            warm, *(self._claim(p, None) for p in rest), return_exceptions=True
         )
         failures = [o for o in outcomes if isinstance(o, BaseException)]
         if failures:
             raise failures[0]
         return [f for o in outcomes if not isinstance(o, BaseException) for f in o]
 
-    async def _ask_and_settle(self, prepared: _Prepared) -> list[FindingRecord]:
-        async with self._gate:
-            asked = await self._ask(prepared, warm_up=False)
-        return await self._settle(asked)
+    async def _claim(
+        self, prepared: _Prepared, warmed: asyncio.Event | None
+    ) -> list[FindingRecord]:
+        """One claim: its call, then its findings checked and verified, all under the
+        claim's span, so the generator's span and each repair's are its children.
+        `warmed` is set once the first call has returned, and only the first is given
+        one: it runs alone, and the rest wait their turn at the gate (`MAX_PARALLEL`)."""
+        targets = self._targets(prepared)
+        with span(
+            "findings.claim",
+            **{
+                "findings.claim_index": prepared.work.claim.claim_index,
+                "findings.targets": [f"{t.kind.value}:{t.id}" for t in targets],
+                "findings.law_clauses": [c.clause_id for c in prepared.law],
+            },
+        ) as current:
+            if warmed is None:
+                async with self._gate:
+                    asked = await self._ask(prepared, warm_up=False)
+            else:
+                asked = await self._ask(prepared, warm_up=True)
+                warmed.set()
+            return await self._settle(asked, current)
 
     async def _ask(self, prepared: _Prepared, *, warm_up: bool) -> _Asked:
         """The one findings call of a claim. The model being unavailable fails
@@ -987,97 +1035,94 @@ class _Run:
 
     # -- settling --------------------------------------------------------------------
 
-    def _targets(self, prepared: _Prepared) -> tuple[Target, ...]:
+    @staticmethod
+    def _targets(prepared: _Prepared) -> tuple[Target, ...]:
         return (
-            *(Target("obligation", r.obligation_id) for r in prepared.obligations),
-            *(Target("policy", c) for c in prepared.work.policy_clauses),
+            *(Target(TargetKind.LAW, r.obligation_id) for r in prepared.obligations),
+            *(Target(TargetKind.POLICY, c) for c in prepared.work.policy_clauses),
         )
 
-    async def _settle(self, asked: _Asked) -> list[FindingRecord]:
+    async def _spent(self, generation: Generation) -> None:
+        """A repair's generation, kept as it returns."""
+        self._generations.append(generation)
+
+    async def _settle(self, asked: _Asked, current: Span) -> list[FindingRecord]:
         """A claim's reply, checked and verified, as one finding per target asked
         about: a verdict, withheld or failed. Never one for anything else."""
         prepared = asked.prepared
         claim = prepared.work.claim.claim_index
         targets = self._targets(prepared)
-        with span(
-            "findings.claim",
-            **{
-                "findings.claim_index": claim,
-                "findings.targets": [f"{t.kind}:{t.id}" for t in targets],
-                "findings.law_clauses": [c.clause_id for c in prepared.law],
-            },
-        ) as current:
-            generation = asked.generation
-            if generation is None:
-                current.set_attribute("generation.unavailable", True)
-                return [_failed(claim, t, WithheldReason.GENERATION_UNAVAILABLE) for t in targets]
-            current.set_attribute("generation.input_tokens", generation.input_tokens)
-            current.set_attribute("generation.output_tokens", generation.output_tokens)
-            current.set_attribute("generation.cached_prefix_hit", generation.cached_prefix_hit)
-            current.set_attribute("generation.cost_usd", generation.cost_usd)
-            try:
-                items = parse_findings(generation.text)
-            except MalformedGeneration:
-                current.set_attribute("generation.schema_valid", False)
-                return [_failed(claim, t, WithheldReason.MALFORMED_GENERATION) for t in targets]
-            current.set_attribute("generation.schema_valid", True)
+        generation = asked.generation
+        if generation is None:
+            current.set_attribute("generation.unavailable", True)
+            return [_failed(claim, t, FailureReason.GENERATION_UNAVAILABLE) for t in targets]
+        current.set_attribute("generation.input_tokens", generation.input_tokens)
+        current.set_attribute("generation.output_tokens", generation.output_tokens)
+        current.set_attribute("generation.cached_prefix_hit", generation.cached_prefix_hit)
+        current.set_attribute("generation.cost_usd", generation.cost_usd)
+        try:
+            items = parse_findings(generation.text)
+        except MalformedGeneration:
+            current.set_attribute("generation.schema_valid", False)
+            return [_failed(claim, t, FailureReason.MALFORMED_GENERATION) for t in targets]
+        current.set_attribute("generation.schema_valid", True)
 
-            boundaries = frozenset(_BOUNDARY.findall(f"{self._prefix}\n{prepared.user}"))
-            asked_targets = frozenset(targets)
-            answered: set[Target] = set()
-            accepted: dict[Target, ExtractedFinding] = {}
-            refused_targets: set[Target] = set()
-            for item in items:
-                reason = (
-                    Refusal.SCHEMA
-                    if item.finding is None
-                    else check_finding(
-                        item.finding,
-                        digest_ids=self._digest.ids,
-                        clause_ids=frozenset(p.clause_id for p in self._policies),
-                        asked=asked_targets,
-                        answered=answered,
-                        boundaries=boundaries,
+        boundaries = frozenset(_BOUNDARY.findall(f"{self._prefix}\n{prepared.user}"))
+        asked_targets = frozenset(targets)
+        answered: set[Target] = set()
+        accepted: dict[Target, ExtractedFinding] = {}
+        refused_targets: set[Target] = set()
+        for item in items:
+            reason = (
+                Refusal.SCHEMA
+                if item.finding is None
+                else check_finding(
+                    item.finding,
+                    digest_ids=self._digest.ids,
+                    clause_ids=frozenset(p.clause_id for p in self._policies),
+                    asked=asked_targets,
+                    answered=answered,
+                    boundaries=boundaries,
+                )
+            )
+            if reason is None:
+                assert item.finding is not None
+                answered.add(item.finding.target)
+                accepted[item.finding.target] = item.finding
+            else:
+                self._refused.append(RefusedFinding(claim, item.position, reason))
+                refused_targets.update(t for t in item.named if t in asked_targets)
+        current.set_attribute(
+            "findings.refused",
+            [self._refusal_label(r) for r in self._refused if r.claim_index == claim],
+        )
+
+        shown = {c.clause_id: c for c in (*self._shown_policies, *prepared.law)}
+        context = frozenset(shown)
+        records: list[FindingRecord] = []
+        outcomes: list[str] = []
+        for target in targets:
+            extracted = accepted.get(target)
+            if extracted is None:
+                records.append(
+                    _failed(
+                        claim,
+                        target,
+                        FailureReason.MALFORMED_FINDING
+                        if target in refused_targets
+                        else FailureReason.NO_FINDING_RETURNED,
                     )
                 )
-                if reason is None:
-                    assert item.finding is not None
-                    answered.add(item.finding.target)
-                    accepted[item.finding.target] = item.finding
-                else:
-                    self._refused.append(RefusedFinding(claim, item.position, reason))
-                    refused_targets.update(t for t in item.named if t in asked_targets)
-            current.set_attribute(
-                "findings.refused",
-                [self._refusal_label(r) for r in self._refused if r.claim_index == claim],
-            )
-
-            shown = {c.clause_id: c for c in (*self._shown_policies, *prepared.law)}
-            context = frozenset(shown)
-            records: list[FindingRecord] = []
-            outcomes: list[str] = []
-            for target in targets:
-                extracted = accepted.get(target)
-                if extracted is None:
-                    records.append(
-                        _failed(
-                            claim,
-                            target,
-                            WithheldReason.REFUSED_REPLY
-                            if target in refused_targets
-                            else WithheldReason.NO_FINDING_RETURNED,
-                        )
-                    )
-                    continue
-                record, checks = await self._verified(claim, extracted, shown, context)
-                records.append(record)
-                outcomes += [f"{c.citation.clause_id}:{c.outcome.value}" for c in checks]
-            current.set_attribute("verifier.outcomes", outcomes)
-            current.set_attribute(
-                "findings.outcomes",
-                [f"{r.obligation_id or r.policy_clause_id}:{r.outcome.value}" for r in records],
-            )
-            return records
+                continue
+            record, checks = await self._verified(claim, extracted, shown, context)
+            records.append(record)
+            outcomes += [f"{c.citation.clause_id}:{c.outcome.value}" for c in checks]
+        current.set_attribute("verifier.outcomes", outcomes)
+        current.set_attribute(
+            "findings.outcomes",
+            [f"{r.obligation_id or r.policy_clause_id}:{r.outcome.value}" for r in records],
+        )
+        return records
 
     async def _verified(
         self,
@@ -1086,33 +1131,31 @@ class _Run:
         shown: Mapping[str, SourceClause],
         context: frozenset[str],
     ) -> tuple[FindingRecord, tuple[CheckedCitation, ...]]:
-        """Every citation checked, and a quote that did not match repaired once,
-        as an answer's is (ADR-0003). A finding with a blocked citation, or with
-        none, is withheld and keeps no verdict."""
-        pipeline = self._pipeline
-        checked = await pipeline.verifier.check_all(
-            extracted.citations, context=context, as_of=self._as_of, user_id=self._member_uid
-        )
-        final: list[CheckedCitation] = []
-        for check in checked:
-            if check.outcome.repairable and check.clause is not None:
-                check, repair = await pipeline.repair(
-                    check,
-                    shown=shown,
-                    context=context,
-                    as_of=self._as_of,
-                    user_id=self._member_uid,
-                )
-                self._generations.append(repair)
-            final.append(check)
+        """Every citation checked, and a quote that did not match repaired once, as
+        an answer's is (`AssessmentPipeline.verify_and_repair`, ADR-0003). A finding
+        with a blocked citation, or with none, is withheld and keeps no verdict. A
+        repair the model could not be asked for fails the finding, as the same outage
+        on its findings call does."""
         target = extracted.target
-        obligation_id = target.id if target.kind == "obligation" else None
-        policy_clause_id = target.id if target.kind == "policy" else None
+        obligation_id = target.id if target.kind is TargetKind.LAW else None
+        policy_clause_id = target.id if target.kind is TargetKind.POLICY else None
         finding_id = _new_id()
+        try:
+            final = await self._pipeline.verify_and_repair(
+                extracted.citations,
+                shown=shown,
+                context=context,
+                as_of=self._as_of,
+                user_id=self._member_uid,
+                on_repair=self._spent,
+                gate=self._gate,
+            )
+        except GenerationUnavailable:
+            return _failed(claim, target, FailureReason.GENERATION_UNAVAILABLE), ()
         blocked = tuple(
             BlockedCitation(c.citation.clause_id, c.outcome.value) for c in final if not c.verified
         )
-        if not final:
+        if not final or blocked:
             return (
                 FindingRecord(
                     finding_id=finding_id,
@@ -1120,22 +1163,10 @@ class _Run:
                     obligation_id=obligation_id,
                     policy_clause_id=policy_clause_id,
                     outcome=FindingOutcome.WITHHELD,
-                    detail=WithheldReason.UNCITED,
-                ),
-                (),
-            )
-        if blocked:
-            return (
-                FindingRecord(
-                    finding_id=finding_id,
-                    claim_index=claim,
-                    obligation_id=obligation_id,
-                    policy_clause_id=policy_clause_id,
-                    outcome=FindingOutcome.WITHHELD,
-                    detail=WithheldReason.CITATION_BLOCKED,
+                    detail=WithheldReason.CITATION_BLOCKED if blocked else WithheldReason.UNCITED,
                     blocked=blocked,
                 ),
-                tuple(final),
+                final,
             )
         citations: list[FindingCitation] = []
         for check in final:
@@ -1160,7 +1191,7 @@ class _Run:
                 settle_by=extracted.settle_by,
                 citations=tuple(citations),
             ),
-            tuple(final),
+            final,
         )
 
 

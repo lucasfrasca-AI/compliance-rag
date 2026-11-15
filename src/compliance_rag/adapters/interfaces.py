@@ -46,7 +46,12 @@ from compliance_rag.assessment.coverage import (
     QualifierOf,
 )
 from compliance_rag.assessment.environment import NotInEnvironment
-from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts
+from compliance_rag.assessment.evidence import (
+    Evidence,
+    EvidenceProvenance,
+    Facts,
+    FactsSnapshot,
+)
 from compliance_rag.corpus.models import (
     Chunk,
     ClauseRecord,
@@ -456,6 +461,11 @@ class AssessmentRecord:
     """The check this assessment judged, when it is a document check's (#299,
     ADR-0059 Q1): the submitted document it points at is that check's. `None`
     for a coverage assessment (`POST /v1/coverage`), which judges no document."""
+    facts: FactsSnapshot | None = None
+    """The facts the coverage was decided on, as the ledger held them (ADR-0034):
+    every evidence row with its value, and their sha256. Recorded with the
+    assessment of a check, in the same transaction; it records what was read and
+    does not reconstruct facts as of a past date (#123)."""
 
 
 def check_assessment_write(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> None:
@@ -669,16 +679,26 @@ class FindingOutcome(StrEnum):
 
 
 class WithheldReason(StrEnum):
-    """Why a finding is withheld or failed, in our words, never the model's."""
+    """Why a finding is withheld (CONTEXT.md: Withheld finding): the verifier
+    blocked a citation, or it cited nothing. In our words, never the model's."""
 
     CITATION_BLOCKED = "citation_blocked"
     UNCITED = "uncited"
+
+
+class FailureReason(StrEnum):
+    """Why a finding failed: no finding could be made for the target. In our
+    words, never the model's."""
+
     MALFORMED_GENERATION = "malformed_generation"
+    """The reply was not one valid set of findings."""
     NO_FINDING_RETURNED = "no_finding_returned"
-    REFUSED_REPLY = "refused_reply"
-    """The model's finding for it was refused (schema, an `ambiguous` with no
-    settle-by text, ...); which, is traced."""
+    MALFORMED_FINDING = "malformed_finding"
+    """The model's finding for it was refused by a check (its shape, an id it was not
+    asked about, ...). Which check is on the span, and not said outward: a reason that
+    named it ("ambiguous with no settle-by") would reveal the verdict class."""
     GENERATION_UNAVAILABLE = "generation_unavailable"
+    """The model was not taking requests, for the call or for a citation repair."""
     CLAUSE_UNAVAILABLE = "clause_unavailable"
     """A clause the obligation, or what it owes, needs could not be delivered, so
     the model was not asked (ADR-0037, ADR-0044)."""
@@ -745,8 +765,8 @@ class FindingRecord:
     for it. The model's text, shown labelled as such."""
     citations: tuple[FindingCitation, ...] = ()
     blocked: tuple[BlockedCitation, ...] = ()
-    detail: WithheldReason | None = None
-    """Why a withheld or failed finding is."""
+    detail: WithheldReason | FailureReason | None = None
+    """Why a finding is withheld (`WithheldReason`) or failed (`FailureReason`)."""
     unassessable_reason: str | None = None
     """For a conditional finding: Track A's reason, from the coverage row stored
     with the assessment, whose questions are the ones that would firm it up."""
@@ -801,6 +821,13 @@ def check_finding_write(finding: FindingRecord) -> None:
         finding.detail is not None
     ):
         raise ValueError("a withheld or failed finding says why, and no other does")
+    if (
+        finding.outcome is FindingOutcome.WITHHELD
+        and not isinstance(finding.detail, WithheldReason)
+    ) or (
+        finding.outcome is FindingOutcome.FAILED and not isinstance(finding.detail, FailureReason)
+    ):
+        raise ValueError("a withheld finding says a withheld reason, a failed one a failure")
     if finding.conditional != (finding.unassessable_reason is not None):
         raise ValueError("a conditional finding carries Track A's reason, and no other does")
     if finding.conditional and finding.obligation_id is None:
@@ -846,6 +873,8 @@ def check_findings_write(record: FindingsRecord, claim_count: int | None = None)
     check_assessment_write(record.assessment, record.coverage)
     if record.assessment.check_id is None or not record.assessment.check_id.strip():
         raise ValueError("a findings run records the check it judged")
+    if record.assessment.facts is None:
+        raise ValueError("a findings run records the facts it was decided on (ADR-0034)")
     seen: set[tuple[int, str | None, str | None]] = set()
     covered = {row.obligation_id: row for row in record.coverage}
     for finding in record.findings:
@@ -1673,9 +1702,11 @@ class LedgerStore(ABC):
         id, and for a check this tenant does not hold."""
 
     @abstractmethod
-    async def fail_findings(self, tenant_id: str, check_id: str) -> None:
+    async def fail_findings(self, tenant_id: str, check_id: str, *, trace_id: str) -> None:
         """Release a pending findings reservation as failed, so the run can be
-        made again. Nothing happens to one that is not pending."""
+        made again, if it is still the one `trace_id` reserved. Nothing happens to
+        one that is not pending, or that another request now holds (a run that
+        outlived its reservation must not release its successor's)."""
 
     @abstractmethod
     async def record_findings(self, record: FindingsRecord) -> None:
@@ -1686,7 +1717,10 @@ class LedgerStore(ABC):
         (ADR-0034). A `ValueError` and nothing written for anything
         `check_findings_write` refuses; a claim the check's extraction does not
         hold; an unregistered tenant; a check not reserved (pending) or already
-        done; an assessment id already recorded."""
+        done; an assessment id already recorded; and a reservation that is no
+        longer this run's: it commits only if `record.assessment.trace_id` is the
+        request that holds the reservation, so a run that outlived its own (taken
+        over after `FINDINGS_RESERVATION_TTL`, or released) records nothing."""
 
     @abstractmethod
     async def get_findings(self, tenant_id: str, check_id: str) -> FindingsRecord | None:

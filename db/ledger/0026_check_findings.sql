@@ -11,6 +11,10 @@
 --
 -- * `assessment.check_id`: the check the assessment judged (0024). One
 --   assessment per check.
+-- * `assessment.facts` + `assessment.facts_sha256`: the tenant's facts the coverage
+--   was decided on (ADR-0034), every evidence row with its value, and the sha256 of
+--   that list. A check's assessment always has them. It records what was read; it
+--   does not reconstruct facts as of a past date (#123).
 -- * `finding.check_id` + `finding.claim_index`: the claim (0025), by number.
 --   **The ledger does not carry the document's words**, so `claim_text`, which
 --   was NOT NULL, is optional for a finding that names its claim this way.
@@ -48,6 +52,16 @@ ALTER TABLE assessment DROP CONSTRAINT IF EXISTS assessment_check_id;
 ALTER TABLE assessment ADD CONSTRAINT assessment_check_id
     CHECK (check_id IS NULL OR btrim(check_id) <> '');
 
+ALTER TABLE assessment ADD COLUMN IF NOT EXISTS facts JSONB;
+ALTER TABLE assessment ADD COLUMN IF NOT EXISTS facts_sha256 TEXT;
+
+ALTER TABLE assessment DROP CONSTRAINT IF EXISTS assessment_facts;
+ALTER TABLE assessment ADD CONSTRAINT assessment_facts
+    CHECK ((facts IS NULL) = (facts_sha256 IS NULL)
+           AND (facts_sha256 IS NULL OR facts_sha256 ~ '^[0-9a-f]{64}$')
+           AND (facts IS NULL OR jsonb_typeof(facts) = 'array')
+           AND (check_id IS NULL OR facts IS NOT NULL));
+
 CREATE UNIQUE INDEX IF NOT EXISTS assessment_one_per_check
     ON assessment (tenant_id, check_id) WHERE check_id IS NOT NULL;
 
@@ -82,27 +96,33 @@ ALTER TABLE finding ADD CONSTRAINT finding_names_its_claim
     CHECK ((check_id IS NULL) = (claim_index IS NULL)
            AND (claim_text IS NOT NULL OR check_id IS NOT NULL));
 
+-- The constraints below speak of a check's findings, so each is scoped to
+-- `check_id IS NOT NULL`, as `finding_citations_iff_verdict` is: a finding recorded
+-- before documents were checked is left to the rules it was written under.
+--
 -- Only a verdict row has a verdict: a withheld finding's is never stored.
 ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_verdict_iff_verdict;
 ALTER TABLE finding ADD CONSTRAINT finding_verdict_iff_verdict
-    CHECK ((outcome = 'verdict') = (verdict IS NOT NULL));
+    CHECK (check_id IS NULL OR (outcome = 'verdict') = (verdict IS NOT NULL));
 
 -- F3: an `ambiguous` finding names what would settle it, and no other does.
 ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_settle_by_iff_ambiguous;
 ALTER TABLE finding ADD CONSTRAINT finding_settle_by_iff_ambiguous
-    CHECK ((verdict = 'ambiguous' AND settle_by IS NOT NULL AND btrim(settle_by) <> ''
-            AND settle_by !~ E'[\\n\\r]')
+    CHECK (check_id IS NULL
+           OR (verdict = 'ambiguous' AND settle_by IS NOT NULL AND btrim(settle_by) <> ''
+               AND settle_by !~ E'[\\n\\r]')
            OR (verdict IS DISTINCT FROM 'ambiguous' AND settle_by IS NULL));
 
 -- F4: conditional is the same fact as not assessable.
 ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_conditional_iff_unassessable;
 ALTER TABLE finding ADD CONSTRAINT finding_conditional_iff_unassessable
-    CHECK ((outcome = 'conditional') = (NOT assessable));
+    CHECK (check_id IS NULL OR (outcome = 'conditional') = (NOT assessable));
 
 -- Our word for why, on a withheld or failed row only.
 ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_detail_iff_withheld_or_failed;
 ALTER TABLE finding ADD CONSTRAINT finding_detail_iff_withheld_or_failed
-    CHECK ((outcome IN ('withheld', 'failed')) = (outcome_detail IS NOT NULL));
+    CHECK (check_id IS NULL
+           OR (outcome IN ('withheld', 'failed')) = (outcome_detail IS NOT NULL));
 
 -- A finding of a check is against one obligation or one policy clause (F1).
 ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_one_target;
@@ -119,7 +139,7 @@ ALTER TABLE finding ADD CONSTRAINT finding_citations_iff_verdict
 
 ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_blocked_only_withheld;
 ALTER TABLE finding ADD CONSTRAINT finding_blocked_only_withheld
-    CHECK (outcome = 'withheld' OR jsonb_array_length(blocked) = 0);
+    CHECK (check_id IS NULL OR outcome = 'withheld' OR jsonb_array_length(blocked) = 0);
 
 -- One finding per claim and target, within an assessment.
 CREATE UNIQUE INDEX IF NOT EXISTS finding_one_per_claim_and_target

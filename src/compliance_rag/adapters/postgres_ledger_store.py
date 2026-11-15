@@ -45,6 +45,7 @@ from compliance_rag.adapters.interfaces import (
     ClaimExtractionRecord,
     ClaimRecord,
     ExtractionAlreadyReserved,
+    FailureReason,
     FindingCitation,
     FindingOutcome,
     FindingRecord,
@@ -85,9 +86,11 @@ from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.evidence import (
     Evidence,
     EvidenceProvenance,
-    FactValue,
+    FactsSnapshot,
     Period,
     check_evidence_write,
+    decode_fact,
+    encode_fact,
 )
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -358,8 +361,8 @@ async def _write_assessment(
     """The assessment row and its coverage rows, on the caller's transaction."""
     await conn.execute(
         "INSERT INTO assessment (tenant_id, assessment_id, user_id, corpus_version, "
-        "corpus_sha, mapping_version, mapping_sha, as_of, trace_id, check_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "corpus_sha, mapping_version, mapping_sha, as_of, trace_id, check_id, facts, "
+        "facts_sha256) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             record.tenant_id,
             record.assessment_id,
@@ -371,6 +374,8 @@ async def _write_assessment(
             record.as_of,
             record.trace_id,
             record.check_id,
+            None if record.facts is None else Jsonb(record.facts.json()),
+            None if record.facts is None else record.facts.sha256,
         ),
     )
     async with conn.cursor() as cursor:
@@ -443,7 +448,13 @@ def _finding_of_row(row: TupleRow) -> FindingRecord:
             BlockedCitation(str(b["clause_id"]), str(b["outcome"]))
             for b in cast("list[dict[str, object]]", row[8])
         ),
-        detail=None if row[9] is None else WithheldReason(str(row[9])),
+        detail=None
+        if row[9] is None
+        else (
+            WithheldReason
+            if FindingOutcome(str(row[2])) is FindingOutcome.WITHHELD
+            else FailureReason
+        )(str(row[9])),
         unassessable_reason=None if row[10] is None else str(row[10]),
         provenance=EvidenceProvenance(str(row[11])),
         derived_from=None if row[12] is None else str(row[12]),
@@ -560,7 +571,7 @@ class PostgresLedgerStore(LedgerStore):
                         evidence.tenant_id,
                         evidence.evidence_id,
                         evidence.field,
-                        Jsonb(_encode_fact(evidence.value)),
+                        Jsonb(encode_fact(evidence.value)),
                         evidence.period.start,
                         evidence.period.end,
                         evidence.provenance.value,
@@ -601,7 +612,7 @@ class PostgresLedgerStore(LedgerStore):
                 tenant_id=tenant_id,
                 evidence_id=str(r[0]),
                 field=str(r[1]),
-                value=_decode_fact(r[2]),
+                value=decode_fact(r[2]),
                 period=Period(start=r[3], end=r[4]),
                 provenance=EvidenceProvenance(str(r[5])),
                 source=str(r[6]),
@@ -655,7 +666,8 @@ class PostgresLedgerStore(LedgerStore):
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
         row = await self._fetchone(
             "SELECT user_id, corpus_version, corpus_sha, mapping_version, mapping_sha, as_of, "
-            "trace_id, check_id FROM assessment WHERE tenant_id = %s AND assessment_id = %s",
+            "trace_id, check_id, facts, facts_sha256 FROM assessment "
+            "WHERE tenant_id = %s AND assessment_id = %s",
             (tenant_id, assessment_id),
         )
         return None if row is None else assessment_from_row(tenant_id, assessment_id, row)
@@ -946,11 +958,11 @@ class PostgresLedgerStore(LedgerStore):
                 raise CheckNotExtracted(f"check {check_id} has not been extracted")
         raise FindingsAlreadyReserved(f"check {check_id} already has its findings")
 
-    async def fail_findings(self, tenant_id: str, check_id: str) -> None:
+    async def fail_findings(self, tenant_id: str, check_id: str, *, trace_id: str) -> None:
         await self._execute(
             "UPDATE check_findings_run SET status = 'failed' "
-            "WHERE tenant_id = %s AND check_id = %s AND status = 'pending'",
-            (tenant_id, check_id),
+            "WHERE tenant_id = %s AND check_id = %s AND status = 'pending' AND trace_id = %s",
+            (tenant_id, check_id, trace_id),
         )
 
     async def record_findings(self, record: FindingsRecord) -> None:
@@ -961,7 +973,7 @@ class PostgresLedgerStore(LedgerStore):
             async with self._connection() as conn, conn.transaction():
                 held = await (
                     await conn.execute(
-                        "SELECT status FROM check_findings_run "
+                        "SELECT status, trace_id FROM check_findings_run "
                         "WHERE tenant_id = %s AND check_id = %s FOR UPDATE",
                         (assessment.tenant_id, assessment.check_id),
                     )
@@ -970,6 +982,11 @@ class PostgresLedgerStore(LedgerStore):
                     raise ValueError(f"check {assessment.check_id} has not been reserved")
                 if held[0] == "done":
                     raise ValueError(f"check {assessment.check_id} already has its findings")
+                if held[1] != assessment.trace_id:
+                    raise ValueError(
+                        f"check {assessment.check_id}: the findings reservation is no longer "
+                        "this run's"
+                    )
                 claims = await (
                     await conn.execute(
                         "SELECT count(*) FROM check_claim WHERE tenant_id = %s AND check_id = %s",
@@ -1056,8 +1073,8 @@ class PostgresLedgerStore(LedgerStore):
             head = await (
                 await conn.execute(
                     "SELECT a.assessment_id, a.user_id, a.corpus_version, a.corpus_sha, "
-                    "a.mapping_version, a.mapping_sha, a.as_of, a.trace_id, a.check_id "
-                    "FROM assessment a JOIN check_findings_run r "
+                    "a.mapping_version, a.mapping_sha, a.as_of, a.trace_id, a.check_id, "
+                    "a.facts, a.facts_sha256 FROM assessment a JOIN check_findings_run r "
                     "ON r.tenant_id = a.tenant_id AND r.check_id = a.check_id "
                     "WHERE a.tenant_id = %s AND a.check_id = %s AND r.status = 'done'",
                     (tenant_id, check_id),
@@ -1502,27 +1519,7 @@ def assessment_from_row(tenant_id: str, assessment_id: str, row: TupleRow) -> As
         as_of=row[5],
         trace_id=str(row[6]),
         check_id=str(row[7]) if len(row) > 7 and row[7] is not None else None,
+        facts=FactsSnapshot.of_json(row[8], str(row[9]))
+        if len(row) > 9 and row[8] is not None
+        else None,
     )
-
-
-def _encode_fact(value: FactValue) -> object:
-    """JSON for a fact value. A date is tagged so it reads back as a date,
-    not a string that happens to look like one."""
-    if isinstance(value, dt.date):
-        return {"date": value.isoformat()}
-    if isinstance(value, tuple):
-        return list(value)
-    return value
-
-
-def _decode_fact(raw: object) -> FactValue:
-    if isinstance(raw, dict):
-        tagged = cast("dict[str, object]", raw)
-        if set(tagged) != {"date"} or not isinstance(tagged["date"], str):
-            raise ValueError(f"unreadable evidence value {raw!r}")
-        return dt.date.fromisoformat(tagged["date"])
-    if isinstance(raw, list):
-        return tuple(str(v) for v in cast("list[object]", raw))
-    if isinstance(raw, bool | int | float | str):
-        return raw
-    raise ValueError(f"unreadable evidence value {raw!r}")

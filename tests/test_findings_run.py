@@ -6,15 +6,24 @@ to a prompt, and what a run that fails leaves in the ledger. Over the same world
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from compliance_rag.adapters.interfaces import FindingsRecord, ReplyKind
+from compliance_rag.adapters.interfaces import (
+    FindingsRecord,
+    Generation,
+    GenerationUnavailable,
+    ReplyKind,
+    Unavailability,
+)
 from compliance_rag.assessment import findings, prefix_cap
+from compliance_rag.assessment.evidence import FactsSnapshot
 from tests.claims_support import Prompt
 from tests.findings_support import (
     APP8_1,
@@ -26,12 +35,17 @@ from tests.findings_support import (
     TENANT,
     CheckModel,
     Say,
+    evidence_of,
+    finding_item,
+    findings_reply,
     honest,
     read_findings_prompt,
     worked_claims,
 )
 from tests.test_api_check_findings import (
     SECRET,
+    SUBMITTER_TOKEN,
+    UNKNOWN_FY2023,
     checked,
     find,
     finding_of,
@@ -243,3 +257,250 @@ async def test_every_call_of_a_check_asks_for_the_shape_it_expects() -> None:
     assert model.by_kind[0] is ReplyKind.CLAIMS
     assert set(model.by_kind[1:]) == {ReplyKind.FINDINGS}
     assert SECRET not in json.dumps([c["user"] for c in model.calls])
+
+
+# ---- one bound on every call in flight -----------------------------------------------------
+
+
+class Counting(CheckModel):
+    """Counts the model calls in flight at once, findings calls and repairs alike, and
+    holds each a moment so overlapping ones are seen."""
+
+    def __init__(self, **scripts: Any) -> None:  # Any: CheckModel's scripts
+        super().__init__(**scripts)
+        self.in_flight = 0
+        self.most = 0
+        self.kinds: list[str] = []
+
+    async def intercept(
+        self, reply: ReplyKind, proceed: Callable[[], Awaitable[Generation]]
+    ) -> Generation:
+        self.in_flight += 1
+        self.most = max(self.most, self.in_flight)
+        self.kinds.append(reply.value)
+        try:
+            await asyncio.sleep(0.01)
+            return await proceed()
+        finally:
+            self.in_flight -= 1
+
+
+def every_quote_is_wrong(seen: Prompt) -> str:
+    """Every finding cites its own clause with a quote the clause does not hold, so
+    every one needs a repair."""
+    asked = read_findings_prompt(seen)
+    wrong = "words that no clause of the corpus holds"
+    return findings_reply(
+        *(
+            finding_item(
+                kind,
+                target,
+                Say(
+                    "not_addressed",
+                    cites=(
+                        ((asked.obligations[target][0] if kind == "obligation" else target), wrong),
+                    ),
+                ),
+                asked,
+            )
+            for kind, target in asked.targets
+        )
+    )
+
+
+async def test_no_more_calls_are_in_flight_than_the_bound_repairs_included(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`MAX_PARALLEL` bounds every model call of a run once the cache is warm: the
+    findings calls and the citation repairs, which run beside them."""
+    monkeypatch.setattr(findings, "MAX_PARALLEL", 2)
+    model = Counting(findings=every_quote_is_wrong)
+    w = await world(model)
+    check_id = await checked(w)
+    model.kinds.clear()
+    model.most = 0
+    _, events = await find(w, check_id)
+    shown = events[1][1]
+    assert shown["counts"]["verdict"] == 7  # every one was repaired, and stands
+    assert model.repairs == 7 and model.kinds.count("findings") == 4
+    assert model.most == 2  # parallel, and never more than the bound
+
+
+async def test_the_lookups_before_the_calls_are_bounded_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(findings, "MAX_PARALLEL", 2)
+    in_flight = [0]
+    most = [0]
+    original = findings._Run._prepare  # pyright: ignore[reportPrivateUsage]
+
+    async def counted(self: Any, work: Any) -> Any:  # Any: the run and its work
+        in_flight[0] += 1
+        most[0] = max(most[0], in_flight[0])
+        try:
+            await asyncio.sleep(0.01)
+            return await original(self, work)
+        finally:
+            in_flight[0] -= 1
+
+    monkeypatch.setattr(findings._Run, "_prepare", counted)  # pyright: ignore[reportPrivateUsage]
+    w = await world()
+    _, events = await find(w, await checked(w))
+    assert events[-1][0] == "findings"
+    assert most[0] == 2
+
+
+# ---- one outage, one outcome ---------------------------------------------------------------
+
+
+class RepairOutage(CheckModel):
+    """A model that is up for the findings calls and down for a citation repair."""
+
+    async def intercept(
+        self, reply: ReplyKind, proceed: Callable[[], Awaitable[Generation]]
+    ) -> Generation:
+        if reply is ReplyKind.ANSWER:
+            raise GenerationUnavailable(Unavailability.QUOTA)
+        return await proceed()
+
+
+async def test_a_repair_that_cannot_be_asked_fails_that_finding_as_a_findings_call_would() -> None:
+    """The same outage gives the same outcome whichever call meets it: the finding
+    fails, the run is not discarded, and what it spent is recorded."""
+
+    def one_wrong_quote(seen: Prompt) -> str:
+        asked = read_findings_prompt(seen)
+        say = Say("not_addressed", cites=((APP8_1, "words that no clause holds"),))
+        return findings_reply(
+            *(
+                finding_item(k, t, say if t == "OB-PA-APP8-1" else Say(), asked)
+                for k, t in asked.targets
+            )
+        )
+
+    model = RepairOutage(findings=one_wrong_quote)
+    w = await world(model)
+    _, events = await find(w, await checked(w))
+    shown = events[1][1]  # the run was made
+    first = finding_of(shown, 2, "OB-PA-APP8-1")
+    assert first["outcome"] == "failed" and first["verdict"] is None
+    assert "wasn't taking requests" in first["failed"]
+    assert finding_of(shown, 3, "OB-PA-APP8-1")["outcome"] == "failed"
+    assert finding_of(shown, 2, D4_2_1)["outcome"] == "verdict"  # the others stand
+    assert shown["counts"]["failed"] == 2 and shown["counts"]["verdict"] == 5
+    stored = await w.ledger.get_findings(TENANT, shown["check_id"])
+    assert stored is not None and len(stored.usage) == 4  # the four findings calls are kept
+
+
+# ---- a run that outlived its reservation ---------------------------------------------------
+
+
+async def test_a_run_that_lost_its_reservation_records_nothing_but_its_usage() -> None:
+    """The reservation was taken over (after its time-out, or released) while the first
+    run was still working. The first run, finishing late, is refused at commit, records
+    only what it spent, and does not release the request that holds the reservation now."""
+
+    class Takeover(CheckModel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ledger: Any = None  # Any: the world's ledger, set once it is built
+            self.check_id = ""
+            self.stolen = False
+
+        async def intercept(
+            self, reply: ReplyKind, proceed: Callable[[], Awaitable[Generation]]
+        ) -> Generation:
+            if reply is ReplyKind.FINDINGS and len(self.findings_calls()) == 1 and not self.stolen:
+                self.stolen = True
+                key = (TENANT, self.check_id)
+                held = self.ledger._findings_runs[key]  # pyright: ignore[reportPrivateUsage]
+                await self.ledger.fail_findings(TENANT, self.check_id, trace_id=held.trace_id)
+                await self.ledger.reserve_findings(TENANT, self.check_id, trace_id="9" * 32)
+            return await proceed()
+
+    model = Takeover()
+    w = await world(model)
+    model.ledger = w.ledger
+    check_id = await checked(w)
+    model.check_id = check_id
+    before = len(await w.ledger.usage(TENANT))
+    response, events = await find(w, check_id)
+    assert events[-1][1]["error"] == "internal" and "no longer" not in response.text
+    assert await w.ledger.get_findings(TENANT, check_id) is None  # nothing of the stale run
+    assert len(await w.ledger.usage(TENANT)) - before == len(model.findings_calls())  # its usage
+    # the request that holds the reservation now still does: the stale run's release did
+    # nothing to it
+    held = w.ledger._findings_runs[(TENANT, check_id)]  # pyright: ignore[reportPrivateUsage]
+    assert (held.status, held.trace_id) == ("pending", "9" * 32)
+    again, _ = await find(w, check_id)
+    assert again.status_code == 409
+
+
+# ---- the facts it was decided on -----------------------------------------------------------
+
+
+async def test_the_assessment_records_the_facts_it_was_decided_on() -> None:
+    """ADR-0034: a stored assessment shows exactly what it was decided on. It records what
+    was read; it does not reconstruct facts as of a past date (#123)."""
+    w = await world()
+    check_id = await checked(w)
+    _, events = await find(w, check_id)
+    shown = events[1][1]
+    evidence = await w.ledger.evidence(TENANT)
+    snapshot = FactsSnapshot.of(evidence)
+    stored = await w.ledger.get_findings(TENANT, check_id)
+    assert stored is not None and stored.assessment.facts == snapshot
+    assert shown["facts"]["sha256"] == snapshot.sha256
+    assert {row["evidence_id"] for row in shown["facts"]["evidence"]} == {
+        e.evidence_id for e in evidence
+    }
+    turnover = [r for r in shown["facts"]["evidence"] if r["field"] == "annual_turnover_aud"]
+    assert sorted(r["value"] for r in turnover) == [2_500_000, 3_200_000]
+    async with w.client(SUBMITTER_TOKEN) as client:
+        assert (await client.get(f"/v1/checks/{check_id}/findings")).json()["facts"] == shown[
+            "facts"
+        ]
+
+
+async def test_each_assessment_keeps_the_facts_of_its_own_day() -> None:
+    """The check run before an answer was decided on fewer facts than the one after, and
+    each says so."""
+    w = await world(evidence=UNKNOWN_FY2023)
+    first = await checked(w)
+    await find(w, first)
+    for fact in evidence_of("GA-05"):
+        if fact.field == "annual_turnover_aud" and fact.period.start.year == 2023:  # type: ignore[attr-defined]
+            await w.ledger.record_evidence(fact)  # type: ignore[arg-type]
+    second = await checked(w)
+    await find(w, second)
+    before = (await w.ledger.get_findings(TENANT, first)).assessment.facts  # type: ignore[union-attr]
+    after = (await w.ledger.get_findings(TENANT, second)).assessment.facts  # type: ignore[union-attr]
+    assert before is not None and after is not None and before.sha256 != after.sha256
+    assert len(after.rows) == len(before.rows) + 1
+
+
+# ---- the spans nest as the work does -------------------------------------------------------
+
+
+async def test_the_generator_and_repair_spans_are_children_of_their_claims_span(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    w = await world(CheckModel(findings=every_quote_is_wrong))
+    check_id = await checked(w)
+    span_exporter.clear()
+    await find(w, check_id)
+    spans = span_exporter.get_finished_spans()
+    claims = {s.context.span_id: s for s in spans if s.name == "findings.claim"}  # type: ignore[union-attr]
+    assert len(claims) == 4
+    parented = [
+        s
+        for s in spans
+        if s.name in ("generator.generate", "answer.repair")
+        and s.parent is not None
+        and s.parent.span_id in claims
+    ]
+    generated = [s for s in parented if s.name == "generator.generate"]
+    # every findings call's generator span is its claim's child (and the repairs' own
+    # generator spans are children of their repair span, itself a claim's child)
+    assert sum(dict(s.attributes or {})["generator.reply"] == "findings" for s in generated) == 4
+    assert len([s for s in parented if s.name == "answer.repair"]) == 7

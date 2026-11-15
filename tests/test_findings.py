@@ -33,6 +33,7 @@ from compliance_rag.assessment.findings import (
     FindingsEnvelope,
     Refusal,
     Target,
+    TargetKind,
     check_finding,
     claim_section,
     findings_user_prompt,
@@ -143,21 +144,23 @@ def test_a_finding_that_is_not_of_the_shape_does_not_refuse_its_neighbours() -> 
 
 def test_a_refused_item_still_says_which_target_it_named() -> None:
     (refused,) = parse_findings(reply(item(verdict="fine")))
-    assert refused.finding is None and refused.named == (Target("obligation", OBLIGATION),)
+    assert refused.finding is None and refused.named == (Target(TargetKind.LAW, OBLIGATION),)
     (neither,) = parse_findings(reply(item(obligation_id=None)))
     assert neither.named == ()
 
 
 def test_the_target_of_a_finding_is_the_one_it_names() -> None:
-    assert extracted().target == Target("obligation", OBLIGATION)
-    assert extracted(obligation_id=None, policy_clause_id=POLICY).target == Target("policy", POLICY)
+    assert extracted().target == Target(TargetKind.LAW, OBLIGATION)
+    assert extracted(obligation_id=None, policy_clause_id=POLICY).target == Target(
+        TargetKind.POLICY, POLICY
+    )
 
 
 # ---- the checks that refuse a finding ------------------------------------------------------
 
 DIGEST = frozenset({OBLIGATION, "OB-PA-APP11-1"})
 CLAUSES = frozenset({POLICY})
-ASKED = frozenset({Target("obligation", OBLIGATION), Target("policy", POLICY)})
+ASKED = frozenset({Target(TargetKind.LAW, OBLIGATION), Target(TargetKind.POLICY, POLICY)})
 BOUNDARY = "0123456789abcdef01234567"
 
 
@@ -196,7 +199,7 @@ def test_a_real_id_the_claim_was_not_asked_about_is_refused() -> None:
 
 
 def test_a_target_is_answered_once() -> None:
-    answered = {Target("obligation", OBLIGATION)}
+    answered = {Target(TargetKind.LAW, OBLIGATION)}
     assert refusal(extracted(), answered=answered) is Refusal.DUPLICATE_TARGET
 
 
@@ -353,8 +356,8 @@ def test_the_targets_are_ids_alone() -> None:
         "doing what the claim describes would breach the clause, on the claim's own words",
         "the clause applies to what the claim describes, and the claim says nothing "
         "that meets or breaches it",
-        "the verdict turns on a fact or judgement that neither the claim nor the clauses settle",
-        "Never resolve an ambiguity under an assumption of your own",
+        "the verdict turns on a fact or judgement neither the claim nor the corpus settles",
+        "Never resolve ambiguity under an assumption of your own",
         "unverified and may be wrong: reason over the quote alone",
     ],
 )
@@ -362,6 +365,57 @@ def test_the_system_prompt_carries_the_verdicts_boundaries_and_the_summarys_stan
     words: str,
 ) -> None:
     assert " ".join(words.split()) in " ".join(FINDINGS_SYSTEM_PROMPT.split())
+
+
+F3 = {
+    "consistent": "what the claim describes meets what the clause requires, on the claim's own "
+    "words",
+    "conflicts": "doing what the claim describes would breach the clause, on the claim's own words",
+    "not_addressed": "the clause applies to what the claim describes, and the claim says nothing "
+    "that meets or breaches it",
+    "ambiguous": "the verdict turns on a fact or judgement neither the claim nor the corpus "
+    "settles. Every ambiguous finding names what would settle it",
+}
+"""ADR-0053 F3's four definitions, in its words."""
+
+
+def _verdict_bullets() -> dict[str, str]:
+    block = FINDINGS_SYSTEM_PROMPT.split("A finding's verdict is one of:")[1].split(
+        "Cite every clause"
+    )[0]
+    found: dict[str, str] = {}
+    for line in " ".join(block.split()).split(' - "')[0:]:
+        match = re.match(r'-? ?"?(consistent|conflicts|not_addressed|ambiguous)": (.*)', line)
+        if match:
+            found[match.group(1)] = match.group(2)
+    return found
+
+
+def test_the_prompt_carries_the_four_verdicts_exactly_as_f3_words_them() -> None:
+    bullets = _verdict_bullets()
+    assert list(bullets) == list(F3)
+    for verdict, words in F3.items():
+        assert bullets[verdict].startswith(words), verdict
+
+
+def test_the_prompt_adds_no_verdict_rule_beyond_f3() -> None:
+    """The ambiguous bullet goes on to say where the settle-by text goes, and that
+    ambiguity is never resolved by the model's own assumption: both are F3's. Nothing
+    else decides a verdict, in particular no rule that a standard the claim does not
+    meet is ambiguous, which F3 does not say and which would move APP 8.1's
+    `not_addressed` (worked example, claim 2)."""
+    bullets = _verdict_bullets()
+    assert bullets["ambiguous"].removeprefix(F3["ambiguous"]).strip() == (
+        f', in "settle_by", in one line of at most {MAX_SETTLE_BY_CHARS} characters. '
+        "Never resolve ambiguity under an assumption of your own."
+    )
+    block = FINDINGS_SYSTEM_PROMPT.split("A finding's verdict is one of:")[1].split(
+        "Cite every clause"
+    )[0]
+    assert block.count('- "') == 4  # four verdicts, and no fifth rule among them
+    prose = " ".join(FINDINGS_SYSTEM_PROMPT.split())
+    for added in ("such as", "a standard", "reasonable", "not consistent", "Judge only"):
+        assert added not in prose, added
 
 
 def test_the_system_prompt_is_trusted_text_fixed_for_every_claim() -> None:
@@ -503,3 +557,80 @@ def test_a_citation_names_the_version_of_its_clause() -> None:
         FindingCitation(CLAUSE, "C2026C00227", "  ", 1)
     with pytest.raises(ValueError, match="canonicalisation"):
         FindingCitation(CLAUSE, "C2026C00227", "words", 0)
+
+
+def test_the_words_a_member_is_shown_cover_every_reason_and_only_those() -> None:
+    """A reason added to either enum has no words until this is made to pass."""
+    from compliance_rag.adapters.interfaces import FailureReason
+    from compliance_rag.api.check_findings import REASONS
+
+    every = {r.value for r in WithheldReason} | {r.value for r in FailureReason}
+    assert set(REASONS) == every
+    assert all(words.strip() for words in REASONS.values())
+    # withheld is for a blocked or an uncited finding alone; every other reason is a failure
+    assert {r.value for r in WithheldReason} == {"citation_blocked", "uncited"}
+    assert not {r.value for r in WithheldReason} & {r.value for r in FailureReason}
+
+
+def test_a_withheld_finding_carries_a_withheld_reason_and_a_failed_one_a_failure() -> None:
+    from compliance_rag.adapters.interfaces import FailureReason
+
+    withheld = FindingRecord(
+        finding_id="w",
+        claim_index=1,
+        outcome=FindingOutcome.WITHHELD,
+        obligation_id=OBLIGATION,
+        detail=FailureReason.NO_FINDING_RETURNED,
+    )
+    with pytest.raises(ValueError, match="withheld reason"):
+        check_finding_write(withheld)
+    failed = FindingRecord(
+        finding_id="f",
+        claim_index=1,
+        outcome=FindingOutcome.FAILED,
+        obligation_id=OBLIGATION,
+        detail=WithheldReason.UNCITED,
+    )
+    with pytest.raises(ValueError, match="withheld reason"):
+        check_finding_write(failed)
+
+
+def test_a_target_is_law_or_policy_as_the_api_names_them() -> None:
+    assert {k.value for k in TargetKind} == {"law", "policy"}
+
+
+def test_a_facts_snapshot_is_the_same_hash_whatever_order_and_is_checked_when_read() -> None:
+    import datetime as dt
+
+    from compliance_rag.assessment.evidence import (
+        Evidence,
+        EvidenceProvenance,
+        FactsSnapshot,
+        Period,
+    )
+
+    def fact(evidence_id: str, value: object) -> Evidence:
+        return Evidence(
+            tenant_id="acme",
+            evidence_id=evidence_id,
+            field="annual_turnover_aud",
+            value=value,  # type: ignore[arg-type]
+            period=Period.financial_year(2025),
+            provenance=EvidenceProvenance.ASSERTED,
+            source="the finance lead",
+            asserted_by="lead@acme.example",
+            trace_id="a" * 32,
+        )
+
+    rows = [fact("e1", 2_500_000), fact("e2", dt.date(2026, 1, 1)), fact("e3", ("a", "b"))]
+    one, other = FactsSnapshot.of(rows), FactsSnapshot.of(reversed(rows))
+    assert one == other and one.sha256 == other.sha256 and len(one.sha256) == 64
+    assert FactsSnapshot.of_json(one.json(), one.sha256) == one  # values round-trip, dates tagged
+    assert (
+        FactsSnapshot.of([fact("e1", 2_600_000)]).sha256
+        != FactsSnapshot.of([fact("e1", 2_500_000)]).sha256
+    )
+    tampered = one.json()
+    tampered[0]["value"] = 1
+    with pytest.raises(ValueError, match="not the facts"):
+        FactsSnapshot.of_json(tampered, one.sha256)

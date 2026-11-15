@@ -20,10 +20,11 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import (
@@ -306,7 +307,8 @@ async def test_claim_2_against_app_8_1_is_not_addressed_citing_sch1_app8_1() -> 
     # and the policy clause, ambiguous, names what would settle it
     policy = finding_of(shown, 2, D4_2_1)
     assert policy["verdict"] == "ambiguous"
-    assert policy["settle_by"].startswith("Whether the approval")
+    assert policy["settle_by"]["text"].startswith("Whether the approval")
+    assert policy["settle_by"]["source"] == "model"  # labelled as the model's words
     assert (
         policy["cite"]
         == "Acme Pty Ltd — Vendor and Cross-Border Data Transfer Policy (Internal), 2.1"
@@ -418,7 +420,9 @@ async def test_two_policies_that_agree_are_no_disagreement() -> None:
     assert events[1][1]["policy_disagreements"] == []
 
 
-async def test_an_ambiguous_finding_names_what_would_settle_it_or_is_refused() -> None:
+async def test_an_ambiguous_finding_names_what_would_settle_it_or_is_refused(
+    span_exporter: InMemorySpanExporter,
+) -> None:
     """F3. The model says `ambiguous` for APP 11.2 and names nothing: the finding is
     refused and its target recorded as failed, never given a settle-by of the model's."""
     model = CheckModel(
@@ -433,28 +437,31 @@ async def test_an_ambiguous_finding_names_what_would_settle_it_or_is_refused() -
     _, events = await find(w, await checked(w))
     shown = events[1][1]
     settled = finding_of(shown, 3, D4_2_2)
-    assert (
-        settled["verdict"] == "ambiguous"
-        and settled["settle_by"] == "Whether the vendor has signed."
-    )
+    assert settled["verdict"] == "ambiguous" and settled["settle_by"] == {
+        "text": "Whether the vendor has signed.",
+        "source": "model",
+    }
     refused = finding_of(shown, 4, "OB-PA-APP11-2")
     assert (
         refused["outcome"] == "failed"
         and refused["verdict"] is None
         and refused["settle_by"] is None
     )
-    assert "refused" in refused["failed"]
-    assert {"claim_index": 4, "position": 1, "reason": "ambiguous_without_settle_by"} in shown[
-        "refused"
-    ]
+    # outward, a refusal is only "malformed": it does not name the check, which would
+    # reveal the verdict class the model chose
+    assert "malformed" in refused["failed"] and "ambiguous" not in refused["failed"]
+    assert shown["refused"] == [{"claim_index": 4, "position": 1, "reason": "malformed_finding"}]
+    assert "ambiguous_without_settle_by" not in json.dumps(shown)
+    # the detail is on the span
+    assert "4:1:ambiguous_without_settle_by" in _refusals(span_exporter)
     stored = await w.ledger.get_findings(TENANT, shown["check_id"])
     assert stored is not None
     assert all(f.settle_by is not None for f in stored.findings if f.verdict is Verdict.AMBIGUOUS)
 
 
-async def test_a_finding_whose_obligation_is_outside_the_digest_is_refused_and_never_stored() -> (
-    None
-):
+async def test_a_finding_whose_obligation_is_outside_the_digest_is_refused_and_never_stored(
+    span_exporter: InMemorySpanExporter,
+) -> None:
     """F2: the id the model names is held to the digest, as a clause id is to the retrieved
     set. A planted one is refused, and so is a real obligation the claim was not asked about."""
 
@@ -479,7 +486,9 @@ async def test_a_finding_whose_obligation_is_outside_the_digest_is_refused_and_n
     w = await world(CheckModel(findings=planted))
     _, events = await find(w, await checked(w))
     shown = events[1][1]
-    reasons = {r["reason"] for r in shown["refused"]}
+    # outward each is only "malformed"; the span names the check that refused it
+    assert {r["reason"] for r in shown["refused"]} == {"malformed_finding"}
+    reasons = {label.split(":")[-1] for label in _refusals(span_exporter)}
     assert reasons == {"obligation_not_in_digest", "not_asked"}
     assert not [
         f for f in shown["findings"] if f.get("obligation_id") in ("OB-PLANTED-9", "OB-PA-APP11-1")
@@ -488,6 +497,14 @@ async def test_a_finding_whose_obligation_is_outside_the_digest_is_refused_and_n
     # the real findings of the same replies stand
     assert finding_of(shown, 2, "OB-PA-APP8-1")["verdict"] == "not_addressed"
     assert shown["counts"]["verdict"] == 7
+
+
+def _refusals(span_exporter: InMemorySpanExporter) -> list[str]:
+    """What the run's span says refused each finding: `<claim>:<position>:<check>`."""
+    (run,) = [s for s in span_exporter.get_finished_spans() if s.name == "findings.run"]
+    return [
+        str(label) for label in cast("tuple[str, ...]", (run.attributes or {})["findings.refused"])
+    ]
 
 
 async def _clause_ids_fetched(w: World) -> list[str]:

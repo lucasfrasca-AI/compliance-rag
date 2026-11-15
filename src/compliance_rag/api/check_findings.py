@@ -15,8 +15,12 @@ the run can be made again.
 
 The stream carries stages and a result, never anything unvalidated:
 - `coverage`: Track A on the date the claims' picks were made on, over the
-  tenant's facts now (so an answer given to the questionnaire since the claims
-  were extracted is read: ADR-0034, the earlier assessment is unchanged);
+  tenant's facts as the ledger holds them now (so an answer given to the
+  questionnaire since the claims were extracted is read), and **the facts it read
+  are recorded with the assessment** (ADR-0034): every evidence row with its value,
+  and their hash, so a stored assessment shows exactly what it was decided on. That
+  records what was read; reading facts as of a past date waits for #123. The
+  earlier assessment of another check is unchanged;
 - `findings`: what was recorded, as `GET` shows it;
 - or `error`.
 
@@ -37,19 +41,21 @@ stream, offshore, only a registered build-phase tester may send a document
 citations blocked it, never a verdict, a quote or the model's prose; a failed
 finding shows our word for why; a conditional one shows Track A's reason and its
 questions, which the questionnaire answers (#304). An `ambiguous` verdict carries
-`settle_by`, the model's own words, labelled as such. Every finding is
+`settle_by` as `{"text": ..., "source": "model"}`: the model's own words, labelled as
+such. A finding the model returned and a check refused is reported as `malformed_finding`
+and nothing more (which check, and so which verdict class, is on the span). Every finding is
 `inferred` (F5, ADR-0059 C1). `policy_disagreements` is the banner's data (Q6),
 derived from the recorded findings.
 
 An error event names our word for what went wrong, never the model's or the
 provider's: `residency`, `generation_unavailable`, `policy_corpus_too_large`,
-`graph_changed` or `internal`.
+`graph_changed` or `internal`. The streaming and reservation skeleton is
+`check_runs.py`'s, shared with `/claims`.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Final
@@ -57,35 +63,31 @@ from typing import Final
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from compliance_rag.adapters.generation_residency import (
-    GenerationResidencyError,
-    assert_submission_allowed,
-)
 from compliance_rag.adapters.interfaces import (
     CheckNotExtracted,
+    FailureReason,
     FindingOutcome,
     FindingRecord,
     FindingsAlreadyReserved,
     FindingsRecord,
-    GenerationUnavailable,
-    LedgerStore,
+    WithheldReason,
 )
 from compliance_rag.api.answers import citation_json
+from compliance_rag.api.check_runs import CheckRun, ErrorBody, event, run_stream
 from compliance_rag.api.checks import NOT_FOUND, read_passages, visible_check
 from compliance_rag.api.deps import (
     ApiServices,
     CurrentCaller,
     counts,
-    coverage_on,
     outcome_counts,
     services_of,
 )
 from compliance_rag.api.sources import source_href
 from compliance_rag.api.tenant import held_sources, version_json
 from compliance_rag.assessment.coverage import CoverageRow, question_json
-from compliance_rag.assessment.findings import FindingsRun, policy_disagreements
+from compliance_rag.assessment.evidence import Facts, FactsSnapshot
+from compliance_rag.assessment.findings import policy_disagreements
 from compliance_rag.assessment.policies import tenant_policies
-from compliance_rag.assessment.prefix_cap import PolicyCorpusTooLarge
 from compliance_rag.corpus.display_form import Titles, cite, cited_policy_versions
 from compliance_rag.corpus.models import instrument_owner, parse_stable_id
 from compliance_rag.telemetry import current_trace_id
@@ -96,59 +98,42 @@ log = logging.getLogger(__name__)
 NOT_EXTRACTED: Final = "this check's claims have not been extracted, so there is nothing to check"
 ALREADY_FOUND: Final = "this check's findings were already made"
 NOT_RUN: Final = "this check has no findings yet"
+MALFORMED_FINDING: Final = "malformed_finding"
+"""The one reason a refused finding is reported outward. Which check refused it is on
+the span: a reason that named it ("ambiguous with no settle-by") would reveal the
+verdict class the model chose, which a withheld finding must not."""
 
-REASONS: Final = {
-    "citation_blocked": "a citation didn't match its clause, so the finding is withheld (ADR-0003)",
-    "uncited": "the finding cited no clause, so nothing in it could be verified",
-    "malformed_generation": "the model's reply wasn't a valid set of findings; nothing in it "
-    "is used",
-    "no_finding_returned": "the model returned no finding for it",
-    "refused_reply": "the model's finding for it was refused by a check and nothing in it is used",
-    "generation_unavailable": "the model wasn't taking requests, so nothing was generated for it",
-    "clause_unavailable": "a clause it rests on, or one it owes, couldn't be delivered, so the "
-    "model was not asked",
-    "boundary_collision": "the claim contains the text that fences it, so it was not sent to the "
-    "model",
+REASONS: Final[dict[str, str]] = {
+    WithheldReason.CITATION_BLOCKED.value: "a citation didn't match its clause, so the finding "
+    "is withheld (ADR-0003)",
+    WithheldReason.UNCITED.value: "the finding cited no clause, so nothing in it could be verified",
+    FailureReason.MALFORMED_GENERATION.value: "the model's reply wasn't a valid set of findings; "
+    "nothing in it is used",
+    FailureReason.NO_FINDING_RETURNED.value: "the model returned no finding for it",
+    FailureReason.MALFORMED_FINDING.value: "the model's finding for it was malformed, so nothing "
+    "in it is used",
+    FailureReason.GENERATION_UNAVAILABLE.value: "the model wasn't taking requests, so nothing was "
+    "generated for it",
+    FailureReason.CLAUSE_UNAVAILABLE.value: "a clause it rests on, or one it owes, couldn't be "
+    "delivered, so the model was not asked",
+    FailureReason.BOUNDARY_COLLISION.value: "the claim contains the text that fences it, so it "
+    "was not sent to the model",
 }
-"""Why a withheld or failed finding is, in the words a member is shown."""
-
-_running: set[asyncio.Task[FindingsRun]] = set()
-"""Runs still going for a client that left: kept until they finish, so the tokens
-they spend are recorded, and so are the findings."""
-
-
-def event(name: str, data: dict[str, object]) -> str:
-    return f"event: {name}\ndata: {json.dumps(data)}\n\n"
-
-
-def _error(failed: Exception) -> tuple[dict[str, object], bool]:
-    """What an `error` event carries, and whether the operator should see it in the
-    log (an unexpected one)."""
-    if isinstance(failed, GenerationResidencyError):
-        return {"error": "residency", "message": str(failed)}, False
-    if isinstance(failed, GenerationUnavailable):
-        return {
-            "error": "generation_unavailable",
-            "message": "the model isn't taking requests, so nothing was generated",
-            "reason": failed.reason.value,
-            "trace_id": current_trace_id(),
-        }, False
-    if isinstance(failed, PolicyCorpusTooLarge):
-        return {
-            "error": "policy_corpus_too_large",
-            "message": str(failed),
-            "estimated_tokens": failed.estimated_tokens,
-            "cap_tokens": failed.cap_tokens,
-            "trace_id": current_trace_id(),
-        }, False
-    if isinstance(failed, GraphChanged):
-        return {"error": "graph_changed", "message": str(failed)}, False
-    return {"error": "internal", "message": "the findings couldn't be made"}, True
+"""Why a withheld or failed finding is, in the words a member is shown: one for every
+`WithheldReason` and every `FailureReason`, held to that by a test."""
 
 
 class GraphChanged(RuntimeError):
     """A graph load began or ended while the coverage was computed, so it may mix
     two versions and the assessment could not honestly name one."""
+
+
+def _error(failed: Exception) -> ErrorBody | None:
+    """Our word for a failure that is the findings' own (the rest are
+    `check_runs.common_error`'s)."""
+    if isinstance(failed, GraphChanged):
+        return {"error": "graph_changed", "message": str(failed)}, False
+    return None
 
 
 async def _canonical_texts(services: ApiServices, clause_ids: set[str]) -> dict[str, str]:
@@ -183,14 +168,17 @@ def _finding_json(
     texts: dict[str, str],
 ) -> dict[str, object]:
     """One finding as a member is shown it. A verdict only for a `verdict` row:
-    a withheld or failed finding stored none, so there is none to show."""
+    a withheld or failed finding stored none, so there is none to show. What would
+    settle an `ambiguous` one is the model's own words, and says so."""
     shown: dict[str, object] = {
         "finding_id": finding.finding_id,
         "claim_index": finding.claim_index,
         **_target_json(finding, titles),
         "outcome": finding.outcome.value,
         "verdict": None if finding.verdict is None else finding.verdict.value,
-        "settle_by": finding.settle_by,
+        "settle_by": None
+        if finding.settle_by is None
+        else {"text": finding.settle_by, "source": "model"},
         "provenance": finding.provenance.value,
         "derived_from": finding.derived_from,
         "citations": [
@@ -224,6 +212,14 @@ def _finding_json(
     return shown
 
 
+def facts_json(facts: FactsSnapshot | None) -> dict[str, object] | None:
+    """The facts an assessment was decided on: every evidence row it read, with its
+    value, and their hash (ADR-0034)."""
+    if facts is None:
+        return None
+    return {"sha256": facts.sha256, "evidence": facts.json()}
+
+
 async def findings_json(
     services: ApiServices, tenant_id: str, check_id: str, record: FindingsRecord
 ) -> dict[str, object]:
@@ -247,6 +243,7 @@ async def findings_json(
         "trace_id": assessment.trace_id,
         "corpus_version": version_json(assessment.corpus),
         "mapping_version": version_json(assessment.mapping),
+        "facts": facts_json(assessment.facts),
         "provenance": "inferred",
         "coverage_counts": outcome_counts(r.outcome for r in record.coverage),
         "counts": tally,
@@ -286,134 +283,102 @@ async def run_findings(request: Request, who: CurrentCaller, check_id: str) -> S
     # leaves the run reservable: an assessment must name what it was computed from.
     before = await services.graph.loaded_sources()
     corpus, mapping = held_sources(before)
+    held_by = current_trace_id()
     try:
-        await services.ledger.reserve_findings(who.tenant_id, check_id, trace_id=current_trace_id())
+        await services.ledger.reserve_findings(who.tenant_id, check_id, trace_id=held_by)
     except CheckNotExtracted:
         raise HTTPException(409, {"error": "not_extracted", "message": NOT_EXTRACTED}) from None
     except FindingsAlreadyReserved:
         raise HTTPException(409, {"error": "already_found", "message": ALREADY_FOUND}) from None
 
-    async def stages() -> AsyncIterator[str]:
-        running: asyncio.Task[FindingsRun] | None = None
-        try:
-            # First: offshore, only a registered tester's document leaves Australia
-            # (ADR-0032), as for a question and for the claims.
-            assert_submission_allowed(
-                generation_region=services.settings.generation_region,
-                submitter=who.member.email,
-                testers=services.settings.offshore_testers,
-            )
-            # On the date the picks were made, so the digest the claims chose from
-            # is the digest the findings are held to; over the facts as they are now.
-            coverage = await coverage_on(services, who.tenant_id, extraction.as_of)
-            if await services.graph.loaded_sources() != before:
-                raise GraphChanged(
-                    "a load started or finished while the coverage was computed, so it may mix "
-                    "two versions: nothing was recorded. Try again"
-                )
-            yield event(
-                "coverage",
-                {
-                    "check_id": check_id,
-                    "as_of": extraction.as_of.isoformat(),
-                    "counts": counts(coverage),
-                },
-            )
-            policies = await tenant_policies(
-                services.ledger, services.clauses, tenant_id=who.tenant_id, as_of=extraction.as_of
-            )
-            passages = await read_passages(services.clauses, check)
-            source = await services.clauses.get_source_html(
-                check.instrument_id, check.version_id, tenant_id=check.tenant_id
-            )
-            if source is None:
-                raise LookupError(f"{check.instrument_id}:{check.version_id}: no stored source")
-            assessor = services.findings_assessor()
+    async def release() -> None:
+        # Only this request's own reservation: a run that outlived it must not release
+        # the request that has since taken it over.
+        await services.ledger.fail_findings(who.tenant_id, check_id, trace_id=held_by)
 
-            async def run() -> FindingsRun:
-                """Makes and records the findings, and releases the reservation if it
-                does not get as far as recording, whatever stops it."""
-                try:
-                    return await assessor.run(
-                        tenant_id=who.tenant_id,
-                        check_id=check_id,
-                        asker=who.member.email,
-                        member_uid=who.member.uid,
-                        extraction=extraction,
-                        passages=passages,
-                        source=source,
-                        coverage=coverage,
-                        policies=policies,
-                        corpus=corpus,
-                        mapping=mapping,
-                    )
-                except BaseException:
-                    await _release(services.ledger, who.tenant_id, check_id)
-                    raise
-
-            # A child task carries a copy of this request's context, so its spans and
-            # rows carry the request's trace_id, and it isn't cancelled if the client
-            # leaves: the tokens it spends and the findings it makes are recorded
-            # either way.
-            running = asyncio.ensure_future(run())
-            _running.add(running)
-            running.add_done_callback(_finished)
-            made = await asyncio.shield(running)
-            stored = await services.ledger.get_findings(who.tenant_id, check_id)
-            if stored is None:  # recorded by `run`, so this is the ledger lying
-                raise LookupError(f"check {check_id}: the findings were not recorded")
-            yield event(
-                "findings",
-                {
-                    **await findings_json(services, who.tenant_id, check_id, stored),
-                    "refused": [
-                        {
-                            "claim_index": r.claim_index,
-                            "position": r.position,
-                            "reason": r.reason.value,
-                        }
-                        for r in made.refused
-                    ],
-                    "skipped": list(made.skipped),
-                    "calls": len(made.generations),
-                    "generator": services.settings.generator,
-                    "cost_usd": made.cost_usd,
-                },
-            )
-        except Exception as failed:
-            if running is None:  # nothing was handed the reservation: release it here
-                await _release(services.ledger, who.tenant_id, check_id)
-            body, unexpected = _error(failed)
-            if unexpected:
-                log.exception("making a check's findings failed")
-            else:
-                log.warning("a check's findings were not made: %s", body["error"])
-            yield event("error", {"check_id": check_id, **body})
-        except BaseException:  # the client left before the model was called
-            if running is None:
-                await _release(services.ledger, who.tenant_id, check_id)
-            raise
-
-    return StreamingResponse(stages(), media_type="text/event-stream")
-
-
-async def _release(ledger: LedgerStore, tenant_id: str, check_id: str) -> None:
-    """Release a reservation as failed. A ledger that cannot take it does not hide
-    the error being reported: the reservation then lapses after
-    `FINDINGS_RESERVATION_TTL`."""
-    try:
-        await ledger.fail_findings(tenant_id, check_id)
-    except Exception:
-        log.exception("a check's findings reservation could not be released")
-
-
-def _finished(task: asyncio.Task[FindingsRun]) -> None:
-    _running.discard(task)
-    if not task.cancelled() and task.exception() is not None:
-        log.warning(
-            "a findings run finished with an error after its client left",
-            exc_info=task.exception(),
+    async def body(run: CheckRun) -> AsyncIterator[str]:
+        # On the date the picks were made, so the digest the claims chose from is the
+        # digest the findings are held to; over the facts as the ledger holds them now,
+        # which the assessment records (ADR-0034).
+        evidence = await services.ledger.evidence(who.tenant_id)
+        coverage = await services.graph.coverage(
+            Facts.of(evidence), tenant_id=who.tenant_id, as_of=extraction.as_of
         )
+        if await services.graph.loaded_sources() != before:
+            raise GraphChanged(
+                "a load started or finished while the coverage was computed, so it may mix "
+                "two versions: nothing was recorded. Try again"
+            )
+        yield event(
+            "coverage",
+            {
+                "check_id": check_id,
+                "as_of": extraction.as_of.isoformat(),
+                "counts": counts(coverage),
+            },
+        )
+        policies = await tenant_policies(
+            services.ledger, services.clauses, tenant_id=who.tenant_id, as_of=extraction.as_of
+        )
+        passages = await read_passages(services.clauses, check)
+        source = await services.clauses.get_source_html(
+            check.instrument_id, check.version_id, tenant_id=check.tenant_id
+        )
+        if source is None:
+            raise LookupError(f"{check.instrument_id}:{check.version_id}: no stored source")
+        assessor = services.findings_assessor()
+        made = await run.spawn(
+            lambda: assessor.run(
+                tenant_id=who.tenant_id,
+                check_id=check_id,
+                asker=who.member.email,
+                member_uid=who.member.uid,
+                extraction=extraction,
+                passages=passages,
+                source=source,
+                coverage=coverage,
+                policies=policies,
+                corpus=corpus,
+                mapping=mapping,
+                evidence=evidence,
+            )
+        )
+        stored = await services.ledger.get_findings(who.tenant_id, check_id)
+        if stored is None:  # recorded by `run`, so this is the ledger lying
+            raise LookupError(f"check {check_id}: the findings were not recorded")
+        yield event(
+            "findings",
+            {
+                **await findings_json(services, who.tenant_id, check_id, stored),
+                # Outward, every refusal is one reason: which check refused it is on the
+                # span, and would reveal the verdict class the model chose.
+                "refused": [
+                    {
+                        "claim_index": r.claim_index,
+                        "position": r.position,
+                        "reason": MALFORMED_FINDING,
+                    }
+                    for r in made.refused
+                ],
+                "skipped": list(made.skipped),
+                "calls": len(made.generations),
+                "generator": services.settings.generator,
+                "cost_usd": made.cost_usd,
+            },
+        )
+
+    return StreamingResponse(
+        run_stream(
+            services=services,
+            who=who,
+            check_id=check_id,
+            release=release,
+            error_of=_error,
+            failure="making a check's findings",
+            body=body,
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.get("/checks/{check_id}/findings")

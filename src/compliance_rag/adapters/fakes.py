@@ -445,6 +445,8 @@ class _FindingsRun:
 
     status: str  # "pending", "done" or "failed"
     reserved_at: dt.datetime
+    trace_id: str
+    """The request that holds the reservation: only it may complete or release it."""
     record: FindingsRecord | None
 
 
@@ -651,11 +653,11 @@ class FakeLedgerStore(LedgerStore):
             or (held.status == "pending" and held.reserved_at < now - FINDINGS_RESERVATION_TTL)
         ):
             raise FindingsAlreadyReserved(f"check {check_id} already has its findings")
-        self._findings_runs[key] = _FindingsRun("pending", now, None)
+        self._findings_runs[key] = _FindingsRun("pending", now, trace_id, None)
 
-    async def fail_findings(self, tenant_id: str, check_id: str) -> None:
+    async def fail_findings(self, tenant_id: str, check_id: str, *, trace_id: str) -> None:
         held = self._findings_runs.get((tenant_id, check_id))
-        if held is not None and held.status == "pending":
+        if held is not None and held.status == "pending" and held.trace_id == trace_id:
             self._findings_runs[(tenant_id, check_id)] = replace(held, status="failed")
 
     async def record_findings(self, record: FindingsRecord) -> None:
@@ -676,6 +678,10 @@ class FakeLedgerStore(LedgerStore):
             raise ValueError(f"check {assessment.check_id} has not been reserved")
         if held.status == "done":
             raise ValueError(f"check {assessment.check_id} already has its findings")
+        if held.trace_id != assessment.trace_id:
+            raise ValueError(
+                f"check {assessment.check_id}: the findings reservation is no longer this run's"
+            )
         if assessment.tenant_id not in self._profiles:
             raise ValueError(f"tenant {assessment.tenant_id!r} isn't registered in the ledger")
         assessment_key = (assessment.tenant_id, assessment.assessment_id)

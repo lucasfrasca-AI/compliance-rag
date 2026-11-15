@@ -68,12 +68,31 @@ def _seed(scratch: psycopg.Connection[Any]) -> None:
         )
 
 
-def _assessment(scratch: psycopg.Connection[Any], assessment_id: str, check_id: str | None) -> None:
+def _assessment(
+    scratch: psycopg.Connection[Any],
+    assessment_id: str,
+    check_id: str | None,
+    *,
+    facts: Any = None,  # Any: the facts column's JSON, or its absence
+    facts_sha256: str | None = None,
+) -> None:
+    """A check's assessment carries the facts it was decided on; a coverage assessment
+    need not."""
+    if check_id is not None and facts is None:
+        facts, facts_sha256 = [], "c" * 64
     scratch.execute(
         "INSERT INTO assessment (tenant_id, assessment_id, user_id, corpus_version, corpus_sha, "
-        "mapping_version, mapping_sha, as_of, trace_id, check_id) VALUES ('acme', %s, 'a@x', "
-        "NULL, %s, NULL, %s, '2026-11-15', %s, %s)",
-        (assessment_id, "a" * 40, "b" * 40, "a" * 32, check_id),
+        "mapping_version, mapping_sha, as_of, trace_id, check_id, facts, facts_sha256) "
+        "VALUES ('acme', %s, 'a@x', NULL, %s, NULL, %s, '2026-11-15', %s, %s, %s, %s)",
+        (
+            assessment_id,
+            "a" * 40,
+            "b" * 40,
+            "a" * 32,
+            check_id,
+            None if facts is None else Jsonb(facts),
+            facts_sha256,
+        ),
     )
 
 
@@ -146,6 +165,24 @@ def test_0026_adds_its_columns_idempotently_and_refuses_what_a_finding_must_not_
             _assessment(scratch, "ghost", "d" * 32)
         with pytest.raises(psycopg.errors.CheckViolation, match="assessment_check_id"):
             _assessment(scratch, "blank", " ")
+        # a check's assessment records the facts it was decided on (ADR-0034): present,
+        # an array, and hashed, the two together
+        with pytest.raises(psycopg.errors.CheckViolation, match="assessment_facts"):
+            scratch.execute(
+                "INSERT INTO assessment (tenant_id, assessment_id, user_id, corpus_sha, "
+                "mapping_sha, as_of, trace_id, check_id) VALUES ('acme', 'nofacts', 'a@x', %s, %s, "
+                "'2026-11-15', %s, %s)",
+                ("a" * 40, "b" * 40, "a" * 32, CHECK),
+            )
+        bad: list[tuple[Any, str | None]] = [
+            ([], "xyz"),
+            ([], "A" * 64),
+            ({"a": 1}, "c" * 64),
+            ([], None),
+        ]
+        for facts, sha in bad:
+            with pytest.raises(psycopg.errors.CheckViolation, match="assessment_facts"):
+                _assessment(scratch, "bad", CHECK, facts=facts, facts_sha256=sha)
         _assessment(scratch, "as1", CHECK)
         with pytest.raises(psycopg.errors.UniqueViolation, match="assessment_one_per_check"):
             _assessment(scratch, "as2", CHECK)
@@ -334,6 +371,21 @@ def test_0026_adds_its_columns_idempotently_and_refuses_what_a_finding_must_not_
                 obligation_id="OB-T",
                 derived_from="nope",
             )
+
+        # the rules above are a check's findings': a finding recorded without a check (as
+        # before this migration) is held to the rules it was written under, not these
+        _finding(
+            scratch,
+            finding_id="legacy",
+            assessment_id="old",
+            check_id=None,
+            claim_index=None,
+            claim_text="Kept 7 years.",
+            obligation_id=None,
+            policy_clause_id=None,
+            settle_by="not a check's finding, so not held to settle-by",
+            citations=Jsonb([{"clause_id": "a:v:1", "canonicalisation_version": 1}]),
+        )
 
         # the reservation: one run per check, pending, done or failed, done exactly when timed
         scratch.execute(

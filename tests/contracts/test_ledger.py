@@ -33,6 +33,7 @@ from compliance_rag.adapters.interfaces import (
     ClaimExtractionRecord,
     ClaimRecord,
     ExtractionAlreadyReserved,
+    FailureReason,
     FindingCitation,
     FindingOutcome,
     FindingRecord,
@@ -56,7 +57,14 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.assessment.coverage import CoverageRow, Outcome, Question
 from compliance_rag.assessment.environment import NotInEnvironment
-from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
+from compliance_rag.assessment.evidence import (
+    Evidence,
+    EvidenceProvenance,
+    FactRow,
+    Facts,
+    FactsSnapshot,
+    Period,
+)
 from compliance_rag.corpus.models import DocumentClass, Incompleteness, IncompleteReason
 from compliance_rag.corpus.submitted_parser import SubmittedFormat
 from compliance_rag.graph.mappings import load_mapping_set
@@ -1358,6 +1366,38 @@ QUESTION = Question(
 )
 
 
+FACTS = FactsSnapshot(
+    (
+        FactRow(
+            "e1",
+            "annual_turnover_aud",
+            2_500_000,
+            dt.date(2025, 7, 1),
+            dt.date(2026, 7, 1),
+            EvidenceProvenance.ASSERTED,
+        ),
+        FactRow(
+            "e2",
+            "business_started_on",
+            dt.date(2015, 3, 2),
+            dt.date(2015, 3, 2),
+            dt.date(9999, 12, 31),
+            EvidenceProvenance.ASSERTED,
+            supersedes="e0",
+        ),
+        FactRow(
+            "e3",
+            "legal_form",
+            "body_corporate",
+            dt.date(2015, 3, 2),
+            dt.date(9999, 12, 31),
+            EvidenceProvenance.PARSED,
+        ),
+    )
+)
+"""The facts a run was decided on: a number, a date and a word, one superseding another."""
+
+
 def findings_coverage() -> tuple[CoverageRow, ...]:
     """Three obligations: one applicable, one unassessable with its question, one not
     applicable (which no finding is ever against)."""
@@ -1386,6 +1426,7 @@ def a_findings_run(
         as_of=JUN,
         trace_id=changes.pop("trace_id", "a" * 32),
         check_id=check_id,
+        facts=changes.pop("facts", FACTS),
     )
     fields: dict[str, Any] = {  # Any: record fields
         "assessment": assessment,
@@ -1422,7 +1463,7 @@ def a_findings_run(
                 claim_index=2,
                 outcome=FindingOutcome.FAILED,
                 policy_clause_id="acme/privacy-policy:v1:3/1",
-                detail=WithheldReason.NO_FINDING_RETURNED,
+                detail=FailureReason.NO_FINDING_RETURNED,
             ),
         ),
         "usage": (
@@ -1485,20 +1526,21 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
 
     # ---- released as failed, it can be reserved again; a release that finds nothing pending
     # does nothing
-    await ledger.fail_findings("acme", check_1)
-    await ledger.fail_findings("acme", check_2)  # never reserved
+    await ledger.fail_findings("acme", check_1, trace_id="a" * 32)
+    await ledger.fail_findings("acme", check_2, trace_id="a" * 32)  # never reserved
     await ledger.reserve_findings("acme", check_1, trace_id="a" * 32)
     with pytest.raises(ValueError, match="reserved"):
         await ledger.record_findings(a_findings_run(check_2))  # check_2 was never reserved
 
     # ---- a refused record writes nothing: no assessment, no coverage, no usage
-    await ledger.fail_findings("acme", check_3)  # a no-op: check_3 holds no reservation
+    await ledger.fail_findings("acme", check_3, trace_id="a" * 32)  # nothing reserved: a no-op
     for change, reason in (
         ("ambiguous_without_settle_by", "settle"),
         ("settle_by_on_a_verdict", "only an ambiguous"),
         ("verdict_without_citation", "cites at least one"),
         ("withheld_with_a_verdict", "if and only if"),
         ("withheld_without_a_reason", "says why"),
+        ("withheld_with_a_failure_reason", "withheld reason"),
         ("conditional_against_a_decided_obligation", "conditional if and only if"),
         ("a_decided_obligation_is_not_conditional", "conditional if and only if"),
         ("not_applicable_obligation", "applies or might"),
@@ -1510,6 +1552,7 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
         ("provenance_asserted", "inferred"),
         ("foreign_usage", "tenant's"),
         ("no_check", "check it judged"),
+        ("no_facts", "facts it was decided on"),
     ):
         base = a_findings_run(check_1)
         findings = list(base.findings)
@@ -1559,6 +1602,10 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
             )
         elif change == "no_check":
             run = replace(base, assessment=replace(base.assessment, check_id=None))
+        elif change == "no_facts":
+            run = replace(base, assessment=replace(base.assessment, facts=None))
+        elif change == "withheld_with_a_failure_reason":
+            findings[3] = replace(findings[3], detail=FailureReason.NO_FINDING_RETURNED)
         if findings != list(base.findings):
             run = replace(base, findings=tuple(findings))
         with pytest.raises(ValueError, match=reason):
@@ -1578,6 +1625,10 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
     assert stored is not None
     assert stored.assessment == run.assessment
     assert stored.assessment.check_id == check_1
+    # the facts the run was decided on come back as written, and are what they hashed
+    assert stored.assessment.facts == FACTS
+    assert stored.assessment.facts is not None and stored.assessment.facts.sha256 == FACTS.sha256
+    assert (await ledger.get_assessment("acme", run.assessment.assessment_id)) is not None
     assert stored.coverage == tuple(sorted(run.coverage, key=lambda r: r.obligation_id))
     ordered = sorted(
         run.findings,
@@ -1655,6 +1706,28 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
     assert second.usage == ()
     assert await ledger.get_findings("acme", check_1) == stored  # the earlier one says what it said
 
+    # ---- a run that outlived its reservation records nothing: only the request that holds
+    # the reservation may complete it, or release it
+    await ledger.reserve_findings("acme", check_3, trace_id="e" * 32)
+    await ledger.fail_findings("acme", check_3, trace_id="f" * 32)  # not the holder: nothing
+    with pytest.raises(FindingsAlreadyReserved):
+        await ledger.reserve_findings("acme", check_3, trace_id="9" * 32)  # still held by `e`
+    with pytest.raises(ValueError, match="no longer"):  # another request's run is not the holder
+        await ledger.record_findings(a_findings_run(check_3, trace_id="f" * 32))
+    await ledger.fail_findings("acme", check_3, trace_id="e" * 32)  # the holder releases it
+    await ledger.reserve_findings("acme", check_3, trace_id="d" * 32)  # and a successor takes it
+    spent = len(await ledger.usage("acme"))
+    with pytest.raises(ValueError, match="no longer"):  # the stale run, finishing late
+        await ledger.record_findings(a_findings_run(check_3, trace_id="e" * 32))
+    assert await ledger.get_findings("acme", check_3) is None
+    assert len(await ledger.usage("acme")) == spent  # not even its usage: the caller's, apart
+    await ledger.fail_findings("acme", check_3, trace_id="e" * 32)  # and it can't release theirs
+    with pytest.raises(FindingsAlreadyReserved):
+        await ledger.reserve_findings("acme", check_3, trace_id="8" * 32)
+    successor = a_verdict(1, finding_id="h1" + "0" * 30, obligation_id="OB-PA-APP11-1")
+    await ledger.record_findings(a_findings_run(check_3, successor, usage=(), trace_id="d" * 32))
+    assert await ledger.get_findings("acme", check_3) is not None
+
 
 async def test_the_fake_ledger_satisfies_the_findings_contract() -> None:
     await assert_findings_contract(FakeLedgerStore())
@@ -1672,7 +1745,7 @@ async def test_the_fake_ledger_takes_over_a_findings_reservation_held_past_the_t
         held, reserved_at=held.reserved_at - FINDINGS_RESERVATION_TTL - dt.timedelta(seconds=1)
     )
     await ledger.reserve_findings("acme", "c" * 32, trace_id="b" * 32)  # taken over
-    await ledger.record_findings(a_findings_run("c" * 32))
+    await ledger.record_findings(a_findings_run("c" * 32, trace_id="b" * 32))
     done = ledger._findings_runs[key]  # pyright: ignore[reportPrivateUsage]
     ledger._findings_runs[key] = replace(  # pyright: ignore[reportPrivateUsage]
         done, reserved_at=done.reserved_at - dt.timedelta(days=1)
