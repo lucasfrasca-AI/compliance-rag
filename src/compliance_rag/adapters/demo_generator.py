@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 
-from compliance_rag.adapters.interfaces import Generation, Generator
+from compliance_rag.adapters.interfaces import Generation, Generator, ReplyKind
 from compliance_rag.assessment.prompt import REPAIR_SYSTEM_PROMPT
 
 FAKE_BANNER = "FAKE GENERATOR — not a real answer"
@@ -56,16 +56,40 @@ class FakeDemoGenerator(Generator):
     """No model is called (see the module docstring)."""
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
-        if system == REPAIR_SYSTEM_PROMPT:
+        reply_json: dict[str, object]
+        if reply is ReplyKind.CLAIMS:
+            # One claim: the opening of the first passage the prompt fences,
+            # quoted verbatim, naming no obligation and no policy clause.
+            first = next(iter(_fenced(user)), None)
+            reply_json = {
+                "claims": []
+                if first is None
+                else [
+                    {
+                        "passage": first[0],
+                        "quote": _opening(first[1]),
+                        "summary": f"{FAKE_BANNER}: the opening of the first passage.",
+                        "obligation_ids": [],
+                        "policy_clause_ids": [],
+                    }
+                ]
+            }
+        elif system == REPAIR_SYSTEM_PROMPT:
             clause_id = next(iter(_fenced(user)), ("", ""))[0]
-            reply: dict[str, object] = {"clause_id": clause_id, "quote": _MISQUOTE}
+            reply_json = {"clause_id": clause_id, "quote": _MISQUOTE}
         else:
             question = user.rsplit("\nQuestion: ", 1)[-1]
             withhold = "withhold" in question.lower()
             quoted = [*_fenced(user)[:1], *_fenced(cached_prefix)[:1]]
-            reply = {
+            reply_json = {
                 "answer": f"{FAKE_BANNER}. No model was called. This stand-in quotes "
                 + (
                     "words no clause contains, because the question says 'withhold', "
@@ -81,7 +105,7 @@ class FakeDemoGenerator(Generator):
                 ],
             }
         return Generation(
-            text=json.dumps(reply),
+            text=json.dumps(reply_json),
             input_tokens=0,
             output_tokens=0,
             stop_reason="end_turn",

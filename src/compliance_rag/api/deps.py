@@ -29,6 +29,7 @@ from compliance_rag.adapters.interfaces import (
     VerifierUnavailable,
 )
 from compliance_rag.api.session import COOKIE_NAME, SessionCodec
+from compliance_rag.assessment.claims import ClaimExtractor
 from compliance_rag.assessment.coverage import Coverage, Outcome
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.assessment.pipeline import AssessmentPipeline
@@ -59,6 +60,14 @@ class ApiServices:
         default_factory=tuple[Callable[[], Awaitable[None]], ...]
     )
     """What to close on shutdown besides the verifier (the graph's driver)."""
+
+    def claim_extractor(self) -> ClaimExtractor:
+        """Claim extraction (#298) over the pipeline's own generator and
+        residency gate and the ledger, so it passes the gates Ask does, with no
+        retrieval store in reach."""
+        return ClaimExtractor(
+            self.pipeline.generator, self.ledger, tenant_text=self.pipeline.tenant_text
+        )
 
     async def start(self) -> None:
         for check in self.readiness:

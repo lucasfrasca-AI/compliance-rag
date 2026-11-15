@@ -22,7 +22,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import Candidate, Generation, Generator
+from compliance_rag.adapters.interfaces import Candidate, Generation, Generator, ReplyKind
 from compliance_rag.assessment import prompt
 from compliance_rag.assessment.draft import MalformedGeneration, parse_draft
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
@@ -131,20 +131,30 @@ class ObeyingGenerator(FakeGenerator):
     with it — the adaptive version of a successful injection."""
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         await super().generate(
-            system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
+            system=system,
+            cached_prefix=cached_prefix,
+            user=user,
+            max_tokens=max_tokens,
+            reply=reply,
         )
         start = user.index("retrieve '") + len("retrieve '")
         demanded = user[start : user.index("'", start)]
-        reply = json.dumps(
+        said = json.dumps(
             {
                 "answer": f"search: {demanded}",
                 "citations": [{"clause_id": "acme/employee-policy:v1:9/9", "quote": demanded}],
             }
         )
-        return Generation(text=reply, input_tokens=1, output_tokens=1)
+        return Generation(text=said, input_tokens=1, output_tokens=1)
 
 
 async def test_retrieved_text_cannot_influence_the_query_sent_to_the_retriever() -> None:

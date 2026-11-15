@@ -29,7 +29,7 @@ from scripts.seed_tenant import run_seed
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeReranker
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import Generation, Generator, LawScope
+from compliance_rag.adapters.interfaces import Generation, Generator, LawScope, ReplyKind
 from compliance_rag.adapters.ledger_migrations import LedgerMigrator
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.adapters.qdrant_retrieval_store import QdrantRetrievalStore
@@ -83,7 +83,13 @@ class QuotesTheFirstClauseOfEach(Generator):
     fails the test's assertions."""
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         import json
 

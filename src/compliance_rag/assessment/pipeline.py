@@ -47,7 +47,6 @@ on what the model said.
 from __future__ import annotations
 
 import datetime as dt
-import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
@@ -61,7 +60,6 @@ from compliance_rag.adapters.interfaces import (
     LedgerStore,
     Owed,
     PolicyCorpus,
-    UsageRecord,
 )
 from compliance_rag.assessment.draft import (
     DraftAnswer,
@@ -86,6 +84,7 @@ from compliance_rag.assessment.prompt import (
     repair_prompt,
     user_prompt,
 )
+from compliance_rag.assessment.usage import record_usage
 from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite, cited_policy_versions
 from compliance_rag.corpus.models import Incomplete, Scope
 from compliance_rag.retrieval.pipeline import RetrievalPipeline, RetrievalTrace
@@ -229,18 +228,7 @@ class AssessmentPipeline:
     async def _record_usage(self, tenant_id: str, generation: Generation) -> None:
         """One ledger `usage` row per generation call — the answer and each
         repair — from real token counts, keyed to the request's trace."""
-        await self.ledger.record_usage(
-            UsageRecord(
-                tenant_id=tenant_id,
-                usage_id=uuid.uuid4().hex,
-                trace_id=current_trace_id(),
-                model=generation.model,
-                input_tokens=generation.input_tokens,
-                output_tokens=generation.output_tokens,
-                cached_prefix_hit=generation.cached_prefix_hit,
-                cost_usd=generation.cost_usd,
-            )
-        )
+        await record_usage(self.ledger, tenant_id, generation)
 
     async def answer(
         self,

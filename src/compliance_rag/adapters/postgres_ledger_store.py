@@ -38,6 +38,8 @@ from compliance_rag.adapters.interfaces import (
     ChatTurn,
     CheckRecord,
     Citation,
+    ClaimExtractionRecord,
+    ClaimRecord,
     LedgerStore,
     PolicyVersion,
     PrefixMeasure,
@@ -58,6 +60,7 @@ from compliance_rag.adapters.interfaces import (
     check_assessment_write,
     check_chat_exchange,
     check_check_write,
+    check_claims_write,
 )
 from compliance_rag.assessment.coverage import (
     CoverageRow,
@@ -299,6 +302,27 @@ _CHECK_SELECT: LiteralString = (
     "SELECT tenant_id, check_id, user_id, instrument_id, version_id, filename, "
     "document_format, trace_id, created_at FROM submitted_check"
 )
+
+
+_CLAIM_SELECT: LiteralString = (
+    "SELECT claim_index, passage, quote_start, quote_end, quote_sha256, summary, "
+    "obligation_ids, policy_clause_ids, provenance FROM check_claim "
+    "WHERE tenant_id = %s AND check_id = %s ORDER BY claim_index"
+)
+
+
+def _claim_of_row(row: TupleRow) -> ClaimRecord:
+    return ClaimRecord(
+        claim_index=int(row[0]),
+        passage=str(row[1]),
+        quote_start=int(row[2]),
+        quote_end=int(row[3]),
+        quote_sha256=str(row[4]),
+        summary=str(row[5]),
+        obligation_ids=tuple(str(i) for i in cast("list[object]", row[6])),
+        policy_clause_ids=tuple(str(i) for i in cast("list[object]", row[7])),
+        provenance=EvidenceProvenance(str(row[8])),
+    )
 
 
 def _check_of_row(row: TupleRow) -> CheckRecord:
@@ -682,6 +706,76 @@ class PostgresLedgerStore(LedgerStore):
             (tenant_id, instrument_id, version_id),
         )
         return None if row is None else _check_of_row(row)
+
+    async def record_claims(self, record: ClaimExtractionRecord) -> None:
+        check_claims_write(record)
+        try:
+            async with self._connection() as conn, conn.transaction():
+                await conn.execute(
+                    "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id, "
+                    "claims_dropped, created_at) VALUES (%s, %s, %s, %s, %s, clock_timestamp())",
+                    (
+                        record.tenant_id,
+                        record.check_id,
+                        record.as_of,
+                        record.trace_id,
+                        record.claims_dropped,
+                    ),
+                )
+                async with conn.cursor() as cursor:
+                    await cursor.executemany(
+                        "INSERT INTO check_claim (tenant_id, check_id, claim_index, passage, "
+                        "quote_start, quote_end, quote_sha256, summary, obligation_ids, "
+                        "policy_clause_ids, provenance, trace_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        [
+                            (
+                                record.tenant_id,
+                                record.check_id,
+                                claim.claim_index,
+                                claim.passage,
+                                claim.quote_start,
+                                claim.quote_end,
+                                claim.quote_sha256,
+                                claim.summary,
+                                list(claim.obligation_ids),
+                                list(claim.policy_clause_ids),
+                                claim.provenance.value,
+                                record.trace_id,
+                            )
+                            for claim in record.claims
+                        ],
+                    )
+        except psycopg.errors.UniqueViolation as exc:
+            raise ValueError(f"check {record.check_id} is already extracted") from exc
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(
+                f"tenant {record.tenant_id!r} holds no check {record.check_id}"
+            ) from exc
+        except psycopg.errors.CheckViolation as exc:
+            raise ValueError(f"claims refused: {exc.diag.constraint_name}") from None
+
+    async def get_claims(self, tenant_id: str, check_id: str) -> ClaimExtractionRecord | None:
+        async with self._connection() as conn:
+            head = await (
+                await conn.execute(
+                    "SELECT as_of, trace_id, claims_dropped, created_at FROM check_extraction "
+                    "WHERE tenant_id = %s AND check_id = %s",
+                    (tenant_id, check_id),
+                )
+            ).fetchone()
+            if head is None:
+                return None
+            rows = await (await conn.execute(_CLAIM_SELECT, (tenant_id, check_id))).fetchall()
+        return ClaimExtractionRecord(
+            tenant_id=tenant_id,
+            check_id=check_id,
+            as_of=head[0],
+            trace_id=str(head[1]),
+            claims_dropped=int(head[2]),
+            claims=tuple(_claim_of_row(r) for r in rows),
+            created_at=head[3],
+        )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         rows = await self._fetchall(

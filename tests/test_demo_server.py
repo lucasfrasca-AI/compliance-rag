@@ -38,7 +38,13 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.gemini_generator import RETRY_ATTEMPTS
-from compliance_rag.adapters.interfaces import Embedder, Generation, Generator, Member
+from compliance_rag.adapters.interfaces import (
+    Embedder,
+    Generation,
+    Generator,
+    Member,
+    ReplyKind,
+)
 from compliance_rag.api import deps
 from compliance_rag.api.app import create_app
 from compliance_rag.assessment.evidence import Facts
@@ -344,7 +350,13 @@ class _Unrecognised(Generator):
     """A failure the API has no name for, so it reports `internal`."""
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         raise RuntimeError(
             "the connection to the model was reset (Authorization: Bearer ya29.not-a-real-token)"

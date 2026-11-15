@@ -25,6 +25,7 @@ from compliance_rag.adapters.fakes import FakeGenerator
 from compliance_rag.adapters.interfaces import (
     ChatTurn,
     Generation,
+    ReplyKind,
     TurnOutcome,
     TurnRole,
 )
@@ -419,11 +420,21 @@ class Scripted(FakeGenerator):
         self._queue = replies
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         self._reply = self._queue[min(len(self.calls), len(self._queue) - 1)]
         return await super().generate(
-            system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
+            system=system,
+            cached_prefix=cached_prefix,
+            user=user,
+            max_tokens=max_tokens,
+            reply=reply,
         )
 
 
