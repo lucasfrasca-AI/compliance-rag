@@ -323,7 +323,7 @@ class AssessmentPipeline:
                 SourceClause(c.clause_id, c.text, incomplete=c.incomplete)
                 for c in trace.delivered()
             ]
-            retrieved, fetched = await self._with_owed(
+            retrieved, fetched = await self.with_owed(
                 retrieved, tenant_id, as_of, law=law, policy_corpus=sent
             )
             # One read for every policy version in the context, prefix and
@@ -403,7 +403,7 @@ class AssessmentPipeline:
             final: list[CheckedCitation] = []
             for check in checked:
                 if check.outcome.repairable and check.clause is not None:
-                    check, repair = await self._repair(
+                    check, repair = await self.repair(
                         check, shown=shown, context=context, as_of=as_of, user_id=user_id
                     )
                     await self._record_usage(tenant_id, repair)
@@ -451,7 +451,7 @@ class AssessmentPipeline:
         current.set_attribute("answer.not_in_environment", [a.span_form for a in absent])
         return absent
 
-    async def _with_owed(
+    async def with_owed(
         self,
         retrieved: list[SourceClause],
         tenant_id: str,
@@ -465,7 +465,9 @@ class AssessmentPipeline:
         marked where the ranking returned it, fetched by id where it didn't,
         and again for anything a fetched clause is owed. Returns what the
         model is given and the ids that were fetched. One that can't be
-        fetched refuses the answer before generation."""
+        fetched refuses the answer before generation (`OwedClauseUndelivered`).
+        Public: a document check's findings (`findings.py`, #299) deliver an
+        obligation's clauses with what it owes the same way."""
         delivered = list(retrieved)
         fetched: list[str] = []
         while True:
@@ -500,7 +502,7 @@ class AssessmentPipeline:
         ]
         return marked, frozenset(fetched)
 
-    async def _repair(
+    async def repair(
         self,
         failed: CheckedCitation,
         *,
@@ -515,7 +517,8 @@ class AssessmentPipeline:
         the very `SourceClause` the model was shown, so its marker (how it is
         cited, what it excepts or qualifies, that it is incomplete) is the
         same one, built by the same property (#243). Only its text is the
-        canonical text the verifier read."""
+        canonical text the verifier read. Public: a document check's findings
+        repair their citations as an answer's are (`findings.py`, #299)."""
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
         # Repairable only if in context, and the context is the keys of `shown`.

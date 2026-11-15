@@ -82,6 +82,11 @@ class FakeDemoGenerator(Generator):
                     }
                 ]
             }
+        elif reply is ReplyKind.FINDINGS:
+            # No finding for any target: the stand-in judges no claim, so a demo
+            # check records each target as failed ("no_finding_returned") and says
+            # so, rather than invent a verdict (#299).
+            reply_json = {"findings": []}
         elif system == REPAIR_SYSTEM_PROMPT:
             clause_id = next(iter(_fenced(user)), ("", ""))[0]
             reply_json = {"clause_id": clause_id, "quote": _MISQUOTE}

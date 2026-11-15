@@ -42,18 +42,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from compliance_rag.assessment.coverage import Coverage, ObligationCoverage, Outcome
+from compliance_rag.assessment.coverage import (
+    OBLIGATION_ID_RE,
+    Coverage,
+    ObligationCoverage,
+    Outcome,
+)
 from compliance_rag.assessment.prompt import DelimiterCollision
 from compliance_rag.corpus.display_form import NO_TITLES, cite
 
-OBLIGATION_ID_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]*")
-"""What an obligation id may be (`OB-PA-APP11-1`): no space, bracket, quote or
-newline, so an id cannot reshape the marker it is written into."""
+__all__ = ["DIGEST_LEAD_IN", "OBLIGATION_ID_RE", "DigestEntry", "ObligationDigest"]
 
 DIGEST_LEAD_IN: Final = (
     "The obligation digest below lists, in id order, every obligation that applies to "

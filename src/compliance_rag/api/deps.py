@@ -32,6 +32,7 @@ from compliance_rag.api.session import COOKIE_NAME, SessionCodec
 from compliance_rag.assessment.claims import ClaimExtractor
 from compliance_rag.assessment.coverage import Coverage, Outcome
 from compliance_rag.assessment.evidence import Facts
+from compliance_rag.assessment.findings import FindingsAssessor
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.settings import Settings
 
@@ -68,6 +69,12 @@ class ApiServices:
         return ClaimExtractor(
             self.pipeline.generator, self.ledger, tenant_text=self.pipeline.tenant_text
         )
+
+    def findings_assessor(self) -> FindingsAssessor:
+        """A check's findings (#299) over the pipeline an answer runs on: its
+        generator, verifier and repair, its residency gate and, for `fetch` by id
+        alone, its retrieval pipeline."""
+        return FindingsAssessor(self.pipeline)
 
     async def start(self) -> None:
         for check in self.readiness:

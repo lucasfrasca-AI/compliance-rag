@@ -20,16 +20,24 @@ import pytest
 
 from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
+    FINDINGS_RESERVATION_TTL,
     RESERVATION_TTL,
     AssessmentRecord,
+    BlockedCitation,
     ChatAnswer,
     ChatCitation,
     ChatExchange,
     ChatTurn,
+    CheckNotExtracted,
     CheckRecord,
     ClaimExtractionRecord,
     ClaimRecord,
     ExtractionAlreadyReserved,
+    FindingCitation,
+    FindingOutcome,
+    FindingRecord,
+    FindingsAlreadyReserved,
+    FindingsRecord,
     LedgerStore,
     PolicyVersion,
     PrefixMeasure,
@@ -43,8 +51,10 @@ from compliance_rag.adapters.interfaces import (
     TurnRole,
     Unavailability,
     UsageRecord,
+    Verdict,
+    WithheldReason,
 )
-from compliance_rag.assessment.coverage import CoverageRow, Outcome
+from compliance_rag.assessment.coverage import CoverageRow, Outcome, Question
 from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
 from compliance_rag.corpus.models import DocumentClass, Incompleteness, IncompleteReason
@@ -1311,3 +1321,361 @@ async def test_the_fake_ledger_takes_over_a_reservation_held_past_the_time_out()
     )
     with pytest.raises(ExtractionAlreadyReserved):
         await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="c" * 32)
+
+
+# ---- findings (#299) -------------------------------------------------------------------
+
+
+def a_citation(clause_id: str = "privacy-act-1988:C2026C00227:sch1/app8/1") -> FindingCitation:
+    return FindingCitation(
+        clause_id=clause_id,
+        version_id=clause_id.split(":")[1],
+        quoted_text="reasonable in the circumstances",
+        canonicalisation_version=1,
+    )
+
+
+def a_verdict(claim: int = 1, **changes: Any) -> FindingRecord:  # Any: record fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "finding_id": f"f{claim}" + "0" * 30,
+        "claim_index": claim,
+        "outcome": FindingOutcome.VERDICT,
+        "obligation_id": "OB-PA-APP8-1",
+        "verdict": Verdict.NOT_ADDRESSED,
+        "citations": (a_citation(),),
+    }
+    fields.update(changes)
+    return FindingRecord(**fields)
+
+
+QUESTION = Question(
+    condition_id="c1",
+    field="annual_turnover_aud",
+    period="FY2023-24",
+    question="What was annual turnover in 2023-24?",
+    unassessable_reason="turnover for 2023-24 is not known",
+    clause_ids=("privacy-act-1988:C2026C00227:s6d/1",),
+)
+
+
+def findings_coverage() -> tuple[CoverageRow, ...]:
+    """Three obligations: one applicable, one unassessable with its question, one not
+    applicable (which no finding is ever against)."""
+    return (
+        CoverageRow(
+            "OB-PA-APP11-1",
+            Outcome.APPLICABLE,
+            "applies",
+            ("privacy-act-1988:C2026C00227:sch1/app11/1",),
+            (),
+        ),
+        CoverageRow("OB-PA-APP3-1", Outcome.NOT_APPLICABLE, "agency only", ("x:v:1",), ()),
+        CoverageRow("OB-PA-APP8-1", Outcome.UNASSESSABLE, "turnover not known", (), (QUESTION,)),
+    )
+
+
+def a_findings_run(
+    check_id: str = "c" * 32, *findings: FindingRecord, **changes: Any
+) -> FindingsRecord:  # Any: record fields
+    assessment = AssessmentRecord(
+        tenant_id="acme",
+        assessment_id=changes.pop("assessment_id", "assess-" + check_id[:4]),
+        user_id="lead@acme.example",
+        corpus=SourceVersion(SourceKind.CORPUS, sha=SHA_CORPUS, tag="corpus-2026.10"),
+        mapping=SourceVersion(SourceKind.MAPPING, sha=SHA_MAPPING),
+        as_of=JUN,
+        trace_id=changes.pop("trace_id", "a" * 32),
+        check_id=check_id,
+    )
+    fields: dict[str, Any] = {  # Any: record fields
+        "assessment": assessment,
+        "coverage": findings_coverage(),
+        "findings": findings
+        or (
+            a_verdict(1, obligation_id="OB-PA-APP11-1"),
+            a_verdict(
+                1,
+                finding_id="f1p" + "0" * 29,
+                obligation_id=None,
+                policy_clause_id="acme/privacy-policy:v1:3/1",
+                verdict=Verdict.AMBIGUOUS,
+                settle_by="Whether a segment profile is account information.",
+                citations=(a_citation("acme/privacy-policy:v1:3/1"),),
+            ),
+            FindingRecord(
+                finding_id="f1c" + "0" * 29,
+                claim_index=1,
+                outcome=FindingOutcome.CONDITIONAL,
+                obligation_id="OB-PA-APP8-1",
+                unassessable_reason="turnover not known",
+            ),
+            FindingRecord(
+                finding_id="f2w" + "0" * 29,
+                claim_index=2,
+                outcome=FindingOutcome.WITHHELD,
+                obligation_id="OB-PA-APP11-1",
+                detail=WithheldReason.CITATION_BLOCKED,
+                blocked=(BlockedCitation("privacy-act-1988:C2026C00227:s6c/2", "not_in_context"),),
+            ),
+            FindingRecord(
+                finding_id="f2f" + "0" * 29,
+                claim_index=2,
+                outcome=FindingOutcome.FAILED,
+                policy_clause_id="acme/privacy-policy:v1:3/1",
+                detail=WithheldReason.NO_FINDING_RETURNED,
+            ),
+        ),
+        "usage": (
+            UsageRecord(
+                "acme", "u1" + "0" * 30, "a" * 32, "gemini-3.5-flash", 1200, 90, False, 0.01
+            ),
+            UsageRecord(
+                "acme", "u2" + "0" * 30, "a" * 32, "gemini-3.5-flash", 1300, 80, True, 0.002
+            ),
+        ),
+    }
+    fields.update(changes)
+    return FindingsRecord(**fields)
+
+
+async def assert_findings_contract(ledger: LedgerStore) -> None:
+    """The findings of a check (#299, ADR-0053 F1-F6): the run is reserved
+    atomically before any model is called, then the assessment, its coverage, every
+    finding and the usage land in one transaction, or none of it does; read back as
+    written, by tenant; never replaced, so an earlier assessment keeps what it said
+    (ADR-0034)."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+    for instrument_id in ("acme/check-1", "acme/check-2", "acme/check-3"):
+        await ledger.record_version(
+            tenant_id="acme",
+            instrument_id=instrument_id,
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.SUBMITTED_DOCUMENT,
+            title="A document",
+        )
+    check_1, check_2, check_3 = "c" * 32, "e" * 32, "f" * 32
+
+    # ---- nothing is there before it is recorded; there is a check to run it for
+    assert await ledger.get_findings("acme", check_1) is None
+    with pytest.raises(ValueError, match="holds no check"):
+        await ledger.reserve_findings("acme", check_1, trace_id="a" * 32)
+    await ledger.record_check(a_check())
+    await ledger.record_check(a_check(check_id=check_2, instrument_id="acme/check-2"))
+    await ledger.record_check(a_check(check_id=check_3, instrument_id="acme/check-3"))
+
+    # ---- the claims come first: there is nothing to check without them
+    with pytest.raises(CheckNotExtracted):
+        await ledger.reserve_findings("acme", check_1, trace_id="a" * 32)
+    for check in (check_1, check_2, check_3):
+        await ledger.reserve_extraction("acme", check, as_of=JUN, trace_id="a" * 32)
+        await ledger.record_claims(an_extraction(check_id=check))
+
+    # ---- a reservation is what lets findings be recorded
+    with pytest.raises(ValueError, match="reserved"):
+        await ledger.record_findings(a_findings_run(check_1))
+    with pytest.raises(ValueError, match="trace_id"):
+        await ledger.reserve_findings("acme", check_1, trace_id=" ")
+    await ledger.reserve_findings("acme", check_1, trace_id="a" * 32)
+    assert await ledger.get_findings("acme", check_1) is None  # pending is not made
+    with pytest.raises(FindingsAlreadyReserved):  # not yet: someone may be working on it
+        await ledger.reserve_findings("acme", check_1, trace_id="b" * 32)
+
+    # ---- released as failed, it can be reserved again; a release that finds nothing pending
+    # does nothing
+    await ledger.fail_findings("acme", check_1)
+    await ledger.fail_findings("acme", check_2)  # never reserved
+    await ledger.reserve_findings("acme", check_1, trace_id="a" * 32)
+    with pytest.raises(ValueError, match="reserved"):
+        await ledger.record_findings(a_findings_run(check_2))  # check_2 was never reserved
+
+    # ---- a refused record writes nothing: no assessment, no coverage, no usage
+    await ledger.fail_findings("acme", check_3)  # a no-op: check_3 holds no reservation
+    for change, reason in (
+        ("ambiguous_without_settle_by", "settle"),
+        ("settle_by_on_a_verdict", "only an ambiguous"),
+        ("verdict_without_citation", "cites at least one"),
+        ("withheld_with_a_verdict", "if and only if"),
+        ("withheld_without_a_reason", "says why"),
+        ("conditional_against_a_decided_obligation", "conditional if and only if"),
+        ("a_decided_obligation_is_not_conditional", "conditional if and only if"),
+        ("not_applicable_obligation", "applies or might"),
+        ("an_obligation_outside_the_coverage", "applies or might"),
+        ("claim_beyond_the_extraction", "not one of the check's claims"),
+        ("both_targets", "one obligation or one policy clause"),
+        ("neither_target", "one obligation or one policy clause"),
+        ("a_claim_twice_against_one_target", "one finding against each"),
+        ("provenance_asserted", "inferred"),
+        ("foreign_usage", "tenant's"),
+        ("no_check", "check it judged"),
+    ):
+        base = a_findings_run(check_1)
+        findings = list(base.findings)
+        run = base
+        if change == "ambiguous_without_settle_by":
+            findings[1] = replace(findings[1], settle_by=None)
+        elif change == "settle_by_on_a_verdict":
+            findings[0] = replace(findings[0], settle_by="Something.")
+        elif change == "verdict_without_citation":
+            findings[0] = replace(findings[0], citations=())
+        elif change == "withheld_with_a_verdict":
+            findings[3] = replace(findings[3], verdict=Verdict.CONSISTENT)
+        elif change == "withheld_without_a_reason":
+            findings[3] = replace(findings[3], detail=None)
+        elif change == "conditional_against_a_decided_obligation":
+            findings = [
+                FindingRecord(
+                    finding_id="fc" + "0" * 30,
+                    claim_index=1,
+                    outcome=FindingOutcome.CONDITIONAL,
+                    obligation_id="OB-PA-APP11-1",
+                    unassessable_reason="x",
+                )
+            ]
+        elif change == "a_decided_obligation_is_not_conditional":
+            findings = [a_verdict(1, obligation_id="OB-PA-APP8-1")]
+        elif change == "not_applicable_obligation":
+            findings[0] = replace(findings[0], obligation_id="OB-PA-APP3-1")
+        elif change == "an_obligation_outside_the_coverage":
+            findings[0] = replace(findings[0], obligation_id="OB-NOT-LISTED")
+        elif change == "claim_beyond_the_extraction":
+            findings[0] = replace(findings[0], claim_index=3)
+        elif change == "both_targets":
+            findings[0] = replace(findings[0], policy_clause_id="acme/privacy-policy:v1:3/1")
+        elif change == "neither_target":
+            findings[0] = replace(findings[0], obligation_id=None)
+        elif change == "a_claim_twice_against_one_target":
+            findings.append(replace(findings[0], finding_id="fdup" + "0" * 28))
+        elif change == "provenance_asserted":
+            findings[0] = replace(findings[0], provenance=EvidenceProvenance.ASSERTED)
+        elif change == "foreign_usage":
+            run = replace(
+                base,
+                usage=(
+                    UsageRecord("other-corp", "ux" + "0" * 30, "a" * 32, "m", 1, 1, False, 0.0),
+                ),
+            )
+        elif change == "no_check":
+            run = replace(base, assessment=replace(base.assessment, check_id=None))
+        if findings != list(base.findings):
+            run = replace(base, findings=tuple(findings))
+        with pytest.raises(ValueError, match=reason):
+            await ledger.record_findings(run)
+        assert await ledger.get_findings("acme", check_1) is None, change
+        assert await ledger.get_assessment("acme", base.assessment.assessment_id) is None, change
+        assert await ledger.coverage_rows("acme", base.assessment.assessment_id) == (), change
+        assert await ledger.usage("acme") == (), change
+    # the reservation was not spent by any of them
+    assert await ledger.count_findings_citing("acme", "privacy-act-1988:") == 0
+
+    # ---- recorded whole, as written: the assessment (with both versions), its coverage,
+    # every finding, and the usage, in one transaction
+    run = a_findings_run(check_1)
+    await ledger.record_findings(run)
+    stored = await ledger.get_findings("acme", check_1)
+    assert stored is not None
+    assert stored.assessment == run.assessment
+    assert stored.assessment.check_id == check_1
+    assert stored.coverage == tuple(sorted(run.coverage, key=lambda r: r.obligation_id))
+    ordered = sorted(
+        run.findings,
+        key=lambda f: (
+            f.claim_index,
+            f.obligation_id is None,
+            f.obligation_id or f.policy_clause_id,
+        ),
+    )
+    assert list(stored.findings) == ordered
+    assert sorted(u.usage_id for u in stored.usage) == sorted(u.usage_id for u in run.usage)
+    assert {f.provenance for f in stored.findings} == {EvidenceProvenance.INFERRED}
+    # the assessment is also an assessment: read as one, with its coverage and versions
+    assert await ledger.get_assessment("acme", run.assessment.assessment_id) == run.assessment
+    assert await ledger.coverage_rows("acme", run.assessment.assessment_id) == stored.coverage
+    # a verdict is only on the verdict rows; a withheld finding stores none, only the clauses
+    # whose citations blocked it
+    by_id = {f.finding_id: f for f in stored.findings}
+    withheld = by_id["f2w" + "0" * 29]
+    assert withheld.verdict is None and withheld.citations == () and withheld.settle_by is None
+    assert withheld.blocked == (
+        BlockedCitation("privacy-act-1988:C2026C00227:s6c/2", "not_in_context"),
+    )
+    conditional = by_id["f1c" + "0" * 29]
+    assert conditional.verdict is None and conditional.unassessable_reason == "turnover not known"
+    assert by_id["f1p" + "0" * 29].settle_by == "Whether a segment profile is account information."
+    # the usage is in the ledger's usage, under the run's trace
+    spent = await ledger.usage("acme")
+    assert {u.usage_id for u in spent} == {u.usage_id for u in run.usage}
+    assert {u.trace_id for u in spent} == {"a" * 32}
+    # what is cited counts as cited (a withheld finding's blocked clause is not)
+    assert await ledger.count_findings_citing("acme", "privacy-act-1988:") == 1
+    assert await ledger.count_findings_citing("acme", "acme/privacy-policy:") == 1
+
+    # ---- tenant-keyed, and never replaced
+    assert await ledger.get_findings("other-corp", check_1) is None
+    assert await ledger.get_findings("acme", check_2) is None
+    with pytest.raises(FindingsAlreadyReserved):
+        await ledger.reserve_findings("acme", check_1, trace_id="c" * 32)
+    with pytest.raises(ValueError, match="already"):
+        await ledger.record_findings(
+            a_findings_run(
+                check_1, a_verdict(1, obligation_id="OB-PA-APP11-1"), assessment_id="again"
+            )
+        )
+    assert await ledger.get_findings("acme", check_1) == stored  # unchanged
+    assert await ledger.get_assessment("acme", "again") is None
+
+    # ---- another check, run against other facts, is another assessment: the first is untouched
+    await ledger.reserve_findings("acme", check_2, trace_id="d" * 32)
+    firm = tuple(
+        CoverageRow(
+            r.obligation_id,
+            Outcome.APPLICABLE if r.obligation_id == "OB-PA-APP8-1" else r.outcome,
+            "applies" if r.obligation_id == "OB-PA-APP8-1" else r.reason,
+            ("privacy-act-1988:C2026C00227:sch1/app8/1",)
+            if r.obligation_id == "OB-PA-APP8-1"
+            else r.citations,
+            () if r.obligation_id == "OB-PA-APP8-1" else r.questions,
+        )
+        for r in findings_coverage()
+    )
+    await ledger.record_findings(
+        a_findings_run(
+            check_2,
+            a_verdict(1, finding_id="g1" + "0" * 30, obligation_id="OB-PA-APP8-1"),
+            coverage=firm,
+            usage=(),
+            trace_id="d" * 32,
+        )
+    )
+    second = await ledger.get_findings("acme", check_2)
+    assert second is not None and second.assessment.assessment_id != stored.assessment.assessment_id
+    assert [f.outcome for f in second.findings] == [FindingOutcome.VERDICT]
+    assert second.usage == ()
+    assert await ledger.get_findings("acme", check_1) == stored  # the earlier one says what it said
+
+
+async def test_the_fake_ledger_satisfies_the_findings_contract() -> None:
+    await assert_findings_contract(FakeLedgerStore())
+
+
+async def test_the_fake_ledger_takes_over_a_findings_reservation_held_past_the_time_out() -> None:
+    ledger = FakeLedgerStore()
+    await _a_checked_document(ledger)
+    await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="a" * 32)
+    await ledger.record_claims(an_extraction())
+    await ledger.reserve_findings("acme", "c" * 32, trace_id="a" * 32)
+    key = ("acme", "c" * 32)
+    held = ledger._findings_runs[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._findings_runs[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        held, reserved_at=held.reserved_at - FINDINGS_RESERVATION_TTL - dt.timedelta(seconds=1)
+    )
+    await ledger.reserve_findings("acme", "c" * 32, trace_id="b" * 32)  # taken over
+    await ledger.record_findings(a_findings_run("c" * 32))
+    done = ledger._findings_runs[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._findings_runs[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        done, reserved_at=done.reserved_at - dt.timedelta(days=1)
+    )
+    with pytest.raises(FindingsAlreadyReserved):  # one that is done is never taken over
+        await ledger.reserve_findings("acme", "c" * 32, trace_id="c" * 32)

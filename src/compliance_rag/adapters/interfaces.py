@@ -38,6 +38,7 @@ from compliance_rag.adapters.graph_schema import (
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
 from compliance_rag.assessment.coverage import (
+    OBLIGATION_ID_RE,
     Coverage,
     CoverageRow,
     ExceptionOf,
@@ -451,6 +452,10 @@ class AssessmentRecord:
     mapping: SourceVersion
     as_of: dt.date
     trace_id: str
+    check_id: str | None = None
+    """The check this assessment judged, when it is a document check's (#299,
+    ADR-0059 Q1): the submitted document it points at is that check's. `None`
+    for a coverage assessment (`POST /v1/coverage`), which judges no document."""
 
 
 def check_assessment_write(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> None:
@@ -628,6 +633,247 @@ def check_claims_write(record: ClaimExtractionRecord) -> None:
             raise ValueError("a claim carries the sha256 of its quote")
         if not claim.summary.strip() or len(claim.summary.splitlines()) != 1:
             raise ValueError("a claim's summary is one non-blank line")
+
+
+# --------------------------------------------------------------------------
+# Findings (#299, ADR-0053 F1-F6, ADR-0059; CONTEXT.md: Finding)
+# --------------------------------------------------------------------------
+
+
+class Verdict(StrEnum):
+    """The four verdicts and where each ends (ADR-0053 F3, CONTEXT.md: Finding).
+    No score (D-06)."""
+
+    CONSISTENT = "consistent"
+    CONFLICTS = "conflicts"
+    NOT_ADDRESSED = "not_addressed"
+    AMBIGUOUS = "ambiguous"
+
+
+class FindingOutcome(StrEnum):
+    """What a finding row is. Only `VERDICT` carries a verdict, and only one is
+    ever shown: a withheld or failed finding stores none, so no reader, and no
+    later code, can show what ADR-0003 kept from them."""
+
+    VERDICT = "verdict"
+    """The model's verdict, every citation verified (after any repair)."""
+    CONDITIONAL = "conditional"
+    """Against an obligation Track A can't decide (F4): built by code from Track
+    A's reason and questions, with no model call and no verdict."""
+    WITHHELD = "withheld"
+    """A citation was blocked, or the finding cited nothing: the verdict is not
+    stored and never shown (ADR-0003)."""
+    FAILED = "failed"
+    """No finding could be made: the reply was refused or silent, the model was
+    unavailable, or a clause could not be delivered."""
+
+
+class WithheldReason(StrEnum):
+    """Why a finding is withheld or failed, in our words, never the model's."""
+
+    CITATION_BLOCKED = "citation_blocked"
+    UNCITED = "uncited"
+    MALFORMED_GENERATION = "malformed_generation"
+    NO_FINDING_RETURNED = "no_finding_returned"
+    REFUSED_REPLY = "refused_reply"
+    """The model's finding for it was refused (schema, an `ambiguous` with no
+    settle-by text, ...); which, is traced."""
+    GENERATION_UNAVAILABLE = "generation_unavailable"
+    CLAUSE_UNAVAILABLE = "clause_unavailable"
+    """A clause the obligation, or what it owes, needs could not be delivered, so
+    the model was not asked (ADR-0037, ADR-0044)."""
+    BOUNDARY_COLLISION = "boundary_collision"
+
+
+MAX_SETTLE_BY_CHARS = 400
+"""The longest text that says what would settle an `ambiguous` finding."""
+MAX_FINDINGS_PER_CLAIM = 20
+"""The most findings one claim's call may return: at most ten obligations and ten
+policy clauses are picked for a claim (`claims.MAX_PICKS`), one finding each. A
+reply with more refuses the whole reply."""
+MAX_CITATIONS_PER_FINDING = 10
+"""The most citations one finding may carry."""
+
+
+@dataclass(frozen=True, slots=True)
+class FindingCitation:
+    """A citation a finding was shown with, verified: the clause, the version it
+    is of (so it stays clickable after the clause is superseded, ADR-0021), the
+    model's quote (a verified substring of the clause's canonical text) and the
+    canonicalisation it was verified under (ledger 0003). What a reader is shown
+    for it is the clause's canonical text."""
+
+    clause_id: str
+    version_id: str
+    quoted_text: str
+    canonicalisation_version: int
+    incomplete: Incomplete = ()
+
+    def __post_init__(self) -> None:
+        if parse_stable_id(self.clause_id)[1] != self.version_id:
+            raise ValueError(f"{self.clause_id} is not a clause of version {self.version_id}")
+        if not self.quoted_text.strip() or self.canonicalisation_version < 1:
+            raise ValueError(
+                "a finding's citation carries its quote and a canonicalisation version"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class BlockedCitation:
+    """A citation that failed verification: its clause and our word for why, never
+    the model's quote (ADR-0003)."""
+
+    clause_id: str
+    outcome: str
+
+
+@dataclass(frozen=True, slots=True)
+class FindingRecord:
+    """One finding of a check: one claim against one obligation (law) or one
+    policy clause (policy), ADR-0053 F1. The claim is named by its number in the
+    check's extraction, never by its words: the ledger does not carry the
+    document's words (`ClaimRecord`)."""
+
+    finding_id: str
+    claim_index: int
+    outcome: FindingOutcome
+    obligation_id: str | None = None
+    policy_clause_id: str | None = None
+    verdict: Verdict | None = None
+    settle_by: str | None = None
+    """What would settle an `ambiguous` verdict (F3): required for it, and only
+    for it. The model's text, shown labelled as such."""
+    citations: tuple[FindingCitation, ...] = ()
+    blocked: tuple[BlockedCitation, ...] = ()
+    detail: WithheldReason | None = None
+    """Why a withheld or failed finding is."""
+    unassessable_reason: str | None = None
+    """For a conditional finding: Track A's reason, from the coverage row stored
+    with the assessment, whose questions are the ones that would firm it up."""
+    provenance: EvidenceProvenance = EvidenceProvenance.INFERRED
+    """One tier, the weakest of the inputs (F5, ADR-0059 C1): the claim is
+    `inferred` until confirmed (#301), so every finding is."""
+    derived_from: str | None = None
+    """The finding this one was derived from through an approved policy mapping
+    (F6, #306). Unused until then."""
+
+    @property
+    def conditional(self) -> bool:
+        return self.outcome is FindingOutcome.CONDITIONAL
+
+
+def check_finding_write(finding: FindingRecord) -> None:
+    """What every `LedgerStore` refuses before writing a finding, in this order;
+    the database's own constraints refuse each again (ledger 0026)."""
+    if not finding.finding_id.strip():
+        raise ValueError("a finding has an id")
+    if finding.claim_index < 1:
+        raise ValueError("a finding names its claim, numbered from 1")
+    if (finding.obligation_id is None) == (finding.policy_clause_id is None):
+        raise ValueError(
+            "a finding is against one obligation or one policy clause, never both or neither"
+        )
+    if finding.obligation_id is not None and not OBLIGATION_ID_RE.fullmatch(finding.obligation_id):
+        raise ValueError(f"{finding.obligation_id!r} is not an obligation id")
+    if finding.policy_clause_id is not None:
+        parse_stable_id(finding.policy_clause_id)
+    if finding.provenance is not EvidenceProvenance.INFERRED:
+        raise ValueError("a finding is inferred until a claim is confirmed (#301)")
+    shown = finding.outcome is FindingOutcome.VERDICT
+    if shown != (finding.verdict is not None):
+        raise ValueError("a finding has a verdict if and only if its outcome is a verdict")
+    if finding.verdict is Verdict.AMBIGUOUS:
+        if finding.settle_by is None or not finding.settle_by.strip():
+            raise ValueError("an ambiguous finding names what would settle it")
+        if len(finding.settle_by) > MAX_SETTLE_BY_CHARS:
+            raise ValueError(f"settle-by text is at most {MAX_SETTLE_BY_CHARS} characters")
+        if len(finding.settle_by.splitlines()) != 1:
+            raise ValueError("settle-by text is one line")
+    elif finding.settle_by is not None:
+        raise ValueError("only an ambiguous finding carries settle-by text")
+    if shown and not finding.citations:
+        raise ValueError("a finding with a verdict cites at least one clause")
+    if not shown and finding.citations:
+        raise ValueError("a finding without a verdict shows no citations")
+    if finding.outcome is not FindingOutcome.WITHHELD and finding.blocked:
+        raise ValueError("only a withheld finding names blocked citations")
+    if (finding.outcome in (FindingOutcome.WITHHELD, FindingOutcome.FAILED)) != (
+        finding.detail is not None
+    ):
+        raise ValueError("a withheld or failed finding says why, and no other does")
+    if finding.conditional != (finding.unassessable_reason is not None):
+        raise ValueError("a conditional finding carries Track A's reason, and no other does")
+    if finding.conditional and finding.obligation_id is None:
+        raise ValueError("only an obligation is unassessable: a policy clause is never conditional")
+    if finding.unassessable_reason is not None and not finding.unassessable_reason.strip():
+        raise ValueError("a conditional finding's reason is not blank")
+
+
+@dataclass(frozen=True, slots=True)
+class FindingsRecord:
+    """Everything one findings run writes, in one transaction (#299): the
+    assessment, with the corpus and mapping versions it was computed against
+    (ADR-0034); a coverage row for every obligation; the findings; and the usage
+    of every model call the run made. All of it lands or none of it does, and
+    once it has, it is never changed: a later check against newer facts is a new
+    assessment (ADR-0034), and the earlier one is left as it was."""
+
+    assessment: AssessmentRecord
+    coverage: tuple[CoverageRow, ...]
+    findings: tuple[FindingRecord, ...]
+    usage: tuple[UsageRecord, ...]
+
+
+FINDINGS_RESERVATION_TTL = dt.timedelta(minutes=30)
+"""How long a reserved findings run may stay pending before another request may
+take it over. Longer than the extraction's: a run is a warm-up call and then up
+to 24 more, each of which `GeminiGenerator` may retry."""
+
+
+class FindingsAlreadyReserved(ValueError):
+    """The check's findings are already made, or another request holds the run
+    right now."""
+
+
+class CheckNotExtracted(ValueError):
+    """The check has no completed extraction, so it has no claims to check."""
+
+
+def check_findings_write(record: FindingsRecord, claim_count: int | None = None) -> None:
+    """What every `LedgerStore` refuses before writing a findings run, in this
+    order; the database's constraints refuse the rest again. `claim_count` is how
+    many claims the check's extraction holds, when the store knows."""
+    check_assessment_write(record.assessment, record.coverage)
+    if record.assessment.check_id is None or not record.assessment.check_id.strip():
+        raise ValueError("a findings run records the check it judged")
+    seen: set[tuple[int, str | None, str | None]] = set()
+    covered = {row.obligation_id: row for row in record.coverage}
+    for finding in record.findings:
+        check_finding_write(finding)
+        key = (finding.claim_index, finding.obligation_id, finding.policy_clause_id)
+        if key in seen:
+            raise ValueError("a claim has one finding against each obligation and policy clause")
+        seen.add(key)
+        if claim_count is not None and finding.claim_index > claim_count:
+            raise ValueError(f"claim {finding.claim_index} is not one of the check's claims")
+        if finding.obligation_id is not None:
+            row = covered.get(finding.obligation_id)
+            if row is None or row.outcome is Outcome.NOT_APPLICABLE:
+                raise ValueError(
+                    f"{finding.obligation_id}: a finding is against an obligation that applies "
+                    "or might"
+                )
+            if (row.outcome is Outcome.UNASSESSABLE) != finding.conditional:
+                raise ValueError(
+                    f"{finding.obligation_id}: a finding is conditional if and only if Track A "
+                    "can't decide the obligation"
+                )
+    ids = [f.finding_id for f in record.findings]
+    if len(set(ids)) != len(ids):
+        raise ValueError("finding ids are unique")
+    for usage in record.usage:
+        if usage.tenant_id != record.assessment.tenant_id:
+            raise ValueError("usage rows are the run's tenant's")
 
 
 # --------------------------------------------------------------------------
@@ -1416,6 +1662,41 @@ class LedgerStore(ABC):
         applied by every route first."""
 
     @abstractmethod
+    async def reserve_findings(self, tenant_id: str, check_id: str, *, trace_id: str) -> None:
+        """Reserve a check's one findings run, atomically, before any model is
+        called (#299), as `reserve_extraction` does for the extraction: of any
+        number of concurrent requests exactly one succeeds, and the rest raise
+        `FindingsAlreadyReserved` and must not call the model. `CheckNotExtracted`
+        if the check has no completed extraction (nothing to check); a failed run,
+        or one pending longer than `FINDINGS_RESERVATION_TTL`, may be reserved
+        again; one that is done may not. A `ValueError` for a blank trace or check
+        id, and for a check this tenant does not hold."""
+
+    @abstractmethod
+    async def fail_findings(self, tenant_id: str, check_id: str) -> None:
+        """Release a pending findings reservation as failed, so the run can be
+        made again. Nothing happens to one that is not pending."""
+
+    @abstractmethod
+    async def record_findings(self, record: FindingsRecord) -> None:
+        """Complete a reserved findings run (#299): the assessment, its coverage
+        rows, every finding and every usage row, in one transaction, with the
+        reservation marked done. All of it lands or none of it does. Append-only:
+        nothing of it is ever updated, so an assessment keeps what it said
+        (ADR-0034). A `ValueError` and nothing written for anything
+        `check_findings_write` refuses; a claim the check's extraction does not
+        hold; an unregistered tenant; a check not reserved (pending) or already
+        done; an assessment id already recorded."""
+
+    @abstractmethod
+    async def get_findings(self, tenant_id: str, check_id: str) -> FindingsRecord | None:
+        """The check's completed findings run as it was recorded, or None if it
+        has none (not run, pending or failed). Findings in claim order, then
+        obligations before policy clauses, each by id, bytewise. Not owner-keyed,
+        like `get_claims`: who may see a check is `CheckRecord.visible_to`,
+        applied by every route first. The usage rows are the run's own."""
+
+    @abstractmethod
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:
         """Append a question and what the member was shown for it to a chat
         (#162), in one transaction: both rows land or neither does, as the
@@ -1761,6 +2042,8 @@ class ReplyKind(StrEnum):
     (`assessment/draft.py`)."""
     CLAIMS = "claims"
     """The claims of a submitted document (`assessment/claims.py`, #298)."""
+    FINDINGS = "findings"
+    """The findings for one claim (`assessment/findings.py`, #299)."""
 
 
 class Generator(ABC):

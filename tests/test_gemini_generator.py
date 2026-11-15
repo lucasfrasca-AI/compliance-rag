@@ -803,3 +803,29 @@ async def test_a_claims_call_asks_for_the_claims_shape_and_an_answer_call_for_th
         "policy_clause_ids",
     ]
     assert "anyOf" in answer_schema  # unchanged: a call that does not say wants an answer
+
+
+async def test_a_findings_call_asks_for_the_findings_shape() -> None:
+    """#299: one claim's findings, each against one obligation or one policy clause."""
+    request: list[httpx.Request] = []
+    generator = gemini_generator(lambda _: answered(), _ok_corpus(), request)
+    await generator.generate(
+        system="s", cached_prefix=None, user="u", max_tokens=64, reply=ReplyKind.FINDINGS
+    )
+    schema = body_of(request[0])["generationConfig"]["responseSchema"]
+    assert schema["required"] == ["findings"] and "anyOf" not in schema
+    item = schema["properties"]["findings"]["items"]
+    assert item["required"] == [
+        "obligation_id",
+        "policy_clause_id",
+        "verdict",
+        "settle_by",
+        "citations",
+    ]
+    assert item["properties"]["verdict"]["enum"] == [
+        "consistent",
+        "conflicts",
+        "not_addressed",
+        "ambiguous",
+    ]
+    assert item["properties"]["settleBy"]["nullable"] is True

@@ -30,18 +30,26 @@ from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
+    FINDINGS_RESERVATION_TTL,
     RESERVATION_TTL,
     AssessmentRecord,
+    BlockedCitation,
     BlockedClause,
     ChatCitation,
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    CheckNotExtracted,
     CheckRecord,
     Citation,
     ClaimExtractionRecord,
     ClaimRecord,
     ExtractionAlreadyReserved,
+    FindingCitation,
+    FindingOutcome,
+    FindingRecord,
+    FindingsAlreadyReserved,
+    FindingsRecord,
     LedgerStore,
     PolicyVersion,
     PrefixMeasure,
@@ -59,10 +67,13 @@ from compliance_rag.adapters.interfaces import (
     UnreadableNotInEnvironment,
     UnreadableReason,
     UsageRecord,
+    Verdict,
+    WithheldReason,
     check_assessment_write,
     check_chat_exchange,
     check_check_write,
     check_claims_write,
+    check_findings_write,
 )
 from compliance_rag.assessment.coverage import (
     CoverageRow,
@@ -341,6 +352,104 @@ def _check_of_row(row: TupleRow) -> CheckRecord:
     )
 
 
+async def _write_assessment(
+    conn: psycopg.AsyncConnection[TupleRow], record: AssessmentRecord, rows: tuple[CoverageRow, ...]
+) -> None:
+    """The assessment row and its coverage rows, on the caller's transaction."""
+    await conn.execute(
+        "INSERT INTO assessment (tenant_id, assessment_id, user_id, corpus_version, "
+        "corpus_sha, mapping_version, mapping_sha, as_of, trace_id, check_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            record.tenant_id,
+            record.assessment_id,
+            record.user_id,
+            record.corpus.tag,
+            record.corpus.sha,
+            record.mapping.tag,
+            record.mapping.sha,
+            record.as_of,
+            record.trace_id,
+            record.check_id,
+        ),
+    )
+    async with conn.cursor() as cursor:
+        await cursor.executemany(
+            "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, "
+            "reason, citations, questions, trace_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            [
+                (
+                    record.tenant_id,
+                    record.assessment_id,
+                    row.obligation_id,
+                    row.outcome.value,
+                    row.reason,
+                    Jsonb(list(row.citations)),
+                    Jsonb([question_json(q) for q in row.questions]),
+                    record.trace_id,
+                )
+                for row in rows
+            ],
+        )
+
+
+def _finding_citation_row(c: FindingCitation) -> dict[str, object]:
+    """A finding's citation as its JSONB element. `canonicalisation_version` is
+    required by the table's own constraint (0003); the incompleteness rides in
+    the element only when there is any, as a chat's does."""
+    row: dict[str, object] = {
+        "clause_id": c.clause_id,
+        "version_id": c.version_id,
+        "quoted_text": c.quoted_text,
+        "canonicalisation_version": c.canonicalisation_version,
+    }
+    if c.incomplete:
+        row["incomplete"] = incomplete_json(c.incomplete)
+    return row
+
+
+def _finding_citation_of_row(raw: object) -> FindingCitation:
+    element = cast("dict[str, object]", raw)
+    return FindingCitation(
+        clause_id=str(element["clause_id"]),
+        version_id=str(element["version_id"]),
+        quoted_text=str(element["quoted_text"]),
+        canonicalisation_version=int(cast("int", element["canonicalisation_version"])),
+        incomplete=incomplete_of_json(element.get("incomplete")),
+    )
+
+
+_FINDING_SELECT: LiteralString = (
+    "SELECT finding_id, claim_index, outcome, obligation_id, policy_clause_id, verdict, "
+    "settle_by, citations, blocked, outcome_detail, unassessable_reason, provenance_tier, "
+    "derived_from FROM finding WHERE tenant_id = %s AND assessment_id = %s "
+    "ORDER BY claim_index, (obligation_id IS NULL), "
+    'COALESCE(obligation_id, policy_clause_id) COLLATE "C"'
+)
+
+
+def _finding_of_row(row: TupleRow) -> FindingRecord:
+    return FindingRecord(
+        finding_id=str(row[0]),
+        claim_index=int(row[1]),
+        outcome=FindingOutcome(str(row[2])),
+        obligation_id=None if row[3] is None else str(row[3]),
+        policy_clause_id=None if row[4] is None else str(row[4]),
+        verdict=None if row[5] is None else Verdict(str(row[5])),
+        settle_by=None if row[6] is None else str(row[6]),
+        citations=tuple(_finding_citation_of_row(c) for c in cast("list[object]", row[7])),
+        blocked=tuple(
+            BlockedCitation(str(b["clause_id"]), str(b["outcome"]))
+            for b in cast("list[dict[str, object]]", row[8])
+        ),
+        detail=None if row[9] is None else WithheldReason(str(row[9])),
+        unassessable_reason=None if row[10] is None else str(row[10]),
+        provenance=EvidenceProvenance(str(row[11])),
+        derived_from=None if row[12] is None else str(row[12]),
+    )
+
+
 class LedgerUnreachable(ConnectionError):
     """The configured ledger didn't answer. The message names where it is,
     never who it connects as."""
@@ -514,41 +623,7 @@ class PostgresLedgerStore(LedgerStore):
         check_assessment_write(record, rows)
         try:
             async with self._connection() as conn, conn.transaction():
-                await conn.execute(
-                    "INSERT INTO assessment (tenant_id, assessment_id, user_id, corpus_version, "
-                    "corpus_sha, mapping_version, mapping_sha, as_of, trace_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (
-                        record.tenant_id,
-                        record.assessment_id,
-                        record.user_id,
-                        record.corpus.tag,
-                        record.corpus.sha,
-                        record.mapping.tag,
-                        record.mapping.sha,
-                        record.as_of,
-                        record.trace_id,
-                    ),
-                )
-                async with conn.cursor() as cursor:
-                    await cursor.executemany(
-                        "INSERT INTO coverage (tenant_id, assessment_id, obligation_id, outcome, "
-                        "reason, citations, questions, trace_id) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                        [
-                            (
-                                record.tenant_id,
-                                record.assessment_id,
-                                row.obligation_id,
-                                row.outcome.value,
-                                row.reason,
-                                Jsonb(list(row.citations)),
-                                Jsonb([question_json(q) for q in row.questions]),
-                                record.trace_id,
-                            )
-                            for row in rows
-                        ],
-                    )
+                await _write_assessment(conn, record, rows)
         except psycopg.errors.ForeignKeyViolation as exc:
             raise ValueError(f"tenant {record.tenant_id!r} isn't registered in the ledger") from exc
         except psycopg.errors.UniqueViolation as exc:
@@ -580,7 +655,7 @@ class PostgresLedgerStore(LedgerStore):
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
         row = await self._fetchone(
             "SELECT user_id, corpus_version, corpus_sha, mapping_version, mapping_sha, as_of, "
-            "trace_id FROM assessment WHERE tenant_id = %s AND assessment_id = %s",
+            "trace_id, check_id FROM assessment WHERE tenant_id = %s AND assessment_id = %s",
             (tenant_id, assessment_id),
         )
         return None if row is None else assessment_from_row(tenant_id, assessment_id, row)
@@ -825,6 +900,200 @@ class PostgresLedgerStore(LedgerStore):
             claims_dropped=int(head[2]),
             claims=tuple(_claim_of_row(r) for r in rows),
             created_at=head[3],
+        )
+
+    async def reserve_findings(self, tenant_id: str, check_id: str, *, trace_id: str) -> None:
+        if not trace_id.strip() or not check_id.strip():
+            raise ValueError(
+                "a findings run carries the trace_id of its request and names its check"
+            )
+        async with self._connection() as conn:
+            # One statement, so of concurrent requests exactly one inserts, or
+            # takes over a failed or abandoned reservation; the rest get no row.
+            # Only a completed extraction has claims to check.
+            row = await (
+                await conn.execute(
+                    "INSERT INTO check_findings_run (tenant_id, check_id, trace_id, status, "
+                    "reserved_at) SELECT %s, %s, %s, 'pending', clock_timestamp() WHERE EXISTS ("
+                    "SELECT 1 FROM check_extraction WHERE tenant_id = %s AND check_id = %s "
+                    "AND status = 'done') "
+                    "ON CONFLICT (tenant_id, check_id) DO UPDATE SET "
+                    "trace_id = EXCLUDED.trace_id, status = 'pending', "
+                    "reserved_at = EXCLUDED.reserved_at, completed_at = NULL "
+                    "WHERE check_findings_run.status = 'failed' OR "
+                    "(check_findings_run.status = 'pending' "
+                    "AND check_findings_run.reserved_at < clock_timestamp() - %s) RETURNING 1",
+                    (tenant_id, check_id, trace_id, tenant_id, check_id, FINDINGS_RESERVATION_TTL),
+                )
+            ).fetchone()
+            if row is not None:
+                return
+            extracted = await (
+                await conn.execute(
+                    "SELECT status FROM check_extraction WHERE tenant_id = %s AND check_id = %s",
+                    (tenant_id, check_id),
+                )
+            ).fetchone()
+            if extracted is None or extracted[0] != "done":
+                held = await (
+                    await conn.execute(
+                        "SELECT 1 FROM submitted_check WHERE tenant_id = %s AND check_id = %s",
+                        (tenant_id, check_id),
+                    )
+                ).fetchone()
+                if held is None:
+                    raise ValueError(f"tenant {tenant_id!r} holds no check {check_id}")
+                raise CheckNotExtracted(f"check {check_id} has not been extracted")
+        raise FindingsAlreadyReserved(f"check {check_id} already has its findings")
+
+    async def fail_findings(self, tenant_id: str, check_id: str) -> None:
+        await self._execute(
+            "UPDATE check_findings_run SET status = 'failed' "
+            "WHERE tenant_id = %s AND check_id = %s AND status = 'pending'",
+            (tenant_id, check_id),
+        )
+
+    async def record_findings(self, record: FindingsRecord) -> None:
+        check_findings_write(record)
+        assessment = record.assessment
+        assert assessment.check_id is not None  # check_findings_write refused a record without
+        try:
+            async with self._connection() as conn, conn.transaction():
+                held = await (
+                    await conn.execute(
+                        "SELECT status FROM check_findings_run "
+                        "WHERE tenant_id = %s AND check_id = %s FOR UPDATE",
+                        (assessment.tenant_id, assessment.check_id),
+                    )
+                ).fetchone()
+                if held is None or held[0] == "failed":
+                    raise ValueError(f"check {assessment.check_id} has not been reserved")
+                if held[0] == "done":
+                    raise ValueError(f"check {assessment.check_id} already has its findings")
+                claims = await (
+                    await conn.execute(
+                        "SELECT count(*) FROM check_claim WHERE tenant_id = %s AND check_id = %s",
+                        (assessment.tenant_id, assessment.check_id),
+                    )
+                ).fetchone()
+                for finding in record.findings:
+                    if claims is None or finding.claim_index > int(claims[0]):
+                        raise ValueError(
+                            f"claim {finding.claim_index} is not one of the check's claims"
+                        )
+                await _write_assessment(conn, assessment, record.coverage)
+                async with conn.cursor() as cursor:
+                    await cursor.executemany(
+                        "INSERT INTO finding (tenant_id, finding_id, assessment_id, check_id, "
+                        "claim_index, obligation_id, policy_clause_id, verdict, provenance_tier, "
+                        "assessable, unassessable_reason, citations, settle_by, outcome, "
+                        "outcome_detail, blocked, derived_from, trace_id) VALUES "
+                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        [
+                            (
+                                assessment.tenant_id,
+                                f.finding_id,
+                                assessment.assessment_id,
+                                assessment.check_id,
+                                f.claim_index,
+                                f.obligation_id,
+                                f.policy_clause_id,
+                                None if f.verdict is None else f.verdict.value,
+                                f.provenance.value,
+                                not f.conditional,
+                                f.unassessable_reason,
+                                Jsonb([_finding_citation_row(c) for c in f.citations]),
+                                f.settle_by,
+                                f.outcome.value,
+                                None if f.detail is None else f.detail.value,
+                                Jsonb(
+                                    [
+                                        {"clause_id": b.clause_id, "outcome": b.outcome}
+                                        for b in f.blocked
+                                    ]
+                                ),
+                                f.derived_from,
+                                assessment.trace_id,
+                            )
+                            for f in record.findings
+                        ],
+                    )
+                    await cursor.executemany(
+                        "INSERT INTO usage (tenant_id, usage_id, trace_id, model, input_tokens, "
+                        "output_tokens, cached_prefix_hit, cost_usd) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        [
+                            (
+                                u.tenant_id,
+                                u.usage_id,
+                                u.trace_id,
+                                u.model,
+                                u.input_tokens,
+                                u.output_tokens,
+                                u.cached_prefix_hit,
+                                u.cost_usd,
+                            )
+                            for u in record.usage
+                        ],
+                    )
+                await conn.execute(
+                    "UPDATE check_findings_run SET status = 'done', trace_id = %s, "
+                    "completed_at = clock_timestamp() WHERE tenant_id = %s AND check_id = %s",
+                    (assessment.trace_id, assessment.tenant_id, assessment.check_id),
+                )
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(
+                f"tenant {assessment.tenant_id!r} isn't registered in the ledger, or the check "
+                "or a claim is not one it holds"
+            ) from exc
+        except psycopg.errors.UniqueViolation as exc:
+            raise ValueError(f"assessment {assessment.assessment_id} is already recorded") from exc
+        except (psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation) as exc:
+            raise ValueError(f"findings refused: {exc.diag.constraint_name}") from None
+
+    async def get_findings(self, tenant_id: str, check_id: str) -> FindingsRecord | None:
+        async with self._connection() as conn:
+            head = await (
+                await conn.execute(
+                    "SELECT a.assessment_id, a.user_id, a.corpus_version, a.corpus_sha, "
+                    "a.mapping_version, a.mapping_sha, a.as_of, a.trace_id, a.check_id "
+                    "FROM assessment a JOIN check_findings_run r "
+                    "ON r.tenant_id = a.tenant_id AND r.check_id = a.check_id "
+                    "WHERE a.tenant_id = %s AND a.check_id = %s AND r.status = 'done'",
+                    (tenant_id, check_id),
+                )
+            ).fetchone()
+            if head is None:
+                return None
+            assessment_id = str(head[0])
+            rows = await (
+                await conn.execute(_FINDING_SELECT, (tenant_id, assessment_id))
+            ).fetchall()
+            used = await (
+                await conn.execute(
+                    "SELECT usage_id, trace_id, model, input_tokens, output_tokens, "
+                    "cached_prefix_hit, cost_usd FROM usage "
+                    "WHERE tenant_id = %s AND trace_id = %s ORDER BY created_at, usage_id",
+                    (tenant_id, str(head[7])),
+                )
+            ).fetchall()
+        return FindingsRecord(
+            assessment=assessment_from_row(tenant_id, assessment_id, head[1:]),
+            coverage=await self.coverage_rows(tenant_id, assessment_id),
+            findings=tuple(_finding_of_row(r) for r in rows),
+            usage=tuple(
+                UsageRecord(
+                    tenant_id=tenant_id,
+                    usage_id=str(u[0]),
+                    trace_id=str(u[1]),
+                    model=str(u[2]),
+                    input_tokens=int(u[3]),
+                    output_tokens=int(u[4]),
+                    cached_prefix_hit=bool(u[5]),
+                    cost_usd=float(u[6]),
+                )
+                for u in used
+            ),
         )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
@@ -1232,6 +1501,7 @@ def assessment_from_row(tenant_id: str, assessment_id: str, row: TupleRow) -> As
         mapping=SourceVersion(SourceKind.MAPPING, sha=str(row[4]), tag=row[3]),
         as_of=row[5],
         trace_id=str(row[6]),
+        check_id=str(row[7]) if len(row) > 7 and row[7] is not None else None,
     )
 
 
