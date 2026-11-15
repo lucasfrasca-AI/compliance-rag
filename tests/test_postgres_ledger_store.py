@@ -59,6 +59,7 @@ from tests.contracts.test_ledger import (
     S6DA_2,
     an_exchange,
     assert_chat_contract,
+    assert_check_contract,
     assert_environment_titles_contract,
     assert_ledger_contract,
     assert_refusal_outcomes_contract,
@@ -74,6 +75,7 @@ pytestmark = pytest.mark.skipif(
 
 _LEDGER_TABLES = (
     "tenant_instrument, corpus_removal_audit, finding, evidence, assessment, usage, chat, "
+    "submitted_check, "
     "document_manifest, clause_version, clause, instrument_version, instrument, app_user, tenant"
 )
 
@@ -132,6 +134,10 @@ async def test_postgres_satisfies_the_ledger_contract(ledger: PostgresLedgerStor
 
 async def test_postgres_satisfies_the_chat_contract(ledger: PostgresLedgerStore) -> None:
     await assert_chat_contract(ledger)
+
+
+async def test_postgres_satisfies_the_check_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_check_contract(ledger)
 
 
 async def test_postgres_satisfies_the_refusal_outcomes_contract(

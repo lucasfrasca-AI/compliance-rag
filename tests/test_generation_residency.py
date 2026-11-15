@@ -23,6 +23,7 @@ from compliance_rag.adapters.generation_residency import (
     GenerationResidencyError,
     TenantTextGate,
     assert_question_allowed,
+    assert_submission_allowed,
     assert_upload_allowed,
     is_real_customer_data,
     validate_generation_region,
@@ -207,6 +208,25 @@ def test_offshore_a_registered_tester_is_allowed_whatever_the_case_of_their_emai
 def test_in_sydney_any_question_is_allowed() -> None:
     assert_question_allowed(
         generation_region="australia-southeast1", asker="lead@acme.example", testers=frozenset()
+    )
+
+
+def test_offshore_a_document_from_a_member_who_isnt_a_registered_tester_is_refused() -> None:
+    """A submitted document is typed or pasted fresh, as a question is, and its
+    claims are what the model reads (#297, ADR-0032): the same tester rule, in
+    its own words."""
+    refused: list[tuple[str, frozenset[str]]] = [
+        ("lead@acme.example", TESTERS),
+        ("anyone", frozenset()),
+    ]
+    for submitter, testers in refused:
+        with pytest.raises(GenerationResidencyError, match="submit a document to be checked"):
+            assert_submission_allowed(generation_region="us", submitter=submitter, testers=testers)
+    assert_submission_allowed(
+        generation_region="us", submitter="tester@acme.EXAMPLE", testers=TESTERS
+    )
+    assert_submission_allowed(
+        generation_region="australia-southeast1", submitter="anyone", testers=frozenset()
     )
 
 

@@ -90,8 +90,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from compliance_rag import telemetry
+from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.demo_generator import FAKE_BANNER, FakeDemoGenerator
-from compliance_rag.adapters.fakes import FakeClauseStore, FakeGraphStore, FakeLedgerStore
+from compliance_rag.adapters.fakes import (
+    FakeClauseStore,
+    FakeGraphStore,
+    FakeLedgerStore,
+    FakeRetrievalStore,
+)
 from compliance_rag.adapters.generation_residency import TenantTextGate, is_offshore
 from compliance_rag.adapters.generator_factory import build_generator, generation_label
 from compliance_rag.adapters.interfaces import (
@@ -119,6 +125,7 @@ from compliance_rag.corpus.models import (
     parse_stable_id,
     validate_library_instrument_id,
 )
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.corpus.tenant_seed import record_evidence_in_span
 from compliance_rag.eval.acme_seed import demo_profile
 from compliance_rag.eval.applicability import load_applicability_set
@@ -492,6 +499,15 @@ def assemble(
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
             tenant_text=TenantTextGate.from_settings(settings),
+        ),
+        # A document submitted for a check is stored in process, like the rest
+        # of the demo: the lifecycle never calls retrieval for it (#296).
+        lifecycle=CorpusLifecycle(
+            ledger=ledger,
+            retrieval=FakeRetrievalStore(ledger=ledger),
+            clauses=clauses,
+            generation_region=settings.generation_region,
+            synthetic_registry=SyntheticRegistry.load(),
         ),
     )
 

@@ -42,6 +42,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI
 
 from compliance_rag import telemetry
+from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.demo_generator import FakeDemoGenerator
 from compliance_rag.adapters.firebase_auth import (
     FirebaseTokenVerifier,
@@ -58,6 +59,7 @@ from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.incomplete_reading import committed_incomplete_readings
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.graph.track_a import GraphTrackA
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings, get_settings
@@ -139,6 +141,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 Verifier(clauses, ledger, CanonicalCitationVerifier()),
                 ledger,
                 tenant_text=TenantTextGate.from_settings(settings),
+            ),
+            lifecycle=CorpusLifecycle(
+                ledger=ledger,
+                retrieval=store,
+                clauses=clauses,
+                generation_region=settings.generation_region,
+                synthetic_registry=SyntheticRegistry.load(),
             ),
             checks=(graph.verify, *generator_checks),
             closers=(graph.aclose,),

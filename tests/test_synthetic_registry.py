@@ -323,6 +323,9 @@ def test_the_submit_path_writes_clauses_and_never_touches_retrieval() -> None:
 PUBLISHING_SCRIPTS = {
     "scripts/load_compilation_vectors.py",  # library law, from the bucket ingest filled
     "scripts/seed_tenant.py",  # Acme's six policies: synthetic because the registry says so (#293)
+    # The throwaway demo's API needs a lifecycle for `POST /v1/checks` (#297), over its own
+    # in-process fakes: nothing it stores leaves the process.
+    "scripts/demo_server.py",
 }
 
 

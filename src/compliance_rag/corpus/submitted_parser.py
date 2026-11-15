@@ -66,6 +66,15 @@ def format_of_filename(filename: str) -> SubmittedFormat:
     return fmt
 
 
+def passage_number(clause_path: str) -> int:
+    """`12` for `p12`: a passage's place in its document. `p10` sorts before
+    `p2` as text, so every reader that lists passages in document order sorts
+    by this."""
+    if not re.fullmatch(r"p[1-9][0-9]*", clause_path):
+        raise ValueError(f"{clause_path!r} is not a passage path (p1, p2, ...)")
+    return int(clause_path[1:])
+
+
 @dataclass(frozen=True, slots=True)
 class _Passage:
     start: int

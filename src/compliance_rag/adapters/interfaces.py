@@ -53,10 +53,12 @@ from compliance_rag.corpus.models import (
     Incomplete,
     Scope,
     clause_ancestors,
+    instrument_tenant_prefix,
     parse_stable_id,
     validate_tenant_id,
 )
 from compliance_rag.corpus.revision import RevisionRecord
+from compliance_rag.corpus.submitted_parser import SubmittedFormat
 from compliance_rag.settings import GeneratorName
 
 # --------------------------------------------------------------------------
@@ -470,6 +472,62 @@ def check_assessment_write(record: AssessmentRecord, rows: tuple[CoverageRow, ..
             raise ValueError(f"{row.obligation_id}: a coverage row says why")
         if row.outcome is not Outcome.UNASSESSABLE and not row.citations:
             raise ValueError(f"{row.obligation_id}: a decided obligation cites its clauses")
+
+
+# --------------------------------------------------------------------------
+# Check (#297, ADR-0059; CONTEXT.md: Check)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CheckRecord:
+    """A recorded check (ledger `submitted_check`): one member's submission of
+    a document to be checked, and the `submitted_document` version it points at
+    (ADR-0059 Q1). Written once, when the document is stored; the assessment a
+    later ticket records points back at it by `check_id`."""
+
+    tenant_id: str
+    check_id: str
+    user_id: str
+    """The submitter's uid (`Member.uid`, ADR-0036), never their email."""
+    instrument_id: str
+    version_id: str
+    filename: str
+    """The name the member's file had: shown, never trusted (its extension chose
+    the format, and nothing else is read from it)."""
+    document_format: SubmittedFormat
+    trace_id: str
+    """The request that submitted it."""
+    created_at: dt.datetime | None = None
+    """Stamped by the ledger on write; `None` on a record not yet written."""
+
+    def visible_to(self, uid: str, *, admin: bool) -> bool:
+        """A check is visible to its submitter and to the tenant's admins
+        (ADR-0059 Q5); anyone else is told it does not exist, as for a chat
+        that is not theirs (#162). One rule, so the page, the API and the
+        source route cannot differ. `admin` is `deps.is_admin`'s answer, read
+        from configuration on the request."""
+        return admin or uid == self.user_id
+
+
+def check_check_write(record: CheckRecord) -> None:
+    """What every `LedgerStore` refuses before writing a check, in this order;
+    the database's own constraints refuse the first four again. What only a
+    store can refuse (the tenant not registered, the version not recorded or
+    not a submitted document, the id or the version already checked) comes
+    after, in both."""
+    if not record.trace_id.strip():
+        raise ValueError("a check carries the trace_id of its request")
+    if not record.user_id.strip():
+        raise ValueError("a check names its submitter")
+    if not record.filename.strip():
+        raise ValueError("a check names the file it was submitted as")
+    if not record.check_id.strip():
+        raise ValueError("a check has an id")
+    if instrument_tenant_prefix(record.instrument_id) != record.tenant_id:
+        raise ValueError(
+            f"{record.instrument_id}: a tenant's check points at one of that tenant's documents"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1195,6 +1253,30 @@ class LedgerStore(ABC):
         """The recorded assessment, or None if this tenant has none by that id.
         One recorded before source versions were (#153) is a `ValueError`,
         never a guess."""
+
+    @abstractmethod
+    async def record_check(self, record: CheckRecord) -> None:
+        """Record a check (#297): the document it submitted, by the
+        `submitted_document` version the ledger already holds. Append-only.
+        A `ValueError` and nothing written for: a blank trace, submitter, file
+        name or id, or an instrument that is not the tenant's
+        (`check_check_write`); a tenant the ledger does not know; a version the
+        ledger has not recorded as a submitted document (the document is stored
+        first, so a check never points at nothing); a check id, or a version,
+        already checked."""
+
+    @abstractmethod
+    async def get_check(self, tenant_id: str, check_id: str) -> CheckRecord | None:
+        """The check, or None if this tenant has none by that id. Not owner-keyed:
+        who may see it is `CheckRecord.visible_to`, which every route applies,
+        so a read here is never itself a disclosure."""
+
+    @abstractmethod
+    async def check_of_version(
+        self, tenant_id: str, instrument_id: str, version_id: str
+    ) -> CheckRecord | None:
+        """The check that submitted this `submitted_document` version, or None:
+        how the source route finds who owns a submitted document."""
 
     @abstractmethod
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:

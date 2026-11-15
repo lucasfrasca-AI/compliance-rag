@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+<div class="title-row">
+<h1>{{ title }}</h1>
+<a class="button" href="/checks/new">Check another</a>
+</div>
+<p class="meta">{{ check.filename }} · {{ check.document_format.value }} · {{ passages | length }} {{ "passage" if passages | length == 1 else "passages" }}
+{% if check.created_at %} · submitted <time datetime="{{ check.created_at.isoformat() }}">{{ check.created_at | sydney }}</time>{% endif %}
+{% if not mine %} · submitted by another member{% endif %}</p>
+<p class="note">This is the document as stored. Claims, findings and the report are not built yet. <a href="{{ source_href }}">Open it as a page</a>.</p>
+<ol class="passages" aria-label="The document, passage by passage">
+{% for p in passages %}
+<li class="passage" id="{{ anchor(p.clause_path) }}" data-passage="{{ p.clause_path }}">
+<a class="passage-number" href="#{{ anchor(p.clause_path) }}" aria-label="Passage {{ p.clause_path[1:] }}">{{ p.clause_path[1:] }}</a>
+<p class="passage-text">{{ p.text }}</p>
+</li>
+{% endfor %}
+</ol>
+</main>
+{% endblock %}

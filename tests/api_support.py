@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509.oid import NameOID
 
+from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import (
     FakeAccountDirectory,
     FakeClauseStore,
@@ -36,6 +37,7 @@ from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.interfaces import AccountDirectory, Member, VerifierUnavailable
 from compliance_rag.api.deps import ApiServices
 from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings
@@ -190,6 +192,13 @@ def fake_api_services(**fields: Any) -> ApiServices:  # Any: ApiServices fields
             Verifier(clauses, ledger, CanonicalCitationVerifier()),
             ledger,
             tenant_text=TenantTextGate.from_settings(settings),
+        ),
+        "lifecycle": CorpusLifecycle(
+            ledger=ledger,
+            retrieval=FakeRetrievalStore(ledger=ledger),
+            clauses=clauses,
+            generation_region=settings.generation_region,
+            synthetic_registry=SyntheticRegistry.load(),
         ),
     }
     return ApiServices(**{**defaults, **fields})

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Check a document{% endblock %}
+{% block body %}
+<main class="page narrow">
+<h1>Check a document</h1>
+<p class="note">Choose a Markdown (.md) or plain-text (.txt) file of up to {{ max_kib }} KiB. It is stored as it is, cut into passages, and shown back to you. Only you and this workspace's admins can see it.</p>
+<noscript><p class="card notice">Submitting a document needs JavaScript.</p></noscript>
+<div id="check-notice" class="card outcome notice" role="alert" hidden></div>
+{#- method="dialog" outside a dialog submits nothing, so without script the file goes nowhere (not into a URL). -#}
+<form id="check-form" class="ask" method="dialog">
+<label for="check-file">Document</label>
+<input id="check-file" name="file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" required>
+<label for="check-title">Title (optional)</label>
+<input id="check-title" name="title" type="text" maxlength="200">
+<div class="row">
+<button type="submit" id="check-submit">Submit for checking</button>
+<span class="note">No model reads it yet.</span>
+</div>
+</form>
+</main>
+<script type="module" src="/static/checks.js"></script>
+{% endblock %}

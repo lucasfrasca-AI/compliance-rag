@@ -18,13 +18,16 @@ from compliance_rag.corpus.source_view import (
     ALLOWED_TAGS,
     TARGET_STYLE,
     render_policy_html,
+    render_submitted_html,
     sanitise_source_html,
 )
+from compliance_rag.corpus.submitted_parser import format_of_filename, segment_submitted_document
 from compliance_rag.eval.golden_corpus import (
     FIXTURES,
     POLICY_INSTRUMENT_IDS,
     policy_source,
     policy_titles,
+    submitted_fixture_files,
 )
 
 IDS = re.compile(r'\bid="([^"]*)"')
@@ -189,3 +192,41 @@ def test_the_documents_own_title_heading_is_not_repeated() -> None:
     assert page.count(html.escape(title)) == 2  # <title> and the one <h1>
     renamed = render_policy_html(markdown, title="A later title")
     assert "<h2>" + html.escape(title) in renamed  # kept when the recorded title differs
+
+
+# ---- a submitted document (#297) ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", submitted_fixture_files(), ids=lambda p: p.name)
+def test_a_rendered_submitted_document_anchors_every_passage_and_holds_its_words(
+    path: Path,
+) -> None:
+    """Every fixture, not one: each passage is an element with its anchor, in the
+    order given, holding the passage's verbatim text, escaped."""
+    passages = segment_submitted_document(
+        path.read_text(encoding="utf-8"),
+        document_format=format_of_filename(path.name),
+        instrument_id="acme/check-1",
+        version_id="v1",
+        tenant_id="acme",
+        user_id="uid-1",
+    )
+    page = render_submitted_html(passages, title="A <title>")
+    assert IDS.findall(page) == [clause_anchor_id(p.clause_path) for p in passages]
+    for passage in passages:
+        assert html.escape(passage.text) in page
+    assert "<title>A &lt;title&gt;</title>" in page and "A <title>" not in page
+
+
+def test_a_submitted_documents_markup_is_text_in_the_page() -> None:
+    passages = segment_submitted_document(
+        '<script>alert(1)</script>\n\n<img src=x onerror="alert(2)">\n',
+        document_format=format_of_filename("a.txt"),
+        instrument_id="acme/check-1",
+        version_id="v1",
+        tenant_id="acme",
+        user_id="uid-1",
+    )
+    page = render_submitted_html(passages, title="t")
+    assert "<script>" not in page and "<img" not in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
