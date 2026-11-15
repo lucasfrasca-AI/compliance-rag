@@ -37,7 +37,7 @@ from compliance_rag.corpus.models import ClauseRecord, DocumentClass, stable_id
 
 _CONCURRENT_READS = 16
 """Clause-store reads in flight at once: one object per clause, so a
-779-clause version is 779 reads."""
+1023-clause version is 1023 reads."""
 
 
 class DifferentClauseSet(RuntimeError):

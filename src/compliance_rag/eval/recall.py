@@ -102,7 +102,8 @@ FLOORS: Mapping[Cell, float] = {
     Cell(FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # target 0.95: open (GQ-10, #221)
     Cell(FUSED, Category.PARAPHRASE, POLICY): 1.0,
     # GQ-18 1/3, GQ-19 0 (was 1/2), GQ-20 1/2: re-baselined from 4/9 when #282
-    # grew the corpus to 1023 clauses (the human's decision, 2026-11-15; #343).
+    # grew the corpus to 1023 clauses (the human's decision, 2026-11-15; #343;
+    # its sibling, the delivered floor below, #344).
     Cell(FUSED, Category.CROSS_CLAUSE, LAW): 5 / 18,
     Cell(FUSED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-23 1/2
     # The reranked gate (CI's `reranker-fidelity` job): the cross-encoder's
@@ -123,7 +124,7 @@ FLOORS: Mapping[Cell, float] = {
     # GQ-18's (a) and (b) come with APP 11.1. Still missed: GQ-19's APP 10.1
     # (#206), and since #282 GQ-20's "agency means:", whose paragraph (ca) s7A(2)
     # pushed out of the rerank candidates: re-baselined from 5/6 (the human's
-    # decision, 2026-11-15; #344).
+    # decision, 2026-11-15; #344; its sibling, the fused floor above, #343).
     Cell(DELIVERED, Category.CROSS_CLAUSE, LAW): 2 / 3,
     Cell(DELIVERED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
 }

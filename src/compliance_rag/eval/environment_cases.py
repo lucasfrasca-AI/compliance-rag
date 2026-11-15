@@ -215,6 +215,8 @@ _ASSERTIVE = frozenset(
 @dataclass(frozen=True, slots=True)
 class CaseCheck:
     flagged: bool
+    """The answer's flag is what the case expects: it names every instrument
+    the case lists, or, for a case that lists none, it is empty."""
     delivered: bool
     says_not_in_environment: bool
     names_held_instrument: bool

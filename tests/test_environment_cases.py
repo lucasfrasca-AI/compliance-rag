@@ -14,6 +14,7 @@ import pytest
 from scripts.run_answer_eval import environment_row
 
 from compliance_rag.eval.environment_cases import (
+    CaseCheck,
     EnvironmentCase,
     UnsignedEnvironmentCases,
     check_case,
@@ -146,25 +147,31 @@ def test_a_case_naming_a_held_part_expects_no_flag(tmp_path: Path) -> None:
     assert cases is not None
     (case,) = cases.cases
     assert case.not_in_environment == ()
-    answer = "Under the Privacy Act 1988, s 26WK(2) says the entity must carry out an assessment."
-    fields: dict[str, object] = {
-        "flagged": [],
-        "named": [],
-        "delivered": [NOTIFY],
-        "answer": answer,
-        "cited": [NOTIFY],
-    }
-    held = check_case(case, **fields)  # pyright: ignore[reportArgumentType]
+    answer = (
+        "Under the Privacy Act 1988, s 26WK(2) says the entity must prepare a statement "
+        "and give a copy to the Commissioner."
+    )
+
+    def check(
+        *,
+        flagged: tuple[str, ...] = (),
+        named: tuple[str, ...] = (),
+        delivered: tuple[str, ...] = (NOTIFY,),
+        text: str = answer,
+    ) -> CaseCheck:
+        return check_case(
+            case, flagged=flagged, named=named, delivered=delivered, answer=text, cited=[NOTIFY]
+        )
+
+    held = check()
     assert held.flagged and held.acceptable
     assert not held.says_not_in_environment and not held.speaks_as_named
     # A flag the case doesn't expect fails it, whatever the answer says.
-    spurious = check_case(case, **(fields | {"flagged": ["Spam Act 2003"], "named": ["spam act"]}))  # pyright: ignore[reportArgumentType]
+    spurious = check(flagged=("Spam Act 2003",), named=("spam act",))
     assert not spurious.flagged and not spurious.acceptable
     # The label is still required, and so is naming the held instrument.
-    undelivered = check_case(case, **(fields | {"delivered": []}))  # pyright: ignore[reportArgumentType]
-    assert not undelivered.acceptable
-    unnamed = check_case(case, **(fields | {"answer": "The entity must assess it."}))  # pyright: ignore[reportArgumentType]
-    assert not unnamed.acceptable
+    assert not check(delivered=()).acceptable
+    assert not check(text="The entity must prepare a statement.").acceptable
 
 
 def test_every_committed_label_is_in_the_gate_corpus() -> None:

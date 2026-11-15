@@ -17,7 +17,7 @@ version (ADR-0021 mechanism 3): it fails closed.
 
 Reads QDRANT_URL / QDRANT_API_KEY / QDRANT_COLLECTION through `Settings` and
 never prints the URL or the key. Writes points to an existing collection on an
-approved service; creates no resource. About 779 embedding calls, under a cent.
+approved service; creates no resource. About 1023 embedding calls, under a cent.
 
     uv run python -m scripts.load_compilation_vectors \\
         --bucket compliance-rag-508904-corpus [--defer-ledger]
