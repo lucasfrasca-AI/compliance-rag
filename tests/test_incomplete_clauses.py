@@ -147,10 +147,11 @@ def test_no_acme_policy_clause_is_incomplete(policy: str) -> None:
 
 
 def test_the_committed_gate_corpus_marks_s6da_2_alone() -> None:
-    """`clauses.json` is the parser's output for the 779 selected clauses: of
-    them, only s6da/2 is incomplete (no table or penalty is selected)."""
+    """`clauses.json` is the parser's output for the 1023 selected clauses: of
+    them, only s6da/2 is incomplete (no table or penalty is selected; #282's
+    244 additions mark nothing)."""
     committed = load_compilation_clauses()
-    assert len(committed.clauses) == 779
+    assert len(committed.clauses) == 1023
     marked = {c.clause_path: c.incomplete for c in committed.clauses if c.incomplete}
     assert marked == {"s6da/2": (FORMULA_NOT_TEXT,)}
 
@@ -333,7 +334,7 @@ def test_every_clause_the_whole_compilation_marks() -> None:
     marking its provision (every clause of which names "the table" or sits in
     a provision that does); and the 61 penalty lines' provisions — 166
     clauses. The coat of arms and the endnotes' tables are in no provision and
-    mark nothing. Of the 779 the selection keeps, s6da/2 alone."""
+    mark nothing. Of the 1023 the selection keeps, s6da/2 alone."""
     raw = Path(os.environ["PRIVACY_ACT_COMPILATION_HTML"]).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == FULL_SHA256, "a different compilation file"
     clauses = _parse(raw.decode("utf-8"))

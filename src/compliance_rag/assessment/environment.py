@@ -20,8 +20,9 @@ member's own input, never retrieved text (#29):
   entry is an instrument the library holds (`library_id`), one it doesn't
   (the Spam Act 2003, the GDPR), or a **part** of a library instrument
   (`part_of`, with the clause-path prefixes it covers): the Notifiable Data
-  Breaches scheme is Part IIIC of the Privacy Act, which a tenant can hold
-  while the selection holds none of Part IIIC. A part counts as held only
+  Breaches scheme is Part IIIC of the Privacy Act, which a tenant could hold
+  while the selection held none of Part IIIC (until #282 selected its
+  Divisions 1-3). A part counts as held only
   when a committed selection manifest of its instrument selects into it. The
   register is reviewed content under D-01, so a pending one is refused, never
   used; with none committed the pattern works alone.
@@ -406,7 +407,8 @@ class RegisterEntry(_Strict):
     """For a part of a library instrument: that instrument's id."""
     paths: tuple[str, ...] = ()
     """For a part: the clause-path prefixes it covers, as plain string
-    prefixes (`s26w` covers `s26wa` to `s26wt`)."""
+    prefixes (`s26wb` covers s 26WB and every clause under it; a bare
+    `s26w` would also cover Part IIIB's s 26W, #282)."""
 
     @field_validator("known_as")
     @classmethod

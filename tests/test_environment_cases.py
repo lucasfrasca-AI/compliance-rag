@@ -14,12 +14,14 @@ import pytest
 from scripts.run_answer_eval import environment_row
 
 from compliance_rag.eval.environment_cases import (
+    CaseCheck,
     EnvironmentCase,
     UnsignedEnvironmentCases,
     check_case,
     load_environment_cases,
     read_environment_cases,
 )
+from compliance_rag.eval.golden_corpus import gate_law_clauses
 from tests.test_not_in_environment import (
     APP7_2,
     APP7_8_B,
@@ -82,7 +84,6 @@ def test_a_pending_file_is_refused_and_none_is_none(tmp_path: Path) -> None:
         (("subscribes: [privacy-act-1988]", "subscribes: []"), "not in 'acme'"),
         (('reviewed_by: "Lucas Frasca"', 'reviewed_by: "model: Claude"'), "never a model"),
         (("id: GE-01", "id: GQ-01"), "GE-"),
-        (('not_in_environment: ["Spam Act 2003"]', "not_in_environment: []"), "at least 1"),
         (("subscribes: [privacy-act-1988]", "subscribes: [acme/policy]"), "library"),
     ],
 )
@@ -129,6 +130,64 @@ def test_either_accepted_answer_passes_and_the_confident_one_fails(tmp_path: Pat
     assert not _check(case, names_held, cited=["spam-act-2003:C1:s16/1"])["acceptable"]
     # Withheld, with no text, only the flag is said.
     assert not _check(case, None, cited=[])["acceptable"]
+
+
+NOTIFY = "privacy-act-1988:C2026C00227:s26wk/2"
+HELD_CASE = CASES.replace(
+    'not_in_environment: ["Spam Act 2003"]', "not_in_environment: []"
+).replace(f"expected_clause_ids: [{APP7_8_B}]", f"expected_clause_ids: [{NOTIFY}]")
+
+
+def test_a_case_naming_a_held_part_expects_no_flag(tmp_path: Path) -> None:
+    """GE-03 after #282: the NDB scheme is held once Part IIIC is selected, so
+    the case expects `not_in_environment: []`. Its check then holds the answer
+    to carrying no flag at all, delivering the label, and answering from held
+    law that it names; a spurious flag fails it."""
+    cases = load_environment_cases(_write(tmp_path, HELD_CASE))
+    assert cases is not None
+    (case,) = cases.cases
+    assert case.not_in_environment == ()
+    answer = (
+        "Under the Privacy Act 1988, s 26WK(2) says the entity must prepare a statement "
+        "and give a copy to the Commissioner."
+    )
+
+    def check(
+        *,
+        flagged: tuple[str, ...] = (),
+        named: tuple[str, ...] = (),
+        delivered: tuple[str, ...] = (NOTIFY,),
+        text: str = answer,
+    ) -> CaseCheck:
+        return check_case(
+            case, flagged=flagged, named=named, delivered=delivered, answer=text, cited=[NOTIFY]
+        )
+
+    held = check()
+    assert held.flagged and held.acceptable
+    assert not held.says_not_in_environment and not held.speaks_as_named
+    # A flag the case doesn't expect fails it, whatever the answer says.
+    spurious = check(flagged=("Spam Act 2003",), named=("spam act",))
+    assert not spurious.flagged and not spurious.acceptable
+    # The label is still required, and so is naming the held instrument.
+    assert not check(delivered=()).acceptable
+    assert not check(text="The entity must prepare a statement.").acceptable
+
+
+def test_every_committed_label_is_in_the_gate_corpus() -> None:
+    """A label the selection doesn't hold could never be delivered: GE-03's
+    s 26WE(2)(b) and s 26WK(2) are in C2026C00227's selection (#282)."""
+    cases = load_environment_cases()
+    assert cases is not None
+    selected = {c.clause_id for c in gate_law_clauses()}
+    labels = {i for case in cases.cases for i in case.expected_clause_ids}
+    assert labels <= selected, sorted(labels - selected)
+    (ge03,) = (c for c in cases.cases if c.id == "GE-03")
+    assert ge03.not_in_environment == ()
+    assert ge03.expected_clause_ids == (
+        "privacy-act-1988:C2026C00227:s26we/2/b",
+        "privacy-act-1988:C2026C00227:s26wk/2",
+    )
 
 
 async def test_the_eval_row_subscribes_answers_and_checks_one_case(tmp_path: Path) -> None:

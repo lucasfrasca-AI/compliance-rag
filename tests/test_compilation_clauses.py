@@ -43,12 +43,36 @@ def committed() -> CompilationClauses:
 def test_the_file_is_the_pinned_compilations_selected_clauses(
     committed: CompilationClauses,
 ) -> None:
-    """779 clauses: Schedule 1, ss 6, 6C, 6D, 6DA, 6E, 6EA and s15, the counts
-    the full-compilation parser test pins (test_parser_full_compilation.py)."""
+    """1023 clauses: Schedule 1, ss 6, 6C, 6D, 6DA, 6E, 6EA and s15, the counts
+    the full-compilation parser test pins (test_parser_full_compilation.py),
+    and the 244 #282 added: s7A, s16C and Part IIIC Divisions 1-3 (ss 26WB-26WT;
+    not Div 4's s26WU, not Div 5's ss 26X-26XH, not Part IIIB's s26W)."""
     assert (committed.instrument_id, committed.version_id) == (INSTRUMENT_ID, VERSION_ID)
     assert committed.source_sha256 == SOURCE_SHA256
     assert committed.selection == selection_manifest().prefixes
     counts = Counter(c.clause_path.split("/")[0] for c in committed.clauses)
+    part_iiic = {
+        # Division 1 (18)
+        "s26wb": 1,
+        "s26wc": 13,
+        "s26wd": 4,
+        # Division 2 (86)
+        "s26we": 23,
+        "s26wf": 39,
+        "s26wg": 15,
+        "s26wh": 6,
+        "s26wj": 3,
+        # Division 3 (124)
+        "s26wk": 12,
+        "s26wl": 13,
+        "s26wm": 3,
+        "s26wn": 6,
+        "s26wp": 11,
+        "s26wq": 39,
+        "s26wr": 28,
+        "s26ws": 3,
+        "s26wt": 9,
+    }
     assert counts == {
         "s6": 451,
         "s6c": 33,
@@ -58,8 +82,14 @@ def test_the_file_is_the_pinned_compilations_selected_clauses(
         "s6ea": 8,
         "sch1": 236,
         "s15": 1,
+        "s7a": 8,
+        "s16c": 8,
+        **part_iiic,
     }
-    assert len(committed.clauses) == 779
+    assert sum(part_iiic.values()) == 18 + 86 + 124
+    assert len(committed.clauses) == 779 + 244 == 1023
+    # Nothing outside the human's groups 1-5 (#282, 2026-11-11).
+    assert not {"s26w", "s26wa", "s26wu", "s26x"} & set(counts)
 
 
 def test_the_manifest_selects_every_clause_and_nothing_else(
@@ -98,9 +128,11 @@ COMPILATION_FIXTURES = sorted(FIXTURES.glob("privacy-act-1988-C2026C00227.*.html
 """Every checked-in cut of the pinned compilation (CLAUDE.md: a parser is tested
 against every available real fixture), found by name so a new one is covered."""
 
-OVERLAP = {"excerpt": 75, "constructs": 100}
+OVERLAP = {"excerpt": 75, "constructs": 191}
 """How many selected clauses each fixture holds. A new fixture fails until its
-count is recorded here, so it can't join without being looked at."""
+count is recorded here, so it can't join without being looked at. The
+constructs fixture's Part IIIC cuts (ss 26WC, 26WE, 26WF, 26WG, 26WN and
+26WQ, 91 clauses) joined the selection in #282: 100 before, 191 after."""
 
 
 @pytest.mark.parametrize("fixture", COMPILATION_FIXTURES, ids=lambda p: p.name.split(".")[1])
@@ -109,7 +141,7 @@ def test_every_clause_a_fixture_also_holds_is_its_fresh_parse(
 ) -> None:
     """Every fixture is cut verbatim from the pinned compilation, so where it
     holds a selected clause, today's parser must produce the committed record
-    exactly. A parser change that moves one of these ~170 clauses fails in CI,
+    exactly. A parser change that moves one of these ~270 clauses fails in CI,
     not only where the full source is at hand."""
     parsed = parse_compilation(
         fixture.read_text(encoding="utf-8"), instrument_id=INSTRUMENT_ID, version_id=VERSION_ID
@@ -127,7 +159,7 @@ def test_every_fixture_found_has_its_overlap_recorded() -> None:
 
 def test_the_excerpt_is_a_subset_of_the_gate_corpus() -> None:
     """Same ids, same text: the excerpt's tests and the gate measure the same
-    clauses, the gate with the other 704 as distractors."""
+    clauses, the gate with the other 948 as distractors."""
     gate = {c.clause_id: c for c in gate_law_clauses()}
     excerpt = [c for c in golden_clauses() if c.tenant_id == PUBLIC_TENANT_ID]
     assert len(excerpt) == 75
