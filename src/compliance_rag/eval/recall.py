@@ -388,7 +388,8 @@ def write_baseline(
         "corpus (the whole compilation's selected clauses and the Acme policies, "
         "ADR-0043). Written only "
         "by UPDATE_RECALL_BASELINE=1 pytest tests/test_recall_gate.py, locally — "
-        "a deliberate, reviewed change, never to make a drop pass.",
+        "a deliberate, reviewed change, never to make a drop pass unless the human "
+        "decides to re-baseline it and an issue tracks the drop (ADR-0043).",
         "corpus_sha256": corpus,
         "recall_at_10": {
             r.query_id: {n: v for n, v in r.by_list.items() if n != RERANKED} for r in results
