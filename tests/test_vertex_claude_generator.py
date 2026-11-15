@@ -251,3 +251,12 @@ def test_the_generation_region_defaults_to_sydney() -> None:
     """Fail closed: the US endpoint must be chosen explicitly."""
     settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue] — pydantic-settings init kwarg
     assert settings.vertex_claude_region == "australia-southeast1"
+
+
+async def test_the_claude_adapter_meets_the_generator_contract_including_the_reply_kind() -> None:
+    from tests.contracts.test_interfaces import assert_generator_contract
+
+    generator = VertexClaudeGenerator(
+        FakeMessages(), model="claude-test", region="us", corpus=_corpus(LAW, SYNTHETIC)
+    )
+    await assert_generator_contract(generator)

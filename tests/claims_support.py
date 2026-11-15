@@ -162,7 +162,7 @@ class ScriptedGenerator(FakeGenerator):
 
 
 async def checked_ledger(*, trace_id: str = "a" * 32) -> FakeLedgerStore:
-    """A ledger holding acme and the check the extraction is recorded against."""
+    """A ledger holding acme and the check, with its extraction reserved."""
     ledger = FakeLedgerStore()
     await ledger.put_profile(Profile(TENANT))
     await ledger.record_version(
@@ -186,6 +186,8 @@ async def checked_ledger(*, trace_id: str = "a" * 32) -> FakeLedgerStore:
             trace_id=trace_id,
         )
     )
+    # The route reserves the extraction before the model is called; so does a test.
+    await ledger.reserve_extraction(TENANT, CHECK_ID, as_of=AS_OF, trace_id=trace_id)
     return ledger
 
 

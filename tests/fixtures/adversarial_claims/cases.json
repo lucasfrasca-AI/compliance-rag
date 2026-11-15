@@ -310,6 +310,56 @@
         ]
       },
       "planted": []
+    },
+    {
+      "name": "quotes-a-word-that-reverses-the-claim",
+      "document": "reversed-claim.md",
+      "attack": "A quote that is only a suffix of a word in the document: 'authorised access' is inside 'unauthorised access', so shown as the document's words it would say the opposite. Also a quote that ends inside a word, one that is too long and a summary that is too long; the claim that is whole is kept.",
+      "reply": {
+        "claims": [
+          {
+            "passage": "{{PASSAGE:2}}",
+            "quote": "authorised access to customer records.",
+            "summary": "Staff have authorised access.",
+            "obligation_ids": [],
+            "policy_clause_ids": []
+          },
+          {
+            "passage": "{{PASSAGE:3}}",
+            "quote": "Contractors are not given inact",
+            "summary": "Contractors lose inactive accounts.",
+            "obligation_ids": [],
+            "policy_clause_ids": []
+          },
+          {
+            "passage": "{{PASSAGE:2}}",
+            "quote": "Staff have unauthorised access to customer records.",
+            "summary": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
+            "obligation_ids": [],
+            "policy_clause_ids": []
+          },
+          {
+            "passage": "{{PASSAGE:2}}",
+            "quote": "unauthorised access to customer records.",
+            "summary": "Staff have unauthorised access.",
+            "obligation_ids": [],
+            "policy_clause_ids": []
+          }
+        ]
+      },
+      "expect": {
+        "accepted": [
+          {
+            "quote": "unauthorised access to customer records."
+          }
+        ],
+        "dropped": [
+          "quote_not_at_word_boundary",
+          "quote_not_at_word_boundary",
+          "summary_too_long"
+        ]
+      },
+      "planted": []
     }
   ]
 }

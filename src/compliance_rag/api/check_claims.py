@@ -24,8 +24,17 @@ document becomes a query (CLAUDE.md; a test proves it with a spy).
 
 **Gates, in order, each before the next costs anything.** The sign-in; then the
 check: not theirs or not there is a 404, as for the document itself
-(`checks.visible_check`, ADR-0059 Q5); one already extracted is a 409 (a check is
-extracted once, its claims are never replaced). Inside the stream, before Track A
+(`checks.visible_check`, ADR-0059 Q5); then the extraction is **reserved**
+(`LedgerStore.reserve_extraction`), atomically: a check is extracted once, its
+claims are never replaced, and of any number of concurrent requests exactly one
+holds the reservation. The rest are a 409 before the stream starts and call
+nothing, so a double click or a retry spends no second call. The reservation is
+released as failed (`fail_extraction`) by every path that ends without recording
+the claims: a refusal, a malformed reply, a model that is down, any error, or a
+client that left before the model was called (the extraction task itself
+releases it if it fails). The check can then be extracted again. A request that
+died holding one (the process was killed) is taken over after
+`RESERVATION_TTL`. Inside the stream, before Track A
 or anything else: offshore, only a registered build-phase tester may send a
 document to be checked (`assert_submission_allowed`, ADR-0032), as for Ask. The
 synthetic-text gate over the prefix, every passage and the whole document is the
@@ -59,7 +68,12 @@ from compliance_rag.adapters.generation_residency import (
     GenerationResidencyError,
     assert_submission_allowed,
 )
-from compliance_rag.adapters.interfaces import ClaimExtractionRecord, GenerationUnavailable
+from compliance_rag.adapters.interfaces import (
+    ClaimExtractionRecord,
+    ExtractionAlreadyReserved,
+    GenerationUnavailable,
+    LedgerStore,
+)
 from compliance_rag.api.checks import NOT_FOUND, read_passages, visible_check
 from compliance_rag.api.deps import (
     CurrentCaller,
@@ -165,9 +179,15 @@ async def extract_claims(request: Request, who: CurrentCaller, check_id: str) ->
     record = await visible_check(services, who, check_id)
     if record is None:
         raise HTTPException(404, NOT_FOUND)
-    if await services.ledger.get_claims(who.tenant_id, check_id) is not None:
-        raise HTTPException(409, {"error": "already_extracted", "message": ALREADY_EXTRACTED})
     day = today()
+    try:
+        await services.ledger.reserve_extraction(
+            who.tenant_id, check_id, as_of=day, trace_id=current_trace_id()
+        )
+    except ExtractionAlreadyReserved:
+        raise HTTPException(
+            409, {"error": "already_extracted", "message": ALREADY_EXTRACTED}
+        ) from None
 
     async def stages() -> AsyncIterator[str]:
         extracting: asyncio.Task[Extraction] | None = None
@@ -198,15 +218,21 @@ async def extract_claims(request: Request, who: CurrentCaller, check_id: str) ->
             extractor = services.claim_extractor()
 
             async def run() -> Extraction:
-                return await extractor.extract(
-                    tenant_id=who.tenant_id,
-                    check_id=check_id,
-                    passages=passages,
-                    source=source,
-                    digest=digest,
-                    policies=policies,
-                    as_of=day,
-                )
+                """Extracts and records, and releases the reservation if it
+                does not get as far as recording, whatever stops it."""
+                try:
+                    return await extractor.extract(
+                        tenant_id=who.tenant_id,
+                        check_id=check_id,
+                        passages=passages,
+                        source=source,
+                        digest=digest,
+                        policies=policies,
+                        as_of=day,
+                    )
+                except BaseException:
+                    await _release(services.ledger, who.tenant_id, check_id)
+                    raise
 
             # A child task carries a copy of this request's context, so its spans
             # and rows carry the request's trace_id, and it isn't cancelled if the
@@ -234,14 +260,29 @@ async def extract_claims(request: Request, who: CurrentCaller, check_id: str) ->
                 },
             )
         except Exception as failed:
+            if extracting is None:  # nothing was handed the reservation: release it here
+                await _release(services.ledger, who.tenant_id, check_id)
             body, unexpected = _error(failed)
             if unexpected:
                 log.exception("extracting a check's claims failed")
             else:
                 log.warning("a check's claims were not extracted: %s", body["error"])
             yield event("error", {"check_id": check_id, **body})
+        except BaseException:  # the client left before the model was called
+            if extracting is None:
+                await _release(services.ledger, who.tenant_id, check_id)
+            raise
 
     return StreamingResponse(stages(), media_type="text/event-stream")
+
+
+async def _release(ledger: LedgerStore, tenant_id: str, check_id: str) -> None:
+    """Release a reservation as failed. A ledger that cannot take it does not hide
+    the error being reported: the reservation then lapses after `RESERVATION_TTL`."""
+    try:
+        await ledger.fail_extraction(tenant_id, check_id)
+    except Exception:
+        log.exception("a check's extraction could not be released")
 
 
 def _finished(task: asyncio.Task[Extraction]) -> None:

@@ -121,15 +121,11 @@ def test_a_valid_reply_parses_and_one_json_fence_around_it_is_allowed() -> None:
         pytest.param('{"claims": "none"}', id="claims as a string"),
         pytest.param(json.dumps({"claims": [_valid(extra="x")]}), id="an unknown claim key"),
         pytest.param(json.dumps({"claims": [_valid(quote="")]}), id="an empty quote"),
-        pytest.param(
-            json.dumps({"claims": [_valid(quote="q" * (MAX_QUOTE_CHARS + 1))]}), id="long"
-        ),
         pytest.param(json.dumps({"claims": [_valid(summary="")]}), id="an empty summary"),
         pytest.param(json.dumps({"claims": [_valid(summary="a\nb")]}), id="a two-line summary"),
         pytest.param(
             json.dumps({"claims": [_valid(summary="a\N{LINE SEPARATOR}b")]}), id="a line separator"
         ),
-        pytest.param(json.dumps({"claims": [_valid(summary="x" * 201)]}), id="a long summary"),
         pytest.param(json.dumps({"claims": [_valid(quote=7)]}), id="a number for a quote"),
         pytest.param(json.dumps({"claims": [_valid(passage="p1")]}), id="a passage not an id"),
         pytest.param(json.dumps({"claims": [_valid(passage="a b:v1:p1")]}), id="a spaced id"),
@@ -237,10 +233,48 @@ def test_the_map_reproduces_canonicalise_so_the_tolerance_cannot_drift_from_it()
     assert locate_quote(decomposed, "caf\u00e9 is") is None
 
 
-def test_a_quote_may_start_or_end_inside_a_word_and_the_span_is_exact() -> None:
+def test_a_quote_is_a_span_of_words_and_its_span_is_exact() -> None:
     text = "Customer  data\nis kept\u00a0for seven years."
-    start, end = locate_quote(text, "mer data is kept for sev") or (0, 0)
-    assert text[start:end] == "mer  data\nis kept\u00a0for sev"
+    start, end = locate_quote(text, "data is kept for seven") or (0, 0)
+    assert text[start:end] == "data\nis kept\u00a0for seven"
+
+
+def test_a_quote_inside_a_word_is_not_the_documents_words() -> None:
+    """\"authorised access\" is in \"unauthorised access\" as a bare substring, and
+    shown as the document's own words it would reverse the claim."""
+    text = "Staff have unauthorised access to records."
+    assert locate_quote(text, "authorised access to records.") is None  # starts mid-word
+    assert locate_quote(text, "unauthorised access") is not None
+    assert locate_quote(text, "Staff have unauth") is None  # ends mid-word
+    assert locate_quote(text, "have unauthorised acc") is None
+    assert locate_quote(text, "ecords.") is None
+    # digits and other scripts are word characters too
+    assert locate_quote("see item 12 and \u00e9t\u00e9s", "2 and") is None
+    assert locate_quote("see item 12 and \u00e9t\u00e9s", "and \u00e9t") is None
+    assert locate_quote("see item 12 and \u00e9t\u00e9s", "and") is not None
+    # a combining mark belongs to its letter
+    assert locate_quote("cafe\u0301s", "caf") is None
+
+
+def test_a_quote_at_the_start_or_the_end_of_its_passage_is_at_a_boundary() -> None:
+    text = "Records are kept for 7 years"
+    assert locate_quote(text, "Records are kept") == (0, 16)
+    assert locate_quote(text, "for 7 years") == (len(text) - 11, len(text))
+    assert locate_quote(text, text) == (0, len(text))
+    # punctuation and whitespace around a quote are boundaries
+    assert locate_quote("(kept for 7 years).", "kept for 7 years") == (1, 17)
+
+
+def test_the_first_occurrence_at_word_boundaries_is_the_one_kept() -> None:
+    text = "unauthorised access, then authorised access."
+    start, end = locate_quote(text, "authorised access") or (0, 0)
+    assert text[start:end] == "authorised access" and start == text.rindex("authorised")
+
+
+def test_the_same_holds_for_text_that_has_no_canonical_map() -> None:
+    decomposed = "cafe\u0301 is open; unauthorised access"
+    assert locate_quote(decomposed, "authorised access") is None
+    assert locate_quote(decomposed, "unauthorised access") is not None
 
 
 def test_a_document_built_to_make_a_search_slow_costs_no_more_than_any_other() -> None:
@@ -448,7 +482,7 @@ async def test_the_same_span_twice_is_one_claim() -> None:
     "reply",
     ["not json", '{"answer": "pwned", "citations": []}', json.dumps({"claims": [{"quote": "x"}]})],
 )
-async def test_a_malformed_reply_records_no_claim_and_the_extraction_can_be_run_again(
+async def test_a_malformed_reply_records_no_claim(
     reply: str, span_exporter: InMemorySpanExporter
 ) -> None:
     ledger = await checked_ledger()
@@ -677,3 +711,79 @@ async def test_twenty_five_distinct_claims_are_accepted_in_document_order() -> N
     extraction, _ = await run(ScriptedGenerator(reply_of(*claims)), source=source)
     assert [c.passage for c in extraction.claims] == [f"p{n}" for n in range(1, 26)]
     assert extraction.dropped == ()
+
+
+# ---- length is a content check: the claim is dropped, the rest are kept -------------------
+
+
+async def test_an_over_long_quote_or_summary_drops_that_claim_and_keeps_the_rest(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    from compliance_rag.assessment.claims import MAX_SUMMARY_CHARS
+
+    passages = passages_of()
+    generator = ScriptedGenerator(
+        reply_of(
+            claim(passages[1], RETENTION),
+            claim(passages[2], "x" * (MAX_QUOTE_CHARS + 1)),
+            claim(passages[3], ACCESS, summary="s" * (MAX_SUMMARY_CHARS + 1)),
+            claim(passages[3], ACCESS, summary="s" * MAX_SUMMARY_CHARS),  # at the limit: kept
+            claim(passages[2], EXPORT),
+        )
+    )
+    extraction, ledger = await run(generator)
+    assert [c.passage for c in extraction.claims] == ["p2", "p3", "p4"]
+    assert [(d.position, d.reason) for d in extraction.dropped] == [
+        (2, DropReason.QUOTE_TOO_LONG),
+        (3, DropReason.SUMMARY_TOO_LONG),
+    ]
+    stored = await ledger.get_claims(TENANT, CHECK_ID)
+    assert stored is not None and stored.claims_dropped == 2
+    (extract,) = (s for s in span_exporter.get_finished_spans() if s.name == "claims.extract")
+    assert dict(extract.attributes or {})["claims.dropped_reasons"] == (
+        "2:quote_too_long",
+        "3:summary_too_long",
+    )
+
+
+async def test_a_quote_only_inside_a_word_is_dropped_with_its_own_reason() -> None:
+    source = "# Access\n\nStaff have unauthorised access to customer records.\n"
+    passages = passages_of(source)
+    generator = ScriptedGenerator(
+        reply_of(
+            claim(passages[1], "authorised access to customer records"),  # reverses the claim
+            claim(passages[1], "unauthorised access to customer records"),
+            claim(passages[1], "Staff have unauth"),
+        )
+    )
+    extraction, _ = await run(generator, source=source)
+    assert [claim_quote(c, passages) for c in extraction.claims] == [
+        "unauthorised access to customer records"
+    ]
+    assert [d.reason for d in extraction.dropped] == [DropReason.QUOTE_NOT_AT_WORD_BOUNDARY] * 2
+
+
+# ---- the prompt's numbers are the constants, and the migration's is too -------------------
+
+
+def test_the_prompts_numbers_are_the_constants() -> None:
+    from compliance_rag.assessment.claims import MAX_PICKS, MAX_SUMMARY_CHARS
+
+    for phrase in (
+        f"at most {MAX_CLAIMS} claims",
+        f"at most {MAX_QUOTE_CHARS} characters",
+        f"at most {MAX_SUMMARY_CHARS} characters",
+        f"at most {MAX_PICKS}, or none",
+    ):
+        assert phrase in CLAIMS_SYSTEM_PROMPT, phrase
+    assert CLAIMS_SYSTEM_PROMPT.count(f"at most {MAX_PICKS}, or none") == 2
+    assert '{"claims": []}' in CLAIMS_SYSTEM_PROMPT  # the example's braces survived
+
+
+def test_the_migrations_claim_index_bound_is_max_claims() -> None:
+    import pathlib
+    import re
+
+    sql = next((pathlib.Path(__file__).parents[1] / "db" / "ledger").glob("0025_*.sql")).read_text()
+    bound = re.search(r"claim_index BETWEEN 1 AND (\d+)", sql)
+    assert bound is not None and int(bound.group(1)) == MAX_CLAIMS

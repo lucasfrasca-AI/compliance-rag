@@ -15,6 +15,7 @@ the one build-phase tester where a test says so; `lead@acme.example` is an admin
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import re
@@ -562,3 +563,91 @@ async def test_a_document_holding_its_own_boundary_is_an_error_and_is_never_sent
     _, events = await extract(w, check_id)
     assert events[-1][1]["error"] == "boundary_collision"
     assert w.generator.calls == [] and await w.ledger.get_claims(TENANT, check_id) is None  # type: ignore[attr-defined]
+
+
+# ---- one extraction per check, atomically ---------------------------------------------
+
+
+class GatedGenerator(ScriptedGenerator):
+    """Holds its reply until released, so a second request arrives while the first
+    is in the middle of its model call."""
+
+    def __init__(self, reply: Any) -> None:  # Any: a script
+        super().__init__(reply)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate(
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
+    ) -> Generation:
+        self.started.set()
+        await self.release.wait()
+        return await super().generate(
+            system=system,
+            cached_prefix=cached_prefix,
+            user=user,
+            max_tokens=max_tokens,
+            reply=reply,
+        )
+
+
+async def test_a_second_request_during_the_first_ones_model_call_is_a_409_and_calls_nothing() -> (
+    None
+):
+    gated = GatedGenerator(two_claims)
+    w = await world(gated)
+    check_id = await submit(w, fixture_upload(PROPOSAL))
+    first = asyncio.ensure_future(extract(w, check_id))
+    await asyncio.wait_for(gated.started.wait(), 5)
+    second, _ = await extract(w, check_id)  # the reservation is held, the claims are not yet in
+    assert second.status_code == 409 and second.json()["detail"]["error"] == "already_extracted"
+    gated.release.set()
+    response, events = await first
+    assert response.status_code == 200 and events[-1][0] == "claims"
+    assert len(gated.calls) == 1  # one model call between them
+
+
+async def test_concurrent_requests_for_one_check_spend_one_model_call() -> None:
+    w = await world()
+    check_id = await submit(w, fixture_upload(PROPOSAL))
+    results = await asyncio.gather(*(extract(w, check_id) for _ in range(6)))
+    assert sorted(r.status_code for r, _ in results) == [200, 409, 409, 409, 409, 409]
+    assert len(w.generator.calls) == 1  # type: ignore[attr-defined]
+    assert len(await w.ledger.usage(TENANT)) == 1
+    stored = await w.ledger.get_claims(TENANT, check_id)
+    assert stored is not None and len(stored.claims) == 2
+
+
+async def test_a_refusal_before_the_model_releases_the_reservation_so_a_retry_can_proceed() -> None:
+    w = await world(**OFFSHORE_SETTINGS, offshore_generation_testers=SECOND)
+    check_id = await submit(w, fixture_upload(PROPOSAL))
+    _, refused = await extract(w, check_id, ADMIN_TOKEN)  # not a tester
+    assert refused[-1][1]["error"] == "residency" and w.generator.calls == []  # type: ignore[attr-defined]
+    response, events = await extract(w, check_id)  # the tester
+    assert response.status_code == 200 and events[-1][0] == "claims"
+    assert len(w.generator.calls) == 1  # type: ignore[attr-defined]
+
+
+async def test_a_model_failure_releases_the_reservation_and_a_retry_is_not_a_409() -> None:
+    attempts: list[int] = []
+
+    def fails_once(seen: Any) -> str:  # Any: a claims_support.Prompt
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("the connection was reset")
+        return two_claims(seen)
+
+    w = await world(ScriptedGenerator(fails_once))
+    check_id = await submit(w, fixture_upload(PROPOSAL))
+    _, failed = await extract(w, check_id)
+    assert failed[-1][1]["error"] == "internal"
+    again, events = await extract(w, check_id)
+    assert again.status_code == 200 and events[-1][0] == "claims"
+    third, _ = await extract(w, check_id)
+    assert third.status_code == 409  # and now it is extracted

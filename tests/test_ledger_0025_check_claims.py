@@ -23,8 +23,8 @@ def _sql(text: str) -> LiteralString:
 
 def _extraction(scratch: psycopg.Connection[Any], check_id: str = "c" * 32) -> None:
     scratch.execute(
-        "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id, claims_dropped) "
-        "VALUES ('acme', %s, '2026-11-15', %s, 0)",
+        "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id) "
+        "VALUES ('acme', %s, '2026-11-15', %s)",
         (check_id, "a" * 32),
     )
 
@@ -123,12 +123,22 @@ def test_0025_adds_the_tables_idempotently_and_they_refuse_what_a_claim_must_not
         ):
             with pytest.raises(psycopg.errors.CheckViolation, match=constraint):
                 _claim(scratch, claim_index=3, **{column: value})
+        # an extraction is pending, done or failed, and done exactly when it has a time
+        for status, completed in (("later", "NULL"), ("done", "NULL"), ("pending", "now()")):
+            with pytest.raises(psycopg.errors.CheckViolation):
+                scratch.execute(
+                    _sql(
+                        "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id, "
+                        f"status, completed_at) VALUES ('acme', '{'1' * 32}', '2026-11-15', "
+                        f"'{'a' * 32}', '{status}', {completed})"
+                    )
+                )
         # the extraction names its request
         _check(scratch, "e" * 32, "acme/check-2")
         with pytest.raises(psycopg.errors.CheckViolation, match="check_extraction_trace_id"):
             scratch.execute(
-                "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id, "
-                "claims_dropped) VALUES ('acme', %s, '2026-11-15', ' ', 0)",
+                "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id) "
+                "VALUES ('acme', %s, '2026-11-15', ' ')",
                 ("e" * 32,),
             )
         with pytest.raises(psycopg.errors.CheckViolation, match="check_extraction_dropped"):

@@ -69,3 +69,10 @@ Check batch 2 put ten questions, each with a recommended option (a). On
   widens. Each ticket's "Pending the human" line is settled by this ADR.
 - C1 tightens F6: a test should prove that approving a mapping never raises a
   finding above its claim's tier.
+- **The one-line summary is model text.** It is shown only labelled as the
+  model's (`inferred`), beside the verified quote, and nothing checks it: it is
+  the one unverified text a check shows, an exception to ADR-0053 I3 ("nothing
+  unverified is shown") that Q2 allows, because the quote is the claim and the
+  summary only labels it (#298). It is held to one line, a bounded length and no
+  fence boundary of its request, and #299 must fence it as data whenever it
+  re-enters a prompt.

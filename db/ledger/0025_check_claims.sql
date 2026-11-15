@@ -16,7 +16,14 @@
 -- once whether or not it yielded a claim (a repeated request does not spend the
 -- model again) and it records how many claims the model returned that failed a
 -- check; `check_claim` is one row per accepted claim, 25 at most. Both carry the
--- request's trace_id. Append-only: nothing updates or deletes a row.
+-- request's trace_id.
+--
+-- **The extraction is reserved before the model is called.** The row is inserted
+-- `pending` under the primary key, so of any number of concurrent requests one
+-- wins and the rest never call the model. It becomes `done` (with its claims, in
+-- one transaction) or `failed`; a `failed` row, or a `pending` one older than the
+-- store's reservation time-out (a request that died holding it), may be reserved
+-- again. Claims are append-only: nothing updates or deletes a `check_claim` row.
 --
 -- Idempotent: every statement is guarded, so the runner (#293) and psql -f both
 -- re-run it safely.
@@ -28,12 +35,16 @@ CREATE TABLE IF NOT EXISTS check_extraction (
     check_id       TEXT        NOT NULL,
     as_of          DATE        NOT NULL,
     trace_id       TEXT        NOT NULL,
-    claims_dropped INTEGER     NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status         TEXT        NOT NULL DEFAULT 'pending',
+    claims_dropped INTEGER     NOT NULL DEFAULT 0,
+    reserved_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at   TIMESTAMPTZ,
     PRIMARY KEY (tenant_id, check_id),
     FOREIGN KEY (tenant_id, check_id) REFERENCES submitted_check (tenant_id, check_id),
     CONSTRAINT check_extraction_trace_id CHECK (btrim(trace_id) <> ''),
-    CONSTRAINT check_extraction_dropped CHECK (claims_dropped >= 0)
+    CONSTRAINT check_extraction_dropped CHECK (claims_dropped >= 0),
+    CONSTRAINT check_extraction_status CHECK (status IN ('pending', 'done', 'failed')),
+    CONSTRAINT check_extraction_completed CHECK ((status = 'done') = (completed_at IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS check_claim (

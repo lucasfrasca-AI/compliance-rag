@@ -569,13 +569,25 @@ class ClaimRecord:
     provenance: EvidenceProvenance = EvidenceProvenance.INFERRED
 
 
+RESERVATION_TTL = dt.timedelta(minutes=10)
+"""How long a reserved extraction may stay pending before another request may
+take it over: a request that died holding one (the process was killed, so nothing
+could mark it failed) must not block its check for good. Longer than any model
+call, which `GeminiGenerator` times out and retries within a few minutes."""
+
+
+class ExtractionAlreadyReserved(ValueError):
+    """The check is already extracted, or another request holds it right now."""
+
+
 @dataclass(frozen=True, slots=True)
 class ClaimExtractionRecord:
     """The claims extracted from one check's document: written once, with every
     claim, when the extraction has been validated (ledger `check_extraction` and
     `check_claim`). A check with no claim still has its extraction recorded, so a
     document is extracted once and its cost is not spent again by a repeated
-    request."""
+    request. The extraction is reserved before the model is called
+    (`LedgerStore.reserve_extraction`), and this fills the reservation in."""
 
     tenant_id: str
     check_id: str
@@ -1367,21 +1379,41 @@ class LedgerStore(ABC):
         how the source route finds who owns a submitted document."""
 
     @abstractmethod
+    async def reserve_extraction(
+        self, tenant_id: str, check_id: str, *, as_of: dt.date, trace_id: str
+    ) -> None:
+        """Reserve a check's one extraction, atomically, before the model is
+        called (#298): of any number of concurrent requests exactly one succeeds,
+        and the rest raise `ExtractionAlreadyReserved` and must not call the
+        model. The reservation is pending until `record_claims` completes it or
+        `fail_extraction` releases it. A check whose last extraction failed, or
+        whose reservation has been pending longer than `RESERVATION_TTL`, may be
+        reserved again; one that is extracted may not. A `ValueError` for a
+        blank trace or check id, and for a check this tenant does not hold."""
+
+    @abstractmethod
+    async def fail_extraction(self, tenant_id: str, check_id: str) -> None:
+        """Release a pending reservation as failed, so the check can be extracted
+        again. Nothing happens to an extraction that is not pending, so it is safe
+        to call from every failure path."""
+
+    @abstractmethod
     async def record_claims(self, record: ClaimExtractionRecord) -> None:
-        """Record the claims extracted from a check's document (#298), the
-        extraction and every claim in one transaction: all of it lands or none
-        of it does. Append-only, and once per check, so a check's claims are
-        never replaced. A `ValueError` and nothing written for: a blank trace
-        or check id, more than `MAX_CLAIMS` claims, claims not numbered from 1 in
-        order, one that is not `inferred` or whose span, passage, hash or
-        summary is not well formed (`check_claims_write`); a check this tenant
-        does not hold; a check already extracted."""
+        """Complete a reserved extraction with its claims (#298), the extraction
+        and every claim in one transaction: all of it lands or none of it does.
+        Append-only: a check's claims are never replaced. A `ValueError` and
+        nothing written for: a blank trace or check id, more than `MAX_CLAIMS`
+        claims, claims not numbered from 1 in order, one that is not `inferred`
+        or whose span, passage, hash or summary is not well formed
+        (`check_claims_write`); a check this tenant does not hold or has not
+        reserved (pending); a check already extracted."""
 
     @abstractmethod
     async def get_claims(self, tenant_id: str, check_id: str) -> ClaimExtractionRecord | None:
-        """The check's extraction, or None if it has not been extracted (or the
-        tenant holds no such check). Not owner-keyed, like `get_check`: who may
-        see a check is `CheckRecord.visible_to`, applied by every route first."""
+        """The check's completed extraction, or None if it has none (not run,
+        pending or failed, or the tenant holds no such check). Not owner-keyed,
+        like `get_check`: who may see a check is `CheckRecord.visible_to`,
+        applied by every route first."""
 
     @abstractmethod
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:

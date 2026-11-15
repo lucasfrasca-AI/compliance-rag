@@ -30,6 +30,7 @@ from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
+    RESERVATION_TTL,
     AssessmentRecord,
     BlockedClause,
     ChatCitation,
@@ -40,6 +41,7 @@ from compliance_rag.adapters.interfaces import (
     Citation,
     ClaimExtractionRecord,
     ClaimRecord,
+    ExtractionAlreadyReserved,
     LedgerStore,
     PolicyVersion,
     PrefixMeasure,
@@ -707,21 +709,75 @@ class PostgresLedgerStore(LedgerStore):
         )
         return None if row is None else _check_of_row(row)
 
+    async def reserve_extraction(
+        self, tenant_id: str, check_id: str, *, as_of: dt.date, trace_id: str
+    ) -> None:
+        if not trace_id.strip() or not check_id.strip():
+            raise ValueError(
+                "an extraction carries the trace_id of its request and names its check"
+            )
+        try:
+            # One statement, so of concurrent requests exactly one inserts, or
+            # takes over a failed or abandoned reservation; the rest get no row.
+            row = await self._fetchone(
+                "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id, status, "
+                "reserved_at) VALUES (%s, %s, %s, %s, 'pending', clock_timestamp()) "
+                "ON CONFLICT (tenant_id, check_id) DO UPDATE SET as_of = EXCLUDED.as_of, "
+                "trace_id = EXCLUDED.trace_id, status = 'pending', "
+                "reserved_at = EXCLUDED.reserved_at, claims_dropped = 0, completed_at = NULL "
+                "WHERE check_extraction.status = 'failed' OR (check_extraction.status = 'pending' "
+                "AND check_extraction.reserved_at < clock_timestamp() - %s) RETURNING 1",
+                (tenant_id, check_id, as_of, trace_id, RESERVATION_TTL),
+            )
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(f"tenant {tenant_id!r} holds no check {check_id}") from exc
+        if row is None:
+            raise ExtractionAlreadyReserved(f"check {check_id} is already extracted")
+
+    async def fail_extraction(self, tenant_id: str, check_id: str) -> None:
+        await self._execute(
+            "UPDATE check_extraction SET status = 'failed' "
+            "WHERE tenant_id = %s AND check_id = %s AND status = 'pending'",
+            (tenant_id, check_id),
+        )
+
     async def record_claims(self, record: ClaimExtractionRecord) -> None:
         check_claims_write(record)
         try:
             async with self._connection() as conn, conn.transaction():
-                await conn.execute(
-                    "INSERT INTO check_extraction (tenant_id, check_id, as_of, trace_id, "
-                    "claims_dropped, created_at) VALUES (%s, %s, %s, %s, %s, clock_timestamp())",
-                    (
-                        record.tenant_id,
-                        record.check_id,
-                        record.as_of,
-                        record.trace_id,
-                        record.claims_dropped,
-                    ),
-                )
+                done = await (
+                    await conn.execute(
+                        "UPDATE check_extraction SET status = 'done', as_of = %s, trace_id = %s, "
+                        "claims_dropped = %s, completed_at = clock_timestamp() "
+                        "WHERE tenant_id = %s AND check_id = %s AND status = 'pending' "
+                        "RETURNING 1",
+                        (
+                            record.as_of,
+                            record.trace_id,
+                            record.claims_dropped,
+                            record.tenant_id,
+                            record.check_id,
+                        ),
+                    )
+                ).fetchone()
+                if done is None:
+                    held = await (
+                        await conn.execute(
+                            "SELECT status FROM check_extraction "
+                            "WHERE tenant_id = %s AND check_id = %s",
+                            (record.tenant_id, record.check_id),
+                        )
+                    ).fetchone()
+                    if held is not None and held[0] == "done":
+                        raise ValueError(f"check {record.check_id} is already extracted")
+                    if held is None:
+                        raise ValueError(
+                            f"tenant {record.tenant_id!r} holds no check {record.check_id}, "
+                            "or has not reserved its extraction"
+                        )
+                    raise ValueError(
+                        f"check {record.check_id} has not been reserved for extraction"
+                    )
                 async with conn.cursor() as cursor:
                     await cursor.executemany(
                         "INSERT INTO check_claim (tenant_id, check_id, claim_index, passage, "
@@ -746,12 +802,6 @@ class PostgresLedgerStore(LedgerStore):
                             for claim in record.claims
                         ],
                     )
-        except psycopg.errors.UniqueViolation as exc:
-            raise ValueError(f"check {record.check_id} is already extracted") from exc
-        except psycopg.errors.ForeignKeyViolation as exc:
-            raise ValueError(
-                f"tenant {record.tenant_id!r} holds no check {record.check_id}"
-            ) from exc
         except psycopg.errors.CheckViolation as exc:
             raise ValueError(f"claims refused: {exc.diag.constraint_name}") from None
 
@@ -759,8 +809,8 @@ class PostgresLedgerStore(LedgerStore):
         async with self._connection() as conn:
             head = await (
                 await conn.execute(
-                    "SELECT as_of, trace_id, claims_dropped, created_at FROM check_extraction "
-                    "WHERE tenant_id = %s AND check_id = %s",
+                    "SELECT as_of, trace_id, claims_dropped, completed_at FROM check_extraction "
+                    "WHERE tenant_id = %s AND check_id = %s AND status = 'done'",
                     (tenant_id, check_id),
                 )
             ).fetchone()
