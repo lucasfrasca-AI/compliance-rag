@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, replace
 
 from opentelemetry.trace import Span
@@ -63,6 +64,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.assessment.draft import (
     DraftAnswer,
+    DraftCitation,
     MalformedGeneration,
     parse_draft,
     parse_repair,
@@ -323,7 +325,7 @@ class AssessmentPipeline:
                 SourceClause(c.clause_id, c.text, incomplete=c.incomplete)
                 for c in trace.delivered()
             ]
-            retrieved, fetched = await self._with_owed(
+            retrieved, fetched = await self.with_owed(
                 retrieved, tenant_id, as_of, law=law, policy_corpus=sent
             )
             # One read for every policy version in the context, prefix and
@@ -396,19 +398,21 @@ class AssessmentPipeline:
             # its keys are the context, so a repairable citation always has one.
             shown = {c.clause_id: c for c in (*policies, *retrieved)}
             context = frozenset(shown)
-            checked = await self.verifier.check_all(
-                draft.citations, context=context, as_of=as_of, user_id=user_id
-            )
             repairs: list[Generation] = []
-            final: list[CheckedCitation] = []
-            for check in checked:
-                if check.outcome.repairable and check.clause is not None:
-                    check, repair = await self._repair(
-                        check, shown=shown, context=context, as_of=as_of, user_id=user_id
-                    )
-                    await self._record_usage(tenant_id, repair)
-                    repairs.append(repair)
-                final.append(check)
+
+            async def spent(repair: Generation) -> None:
+                # Recorded as each repair returns, so a later failure keeps it.
+                await self._record_usage(tenant_id, repair)
+                repairs.append(repair)
+
+            final = await self.verify_and_repair(
+                draft.citations,
+                shown=shown,
+                context=context,
+                as_of=as_of,
+                user_id=user_id,
+                on_repair=spent,
+            )
 
             result = Answer(
                 retrieval=trace,
@@ -451,7 +455,7 @@ class AssessmentPipeline:
         current.set_attribute("answer.not_in_environment", [a.span_form for a in absent])
         return absent
 
-    async def _with_owed(
+    async def with_owed(
         self,
         retrieved: list[SourceClause],
         tenant_id: str,
@@ -465,7 +469,9 @@ class AssessmentPipeline:
         marked where the ranking returned it, fetched by id where it didn't,
         and again for anything a fetched clause is owed. Returns what the
         model is given and the ids that were fetched. One that can't be
-        fetched refuses the answer before generation."""
+        fetched refuses the answer before generation (`OwedClauseUndelivered`).
+        Public: a document check's findings (`findings.py`, #299) deliver an
+        obligation's clauses with what it owes the same way."""
         delivered = list(retrieved)
         fetched: list[str] = []
         while True:
@@ -500,7 +506,39 @@ class AssessmentPipeline:
         ]
         return marked, frozenset(fetched)
 
-    async def _repair(
+    async def verify_and_repair(
+        self,
+        citations: Sequence[DraftCitation],
+        *,
+        shown: Mapping[str, SourceClause],
+        context: frozenset[str],
+        as_of: dt.date,
+        user_id: str | None,
+        on_repair: Callable[[Generation], Awaitable[None]] | None = None,
+        gate: AbstractAsyncContextManager[object] | None = None,
+    ) -> tuple[CheckedCitation, ...]:
+        """Every citation checked against `context`, and each whose quote did not
+        match repaired once, alone, and checked again (ADR-0003): the one loop an
+        answer's citations and a finding's both go through. `on_repair` is told of
+        each repair's generation as soon as it returns, so a caller records its usage
+        before anything later can fail; `gate` holds each repair's model call (a
+        caller bounding its concurrency). A repair that cannot be made
+        (`GenerationUnavailable`) is the caller's to handle."""
+        checked = await self.verifier.check_all(
+            citations, context=context, as_of=as_of, user_id=user_id
+        )
+        final: list[CheckedCitation] = []
+        for check in checked:
+            if check.outcome.repairable and check.clause is not None:
+                check, repair = await self.repair(
+                    check, shown=shown, context=context, as_of=as_of, user_id=user_id, gate=gate
+                )
+                if on_repair is not None:
+                    await on_repair(repair)
+            final.append(check)
+        return tuple(final)
+
+    async def repair(
         self,
         failed: CheckedCitation,
         *,
@@ -508,6 +546,7 @@ class AssessmentPipeline:
         context: frozenset[str],
         as_of: dt.date,
         user_id: str | None,
+        gate: AbstractAsyncContextManager[object] | None = None,
     ) -> tuple[CheckedCitation, Generation]:
         """One targeted regeneration of one citation, re-verified. A repair
         that changes the clause id, or isn't valid JSON, leaves the original
@@ -515,7 +554,8 @@ class AssessmentPipeline:
         the very `SourceClause` the model was shown, so its marker (how it is
         cited, what it excepts or qualifies, that it is incomplete) is the
         same one, built by the same property (#243). Only its text is the
-        canonical text the verifier read."""
+        canonical text the verifier read. Public: a document check's findings
+        repair their citations as an answer's are (`findings.py`, #299)."""
         if failed.clause is None:
             raise ValueError("only a citation whose clause was read can be repaired")
         # Repairable only if in context, and the context is the keys of `shown`.
@@ -527,12 +567,13 @@ class AssessmentPipeline:
                 failed.clause.tenant_id, ((clause.clause_id, clause.text),), what="clause to repair"
             )
         with span("answer.repair", **{"repair.clause_id": clause.clause_id}) as current:
-            generation = await self.generator.generate(
-                system=REPAIR_SYSTEM_PROMPT,
-                cached_prefix=None,
-                user=repair_prompt(clause, failed.citation.quote),
-                max_tokens=REPAIR_MAX_TOKENS,
-            )
+            async with gate if gate is not None else nullcontext():
+                generation = await self.generator.generate(
+                    system=REPAIR_SYSTEM_PROMPT,
+                    cached_prefix=None,
+                    user=repair_prompt(clause, failed.citation.quote),
+                    max_tokens=REPAIR_MAX_TOKENS,
+                )
             current.set_attribute("generation.input_tokens", generation.input_tokens)
             current.set_attribute("generation.output_tokens", generation.output_tokens)
             current.set_attribute("generation.cost_usd", generation.cost_usd)

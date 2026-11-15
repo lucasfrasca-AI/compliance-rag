@@ -29,10 +29,12 @@ from opentelemetry.sdk.trace import ReadableSpan
 from compliance_rag.adapters import postgres_ledger_store
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
 from compliance_rag.adapters.interfaces import (
+    FINDINGS_RESERVATION_TTL,
     AssessmentRecord,
     ChatAnswer,
     ChatCitation,
     ExtractionAlreadyReserved,
+    FindingsAlreadyReserved,
     PolicyVersion,
     Profile,
     SourceKind,
@@ -58,11 +60,15 @@ from tests.contracts.test_ledger import (
     MODEL_PROSE,
     POLICY_CLAUSE,
     S6DA_2,
+    a_check,
+    a_findings_run,
     an_exchange,
+    an_extraction,
     assert_chat_contract,
     assert_check_contract,
     assert_claims_contract,
     assert_environment_titles_contract,
+    assert_findings_contract,
     assert_ledger_contract,
     assert_refusal_outcomes_contract,
 )
@@ -144,6 +150,10 @@ async def test_postgres_satisfies_the_check_contract(ledger: PostgresLedgerStore
 
 async def test_postgres_satisfies_the_claims_contract(ledger: PostgresLedgerStore) -> None:
     await assert_claims_contract(ledger)
+
+
+async def test_postgres_satisfies_the_findings_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_findings_contract(ledger)
 
 
 async def test_postgres_satisfies_the_refusal_outcomes_contract(
@@ -699,3 +709,42 @@ async def test_postgres_takes_over_a_reservation_held_past_the_time_out(
         )
     done = await ledger.get_claims("acme", "c" * 32)
     assert done is not None and done.trace_id == "b" * 32
+
+
+async def test_postgres_takes_over_a_stale_findings_reservation(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """A run that died holding its reservation is taken over after
+    `FINDINGS_RESERVATION_TTL`, and the first run, finishing late, is refused: it
+    commits only if the reservation is still its own (#299)."""
+    check = "c" * 32
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_version(
+        tenant_id="acme",
+        instrument_id="acme/check-1",
+        version_id="v1",
+        valid_from=dt.date(2026, 1, 1),
+        supersedes=None,
+        document_class=DocumentClass.SUBMITTED_DOCUMENT,
+        title="A document",
+    )
+    await ledger.record_check(a_check())
+    await ledger.reserve_extraction("acme", check, as_of=dt.date(2026, 6, 1), trace_id="a" * 32)
+    await ledger.record_claims(an_extraction())
+    await ledger.reserve_findings("acme", check, trace_id="a" * 32)
+    with pytest.raises(FindingsAlreadyReserved):
+        await ledger.reserve_findings("acme", check, trace_id="b" * 32)  # not yet: it is fresh
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute(
+            "UPDATE check_findings_run SET reserved_at = clock_timestamp() - %s "
+            "WHERE tenant_id = 'acme' AND check_id = %s",
+            (FINDINGS_RESERVATION_TTL + dt.timedelta(seconds=1), check),
+        )
+    await ledger.reserve_findings("acme", check, trace_id="b" * 32)  # taken over
+    with pytest.raises(ValueError, match="no longer"):
+        await ledger.record_findings(a_findings_run(check, trace_id="a" * 32))  # the stale run
+    await ledger.fail_findings("acme", check, trace_id="a" * 32)  # and it can't release theirs
+    with pytest.raises(FindingsAlreadyReserved):
+        await ledger.reserve_findings("acme", check, trace_id="c" * 32)
+    await ledger.record_findings(a_findings_run(check, trace_id="b" * 32))
+    assert await ledger.get_findings("acme", check) is not None

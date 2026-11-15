@@ -41,7 +41,8 @@ D-11 can't look healthy on a trace while every request paid full price.
 with a response schema chosen by the call's `ReplyKind`: `REPLY_SCHEMA` for an
 answer, either one (`answer`, `citations`) or a repair (`clause_id`, `quote`),
 the two shapes `assessment/draft.py` parses; `CLAIMS_SCHEMA` for the claims of a
-submitted document (`assessment/claims.py`, #298). The schema helps the model and is never trusted:
+submitted document (`assessment/claims.py`, #298); `FINDINGS_SCHEMA` for one claim's
+findings (`assessment/findings.py`, #299). The schema helps the model and is never trusted:
 `parse_draft` and `parse_repair` still validate strictly afterwards, and
 `tests/test_gemini_generator.py` holds the schema to those models.
 
@@ -90,13 +91,16 @@ from compliance_rag.adapters.generation_residency import (
     validate_generation_region,
 )
 from compliance_rag.adapters.interfaces import (
+    MAX_CITATIONS_PER_FINDING,
     MAX_CLAIMS,
+    MAX_FINDINGS_PER_CLAIM,
     Generation,
     GenerationUnavailable,
     Generator,
     ReplyKind,
     RetrievalAdmin,
     Unavailability,
+    Verdict,
 )
 from compliance_rag.settings import Settings
 
@@ -260,6 +264,49 @@ Like `REPLY_SCHEMA` it helps the model and is never trusted: `parse_claims`
 validates the reply strictly whatever the model was asked for."""
 
 
+_NULLABLE_STRING = types.Schema(type=types.Type.STRING, nullable=True)
+
+FINDINGS_SCHEMA = _object(
+    {
+        "findings": types.Schema(
+            type=types.Type.ARRAY,
+            max_items=MAX_FINDINGS_PER_CLAIM,
+            items=_object(
+                {
+                    "obligation_id": _NULLABLE_STRING,
+                    "policy_clause_id": _NULLABLE_STRING,
+                    "verdict": types.Schema(
+                        type=types.Type.STRING, enum=[v.value for v in Verdict]
+                    ),
+                    "settle_by": _NULLABLE_STRING,
+                    "citations": types.Schema(
+                        type=types.Type.ARRAY,
+                        max_items=MAX_CITATIONS_PER_FINDING,
+                        items=_object(_CITATION, "clause_id", "quote"),
+                    ),
+                },
+                "obligation_id",
+                "policy_clause_id",
+                "verdict",
+                "settle_by",
+                "citations",
+            ),
+        )
+    },
+    "findings",
+)
+"""The reply of `ReplyKind.FINDINGS` (`assessment/findings.py`, #299): one finding
+per target of a claim. Held to `FindingsEnvelope` and `ExtractedFinding` by
+`tests/test_gemini_generator.py`. Like the others it helps the model and is never
+trusted: `parse_findings` validates the reply whatever the model was asked for."""
+
+_REPLY_SCHEMAS = {
+    ReplyKind.ANSWER: REPLY_SCHEMA,
+    ReplyKind.CLAIMS: CLAIMS_SCHEMA,
+    ReplyKind.FINDINGS: FINDINGS_SCHEMA,
+}
+
+
 class _ModelsLike(Protocol):
     async def generate_content(
         self,
@@ -380,7 +427,7 @@ class GeminiGenerator(Generator):
             system_instruction=system,
             max_output_tokens=max_tokens + THINKING_HEADROOM_TOKENS,
             response_mime_type="application/json",
-            response_schema=CLAIMS_SCHEMA if reply is ReplyKind.CLAIMS else REPLY_SCHEMA,
+            response_schema=_REPLY_SCHEMAS[reply],
             thinking_config=types.ThinkingConfig(thinking_level=_THINKING_LEVEL),
             # No tools are offered, so there is nothing to call automatically.
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),

@@ -27,6 +27,7 @@ from compliance_rag.api import (
     answers,
     chats,
     check_claims,
+    check_findings,
     check_pages,
     checks,
     pages,
@@ -108,6 +109,7 @@ def create_app(services: ApiServices, *, redirect_root: bool = True) -> FastAPI:
     app.include_router(chats.router)
     app.include_router(checks.router)
     app.include_router(check_claims.router)
+    app.include_router(check_findings.router)
     app.include_router(sources.router)
     app.include_router(sign_in.router)
     app.include_router(pages.router)

@@ -451,6 +451,38 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def check_document_residency(
+    tenant_text: TenantTextGate,
+    tenant_id: str,
+    *,
+    policies: Sequence[SourceClause],
+    passages: Sequence[ClauseRecord],
+    source: str,
+) -> None:
+    """What every call that sends a submitted document, or a claim of it, to the
+    model clears first, on exactly what will be sent: offshore, the CAG prefix,
+    every passage and the whole document must be registered synthetic
+    (`GenerationResidencyError`, ADR-0026, ADR-0032), and the passages must be the
+    stored source's own (`LookupError`), so what the gate reads is what is sent.
+    Shared by claim extraction and the findings that follow it (#299)."""
+    tenant_text.check(
+        tenant_id,
+        ((p.clause_id, p.text) for p in policies),
+        what="clause(s) of the CAG prefix",
+    )
+    tenant_text.check(
+        tenant_id,
+        ((p.clause_id, p.canonical_text) for p in passages),
+        what="passage(s) of a submitted document",
+    )
+    tenant_text.check_document(source.encode("utf-8"))
+    for passage in passages:
+        if source[passage.char_start or 0 : passage.char_end or 0] != passage.text:
+            raise LookupError(
+                f"{passage.clause_id}: the stored passage is not the stored document's own"
+            )
+
+
 class ClaimExtractor:
     """One generator, the ledger and the residency gate: no retrieval (see the
     module docstring). `tenant_text` is required, as `AssessmentPipeline`'s is:
@@ -501,22 +533,13 @@ class ClaimExtractor:
         ) as current:
             # Before anything is built: offshore, the prefix, every passage and the
             # whole document must be registered synthetic (ADR-0026, ADR-0032).
-            self._tenant_text.check(
+            check_document_residency(
+                self._tenant_text,
                 tenant_id,
-                ((p.clause_id, p.text) for p in policies),
-                what="clause(s) of the CAG prefix",
+                policies=policies,
+                passages=passages,
+                source=source,
             )
-            self._tenant_text.check(
-                tenant_id,
-                ((p.clause_id, p.canonical_text) for p in passages),
-                what="passage(s) of a submitted document",
-            )
-            self._tenant_text.check_document(source.encode("utf-8"))
-            for passage in passages:
-                if source[passage.char_start or 0 : passage.char_end or 0] != passage.text:
-                    raise LookupError(
-                        f"{passage.clause_id}: the stored passage is not the stored document's own"
-                    )
             prefix = cag_prefix(policies, digest.text)
             user = claims_user_prompt(passages)  # DelimiterCollision, before anything is sent
             check_prefix_cap(CLAIMS_SYSTEM_PROMPT, prefix, current=current)

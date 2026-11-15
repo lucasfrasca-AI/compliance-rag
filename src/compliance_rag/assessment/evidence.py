@@ -22,11 +22,14 @@ system and on whose word (CONTEXT.md: Evidence).
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import cast
 
 from compliance_rag.corpus.models import NO_END_DATE, validate_tenant_id
 
@@ -241,3 +244,115 @@ def check_evidence_write(evidence: Evidence) -> None:
         evidence.trace_id and evidence.trace_id.strip("0")
     ):
         raise ValueError("asserted evidence is recorded with the trace_id of its request")
+
+
+def encode_fact(value: FactValue) -> object:
+    """JSON for a fact value. A date is tagged so it reads back as a date, not a
+    string that happens to look like one."""
+    if isinstance(value, dt.date):
+        return {"date": value.isoformat()}
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def decode_fact(raw: object) -> FactValue:
+    if isinstance(raw, dict):
+        tagged = cast("dict[str, object]", raw)
+        if set(tagged) != {"date"} or not isinstance(tagged["date"], str):
+            raise ValueError(f"unreadable evidence value {raw!r}")
+        return dt.date.fromisoformat(tagged["date"])
+    if isinstance(raw, list):
+        return tuple(str(v) for v in cast("list[object]", raw))
+    if isinstance(raw, bool | int | float | str):
+        return raw
+    raise ValueError(f"unreadable evidence value {raw!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class FactRow:
+    """One evidence row as an assessment relied on it: which row, and what it said."""
+
+    evidence_id: str
+    field: str
+    value: FactValue
+    period_start: dt.date
+    period_end: dt.date
+    provenance: EvidenceProvenance
+    supersedes: str | None = None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "evidence_id": self.evidence_id,
+            "field": self.field,
+            "value": encode_fact(self.value),
+            "period_start": self.period_start.isoformat(),
+            "period_end": self.period_end.isoformat(),
+            "provenance": self.provenance.value,
+            "supersedes": self.supersedes,
+        }
+
+    @classmethod
+    def of_json(cls, raw: object) -> FactRow:
+        row = cast("dict[str, object]", raw)
+        supersedes = row["supersedes"]
+        return cls(
+            evidence_id=str(row["evidence_id"]),
+            field=str(row["field"]),
+            value=decode_fact(row["value"]),
+            period_start=dt.date.fromisoformat(str(row["period_start"])),
+            period_end=dt.date.fromisoformat(str(row["period_end"])),
+            provenance=EvidenceProvenance(str(row["provenance"])),
+            supersedes=None if supersedes is None else str(supersedes),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FactsSnapshot:
+    """The tenant's facts a Track A result was decided on (ADR-0034): every
+    evidence row the ledger held when the coverage was computed, with its value,
+    in evidence-id order, and the sha256 of that list's canonical JSON. Recorded
+    with the assessment, in the same transaction, so a stored assessment shows
+    exactly what it was decided on. It **records** what was read; it does not
+    reconstruct the facts as of a past date (that waits for #123)."""
+
+    rows: tuple[FactRow, ...]
+
+    @classmethod
+    def of(cls, evidence: Iterable[Evidence]) -> FactsSnapshot:
+        return cls(
+            tuple(
+                sorted(
+                    (
+                        FactRow(
+                            e.evidence_id,
+                            e.field,
+                            e.value,
+                            e.period.start,
+                            e.period.end,
+                            e.provenance,
+                            e.supersedes,
+                        )
+                        for e in evidence
+                    ),
+                    key=lambda r: r.evidence_id,
+                )
+            )
+        )
+
+    def json(self) -> list[dict[str, object]]:
+        return [r.json() for r in self.rows]
+
+    @property
+    def sha256(self) -> str:
+        canonical = json.dumps(self.json(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def of_json(cls, raw: object, sha256: str) -> FactsSnapshot:
+        """The stored form back; a snapshot whose hash is not the stored one is
+        an integrity failure (`ValueError`), never read as what it was."""
+        snapshot = cls(tuple(FactRow.of_json(r) for r in cast("list[object]", raw)))
+        if snapshot.sha256 != sha256:
+            raise ValueError("the stored facts are not the facts the assessment hashed")
+        return snapshot

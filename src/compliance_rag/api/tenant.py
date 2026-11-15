@@ -340,7 +340,7 @@ class AssessmentIn(BaseModel):
     as_of: dt.date | None = Field(default=None, ge=EARLIEST, le=LATEST)
 
 
-def _version_json(version: SourceVersion) -> dict[str, object]:
+def version_json(version: SourceVersion) -> dict[str, object]:
     return {"tag": version.tag, "sha": version.sha, "untagged": version.untagged}
 
 
@@ -349,15 +349,15 @@ def _recorded_json(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> d
         "assessment_id": record.assessment_id,
         "tenant_id": record.tenant_id,
         "as_of": record.as_of.isoformat(),
-        "corpus_version": _version_json(record.corpus),
-        "mapping_version": _version_json(record.mapping),
+        "corpus_version": version_json(record.corpus),
+        "mapping_version": version_json(record.mapping),
         "recorded_by": record.user_id,
         "counts": outcome_counts(r.outcome for r in rows),
         "obligations": [_row_json(r) for r in rows],
     }
 
 
-def _held(sources: LoadedSources) -> tuple[SourceVersion, SourceVersion]:
+def held_sources(sources: LoadedSources) -> tuple[SourceVersion, SourceVersion]:
     """The corpus and mapping versions the graph holds, or the 503 saying why
     there is nothing to record an assessment against: a load is open (wait),
     or one was abandoned after it may have written and none has finished since
@@ -406,7 +406,7 @@ async def record_coverage(
     day = (body.as_of if body else None) or today()
     services = services_of(request)
     before = await services.graph.loaded_sources()
-    corpus, mapping = _held(before)
+    corpus, mapping = held_sources(before)
     coverage = await coverage_on(services, who.tenant_id, day)
     if await services.graph.loaded_sources() != before:
         raise HTTPException(
