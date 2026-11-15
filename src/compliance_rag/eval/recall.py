@@ -101,7 +101,9 @@ FLOORS: Mapping[Cell, float] = {
     Cell(FUSED, Category.EXACT_ID, POLICY): 1.0,
     Cell(FUSED, Category.PARAPHRASE, LAW): 5 / 6,  # target 0.95: open (GQ-10, #221)
     Cell(FUSED, Category.PARAPHRASE, POLICY): 1.0,
-    Cell(FUSED, Category.CROSS_CLAUSE, LAW): 4 / 9,  # GQ-18 1/3, GQ-19 1/2, GQ-20 1/2
+    # GQ-18 1/3, GQ-19 0 (was 1/2), GQ-20 1/2: re-baselined from 4/9 when #282
+    # grew the corpus to 1023 clauses (the human's decision, 2026-11-15; #343).
+    Cell(FUSED, Category.CROSS_CLAUSE, LAW): 5 / 18,
     Cell(FUSED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-23 1/2
     # The reranked gate (CI's `reranker-fidelity` job): the cross-encoder's
     # top 10, recall@10, the retrieval metric. The targets are here.
@@ -118,15 +120,20 @@ FLOORS: Mapping[Cell, float] = {
     Cell(DELIVERED, Category.EXACT_ID, POLICY): 1.0,
     Cell(DELIVERED, Category.PARAPHRASE, LAW): 1.0,
     Cell(DELIVERED, Category.PARAPHRASE, POLICY): 1.0,
-    # GQ-18's (a) and (b) come with APP 11.1, and GQ-20's "agency means:" with
-    # its paragraph (ca). Still missed: GQ-19's APP 10.1 (#206).
-    Cell(DELIVERED, Category.CROSS_CLAUSE, LAW): 5 / 6,
+    # GQ-18's (a) and (b) come with APP 11.1. Still missed: GQ-19's APP 10.1
+    # (#206), and since #282 GQ-20's "agency means:", whose paragraph (ca) s7A(2)
+    # pushed out of the rerank candidates: re-baselined from 5/6 (the human's
+    # decision, 2026-11-15; #344).
+    Cell(DELIVERED, Category.CROSS_CLAUSE, LAW): 2 / 3,
     Cell(DELIVERED, Category.CROSS_CLAUSE, POLICY): 0.9,  # GQ-21 1/2
 }
 """What the gate achieves on the whole compilation (ADR-0043, measured
 2026-10-15; the delivered cells ADR-0045, the same day): enforced, so any drop
 in any cell fails. Raised deliberately when recall improves, never lowered to
-let a drop pass."""
+let a drop pass. The one exception is a decision of the human's, recorded with
+the issue that tracks the drop: on 2026-11-15 (#282, #340) the two law
+cross-clause cells that fell when the corpus grew to 1023 clauses were
+re-baselined to their new values (#343, #344)."""
 
 
 def target_of(cell: Cell) -> float | None:
