@@ -32,6 +32,7 @@ import httpx
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from compliance_rag.adapters import corpus_lifecycle
 from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.fakes import (
     FakeClauseStore,
@@ -46,14 +47,17 @@ from compliance_rag.api import checks
 from compliance_rag.api.app import create_app
 from compliance_rag.api.checks import (
     MAX_DOCUMENT_BYTES,
-    MAX_PASSAGES,
     MAX_REQUEST_BYTES,
     CheckSubmission,
 )
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY, STATIC_DIR
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.corpus.models import DocumentClass, Scope, stable_id
-from compliance_rag.corpus.submitted_parser import SubmittedFormat, segment_submitted_document
+from compliance_rag.corpus.submitted_parser import (
+    MAX_PASSAGES,
+    SubmittedFormat,
+    segment_submitted_document,
+)
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.golden_corpus import FIXTURES, submitted_fixture_files
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
@@ -640,7 +644,7 @@ async def test_a_request_over_the_limit_is_refused_413_unparsed(
         raise AssertionError("an over-limit request must be refused before it is parsed")
 
     monkeypatch.setattr(checks, "_submission", parsed)
-    monkeypatch.setattr(checks, "segment_submitted_document", parsed)
+    monkeypatch.setattr(corpus_lifecycle, "segment_submitted_document", parsed)
     async with sydney.client(SUBMITTER_TOKEN) as client:
         # declared over the limit: refused before a byte is read
         declared = await client.post(
@@ -668,13 +672,33 @@ async def test_a_document_over_the_limit_is_refused_413_before_it_is_cut_into_pa
     def cut(*_: Any, **__: Any) -> None:  # Any: anything at all
         raise AssertionError("the bytes are counted before the document is parsed")
 
-    monkeypatch.setattr(checks, "segment_submitted_document", cut)
+    monkeypatch.setattr(corpus_lifecycle, "segment_submitted_document", cut)
     over = "a" * (MAX_DOCUMENT_BYTES + 1)
     response = await submit(sydney, upload("big.txt", over))
     assert response.status_code == 413 and response.json()["detail"]["error"] == "too_large"
     # bytes, not characters: 110,000 two-byte characters are 220,000 bytes
     assert (await submit(sydney, upload("big.txt", "é" * 110_000))).status_code == 413
     sydney.assert_nothing_written()
+
+
+async def test_a_non_ascii_digit_in_content_length_is_not_a_declared_size() -> None:
+    """`"\xb2".isdigit()` is true and `int("\xb2")` raises: a header of such a
+    character must be read as no declared length, not crash the request."""
+    from starlette.requests import Request
+
+    body = b'{"filename": "a.txt", "content": "Words.\\n"}'
+    for raw in (b"\xb2", b"\xb3", b"\xb9"):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/checks",
+            "headers": [(b"content-length", raw)],
+        }
+
+        async def receive() -> dict[str, Any]:  # Any: an ASGI message
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        assert await checks._body(Request(scope, receive)) == body  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_a_document_at_the_limit_is_accepted(sydney: World) -> None:
@@ -689,6 +713,7 @@ async def test_a_document_with_too_many_passages_is_refused_422(sydney: World) -
     assert response.status_code == 422 and response.json()["detail"]["error"] == (
         "too_many_passages"
     )
+    sydney.assert_nothing_written()  # refused by the lifecycle, before any write
     assert (await submit(sydney, upload("fits.txt", "x\n\n" * MAX_PASSAGES))).status_code == 201
     assert len(sydney.ledger._checks) == 1  # pyright: ignore[reportPrivateUsage]
 
@@ -846,6 +871,8 @@ async def test_the_new_check_page_has_the_form_and_its_one_script(sydney: World)
     scripts = sorted(a["src"] or "" for a in page.where("script"))
     assert scripts == ["/static/ask.js", "/static/checks.js", "/static/vendor/htmx/htmx.min.js"]
     assert "Markdown" in response.text and "200 KiB" in response.text
+    (form,) = page.where("form", id="check-form")
+    assert form["data-max-bytes"] == str(MAX_DOCUMENT_BYTES) and form["data-max-kib"] == "200"
     assert page.where("a", href="/checks/new")  # the navigation links to it
     assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
     assert response.headers["cache-control"] == "no-store"
@@ -918,6 +945,9 @@ def test_checks_js_never_writes_html() -> None:
         assert forbidden not in script, forbidden
     assert "http://" not in script and "https://" not in script
     assert 'fetch("/v1/checks"' in script
+    # the limit is the server's, handed over by the template, not written twice
+    assert "204800" not in script and "200 KiB" not in script
+    assert "dataset.maxBytes" in script
     assert "synthetic" not in script  # the page cannot say it either
 
 

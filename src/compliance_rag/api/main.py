@@ -149,7 +149,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 generation_region=settings.generation_region,
                 synthetic_registry=SyntheticRegistry.load(),
             ),
-            checks=(graph.verify, *generator_checks),
+            readiness=(graph.verify, *generator_checks),
             closers=(graph.aclose,),
         )
     )

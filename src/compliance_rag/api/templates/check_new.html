@@ -7,7 +7,7 @@
 <noscript><p class="card notice">Submitting a document needs JavaScript.</p></noscript>
 <div id="check-notice" class="card outcome notice" role="alert" hidden></div>
 {#- method="dialog" outside a dialog submits nothing, so without script the file goes nowhere (not into a URL). -#}
-<form id="check-form" class="ask" method="dialog">
+<form id="check-form" class="ask" method="dialog" data-max-bytes="{{ max_bytes }}" data-max-kib="{{ max_kib }}">
 <label for="check-file">Document</label>
 <input id="check-file" name="file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" required>
 <label for="check-title">Title (optional)</label>

@@ -39,7 +39,12 @@ def _no_such_check() -> PageError:
 
 @router.get("/checks/new", response_class=HTMLResponse)
 async def new_check_page(request: Request, _: PageCaller) -> HTMLResponse:
-    return render(request, "check_new.html", max_kib=MAX_DOCUMENT_BYTES // 1024)
+    return render(
+        request,
+        "check_new.html",
+        max_bytes=MAX_DOCUMENT_BYTES,
+        max_kib=MAX_DOCUMENT_BYTES // 1024,
+    )
 
 
 @router.get("/checks/{check_id}", response_class=HTMLResponse)

@@ -27,9 +27,12 @@ costs anything:
    before the document is cut into passages;
 6. a file that is not Markdown or plain text: 415 (a PDF is #307's, DOCX waits
    for a customer to name it, ADR-0053 U2);
-7. a document with no words, or more than `MAX_PASSAGES` passages: 422;
-8. offshore, a passage the synthetic registry does not vouch for: 403
-   `residency`, naming the first passage's id and never its text.
+7. in `submit_document`, before anything is written: a document with no words,
+   or cut into more than `MAX_PASSAGES` passages (the lifecycle's own limit,
+   `corpus/submitted_parser.py`, so every caller is bound by it): 422;
+8. offshore, a passage the synthetic registry does not vouch for, or a document
+   that is not a registered fixture byte for byte: 403 `residency`, naming the
+   first passage's id and never its text.
 
 **Two writes, in an order that fails safe.** The document first (the
 lifecycle's ledger record is its commit point, ADR-0048), then the check. A
@@ -86,10 +89,11 @@ from compliance_rag.corpus.models import (
     validate_title,
 )
 from compliance_rag.corpus.submitted_parser import (
+    EmptyDocument,
     SubmittedFormat,
+    TooManyPassages,
     format_of_filename,
     passage_number,
-    segment_submitted_document,
 )
 
 router = APIRouter(prefix="/v1")
@@ -103,10 +107,6 @@ refused here instead."""
 MAX_DOCUMENT_BYTES = 204_800
 """The document's UTF-8 bytes, 200 KiB: a long contract or policy (about 35,000
 words). Checked on the raw bytes, before anything is cut into passages."""
-MAX_PASSAGES = 1_000
-"""Passages in one document. Each is a clause record in the clause store (an
-object each) and each is read to draw the page, so the count is bounded as the
-bytes are: `MAX_DOCUMENT_BYTES` alone would allow some 70,000 of them."""
 MAX_FILENAME_CHARS = 255
 MAX_TITLE_CHARS = 200
 VERSION = "v1"
@@ -170,7 +170,7 @@ async def _body(request: Request) -> bytes:
     declared length over the limit is refused before any is read, and an
     undeclared or understated one is refused as it streams past the limit."""
     declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > MAX_REQUEST_BYTES:
+    if declared.isascii() and declared.isdigit() and int(declared) > MAX_REQUEST_BYTES:
         raise _too_big()
     body = bytearray()
     async for chunk in request.stream():
@@ -219,25 +219,6 @@ def _format_of(filename: str) -> SubmittedFormat:
         raise _refusal(415, "unsupported_format", UNSUPPORTED_FORMAT) from None
 
 
-def _passage_count(source: str, fmt: SubmittedFormat) -> int:
-    """How many passages `source` is cut into, which `submit_document` will
-    cut again: the same function of the same text, so the count is the one
-    that is stored. A document with no words is refused here (422)."""
-    try:
-        return len(
-            segment_submitted_document(
-                source,
-                document_format=fmt,
-                instrument_id="check/count",
-                version_id=VERSION,
-                tenant_id="check",
-                user_id="check",
-            )
-        )
-    except ValueError:
-        raise _refusal(422, "no_words", "the document has no words to check") from None
-
-
 def source_path(instrument_id: str) -> str:
     return f"/v1/sources/{instrument_id}/{VERSION}"
 
@@ -268,15 +249,6 @@ async def submit_check(request: Request, who: CurrentCaller) -> JSONResponse:
             )
         fmt = _format_of(submission.filename)
         span.set_attribute("check.format", fmt.value)
-        passages = _passage_count(submission.content, fmt)
-        span.set_attribute("check.passages", passages)
-        if passages > MAX_PASSAGES:
-            span.set_attribute("check.refused", "too_many_passages")
-            raise _refusal(
-                422,
-                "too_many_passages",
-                f"the document has {passages:,} passages; the limit is {MAX_PASSAGES:,}",
-            )
         check_id = uuid.uuid4().hex
         instrument_id = f"{who.tenant_id}/check-{check_id}"
         span.set_attribute("check.check_id", check_id)
@@ -285,7 +257,7 @@ async def submit_check(request: Request, who: CurrentCaller) -> JSONResponse:
             # The one write: the lifecycle stores the passages, the source and
             # the version, and refuses offshore any passage the synthetic
             # registry does not vouch for before it writes anything.
-            await services.lifecycle.submit_document(
+            passages = await services.lifecycle.submit_document(
                 submission.content,
                 document_format=fmt,
                 instrument_id=instrument_id,
@@ -295,9 +267,15 @@ async def submit_check(request: Request, who: CurrentCaller) -> JSONResponse:
                 submitted_by=who.member.uid,
                 title=title,
             )
+        except EmptyDocument:
+            raise _refusal(422, "no_words", "the document has no words to check") from None
+        except TooManyPassages as refused:
+            span.set_attribute("check.refused", "too_many_passages")
+            raise _refusal(422, "too_many_passages", str(refused)) from None
         except GenerationResidencyError as refused:
             span.set_attribute("check.refused", "residency")
             raise _refusal(403, "residency", str(refused)) from None
+        span.set_attribute("check.passages", passages)
         trace_id = telemetry.current_trace_id()
         await services.ledger.record_check(
             CheckRecord(

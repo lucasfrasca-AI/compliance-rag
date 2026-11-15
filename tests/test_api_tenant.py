@@ -723,7 +723,7 @@ def test_a_failing_startup_check_stops_the_app() -> None:
     async def unreachable() -> None:
         raise ConnectionError("graph unreachable")
 
-    app = create_app(_services(FakeLedgerStore(), checks=(unreachable,)))
+    app = create_app(_services(FakeLedgerStore(), readiness=(unreachable,)))
     with pytest.raises(ConnectionError, match="graph unreachable"), TestClient(app):
         pass
 

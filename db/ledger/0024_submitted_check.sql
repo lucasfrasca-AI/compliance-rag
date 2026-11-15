@@ -44,10 +44,6 @@ CREATE TABLE IF NOT EXISTS submitted_check (
     CONSTRAINT submitted_check_format CHECK (document_format IN ('markdown', 'text'))
 );
 
--- A member's checks, for a list.
-CREATE INDEX IF NOT EXISTS submitted_check_by_member
-    ON submitted_check (tenant_id, user_id, created_at);
-
 COMMENT ON TABLE submitted_check IS
     'one member''s submission of a document to be checked (#297, ADR-0059): the check, pointing at its submitted_document version';
 COMMENT ON COLUMN submitted_check.user_id IS

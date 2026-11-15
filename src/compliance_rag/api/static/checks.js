@@ -6,8 +6,9 @@
 // residency, who may see it): this only carries the file and says what the
 // server said.
 
+// Mirrors the server's check id (`deps.UUID4_HEX`): only to refuse an answer that
+// is not one before navigating on it. The server decides what an id is.
 const CHECK_ID = /^[0-9a-f]{32}$/;
-const MAX_BYTES = 204800;
 
 function say(text) {
   const notice = document.getElementById("check-notice");
@@ -44,8 +45,10 @@ form?.addEventListener("submit", async (event) => {
     say("Choose a file first.");
     return;
   }
-  if (file.size > MAX_BYTES) {
-    say("That file is over 200 KiB, so the server would refuse it.");
+  // The limit is the server's: the template hands it over in data-max-bytes.
+  const maxBytes = Number(form.dataset.maxBytes);
+  if (maxBytes > 0 && file.size > maxBytes) {
+    say(`That file is over ${form.dataset.maxKib} KiB, so the server would refuse it.`);
     return;
   }
   submit.disabled = true;

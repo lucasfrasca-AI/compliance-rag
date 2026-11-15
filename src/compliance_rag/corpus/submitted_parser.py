@@ -41,6 +41,26 @@ _HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(?P<title>.*?))?(?:[ \t]+#+)?[ 
 _FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})")
 
 
+MAX_PASSAGES = 1_000
+"""Passages in one submitted document. Each is a clause record in the clause
+store (an object each) and is read when the document is drawn, so the count is
+bounded as the bytes are; `CorpusLifecycle.submit_document` refuses more before
+it writes anything, so every caller is bound by it (#297). The API's byte limit
+alone would allow some 70,000."""
+
+
+class EmptyDocument(ValueError):
+    """A submitted document with no words, so no passage."""
+
+
+class TooManyPassages(ValueError):
+    """A submitted document cut into more than `MAX_PASSAGES` passages."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(f"the document has {count:,} passages; the limit is {MAX_PASSAGES:,}")
+        self.count = count
+
+
 class SubmittedFormat(StrEnum):
     MARKDOWN = "markdown"
     TEXT = "text"
@@ -154,7 +174,7 @@ def segment_submitted_document(
     the instrument id's. A document with nothing in it is refused."""
     passages = tuple(_passages(source, document_format))
     if not passages:
-        raise ValueError("a submitted document with no passage: it has no words")
+        raise EmptyDocument("a submitted document with no passage: it has no words")
     return tuple(
         ClauseRecord.build(
             instrument_id=instrument_id,
