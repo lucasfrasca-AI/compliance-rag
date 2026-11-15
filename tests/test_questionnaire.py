@@ -227,11 +227,14 @@ async def test_a_state_is_asked_on_the_date_and_a_year_for_that_year() -> None:
     assert state is not None and [(s.key, s.label) for s in state.slots] == [(STATE, f"On {AS_OF}")]
     turnover = q.item("annual_turnover_aud")
     assert turnover is not None and turnover.answer_kind is AnswerKind.NUMBER
-    # s6D(1) reads the previous year, s6D(2) the current one
-    assert [(s.key, s.label, s.period) for s in turnover.slots] == [
+    # s6D(1) reads the previous year, s6D(2) the current one, and s6D(4)(a), with
+    # no start date recorded, every year ended since 21 December 2001: since #338
+    # (ADR-0058) none of them is a part year left open, so each is asked
+    assert [(s.key, s.label, s.period) for s in turnover.slots[:2]] == [
         ("fy2025", "FY2025-26", Period.financial_year(2025)),
         ("fy2026", "FY2026-27", Period.financial_year(2026)),
     ]
+    assert [s.key for s in turnover.slots[2:]] == [f"fy{y}" for y in range(2001, 2025)]
     assert all(s.status is SlotStatus.OPEN for s in q.items[0].slots)
 
 
@@ -239,7 +242,8 @@ async def test_s6d4a_asks_each_financial_year_since_the_business_started_that_la
     None
 ):
     """A "never over $3M" shortcut can't stand in for the years (#123): each is
-    asked, and the one the business started in is not (a part year, s6DA(2))."""
+    asked, the one the business started in too, its figure worked out by
+    s6DA(2)'s formula, which the corpus holds since #338 (ADR-0058)."""
     started = fact(1, "business_started_on", dt.date(2015, 3, 2), Period(dt.date(2015, 3, 2)))
     q, _ = await asked(started)
     turnover = q.item("annual_turnover_aud")
@@ -248,7 +252,7 @@ async def test_s6d4a_asks_each_financial_year_since_the_business_started_that_la
     assert keys[0] == "fy2025"
     assert set(keys) >= {f"fy{y}" for y in range(2015, 2026)}
     labels = [s.label for s in turnover.slots]
-    assert "FY2014-15" not in labels  # the part year
+    assert "FY2014-15" in labels and "FY2013-14" not in labels  # the start year, not before
     assert "FY2015-16" in labels and "FY2025-26" in labels
     assert "business_started_on" not in fields(q)  # known, so not asked again
 

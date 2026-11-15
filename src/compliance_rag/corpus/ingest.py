@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from compliance_rag.adapters.interfaces import ClauseStore
 from compliance_rag.corpus.models import Scope, canonical_sha256, sha256_hex
 from compliance_rag.corpus.parser import parse_compilation
+from compliance_rag.corpus.second_source import ClauseCompletion
 from compliance_rag.corpus.selection_manifest import SelectionManifest
 
 
@@ -77,6 +78,7 @@ async def ingest_compilation(
     selection: SelectionManifest,
     store: ClauseStore,
     acknowledged_additions: frozenset[str] = frozenset(),
+    completions: tuple[ClauseCompletion, ...] = (),
 ) -> IngestResult:
     """Parse `source_html`, select the clauses `selection` puts in scope,
     and write them — unless doing so would silently change what's already
@@ -94,6 +96,10 @@ async def ingest_compilation(
     written. A removal or an edit is never acknowledgeable (issue #19's
     guarantee; the acknowledgement mirrors ADR-0021's findings-citing count).
 
+    `completions` are the version's clauses whose text has a second source
+    (ADR-0058), applied to the parse: an ingest of a version that has one
+    without it would read as drift from what is stored.
+
     Library law only: a tenant document is written through `CorpusLifecycle`,
     where the residency gate and the synthetic registry apply (ADR-0023,
     ADR-0026) — this path checks neither.
@@ -109,6 +115,7 @@ async def ingest_compilation(
         version_id=version_id,
         tenant_id=tenant_id,
         scope=scope,
+        completions=completions,
     )
     in_scope = selection.select(parsed.clauses)
 

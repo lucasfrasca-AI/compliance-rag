@@ -164,17 +164,19 @@ async def test_a_year_s6d4a_does_not_count_leaves_it_asked(
     assert S6D4A in asked
 
 
-async def test_fy2023_24_ended_before_it_started_and_its_start_year_is_a_part_year() -> None:
+async def test_fy2023_24_ended_before_it_started_and_its_start_year_is_asked() -> None:
     """Started 1 August 2024: FY2023-24's figure doesn't count, and FY2024-25,
-    the year it started in, is a part year, whose turnover s6DA(2)'s formula
-    sets and the corpus doesn't hold (#211, ADR-0047). No figure settles it,
-    so s6D(4)(a) is unassessable and not asked."""
+    the year it started in, is a part year whose turnover s6DA(2)'s formula
+    sets. Since #338 the corpus holds the formula (ADR-0058), so that year is
+    asked for, its figure worked out by the formula, as the question says;
+    until then it was left unassessable (#211, ADR-0047)."""
     app11, asked = await _app11(_ga05(started=dt.date(2024, 8, 1)))
     assert app11.outcome is Outcome.UNASSESSABLE
-    assert S6D4A not in asked
+    assert S6D4A in asked
     leaf = app11.explanation.find(S6D4A)
     assert leaf is not None and leaf.truth is Truth.UNKNOWN
-    assert [clause for clause, _ in leaf.incomplete] == [f"{P}s6da/2"]
+    assert leaf.incomplete == ()
+    assert leaf.question is not None and leaf.question.missing_periods == ("FY2024-25",)
 
 
 async def test_every_ended_year_known_and_under_settles_s6d4a_false() -> None:

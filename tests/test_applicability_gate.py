@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -49,23 +50,34 @@ def stored_incomplete() -> dict[str, Incomplete]:
     return {c.clause_id: c.incomplete for c in load_compilation_clauses().clauses if c.incomplete}
 
 
-def fake_for(mappings: MappingSet, labels: ApplicabilityGoldenSet) -> FakeGraphStore:
+def fake_for(
+    mappings: MappingSet,
+    labels: ApplicabilityGoldenSet,
+    *,
+    incomplete: Mapping[str, Incomplete] | None = None,
+) -> FakeGraphStore:
+    """`incomplete` stands in for the committed corpus's state (a test of the
+    corpus as it stood before #338, say)."""
     return FakeGraphStore(
         mappings,
         clause_validity=labels.clause_validity(_clause_ids(mappings)),
-        incomplete=stored_incomplete(),
+        incomplete=stored_incomplete() if incomplete is None else incomplete,
     )
 
 
 async def graph_for(
-    graph: Neo4jGraph, mappings: MappingSet, labels: ApplicabilityGoldenSet
+    graph: Neo4jGraph,
+    mappings: MappingSet,
+    labels: ApplicabilityGoldenSet,
+    *,
+    incomplete: Mapping[str, Incomplete] | None = None,
 ) -> GraphTrackA:
     """The mappings loaded into a real graph over skeleton clauses: the graph
         stores no clause text, only ids, validity and a hash, so placeholder text
         is enough for Track A (and never leaves the test database). Each carries the
     committed corpus's incompleteness, as the stored Clause node does (ADR-0047)."""
     await graph.apply_schema()
-    incomplete = stored_incomplete()
+    incomplete = stored_incomplete() if incomplete is None else incomplete
     by_version: dict[tuple[str, str], list[str]] = {}
     for clause_id in sorted(_clause_ids(mappings)):
         instrument_id, version_id, path = clause_id.split(":")

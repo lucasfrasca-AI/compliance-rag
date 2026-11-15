@@ -15,6 +15,12 @@ on #211):
 
 The reading that says so is a reviewed artefact, never the signed mapping,
 and it also carries the words a reader is shown (decision 3).
+
+Since #338 the committed corpus holds s6DA(2) complete, its formula read from
+the PDF compilation (ADR-0058), and the two reading files are retired from
+`corpus/instruments/`. The mechanism stays, for the next incomplete clause, and
+is tested here on the corpus as it stood before #338 (`tests/before_338.py`):
+s6da/2 as the ePub alone gives it, and the two files as they were signed.
 """
 
 from __future__ import annotations
@@ -34,7 +40,6 @@ from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.assessment.coverage import Explanation, Outcome, Truth
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.corpus.incomplete_reading import (
-    INSTRUMENTS_ROOT,
     IncompleteReadings,
     UnsignedIncompleteReading,
     committed_incomplete_readings,
@@ -49,13 +54,16 @@ from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.graph.applicability import Snapshot, explain
 from compliance_rag.graph.mappings import load_mapping_set
 from compliance_rag.graph.track_a import snapshot_of_mappings
-from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for, graph_for, stored_incomplete
+from tests.before_338 import INCOMPLETE as BEFORE_338
+from tests.before_338 import READINGS_ROOT, before_338, signed_readings
+from tests.before_338 import readings_before_338 as readings_before_338
+from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for, graph_for
 from tests.test_neo4j_graph import graph as graph
 from tests.test_neo4j_graph import needs_neo4j
 from tests.test_obligation_qualifiers import strings
 
 S6DA_2 = "privacy-act-1988:C2026C00227:s6da/2"
-REVIEW = INSTRUMENTS_ROOT / "privacy-act-1988" / "C2026C00227" / "incomplete.yaml"
+REVIEW = READINGS_ROOT / "privacy-act-1988" / "C2026C00227" / "incomplete.yaml"
 PART_YEAR = REVIEW.with_name("part_year.yaml")
 SIGNED = (
     "the turnover formula in s 6DA(2) is published as an image in the compilation "
@@ -83,9 +91,9 @@ def _snapshot(readings: IncompleteReadings | None = None) -> Snapshot:
         mappings,
         AS_OF,
         clause_validity=labels.clause_validity(set(mappings.clause_ids)),
-        incomplete=stored_incomplete(),
+        incomplete=BEFORE_338,
     )
-    return snapshot if readings is None else replace(snapshot, readings=readings)
+    return replace(snapshot, readings=signed_readings() if readings is None else readings)
 
 
 def _facts(started: dt.date | None, turnover: dict[int, int]) -> Facts:
@@ -293,11 +301,14 @@ def test_without_a_reviewed_reading_each_condition_is_unknown_whatever_the_evide
 # ---- the reason Track A gives ----------------------------------------------------------
 
 
-async def test_ga_04s_reason_is_the_signed_wording_and_no_question_is_asked() -> None:
+async def test_ga_04s_reason_is_the_signed_wording_and_no_question_is_asked(
+    readings_before_338: IncompleteReadings,
+) -> None:
     """GA-04: started 2 March 2015, so s6D(4)(a)'s first year is a part year."""
     labels = load_applicability_set()
     case = next(c for c in labels.cases if c.id == "GA-04")
-    store = fake_for(load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
+    mappings = load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml")))
+    store = fake_for(mappings, labels, incomplete=BEFORE_338)
     coverage = await store.coverage(
         Facts.of(case.evidence()), tenant_id=case.tenant_id, as_of=case.as_of
     )
@@ -309,13 +320,16 @@ async def test_ga_04s_reason_is_the_signed_wording_and_no_question_is_asked() ->
 
 @needs_neo4j
 async def test_on_neo4j_ga_04s_reason_is_the_signed_wording_too(
-    graph: Neo4jGraph, span_exporter: InMemorySpanExporter
+    graph: Neo4jGraph,
+    span_exporter: InMemorySpanExporter,
+    readings_before_338: IncompleteReadings,
 ) -> None:
     """The graph's Clause node carries the parser's state; the reading is
     joined by the same evaluator."""
     labels = load_applicability_set()
     case = next(c for c in labels.cases if c.id == "GA-04")
-    store = await graph_for(graph, load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml"))), labels)
+    mappings = load_mapping_set(sorted(CORPUS_MAPPINGS.glob("*.yaml")))
+    store = await graph_for(graph, mappings, labels, incomplete=BEFORE_338)
     coverage = await store.coverage(
         Facts.of(case.evidence()), tenant_id=case.tenant_id, as_of=case.as_of
     )
@@ -398,9 +412,9 @@ def test_every_reading_is_of_a_reason_the_parser_marks_and_a_part_year_one_says_
     """A reading for a clause the corpus holds complete would be dead, and a
     part-year reading must rest on the clause's own words; the fact it names
     must be one the signed mapping reads."""
-    clauses = {c.clause_id: c for c in load_compilation_clauses().clauses}
+    clauses = {c.clause_id: c for c in (before_338(c) for c in load_compilation_clauses().clauses)}
     mapping = (CORPUS_MAPPINGS / "privacy-act-1988.yaml").read_text()
-    readings = committed_incomplete_readings()
+    readings = signed_readings()
     assert readings.entries and readings.part_years
     for clause_id, reason in (*readings.entries, *readings.part_years):
         assert reason in {i.reason for i in clauses[clause_id].incomplete}
@@ -412,7 +426,7 @@ def test_every_reading_is_of_a_reason_the_parser_marks_and_a_part_year_one_says_
 def test_the_signed_wording_without_the_part_year_reading_governs_every_year() -> None:
     """Each file does one thing: the words alone change what a reader is
     shown, not which years the gap governs."""
-    words_only = IncompleteReadings(entries=committed_incomplete_readings().entries)
+    words_only = IncompleteReadings(entries=signed_readings().entries)
     found = explain(
         _snapshot(words_only),
         _facts(FULL_YEAR_START, {2025: 2_500_000}),
@@ -445,10 +459,18 @@ def test_a_reading_pending_review_is_refused_not_used(
         load_incomplete_readings(root)
 
 
-def test_the_committed_files_load_from_a_copy(tmp_path: Path) -> None:
+def test_the_signed_files_load_from_a_copy(tmp_path: Path) -> None:
     root = tmp_path / "instruments"
-    shutil.copytree(INSTRUMENTS_ROOT, root)
-    assert load_incomplete_readings(root) == committed_incomplete_readings()
+    shutil.copytree(READINGS_ROOT, root)
+    assert load_incomplete_readings(root) == signed_readings()
+
+
+def test_since_338_the_corpus_holds_no_reading_and_no_incomplete_clause() -> None:
+    """#338 completed s6da/2 (ADR-0058), so both files are retired from the
+    corpus: a reading of a complete clause would be dead. What the app reads
+    is empty, and the committed corpus marks nothing."""
+    assert committed_incomplete_readings() == IncompleteReadings()
+    assert [c.clause_id for c in load_compilation_clauses().clauses if c.incomplete] == []
 
 
 @pytest.mark.parametrize("reading", READINGS, ids=lambda p: p.name)
@@ -499,7 +521,7 @@ def test_what_a_reader_is_shown_cant_reshape_the_fence_marker(tmp_path: Path, sh
 
 
 def test_the_signed_words_stand_in_only_for_the_reason_they_were_signed_for() -> None:
-    readings = committed_incomplete_readings()
+    readings = signed_readings()
     assert readings.shown(S6DA_2, FORMULA_NOT_TEXT) == SIGNED
     # Another reason on the same clause, or an unread clause, keeps the parser's.
     assert readings.shown(S6DA_2, TABLE_NOT_TEXT) == TABLE_NOT_TEXT.detail

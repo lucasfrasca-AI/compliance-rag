@@ -608,6 +608,10 @@ def _no_source(html: Path | None) -> str:
     return ""
 
 
+def _no_completions(pdf: Path | None) -> tuple[()]:
+    return ()
+
+
 def _parsed(*args: object, **kwargs: object) -> SimpleNamespace:
     return SimpleNamespace(clauses=V1)
 
@@ -628,6 +632,7 @@ async def test_the_corpus_script_records_a_load_that_returned(
     _use(graph, load_graph_structure, monkeypatch)
     monkeypatch.setattr(load_graph_structure, "resolve_source_version", _resolves_to(C1))
     monkeypatch.setattr(load_graph_structure, "pinned_source", _no_source)
+    monkeypatch.setattr(load_graph_structure, "pinned_completions", _no_completions)
     monkeypatch.setattr(load_graph_structure, "parse_compilation", _parsed)
     monkeypatch.setattr(load_graph_structure, "parse_selection_manifest", _manifest)
     await load_graph_structure.main(None)

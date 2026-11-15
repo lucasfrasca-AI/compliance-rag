@@ -7,11 +7,17 @@ the instrument version's reviewed `manifest.yaml`, and writes them with
 `ingest_compilation` into `GCSClauseStore` — idempotent, and a re-run whose
 selection or content drifted stops before writing (`IngestDriftError`).
 
+Since #338 (ADR-0058) the version has a second pinned source: the Register's
+PDF of the same compilation, from which s 6DA(2)'s formula is completed
+against the signed form beside the manifest (`formula.yaml`). It is fetched,
+or read from `--pdf`, and refused unless its sha256 is the pin, as the ePub is.
+
 Run locally with Application Default Credentials; it writes objects into the
 already-approved corpus bucket and creates no resource.
 
     uv run python scripts/ingest_compilation.py \\
-        --bucket compliance-rag-508904-corpus [--html path/to/document_1.html]
+        --bucket compliance-rag-508904-corpus [--html path/to/document_1.html] \\
+        [--pdf path/to/C2026C00227.pdf]
 
 A completed version whose reviewed manifest has since grown stops with the
 exact paths being added; re-run with `--acknowledge <those paths>` to add them
@@ -32,6 +38,12 @@ import httpx
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.corpus.ingest import ingest_compilation
 from compliance_rag.corpus.models import Scope
+from compliance_rag.corpus.pdf_formula import (
+    SignedFormula,
+    formula_completion,
+    load_signed_formulas,
+)
+from compliance_rag.corpus.second_source import ClauseCompletion
 from compliance_rag.corpus.selection_manifest import parse_selection_manifest
 
 INSTRUMENT_ID = "privacy-act-1988"
@@ -50,14 +62,18 @@ SOURCE_URL = (
     f"https://www.legislation.gov.au/{SERIES_ID}/{START}/{START}"
     "/text/original/epub/OEBPS/document_1/document_1.html"
 )
-MANIFEST = (
-    Path(__file__).resolve().parents[1]
-    / "corpus"
-    / "instruments"
-    / INSTRUMENT_ID
-    / VERSION_ID
-    / "manifest.yaml"
+VERSION_DIR = (
+    Path(__file__).resolve().parents[1] / "corpus" / "instruments" / INSTRUMENT_ID / VERSION_ID
 )
+MANIFEST = VERSION_DIR / "manifest.yaml"
+PDF_URL = f"https://www.legislation.gov.au/{SERIES_ID}/{START}/{START}/text/original/pdf"
+PDF_SHA256 = "443e895f1e1536763af78e4553d469b0857a84553ca0c011ed796a623f954e38"
+"""The Register's PDF of the same compilation, fetched 2026-11-08 (#276) and
+2026-11-11 (#338): the second source s 6DA(2)'s formula is read from
+(ADR-0058). Its own pin, beside the ePub's."""
+SECOND_SOURCES = {"s6da/2": PDF_SHA256}
+"""Every clause of this version whose text has a second source, with that
+source's pin: what a correction checks the parse against (ADR-0058)."""
 
 
 def pinned_source(html_path: Path | None) -> str:
@@ -75,7 +91,46 @@ def pinned_source(html_path: Path | None) -> str:
     return raw.decode("utf-8")
 
 
-async def main(bucket: str, html_path: Path | None, acknowledged: frozenset[str]) -> None:
+def pinned_pdf(pdf_path: Path | None) -> bytes:
+    raw = (
+        pdf_path.read_bytes()
+        if pdf_path is not None
+        else httpx.get(PDF_URL, timeout=120, follow_redirects=True).raise_for_status().content
+    )
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != PDF_SHA256:
+        raise SystemExit(
+            f"PDF sha256 {digest} is not the pinned {PDF_SHA256}: the Register served "
+            "different bytes — re-run the formula tests on them before using them"
+        )
+    return raw
+
+
+def signed_formulas() -> tuple[SignedFormula, ...]:
+    """The version's signed formulas (`formula.yaml`), each pinned to the
+    source `SECOND_SOURCES` pins for its clause."""
+    signed = load_signed_formulas(VERSION_DIR)
+    pins = {f.clause_path: f.source.sha256 for f in signed}
+    if pins != SECOND_SOURCES:
+        raise SystemExit(
+            f"the signed formulas pin {pins}; the version's second sources are {SECOND_SOURCES}"
+        )
+    return signed
+
+
+def pinned_completions(pdf_path: Path | None) -> tuple[ClauseCompletion, ...]:
+    """Every clause completion this version's parse takes: the signed
+    formulas, read from the pinned PDF (ADR-0058)."""
+    signed = signed_formulas()
+    if not signed:
+        return ()
+    pdf = pinned_pdf(pdf_path)
+    return tuple(formula_completion(pdf, formula) for formula in signed)
+
+
+async def main(
+    bucket: str, html_path: Path | None, pdf_path: Path | None, acknowledged: frozenset[str]
+) -> None:
     selection = parse_selection_manifest(MANIFEST.read_text(encoding="utf-8"))
     store = GCSClauseStore.for_bucket(bucket)
     result = await ingest_compilation(
@@ -87,6 +142,7 @@ async def main(bucket: str, html_path: Path | None, acknowledged: frozenset[str]
         selection=selection,
         store=store,
         acknowledged_additions=acknowledged,
+        completions=pinned_completions(pdf_path),
     )
     print(
         f"{result.instrument_id}:{result.version_id}: {result.clauses_written} clauses, "
@@ -103,6 +159,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--html", type=Path, default=None)
+    parser.add_argument("--pdf", type=Path, default=None)
     parser.add_argument(
         "--acknowledge",
         nargs="*",
@@ -112,4 +169,6 @@ if __name__ == "__main__":
         "exactly as the refusal lists them (issue #19's drift check)",
     )
     arguments = parser.parse_args()
-    asyncio.run(main(arguments.bucket, arguments.html, frozenset(arguments.acknowledge)))
+    asyncio.run(
+        main(arguments.bucket, arguments.html, arguments.pdf, frozenset(arguments.acknowledge))
+    )

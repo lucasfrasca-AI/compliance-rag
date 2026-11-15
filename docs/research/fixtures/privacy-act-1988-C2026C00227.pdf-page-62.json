@@ -1,0 +1,672 @@
+{
+ "sha256": "443e895f1e1536763af78e4553d469b0857a84553ca0c011ed796a623f954e38",
+ "page": 62,
+ "spans": [
+  {
+   "text": "Part II ",
+   "font": "TimesNewRomanPS-BoldMT",
+   "size": 10.0,
+   "bbox": [
+    120.5,
+    50.93,
+    152.16,
+    62.0
+   ]
+  },
+  {
+   "text": " Interpretation",
+   "font": "TimesNewRomanPSMT",
+   "size": 10.0,
+   "bbox": [
+    152.16,
+    50.93,
+    209.08,
+    62.0
+   ]
+  },
+  {
+   "text": "Division 1 ",
+   "font": "TimesNewRomanPS-BoldMT",
+   "size": 10.0,
+   "bbox": [
+    120.5,
+    63.93,
+    165.51,
+    75.0
+   ]
+  },
+  {
+   "text": " General definitions",
+   "font": "TimesNewRomanPSMT",
+   "size": 10.0,
+   "bbox": [
+    165.51,
+    63.93,
+    244.93,
+    75.0
+   ]
+  },
+  {
+   "text": "Section 6E",
+   "font": "TimesNewRomanPSMT",
+   "size": 12.0,
+   "bbox": [
+    120.5,
+    89.31,
+    172.82,
+    102.59
+   ]
+  },
+  {
+   "text": "44",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 8.0,
+   "bbox": [
+    120.5,
+    631.34,
+    128.5,
+    640.2
+   ]
+  },
+  {
+   "text": "Privacy Act 1988",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 8.0,
+   "bbox": [
+    284.36,
+    631.34,
+    339.89,
+    640.2
+   ]
+  },
+  {
+   "text": "Compilation No. 104",
+   "font": "TimesNewRomanPSMT",
+   "size": 8.0,
+   "bbox": [
+    120.5,
+    650.34,
+    188.28,
+    659.2
+   ]
+  },
+  {
+   "text": "Compilation date: 04/06/2026",
+   "font": "TimesNewRomanPSMT",
+   "size": 8.0,
+   "bbox": [
+    378.86,
+    650.34,
+    474.85,
+    659.2
+   ]
+  },
+  {
+   "text": "6E  Small business operator treated as organisation",
+   "font": "TimesNewRomanPS-BoldMT",
+   "size": 12.0,
+   "bbox": [
+    120.5,
+    185.31,
+    383.5,
+    198.6
+   ]
+  },
+  {
+   "text": "Small business operator that is a reporting entity",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    211.07,
+    393.23,
+    223.25
+   ]
+  },
+  {
+   "text": "(1A)",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    150.78,
+    232.72,
+    171.55,
+    244.89
+   ]
+  },
+  {
+   "text": "If a small business operator is a reporting entity or an authorised ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.21,
+    232.72,
+    463.13,
+    244.89
+   ]
+  },
+  {
+   "text": "agent of a reporting entity because of anything done in the course ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    245.37,
+    467.99,
+    257.54
+   ]
+  },
+  {
+   "text": "of a small business carried on by the small business operator, this ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    258.02,
+    467.73,
+    270.19
+   ]
+  },
+  {
+   "text": "Act applies, with the prescribed modifications (if any), in relation ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    270.66,
+    468.61,
+    282.84
+   ]
+  },
+  {
+   "text": "to the activities carried on by the small business operator for the ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    283.31,
+    461.89,
+    295.49
+   ]
+  },
+  {
+   "text": "purposes of, or in connection with, activities relating to:",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    295.96,
+    423.42,
+    308.14
+   ]
+  },
+  {
+   "text": "(a)",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    184.84,
+    310.61,
+    197.05,
+    322.79
+   ]
+  },
+  {
+   "text": "the ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    202.7,
+    310.61,
+    218.88,
+    322.79
+   ]
+  },
+  {
+   "text": "Anti-Money Laundering and Counter-Terrorism ",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 11.0,
+   "bbox": [
+    218.88,
+    310.61,
+    433.99,
+    322.79
+   ]
+  },
+  {
+   "text": "Financing Act 2006",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 11.0,
+   "bbox": [
+    202.7,
+    323.26,
+    290.07,
+    335.44
+   ]
+  },
+  {
+   "text": "; or",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    290.07,
+    323.26,
+    305.04,
+    335.44
+   ]
+  },
+  {
+   "text": "(b)",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    184.22,
+    337.91,
+    197.05,
+    350.09
+   ]
+  },
+  {
+   "text": "regulations or AML/CTF Rules under that Act;",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    202.7,
+    337.91,
+    410.45,
+    350.09
+   ]
+  },
+  {
+   "text": "as if the small business operator were an organisation.",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    352.56,
+    415.16,
+    364.73
+   ]
+  },
+  {
+   "text": "Note:",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    177.2,
+    371.22,
+    197.2,
+    381.18
+   ]
+  },
+  {
+   "text": "The regulations may prescribe different modifications of the Act for ",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    219.75,
+    371.22,
+    467.16,
+    381.18
+   ]
+  },
+  {
+   "text": "different small business operators. See subsection 33(3A) of the ",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    219.75,
+    381.57,
+    452.19,
+    391.53
+   ]
+  },
+  {
+   "text": "Acts ",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 9.0,
+   "bbox": [
+    452.19,
+    381.57,
+    469.94,
+    391.53
+   ]
+  },
+  {
+   "text": "Interpretation Act 1901",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 9.0,
+   "bbox": [
+    219.75,
+    391.92,
+    304.74,
+    401.88
+   ]
+  },
+  {
+   "text": ".",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    304.74,
+    391.92,
+    306.99,
+    401.88
+   ]
+  },
+  {
+   "text": "Small business operator that is a protected action ballot agent ",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    414.35,
+    454.63,
+    426.53
+   ]
+  },
+  {
+   "text": "under the Fair Work Act 2009",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    427.0,
+    310.09,
+    439.18
+   ]
+  },
+  {
+   "text": "(1B)",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    151.39,
+    448.65,
+    171.55,
+    460.83
+   ]
+  },
+  {
+   "text": "If a small business operator is the protected action ballot agent for ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.21,
+    448.65,
+    470.44,
+    460.83
+   ]
+  },
+  {
+   "text": "a protected action ballot conducted under Part 3-3 of the ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    461.3,
+    427.66,
+    473.48
+   ]
+  },
+  {
+   "text": "Fair Work ",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 11.0,
+   "bbox": [
+    427.66,
+    461.3,
+    476.54,
+    473.48
+   ]
+  },
+  {
+   "text": "Act 2009",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    473.95,
+    216.61,
+    486.13
+   ]
+  },
+  {
+   "text": ", this Act applies, with the prescribed modifications (if ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    216.61,
+    473.95,
+    459.47,
+    486.13
+   ]
+  },
+  {
+   "text": "any), in relation to the activities carried on by the small business ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    486.6,
+    463.43,
+    498.78
+   ]
+  },
+  {
+   "text": "operator for the purpose of, or in connection with, the conduct of ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    499.25,
+    465.55,
+    511.42
+   ]
+  },
+  {
+   "text": "the protected action ballot, as if the small business operator were ",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    511.9,
+    464.94,
+    524.07
+   ]
+  },
+  {
+   "text": "an organisation.",
+   "font": "TimesNewRomanPSMT",
+   "size": 11.0,
+   "bbox": [
+    177.2,
+    524.55,
+    247.46,
+    536.72
+   ]
+  },
+  {
+   "text": "Note:",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    177.2,
+    543.21,
+    197.2,
+    553.17
+   ]
+  },
+  {
+   "text": "The regulations may prescribe different modifications of the Act for ",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    219.75,
+    543.21,
+    467.16,
+    553.17
+   ]
+  },
+  {
+   "text": "different small business operators. See subsection 33(3A) of the ",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    219.75,
+    553.56,
+    452.19,
+    563.52
+   ]
+  },
+  {
+   "text": "Acts ",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 9.0,
+   "bbox": [
+    452.19,
+    553.56,
+    469.94,
+    563.52
+   ]
+  },
+  {
+   "text": "Interpretation Act 1901",
+   "font": "TimesNewRomanPS-ItalicMT",
+   "size": 9.0,
+   "bbox": [
+    219.75,
+    563.91,
+    304.74,
+    573.87
+   ]
+  },
+  {
+   "text": ".",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.0,
+   "bbox": [
+    304.74,
+    563.91,
+    306.99,
+    573.87
+   ]
+  },
+  {
+   "text": "Number of days in the",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.92,
+   "bbox": [
+    329.49,
+    126.24,
+    418.21,
+    137.15
+   ]
+  },
+  {
+   "text": "Amount that would be the",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.92,
+   "bbox": [
+    190.29,
+    127.72,
+    294.13,
+    138.63
+   ]
+  },
+  {
+   "text": "whole financial year",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.92,
+   "bbox": [
+    333.3,
+    136.1,
+    413.87,
+    147.0
+   ]
+  },
+  {
+   "text": "annual turnover of the business",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.92,
+   "bbox": [
+    179.99,
+    137.57,
+    304.2,
+    148.48
+   ]
+  },
+  {
+   "text": "under subsection (1) if the part",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.92,
+   "bbox": [
+    180.77,
+    147.42,
+    303.24,
+    158.33
+   ]
+  },
+  {
+   "text": "Number of days in the part",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.92,
+   "bbox": [
+    320.35,
+    150.1,
+    426.91,
+    161.01
+   ]
+  },
+  {
+   "text": "were a whole financial year",
+   "font": "TimesNewRomanPSMT",
+   "size": 9.92,
+   "bbox": [
+    187.57,
+    157.28,
+    296.71,
+    168.18
+   ]
+  },
+  {
+   "text": "´",
+   "font": "SymbolMT",
+   "size": 9.92,
+   "bbox": [
+    308.74,
+    141.22,
+    314.22,
+    153.29
+   ]
+  },
+  {
+   "text": "Authorised Version C2026C00227 registered 17/06/2026",
+   "font": "TimesNewRoman",
+   "size": 8.0,
+   "bbox": [
+    205.91,
+    823.09,
+    389.45,
+    831.95
+   ]
+  }
+ ],
+ "rules": [
+  {
+   "x0": 119.05,
+   "x1": 476.3,
+   "y": 103.97
+  },
+  {
+   "x0": 119.05,
+   "x1": 476.3,
+   "y": 612.83
+  },
+  {
+   "x0": 319.19,
+   "x1": 427.94,
+   "y": 148.66
+  }
+ ]
+}
