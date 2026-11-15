@@ -23,6 +23,14 @@ the registry, refuses a chunk that claims to be synthetic without being
 registered, and counts an unregistered tenant clause as real data. Content
 that is byte-for-byte a registered fixture under the same tenant is synthetic
 whoever uploads it; anything else is real.
+
+**A submitted document is vouched whole as well as by passage** (#297). The file
+also lists `documents`: the sha256 of the raw bytes of each registered submitted
+fixture. Offshore, a submission is synthetic only if the hash of its raw bytes is
+listed *and* every passage is vouched, so an excerpt, a reordering or a one-byte
+change of a fixture is real data. The per-passage `keys` are unchanged, so
+nothing for policies moves. An older file with no `documents` vouches for no
+submitted document.
 """
 
 from __future__ import annotations
@@ -49,6 +57,11 @@ def synthetic_key(tenant_id: str, text: str) -> str:
     return hashlib.sha256(f"{tenant_id}\0{text}".encode()).hexdigest()
 
 
+def document_key(raw: bytes) -> str:
+    """sha256 of a submitted document's raw bytes."""
+    return hashlib.sha256(raw).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class SyntheticRegistry:
     keys: AbstractSet[str]
@@ -56,25 +69,50 @@ class SyntheticRegistry:
     from the file; read-only to this class either way."""
     source: str
     """Where the registered content came from, for whoever reads the file."""
+    documents: AbstractSet[str] = frozenset()
+    """sha256 of the raw bytes of each registered submitted fixture (#297): the
+    whole-document half of what vouches for a submission."""
 
     @classmethod
     def load(cls, path: Path = SYNTHETIC_REGISTRY_PATH) -> SyntheticRegistry:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return cls(keys=frozenset(str(k) for k in raw["keys"]), source=str(raw["source"]))
+        return cls(
+            keys=frozenset(str(k) for k in raw["keys"]),
+            source=str(raw["source"]),
+            documents=frozenset(str(d) for d in raw.get("documents", [])),
+        )
 
     @classmethod
     def of(
-        cls, chunks: Iterable[Chunk], clauses: Iterable[ClauseRecord] = (), *, source: str
+        cls,
+        chunks: Iterable[Chunk],
+        clauses: Iterable[ClauseRecord] = (),
+        *,
+        source: str,
+        documents: Iterable[bytes] = (),
     ) -> SyntheticRegistry:
-        """Built by the operator script from fixtures — not an upload path."""
+        """Built by the operator script from fixtures — not an upload path.
+        `documents` are the raw bytes of each submitted fixture."""
         keys = {synthetic_key(c.tenant_id, c.text) for c in chunks}
         keys |= {synthetic_key(c.tenant_id, c.canonical_text) for c in clauses}
-        return cls(keys=frozenset(keys), source=source)
+        return cls(
+            keys=frozenset(keys),
+            source=source,
+            documents=frozenset(document_key(d) for d in documents),
+        )
 
     def save(self, path: Path = SYNTHETIC_REGISTRY_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        document = {"source": self.source, "keys": sorted(self.keys)}
+        document = {
+            "source": self.source,
+            "keys": sorted(self.keys),
+            "documents": sorted(self.documents),
+        }
         path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    def vouches_for_document(self, raw: bytes) -> bool:
+        """Whether `raw` is, byte for byte, a registered submitted fixture."""
+        return document_key(raw) in self.documents
 
     def vouches_for(self, chunk: Chunk) -> bool:
         return synthetic_key(chunk.tenant_id, chunk.text) in self.keys

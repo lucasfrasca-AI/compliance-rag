@@ -375,16 +375,41 @@ async def test_any_other_upload_is_refused_offshore_before_any_write(offshore: W
     offshore.assert_no_model_called()
 
 
-async def test_a_document_made_only_of_registered_passages_is_vouched_passage_by_passage(
+async def test_an_excerpt_a_reordering_or_a_one_byte_change_of_a_fixture_is_refused_offshore(
     offshore: World,
 ) -> None:
-    """The registry keys on a passage's tenant and words (ADR-0026, #296), so a
-    document whose every passage is a registered fixture's is synthetic whole,
-    in a different order or with some left out: there is no real word in it to
-    send. One word more is real (the test above)."""
-    passages = [p for p in PROPOSAL.read_text("utf-8").split("\n\n")[2:5]]
-    reordered = "\n\n".join(reversed(passages)) + "\n"
-    assert (await submit(offshore, upload("excerpt.md", reordered))).status_code == 201
+    """Offshore a submission is synthetic only if its raw bytes are a registered
+    fixture's (ADR-0026, #297) as well as every passage being registered: each
+    passage of these is registered, and each is still refused, with nothing
+    written. The one-byte changes alter no passage at all."""
+    for path in EVERY_FIXTURE:
+        source = path.read_text("utf-8")
+        blocks = source.split("\n\n")
+        variants = {
+            "an excerpt": "\n\n".join(blocks[2:5]) + "\n",
+            "a passage dropped": "\n\n".join(blocks[:-1]) + "\n",
+            "a reordering": "\n\n".join(reversed(blocks)),
+            "one byte more": source + "\n",
+            "one byte fewer": source[:-1],
+            "a space in the blank line": source.replace("\n\n", "\n \n", 1),
+            "CRLF line ends": source.replace("\n", "\r\n"),
+        }
+        for what, changed in variants.items():
+            assert changed != source, (path.name, what)
+            response = await submit(offshore, upload(path.name, changed))
+            assert response.status_code == 403, (path.name, what)
+            error = response.json()["detail"]
+            assert error["error"] == "residency" and "ADR-0026" in error["message"]
+        assert (await submit(offshore, fixture_upload(path))).status_code == 201  # and itself
+    # nothing but the two byte-identical fixtures was ever written
+    assert len(offshore.ledger._checks) == len(EVERY_FIXTURE)  # pyright: ignore[reportPrivateUsage]
+    offshore.assert_no_model_called()
+
+
+async def test_in_sydney_an_excerpt_of_a_fixture_is_accepted(sydney: World) -> None:
+    """Onshore nothing is decided by the registry."""
+    excerpt = "\n\n".join(PROPOSAL.read_text("utf-8").split("\n\n")[2:5]) + "\n"
+    assert (await submit(sydney, upload("excerpt.md", excerpt))).status_code == 201
 
 
 async def test_a_fixtures_bytes_under_another_name_are_still_synthetic(offshore: World) -> None:

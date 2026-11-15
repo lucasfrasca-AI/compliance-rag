@@ -117,6 +117,10 @@ async def live_answer_pipeline(
             ledger,
             tenant_text=TenantTextGate(
                 settings.generation_region,
-                SyntheticRegistry(registry.keys | probe.keys, f"{registry.source}; {probe.source}"),
+                SyntheticRegistry(
+                    registry.keys | probe.keys,
+                    f"{registry.source}; {probe.source}",
+                    registry.documents,
+                ),
             ),
         )

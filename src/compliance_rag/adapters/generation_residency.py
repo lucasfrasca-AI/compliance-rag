@@ -158,6 +158,18 @@ class TenantTextGate:
     def from_settings(cls, settings: Settings) -> TenantTextGate:
         return cls(settings.generation.region, SyntheticRegistry.load())
 
+    def check_document(self, raw: bytes) -> None:
+        """Offshore, a submitted document is synthetic only if its raw bytes are
+        a registered submitted fixture's (#297, ADR-0026); this is the
+        whole-document half, and `check` over its passages the other. Anything
+        else (an excerpt, a reordering, one byte changed) is real data."""
+        if is_offshore(self.generation_region) and not self.registry.vouches_for_document(raw):
+            raise GenerationResidencyError(
+                f"generation runs in {self.generation_region}, outside Australia, during the "
+                "build phase, and this submitted document isn't, byte for byte, a registered "
+                "synthetic fixture, so it's real data (ADR-0026, ADR-0032)"
+            )
+
     def check(self, tenant_id: str, texts: Iterable[tuple[str, str]], *, what: str) -> None:
         """`texts`: `(clause id, text)` pairs owned by `tenant_id`, about to be
         sent to the model as `what`."""

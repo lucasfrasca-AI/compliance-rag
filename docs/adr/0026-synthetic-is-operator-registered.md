@@ -30,6 +30,11 @@ There were three options:
   prompt carries a clause's canonical text. Registered chunks paired with an
   unregistered clause on replace-in-place are therefore real data, and refused
   offshore.
+- **A submitted document is also vouched whole** (#297): the file's `documents`
+  list holds the sha256 of each registered submitted fixture's raw bytes, and
+  offshore a submission is synthetic only if its bytes are listed and every
+  passage is registered. An excerpt, a reordering or a one-byte change is real.
+  The `keys` for policies are unchanged.
 - **Who writes it:** only `scripts/register_synthetic_fixtures.py`, from
   `docs/research/fixtures/synthetic-policies/`. It changes only by PR, like
   `corpus/mappings/`.

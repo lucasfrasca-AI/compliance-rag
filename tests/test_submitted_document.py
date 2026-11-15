@@ -612,3 +612,17 @@ async def test_withdraw_and_purge_are_the_existing_operations(world: _World) -> 
         tenant_id=TENANT, instrument_id=instrument, version_id="v1"
     ) == ("admin", "member asked")
     assert world.retrieval.stored_chunk_ids == frozenset()
+
+
+async def test_offshore_a_document_that_is_not_a_registered_fixture_byte_for_byte_is_refused(
+    world: _World,
+) -> None:
+    """The lifecycle is where it is decided (ADR-0026, #297): an excerpt of a
+    fixture, whose every passage is registered, has no registered whole."""
+    source = PROPOSAL.read_text(encoding="utf-8")
+    excerpt = "\n\n".join(source.split("\n\n")[2:5]) + "\n"
+    for changed in (excerpt, source + "\n", source[:-1]):
+        with pytest.raises(GenerationResidencyError, match="byte for byte"):
+            await world.submit(changed)
+    world.assert_nothing_written()
+    await world.submit(source)  # itself passes
