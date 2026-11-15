@@ -29,8 +29,9 @@
 # before 2026-10-20: FY2014-15's $400,000 is read, Acme was never over
 # $3,000,000, so it is a small business operator and its 35 APPs don't apply;
 # app-entity and organisation are false; APP 11.1 cites s6E(1) and s6EA(1)
-# again, not s6D(4)(a) and s6DA(2). Drafted by the model; PENDING Lucas
-# Frasca's signature, and refused by the gate until then.
+# again, not s6D(4)(a) and s6DA(2). Drafted by the model; signed by Lucas
+# Frasca on 2026-11-15 ("Sign GA-04", sign 5), with formula.yaml confirmed
+# the same day (sign 4).
 #
 # Acme Pty Ltd is the synthetic company of docs/research/fixtures/
 # synthetic-policies/. Its facts here (when it started, its turnover each year,
@@ -43,8 +44,8 @@
 # 2 March 2015.
 
 author: "model: Claude Opus 5.5 — labels drafted for #117/#118 from C2026C00227"
-reviewed_by: "PENDING — Lucas Frasca"
-date: "PENDING"
+reviewed_by: "Lucas Frasca"
+date: "2026-11-15"
 compilations:
   "privacy-act-1988:C2026C00227": 2026-06-04
 
