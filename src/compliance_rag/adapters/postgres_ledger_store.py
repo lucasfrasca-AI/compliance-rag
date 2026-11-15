@@ -839,12 +839,17 @@ class PostgresLedgerStore(LedgerStore):
     ) -> dict[str, frozenset[str]]:
         # The tenant's own versions, and `_public`'s of the instruments it
         # subscribes to (`_public` holds no subscription, and owns them all).
+        # A submitted document is the subject of a check, never part of the
+        # environment (ADR-0051, ADR-0053 U1); an unclassified one (before
+        # 0011) is not left out.
         rows = await self._fetchall(
             "SELECT v.instrument_id, v.title FROM instrument_version v "
+            "JOIN instrument i USING (tenant_id, instrument_id) "
             "WHERE (v.tenant_id = %s OR (v.tenant_id = %s AND v.instrument_id IN "
             "(SELECT instrument_id FROM tenant_instrument WHERE tenant_id = %s))) "
             "AND v.valid_from <= %s AND (v.valid_to IS NULL OR %s < v.valid_to) "
-            "AND v.withdrawn_at IS NULL AND v.purged_at IS NULL",
+            "AND v.withdrawn_at IS NULL AND v.purged_at IS NULL "
+            "AND i.document_class IS DISTINCT FROM 'submitted_document'",
             (tenant_id, PUBLIC_TENANT_ID, tenant_id, as_of, as_of),
         )
         found: dict[str, set[str]] = {}

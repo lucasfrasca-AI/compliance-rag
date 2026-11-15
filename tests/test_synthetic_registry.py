@@ -11,6 +11,7 @@ says, whatever the caller sent.
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import re
 from pathlib import Path
@@ -28,6 +29,7 @@ from compliance_rag.corpus.synthetic_registry import (
 )
 from compliance_rag.eval.golden_corpus import (
     golden_chunks,
+    submitted_fixture_clauses,
     synthetic_fixture_chunks,
     synthetic_fixture_clauses,
 )
@@ -158,9 +160,22 @@ def test_the_registry_matches_the_fixtures() -> None:
     """Editing a fixture, the parser or the chunker without re-registering
     (scripts/register_synthetic_fixtures.py, by PR) fails here."""
     expected = SyntheticRegistry.of(
-        synthetic_fixture_chunks(), synthetic_fixture_clauses(), source=""
+        synthetic_fixture_chunks(),
+        (*synthetic_fixture_clauses(), *submitted_fixture_clauses()),
+        source="",
     )
     assert SyntheticRegistry.load().keys == expected.keys
+
+
+def test_a_submitted_fixture_is_registered_by_its_passages_and_has_no_chunk() -> None:
+    """A submitted document is never chunked (ADR-0053 U1), so the registry
+    holds its passages' text and `synthetic_fixture_chunks` none of it."""
+    passages = submitted_fixture_clauses()
+    assert passages
+    registry = SyntheticRegistry.load()
+    assert not registry.unregistered("acme", ((p.clause_id, p.canonical_text) for p in passages))
+    chunk_texts = {c.text for c in synthetic_fixture_chunks()}
+    assert not chunk_texts & {p.canonical_text for p in passages}
 
 
 def test_every_golden_tenant_chunk_is_synthetic_by_the_registry() -> None:
@@ -238,7 +253,9 @@ async def test_registered_clauses_pass_replace_in_place() -> None:
 
 
 WRITERS = {
-    "src/compliance_rag/adapters/corpus_lifecycle.py",  # the write path: registry + gate
+    # The write path: registry + gate. Its `submit_document` (#296) writes clauses and
+    # never a chunk: `test_the_submit_path_writes_clauses_and_never_touches_retrieval`.
+    "src/compliance_rag/adapters/corpus_lifecycle.py",
     "src/compliance_rag/corpus/ingest.py",  # library law only (refuses tenant scope)
     "src/compliance_rag/eval/harness.py",  # operator: the golden corpus
     "src/compliance_rag/eval/live.py",  # operator: live eval and injection probes
@@ -258,6 +275,49 @@ def test_only_known_paths_write_to_the_corpus_stores() -> None:
         if re.search(r"\.(upsert_chunks|put_clauses?)\(", path.read_text(encoding="utf-8"))
     }
     assert callers == WRITERS
+
+
+def test_the_submit_path_writes_clauses_and_never_touches_retrieval() -> None:
+    """A submitted document is never chunked and never retrieved (ADR-0053 U1,
+    #296). The lifecycle's submit path is a writer of clauses beside its
+    publish path, so this file stays on the writers' list; what the listing
+    can't say is that `submit_document` is the one writer that never reaches
+    retrieval. Its body names no retrieval store, no chunker and no tokenizer:
+    it can't derive a chunk, and no vector store is asked about it. A second
+    submit path, or a call added to this one, fails here until it is reviewed
+    (the behavioural proof, with every retrieval method spied on, is
+    `tests/test_submitted_document.py`)."""
+    root = Path(__file__).resolve().parents[1]
+    tree = ast.parse(
+        (root / "src/compliance_rag/adapters/corpus_lifecycle.py").read_text(encoding="utf-8")
+    )
+    submitters = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith("submit")
+    ]
+    assert [n.name for n in submitters] == ["submit_document"]
+    named = {
+        name
+        for node in ast.walk(submitters[0])
+        for name in (
+            [node.attr]
+            if isinstance(node, ast.Attribute)
+            else [node.id]
+            if isinstance(node, ast.Name)
+            else []
+        )
+    }
+    assert not named & {
+        "_retrieval",
+        "upsert_chunks",
+        "chunk_clauses",
+        "count_tokens",
+        "Chunk",
+        "revise_chunks",
+        "retire_version",
+    }
+    assert {"_store_clauses", "_record", "TenantTextGate"} <= named  # it does write, and gate
 
 
 PUBLISHING_SCRIPTS = {
