@@ -82,10 +82,17 @@ _CONCURRENT_READS = 16
 stored with what it was given: one object per clause."""
 
 
-_SUBMITTED_NEVER_CHUNKED = (
-    "a submitted document is never chunked: it is stored by submit_document, and the paths "
-    "that publish, complete or replace a version chunk it (ADR-0053 U1)"
-)
+def _refuse_chunking_a_submitted_document(document_class: DocumentClass | None) -> None:
+    """A submitted document is never chunked (ADR-0053 U1). The one place that
+    says so: every path that chunks (publish, check, complete, record, replace
+    in place) calls it with the class it is about to write or has on record, so
+    a new such path has one call to make, not a rule to re-state. Only
+    `submit_document` writes the class, and it chunks nothing."""
+    if document_class is DocumentClass.SUBMITTED_DOCUMENT:
+        raise ValueError(
+            "a submitted document is never chunked: it is stored by submit_document, and the "
+            "paths that publish, complete or replace a version chunk it (ADR-0053 U1)"
+        )
 
 
 class RemovalRefused(PermissionError):
@@ -313,9 +320,7 @@ class CorpusLifecycle:
             },
         ) as span:
             validate_title(title)
-            await self._check_class(
-                tenant_id, instrument_id, DocumentClass.SUBMITTED_DOCUMENT, submitting=True
-            )
+            await self._check_submitted_class(tenant_id, instrument_id)
             passages = segment_submitted_document(
                 source,
                 document_format=document_format,
@@ -345,6 +350,8 @@ class CorpusLifecycle:
                 instrument_id=instrument_id,
                 tenant_id=tenant_id,
                 version_id=version_id,
+                # `source_html` is the store's name for the stored source; here it
+                # is the submitted text as given (Markdown or plain), not HTML.
                 source_html=source,
             )
             await self._record(
@@ -506,18 +513,22 @@ class CorpusLifecycle:
         )
 
     async def _check_class(
-        self,
-        tenant_id: str,
-        instrument_id: str,
-        document_class: DocumentClass,
-        *,
-        submitting: bool = False,
+        self, tenant_id: str, instrument_id: str, document_class: DocumentClass
     ) -> None:
-        """The class checks every write makes. A submitted document is never
-        chunked (ADR-0053 U1), and every path but `submit_document` chunks, so
-        only `submitting` may name its class."""
-        if (document_class is DocumentClass.SUBMITTED_DOCUMENT) != submitting:
-            raise ValueError(_SUBMITTED_NEVER_CHUNKED)
+        """The class checks every path that chunks makes: never a submitted
+        document's, then the class against the tenant and the instrument's
+        recorded one."""
+        _refuse_chunking_a_submitted_document(document_class)
+        await self._check_recorded_class(tenant_id, instrument_id, document_class)
+
+    async def _check_submitted_class(self, tenant_id: str, instrument_id: str) -> None:
+        """The same for `submit_document`: the instrument must be a submitted
+        document's, or not recorded."""
+        await self._check_recorded_class(tenant_id, instrument_id, DocumentClass.SUBMITTED_DOCUMENT)
+
+    async def _check_recorded_class(
+        self, tenant_id: str, instrument_id: str, document_class: DocumentClass
+    ) -> None:
         check_document_class(tenant_id, document_class)
         recorded = await self._ledger.document_class(
             tenant_id=tenant_id, instrument_id=instrument_id
@@ -817,8 +828,7 @@ class CorpusLifecycle:
         recorded = await self._ledger.document_class(
             tenant_id=tenant_id, instrument_id=instrument_id
         )
-        if recorded is DocumentClass.SUBMITTED_DOCUMENT:
-            raise ValueError(_SUBMITTED_NEVER_CHUNKED)
+        _refuse_chunking_a_submitted_document(recorded)
         if recorded is not None:
             # With no class recorded the instrument is no policy, so it is not
             # in the cached prefix (the ledger lists the prefix by class).

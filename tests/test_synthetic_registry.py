@@ -294,7 +294,7 @@ def test_the_submit_path_writes_clauses_and_never_touches_retrieval() -> None:
     submitters = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef) and "submit" in node.name
+        if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith("submit")
     ]
     assert [n.name for n in submitters] == ["submit_document"]
     named = {

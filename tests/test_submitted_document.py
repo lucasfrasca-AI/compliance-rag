@@ -27,7 +27,7 @@ from compliance_rag.adapters.interfaces import ClauseStore, RetrievalAdmin
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.assessment.draft import DraftCitation
 from compliance_rag.assessment.policies import tenant_policies
-from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
+from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope, canonical_sha256
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
 from compliance_rag.corpus.submitted_parser import SubmittedFormat, segment_submitted_document
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
@@ -458,43 +458,55 @@ async def test_a_title_that_is_not_a_title_is_refused_before_a_write(world: _Wor
     world.assert_nothing_written()
 
 
+CHUNKING_PATHS = (
+    "publish_version",
+    "check_publishable",
+    "complete_version",
+    "record_published_version",
+)
+
+
+@pytest.mark.parametrize("path", CHUNKING_PATHS)
 async def test_a_submitted_document_can_not_be_published_as_a_policy_or_chunked(
-    world: _World,
+    world: _World, path: str
 ) -> None:
-    """The class that is never chunked is refused by every path that chunks."""
+    """The class that is never chunked is refused by every path that chunks,
+    each on its own, before anything is written."""
     passages = _passages("One paragraph.\n", fmt=SubmittedFormat.TEXT)
-    common: dict[str, Any] = {  # Any: the keywords every chunking path takes alike
-        "count_tokens": count_reranker_tokens,
+    common: dict[str, Any] = {  # Any: the keywords the chunking paths take alike
         "instrument_id": "acme/proposal",
         "tenant_id": TENANT,
         "version_id": "v1",
         "document_class": DocumentClass.SUBMITTED_DOCUMENT,
     }
-    with pytest.raises(ValueError, match="never chunked"):
-        await world.lifecycle.publish_version(
+    lifecycle = world.lifecycle
+    calls = {
+        "publish_version": lambda: lifecycle.publish_version(
             passages,
+            count_tokens=count_reranker_tokens,
             source_html="One paragraph.\n",
             effective_from=SUBMITTED_ON,
             supersedes=None,
             title="T",
             **common,
-        )
-    with pytest.raises(ValueError, match="never chunked"):
-        await world.lifecycle.check_publishable(passages, title="T", **common)
-    with pytest.raises(ValueError, match="never chunked"):
-        await world.lifecycle.complete_version(
-            passages, source_html="One paragraph.\n", effective_from=SUBMITTED_ON, **common
-        )
-    with pytest.raises(ValueError, match="never chunked"):
-        await world.lifecycle.record_published_version(
-            instrument_id="acme/proposal",
-            tenant_id=TENANT,
-            version_id="v1",
+        ),
+        "check_publishable": lambda: lifecycle.check_publishable(
+            passages, count_tokens=count_reranker_tokens, title="T", **common
+        ),
+        "complete_version": lambda: lifecycle.complete_version(
+            passages,
+            count_tokens=count_reranker_tokens,
+            source_html="One paragraph.\n",
             effective_from=SUBMITTED_ON,
-            supersedes=None,
-            document_class=DocumentClass.SUBMITTED_DOCUMENT,
-            title="T",
-        )
+            **common,
+        ),
+        "record_published_version": lambda: lifecycle.record_published_version(
+            effective_from=SUBMITTED_ON, supersedes=None, title="T", **common
+        ),
+    }
+    assert set(calls) == set(CHUNKING_PATHS)
+    with pytest.raises(ValueError, match="never chunked"):
+        await calls[path]()
     world.assert_nothing_written()
 
 
@@ -508,19 +520,30 @@ async def test_replace_in_place_can_not_chunk_a_submitted_document(sydney: _Worl
         tenant_id=TENANT,
         user_id=MEMBER,
     )
+    other = passage.model_copy(update={"text": "Other.", "canonical_text": "Other."})
     with pytest.raises(ValueError, match="never chunked"):
         await sydney.lifecycle.replace_in_place(
             (chunk,),
-            (passage,),
+            (other,),
             tenant_id=TENANT,
             instrument_id="acme/proposal",
             version_id="v1",
-            source_html="One paragraph.\n",
+            source_html="Other.\n",
             actor="admin",
             reason="typo",
             acknowledged_findings_citing=0,
         )
     assert sydney.retrieval.stored_chunk_ids == frozenset()
+    # The clause store is as it was: the passage, its manifest and its source.
+    stored = await sydney.clauses.get_clause(passage.clause_id, tenant_id=TENANT, user_id=MEMBER)
+    assert stored == passage
+    assert await sydney.clauses.get_manifest("acme/proposal", "v1", tenant_id=TENANT) == {
+        "p1": canonical_sha256(passage.canonical_text)
+    }
+    assert (
+        await sydney.clauses.get_source_html("acme/proposal", "v1", tenant_id=TENANT)
+        == "One paragraph.\n"
+    )
 
 
 async def test_an_instrument_of_another_class_is_not_submitted_to(sydney: _World) -> None:

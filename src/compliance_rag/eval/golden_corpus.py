@@ -29,7 +29,7 @@ from compliance_rag.corpus.models import PUBLIC_TENANT_ID, Chunk, ClauseRecord, 
 from compliance_rag.corpus.parser import parse_compilation
 from compliance_rag.corpus.policy_parser import parse_policy
 from compliance_rag.corpus.reranker_tokenizer import count_reranker_tokens
-from compliance_rag.corpus.submitted_parser import SubmittedFormat, segment_submitted_document
+from compliance_rag.corpus.submitted_parser import format_of_filename, segment_submitted_document
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.compilation_clauses import load_compilation_clauses
 from compliance_rag.eval.golden import load_golden_set
@@ -44,9 +44,8 @@ POLICY_TENANT_ID = "acme"
 POLICY_VERSION_ID = "v1"
 
 SUBMITTED_FIXTURES = FIXTURES / "synthetic-submitted"
-SUBMITTED_FIXTURE_FORMATS = {".md": SubmittedFormat.MARKDOWN, ".txt": SubmittedFormat.TEXT}
-"""The synthetic submitted documents (#296): every file here with one of these
-extensions, a Markdown or plain-text document of tenant `acme`."""
+"""The synthetic submitted documents (#296): Markdown or plain-text files of
+tenant `acme`, whose format `submitted_parser.format_of_filename` says."""
 
 POLICY_INSTRUMENT_IDS = {
     "acme-privacy-policy.md": "acme/privacy-policy",
@@ -130,12 +129,14 @@ def synthetic_fixture_clauses() -> tuple[ClauseRecord, ...]:
 
 def submitted_fixture_files() -> tuple[Path, ...]:
     """Every synthetic submitted document, by name (the folder's README is its
-    provenance note, not a document)."""
+    provenance note, and a dotfile is the file system's, neither a document). A
+    file here that `format_of_filename` refuses fails `submitted_fixture_clauses`
+    loudly rather than being skipped."""
     return tuple(
         sorted(
             p
             for p in SUBMITTED_FIXTURES.iterdir()
-            if p.suffix in SUBMITTED_FIXTURE_FORMATS and p.name != "README.md"
+            if p.name != "README.md" and not p.name.startswith(".")
         )
     )
 
@@ -152,7 +153,7 @@ def submitted_fixture_clauses() -> tuple[ClauseRecord, ...]:
         for path in submitted_fixture_files()
         for passage in segment_submitted_document(
             path.read_text(encoding="utf-8"),
-            document_format=SUBMITTED_FIXTURE_FORMATS[path.suffix],
+            document_format=format_of_filename(path.name),
             instrument_id=f"{POLICY_TENANT_ID}/{path.stem}",
             version_id=POLICY_VERSION_ID,
             tenant_id=POLICY_TENANT_ID,
