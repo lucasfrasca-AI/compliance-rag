@@ -1299,7 +1299,9 @@ class LedgerStore(ABC):
         """The tenant's environment on `as_of` (D-17), as the ledger records
         it, in one read: each instrument its retrieval can see, to the
         recorded titles of its versions in force then (ADR-0049). Its own
-        documents of every class, never withdrawn or purged, and the library
+        documents of every class but a submitted document (the subject of a
+        check, never part of the environment: ADR-0053 U1), never withdrawn
+        or purged, and the library
         instruments it subscribes to; `_public`'s is the whole library. What
         `answer()` decides a question's named instruments are held against
         (#252, ADR-0051)."""

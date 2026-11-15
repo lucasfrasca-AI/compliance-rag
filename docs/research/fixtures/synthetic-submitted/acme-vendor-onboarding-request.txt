@@ -1,0 +1,9 @@
+Vendor onboarding request: SupportBridge
+
+Acme's after-hours support team would like to engage SupportBridge Ltd to answer customer calls between 6pm and 6am.
+
+SupportBridge staff would see customers' names, phone numbers and the reason for each call. Call recordings would be kept by SupportBridge for 90 days and then deleted.
+
+    The vendor is based outside Australia. We have not yet asked which country its servers are in.
+
+We would like a decision before the end of the quarter.

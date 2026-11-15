@@ -265,11 +265,14 @@ def check_user_owner(scope: Scope, user_id: str | None) -> None:
 class DocumentClass(StrEnum):
     """Which kind of document an instrument is (`CONTEXT.md`: Document class,
     #148). Every version of an instrument has its class. Only internal policies
-    are `answer()`'s cached prefix (D-11); external uploads are retrieval-only."""
+    are `answer()`'s cached prefix (D-11); external uploads are retrieval-only;
+    a submitted document is neither: the subject of a check, never chunked,
+    never retrieved, never in the environment (ADR-0053 U1, ADR-0059)."""
 
     LIBRARY_LAW = "library_law"
     EXTERNAL_UPLOAD = "external_upload"
     INTERNAL_POLICY = "internal_policy"
+    SUBMITTED_DOCUMENT = "submitted_document"
 
 
 def check_document_class(tenant_id: str, document_class: DocumentClass) -> None:
