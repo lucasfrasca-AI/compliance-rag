@@ -25,6 +25,7 @@ from compliance_rag.adapters.interfaces import (
     ChatCitation,
     ChatExchange,
     ChatTurn,
+    CheckRecord,
     LedgerStore,
     PolicyVersion,
     PrefixMeasure,
@@ -43,6 +44,7 @@ from compliance_rag.assessment.coverage import CoverageRow, Outcome
 from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts, Period
 from compliance_rag.corpus.models import DocumentClass, Incompleteness, IncompleteReason
+from compliance_rag.corpus.submitted_parser import SubmittedFormat
 from compliance_rag.graph.mappings import load_mapping_set
 from tests.test_applicability import AS_OF as APPLICABILITY_AS_OF
 from tests.test_applicability import CLAUSES as APPLICABILITY_CLAUSES
@@ -855,6 +857,118 @@ async def test_the_fake_ledger_satisfies_the_environment_contract() -> None:
 
 async def test_the_fake_ledger_satisfies_the_chat_contract() -> None:
     await assert_chat_contract(FakeLedgerStore())
+
+
+# ---- checks (#297) ---------------------------------------------------------------------
+
+
+def a_check(**changes: Any) -> CheckRecord:  # Any: record fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "tenant_id": "acme",
+        "check_id": "c" * 32,
+        "user_id": "uid-1",
+        "instrument_id": "acme/check-1",
+        "version_id": "v1",
+        "filename": "proposal.md",
+        "document_format": SubmittedFormat.MARKDOWN,
+        "trace_id": "a" * 32,
+    }
+    fields.update(changes)
+    return CheckRecord(**fields)
+
+
+async def assert_check_contract(ledger: LedgerStore) -> None:
+    """A check is one member's submission of a document, pointing at the
+    `submitted_document` version the ledger already holds (#297, ADR-0059).
+    Append-only, one per version, and read by tenant (visibility is the API's,
+    `CheckRecord.visible_to`)."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+
+    async def document(instrument_id: str, tenant_id: str = "acme") -> None:
+        await ledger.record_version(
+            tenant_id=tenant_id,
+            instrument_id=instrument_id,
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.SUBMITTED_DOCUMENT,
+            title="A document",
+        )
+
+    # ---- nothing before it is recorded
+    assert await ledger.get_check("acme", "c" * 32) is None
+    assert await ledger.check_of_version("acme", "acme/check-1", "v1") is None
+
+    # ---- a check points at a document the ledger has: not at nothing
+    with pytest.raises(ValueError, match="isn't recorded"):
+        await ledger.record_check(a_check())
+    assert await ledger.get_check("acme", "c" * 32) is None
+
+    # ---- recorded, and stamped by the ledger
+    await document("acme/check-1")
+    await ledger.record_check(a_check())
+    stored = await ledger.get_check("acme", "c" * 32)
+    assert stored is not None and stored.created_at is not None
+    assert stored == a_check(created_at=stored.created_at)
+    assert stored.document_format is SubmittedFormat.MARKDOWN
+    assert await ledger.check_of_version("acme", "acme/check-1", "v1") == stored
+
+    # ---- tenant-keyed: another tenant's read finds nothing
+    assert await ledger.get_check("other-corp", "c" * 32) is None
+    assert await ledger.check_of_version("other-corp", "acme/check-1", "v1") is None
+    assert await ledger.get_check("acme", "d" * 32) is None
+
+    # ---- append-only: an id, or a version, is checked once
+    await document("acme/check-2")
+    with pytest.raises(ValueError, match="already"):
+        await ledger.record_check(a_check(instrument_id="acme/check-2"))  # same id
+    with pytest.raises(ValueError, match="already"):
+        await ledger.record_check(a_check(check_id="e" * 32))  # same version
+    assert await ledger.check_of_version("acme", "acme/check-2", "v1") is None
+    await ledger.record_check(a_check(check_id="e" * 32, instrument_id="acme/check-2"))
+
+    # ---- only a submitted document is checked
+    await ledger.record_version(
+        tenant_id="acme",
+        instrument_id="acme/policy",
+        version_id="v1",
+        valid_from=JAN,
+        supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
+        title="A policy",
+    )
+    with pytest.raises(ValueError, match="not a submitted document"):
+        await ledger.record_check(a_check(check_id="f" * 32, instrument_id="acme/policy"))
+
+    # ---- what a check names, refused before anything is written
+    await document("acme/check-3")
+    for change, reason in (
+        ({"trace_id": " "}, "trace_id"),
+        ({"user_id": ""}, "submitter"),
+        ({"filename": "  "}, "file"),
+        ({"check_id": ""}, "id"),
+        ({"instrument_id": "other-corp/check-3"}, "tenant's"),
+        ({"instrument_id": "check-3"}, "tenant's"),
+        ({"tenant_id": "ghost", "instrument_id": "ghost/check-3"}, "registered"),
+    ):
+        with pytest.raises(ValueError, match=reason):
+            await ledger.record_check(a_check(**{"check_id": "1" * 32, **change}))
+    assert await ledger.get_check("acme", "1" * 32) is None
+    assert await ledger.check_of_version("acme", "acme/check-3", "v1") is None
+
+
+async def test_the_fake_ledger_satisfies_the_check_contract() -> None:
+    await assert_check_contract(FakeLedgerStore())
+
+
+def test_a_check_is_visible_to_its_submitter_and_to_admins_alone() -> None:
+    record = a_check()
+    assert record.visible_to("uid-1", admin=False)
+    assert record.visible_to("uid-2", admin=True)
+    assert not record.visible_to("uid-2", admin=False)
+    assert not record.visible_to("", admin=False)
+    assert not a_check(user_id="uid-2").visible_to("uid-1", admin=False)
 
 
 async def assert_refusal_outcomes_contract(ledger: LedgerStore) -> None:

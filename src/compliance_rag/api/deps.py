@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from compliance_rag.adapters.corpus_lifecycle import CorpusLifecycle
 from compliance_rag.adapters.firebase_auth import is_member
 from compliance_rag.adapters.interfaces import (
     ClauseStore,
@@ -46,7 +47,10 @@ class ApiServices:
     """Canonical text: the tenant's policies for the cached prefix (#148)."""
     pipeline: AssessmentPipeline
     """`answer()`: retrieval, generation, verification (#149)."""
-    checks: tuple[Callable[[], Awaitable[None]], ...] = field(
+    lifecycle: CorpusLifecycle
+    """The one write path for a document a member submits (#297,
+    `submit_document`, #296): the API stores nothing any other way."""
+    readiness: tuple[Callable[[], Awaitable[None]], ...] = field(
         default_factory=tuple[Callable[[], Awaitable[None]], ...]
     )
     """Run at startup; one that raises stops the app starting (the graph's
@@ -57,7 +61,7 @@ class ApiServices:
     """What to close on shutdown besides the verifier (the graph's driver)."""
 
     async def start(self) -> None:
-        for check in self.checks:
+        for check in self.readiness:
             await check()
 
     async def aclose(self) -> None:

@@ -555,7 +555,7 @@ def test_a_residency_refusal_at_startup_stops_the_app(monkeypatch: pytest.Monkey
     generator = GeneratorAtStartup(
         api_settings(**OFFSHORE), corpus=FakeRetrievalStore(ledger=FakeLedgerStore())
     )
-    app = create_app(fake_api_services(checks=(generator.start,)))
+    app = create_app(fake_api_services(readiness=(generator.start,)))
     with pytest.raises(GenerationResidencyError), TestClient(app):
         pass
 

@@ -30,6 +30,8 @@ from compliance_rag.corpus.synthetic_registry import (
 from compliance_rag.eval.golden_corpus import (
     golden_chunks,
     submitted_fixture_clauses,
+    submitted_fixture_documents,
+    submitted_fixture_files,
     synthetic_fixture_chunks,
     synthetic_fixture_clauses,
 )
@@ -164,7 +166,13 @@ def test_the_registry_matches_the_fixtures() -> None:
         (*synthetic_fixture_clauses(), *submitted_fixture_clauses()),
         source="",
     )
-    assert SyntheticRegistry.load().keys == expected.keys
+    loaded = SyntheticRegistry.load()
+    assert loaded.keys == expected.keys
+    assert (
+        loaded.documents
+        == SyntheticRegistry.of((), documents=submitted_fixture_documents(), source="").documents
+    )
+    assert len(loaded.documents) == len(submitted_fixture_files())
 
 
 def test_a_submitted_fixture_is_registered_by_its_passages_and_has_no_chunk() -> None:
@@ -189,6 +197,11 @@ def test_the_registry_round_trips(tmp_path: Path) -> None:
     assert SyntheticRegistry.load(tmp_path / "r.json") == SyntheticRegistry(
         keys=frozenset(registry.keys), source="s"
     )
+    with_documents = SyntheticRegistry.of((), source="s", documents=(b"a document",))
+    with_documents.save(tmp_path / "d.json")
+    loaded = SyntheticRegistry.load(tmp_path / "d.json")
+    assert loaded == with_documents and loaded.vouches_for_document(b"a document")
+    assert not loaded.vouches_for_document(b"a document ")
 
 
 async def test_registered_chunks_cannot_carry_real_clauses_through_replace_in_place() -> None:
@@ -323,6 +336,9 @@ def test_the_submit_path_writes_clauses_and_never_touches_retrieval() -> None:
 PUBLISHING_SCRIPTS = {
     "scripts/load_compilation_vectors.py",  # library law, from the bucket ingest filled
     "scripts/seed_tenant.py",  # Acme's six policies: synthetic because the registry says so (#293)
+    # The throwaway demo's API needs a lifecycle for `POST /v1/checks` (#297), over its own
+    # in-process fakes: nothing it stores leaves the process.
+    "scripts/demo_server.py",
 }
 
 

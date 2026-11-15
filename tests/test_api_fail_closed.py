@@ -418,7 +418,15 @@ def _guarded_routes(app: FastAPI) -> Iterator[tuple[str, str]]:
 def test_the_route_enumeration_finds_the_api_and_the_pages() -> None:
     found = {path for _, path in _guarded_routes(World(enabled()).app)}
     assert len(found) >= 20
-    assert {"/v1/me", "/v1/answers", "/session", "/chats", "/admin/subscriptions"} <= found
+    assert {
+        "/v1/me",
+        "/v1/answers",
+        "/v1/checks",
+        "/session",
+        "/chats",
+        "/checks/new",
+        "/admin/subscriptions",
+    } <= found
 
 
 @pytest.mark.parametrize("headers", EMPTY_OR_MALFORMED)
@@ -433,7 +441,7 @@ async def test_no_usable_token_is_a_401_on_every_api_route_and_a_redirect_on_eve
             response = await c.request(method, path, headers=headers)
             asked += 1
             # Pages send you to sign in; the htmx fragment is a 401 like the API.
-            if path.startswith(("/chats", "/admin")) and not path.endswith("/turns"):
+            if path.startswith(("/chats", "/checks", "/admin")) and not path.endswith("/turns"):
                 assert (response.status_code, response.headers.get("location")) == (
                     303,
                     "/signin",

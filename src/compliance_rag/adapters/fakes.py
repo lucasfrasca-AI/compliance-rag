@@ -27,6 +27,7 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    CheckRecord,
     ClauseStore,
     Embedder,
     Generation,
@@ -48,6 +49,7 @@ from compliance_rag.adapters.interfaces import (
     UsageRecord,
     check_assessment_write,
     check_chat_exchange,
+    check_check_write,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -439,6 +441,7 @@ class FakeLedgerStore(LedgerStore):
         self._evidence: list[Evidence] = []
         self._coverage: dict[tuple[str, str], dict[str, CoverageRow]] = {}
         self._chats: dict[tuple[str, str], list[ChatTurn]] = {}  # (tenant, chat) -> its turns
+        self._checks: dict[tuple[str, str], CheckRecord] = {}  # (tenant, check) -> the check
         self._recorded_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
@@ -514,6 +517,42 @@ class FakeLedgerStore(LedgerStore):
             *held,
             *(replace(turn, created_at=stamped) for turn in exchange.turns(len(held))),
         ]
+
+    async def record_check(self, record: CheckRecord) -> None:
+        """Checked before anything is stored, in Postgres' order."""
+        check_check_write(record)
+        if record.tenant_id not in self._profiles:
+            raise ValueError(f"tenant {record.tenant_id!r} isn't registered in the ledger")
+        version = (record.tenant_id, record.instrument_id, record.version_id)
+        if version not in self._versions:
+            raise ValueError(
+                f"{record.instrument_id}:{record.version_id} isn't recorded: a check points at "
+                "a document that is stored"
+            )
+        if self._classes.get((record.tenant_id, record.instrument_id)) is not (
+            DocumentClass.SUBMITTED_DOCUMENT
+        ):
+            raise ValueError(f"{record.instrument_id} is not a submitted document")
+        if (record.tenant_id, record.check_id) in self._checks:
+            raise ValueError(f"check {record.check_id} is already recorded")
+        if await self.check_of_version(record.tenant_id, record.instrument_id, record.version_id):
+            raise ValueError(f"{record.instrument_id}:{record.version_id} is already checked")
+        self._checks[(record.tenant_id, record.check_id)] = replace(record, created_at=self._now())
+
+    async def get_check(self, tenant_id: str, check_id: str) -> CheckRecord | None:
+        return self._checks.get((tenant_id, check_id))
+
+    async def check_of_version(
+        self, tenant_id: str, instrument_id: str, version_id: str
+    ) -> CheckRecord | None:
+        return next(
+            (
+                c
+                for (t, _), c in self._checks.items()
+                if t == tenant_id and (c.instrument_id, c.version_id) == (instrument_id, version_id)
+            ),
+            None,
+        )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         turns = self._chats.get((tenant_id, chat_id), [])

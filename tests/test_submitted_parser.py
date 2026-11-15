@@ -259,3 +259,12 @@ def test_a_pdf_a_docx_and_anything_else_is_refused(name: str) -> None:
     """PDF positions are #307's, DOCX waits for a customer to name it (U2)."""
     with pytest.raises(ValueError, match="Markdown or plain text"):
         format_of_filename(name)
+
+
+def test_a_passage_path_is_numbered_so_p10_follows_p9() -> None:
+    from compliance_rag.corpus.submitted_parser import passage_number
+
+    assert sorted(["p10", "p2", "p1", "p9"], key=passage_number) == ["p1", "p2", "p9", "p10"]
+    for bad in ("", "p", "p0", "p01", "q1", "1", "p1/2", "p1x", "p-1"):
+        with pytest.raises(ValueError, match="not a passage path"):
+            passage_number(bad)

@@ -46,18 +46,24 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from compliance_rag.api.checks import may_see, read_passages
 from compliance_rag.api.deps import ApiServices, Caller, CurrentCaller, services_of
 from compliance_rag.assessment.policies import document_order
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
     VERSION_ID_RE,
+    DocumentClass,
     clause_anchor_id,
     instrument_tenant_prefix,
     parse_stable_id,
     stable_id,
     validate_instrument_id,
 )
-from compliance_rag.corpus.source_view import render_policy_html, sanitise_source_html
+from compliance_rag.corpus.source_view import (
+    render_policy_html,
+    render_submitted_html,
+    sanitise_source_html,
+)
 from compliance_rag.telemetry import span
 
 router = APIRouter(prefix="/v1")
@@ -105,12 +111,34 @@ async def _library_source(
     return sanitise_source_html(html, titles.get((instrument_id, version_id), instrument_id))
 
 
+async def _submitted_source(
+    services: ApiServices, who: Caller, instrument_id: str, version_id: str
+) -> str | None:
+    """A submitted document, for its submitter and the tenant's admins alone.
+    Who submitted it is the check's record, found by the version, and the rule
+    is the one the page and the JSON route apply (`checks.may_see`). A version
+    nobody checked (a part-written submission) is not served to anyone."""
+    record = await services.ledger.check_of_version(who.tenant_id, instrument_id, version_id)
+    if record is None or not may_see(services, who, record):
+        return None
+    titles = await services.ledger.version_titles(who.tenant_id, [(instrument_id, version_id)])
+    title = titles.get((instrument_id, version_id))
+    if title is None:
+        return None
+    return render_submitted_html(await read_passages(services.clauses, record), title=title)
+
+
 async def _tenant_source(
     services: ApiServices, who: Caller, instrument_id: str, version_id: str
 ) -> str | None:
     tenant_id = who.tenant_id
     if instrument_tenant_prefix(instrument_id) != tenant_id:
         return None
+    if (
+        await services.ledger.document_class(tenant_id=tenant_id, instrument_id=instrument_id)
+        is DocumentClass.SUBMITTED_DOCUMENT
+    ):
+        return await _submitted_source(services, who, instrument_id, version_id)
     titles = await services.ledger.version_titles(tenant_id, [(instrument_id, version_id)])
     title = titles.get((instrument_id, version_id))
     if title is None:  # never recorded: a part-written publish isn't citable

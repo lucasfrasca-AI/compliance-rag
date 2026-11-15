@@ -72,10 +72,10 @@ PAGE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
-"""On every response under `/chats` and `/admin`, a redirect, an error page, a
+"""On every response under `/chats`, `/checks` and `/admin`, a redirect, an error page, a
 fragment and its JSON refusals included (`PageHeaders`)."""
 
-PAGE_PREFIXES = ("/chats", "/admin")
+PAGE_PREFIXES = ("/chats", "/checks", "/admin")
 
 HEADING_CHARS = 80
 _CHAT_ID = re.compile(UUID4_HEX)
@@ -88,8 +88,8 @@ def is_chat_id(text: str) -> bool:
 
 
 class PageHeaders:
-    """Adds `PAGE_HEADERS` to every response for a path under `/chats` or
-    `/admin` (`PAGE_PREFIXES`), whatever
+    """Adds `PAGE_HEADERS` to every response for a path under `/chats`,
+    `/checks` or `/admin` (`PAGE_PREFIXES`), whatever
     made it: a page, a redirect, the fragment, or a refusal from a dependency
     or the validator (401, 404, 405, 422), which would otherwise carry none.
     Pure ASGI, so no route can forget it; a header a response already has is

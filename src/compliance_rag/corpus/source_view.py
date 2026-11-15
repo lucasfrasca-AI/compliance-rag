@@ -21,6 +21,10 @@ name has an element with `id="{clause_anchor_id(clause_path)}"`.
   parser's own line grammar, so a clause is anchored exactly where the parser
   made one: `## N.` opens a section and `N.M ` starts clause `N/M`. Every
   character of the source goes through `html.escape`.
+- **A submitted document** (#297) is drawn from its stored passages, not
+  re-read from its Markdown: `render_submitted_html` gives each passage an
+  element with `id="{clause_anchor_id('pN')}"` holding its verbatim text,
+  escaped. Markdown in it is never rendered; it is the text a claim will quote.
 
 The two layers: this module's output is already inert, and the route
 (`api/sources.py`) serves it under a CSP that would stop script even if it
@@ -35,10 +39,11 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Iterable
 from functools import lru_cache
 from html.parser import HTMLParser
 
-from compliance_rag.corpus.models import clause_anchor_id
+from compliance_rag.corpus.models import ClauseRecord, clause_anchor_id
 from compliance_rag.corpus.policy_parser import HEADING_RE, SUBSECTION_RE, strip_front_matter
 
 TARGET_STYLE = (
@@ -275,4 +280,32 @@ def render_policy_html(markdown: str, *, title: str) -> str:
         '<!doctype html><html lang="en-AU"><head><meta charset="utf-8">'
         f"<title>{heading}</title><style>{_STYLE}</style></head>"
         f"<body><main><h1>{heading}</h1>{''.join(blocks)}</main></body></html>"
+    )
+
+
+# ---- a submitted document: its stored passages, escaped, anchored as the clauses are ----
+
+_SUBMITTED_STYLE = """
+body{font:16px/1.55 system-ui,sans-serif;margin:0 auto;max-width:46rem;padding:1.5rem 1rem}
+h1{font-size:1.5rem}
+.passage{margin:.9rem 0;padding:.25rem .5rem;white-space:pre-wrap;overflow-wrap:anywhere}
+:target{background:#fff1b8;outline:3px solid #d4a017;scroll-margin-top:4rem}
+"""
+
+
+def render_submitted_html(passages: Iterable[ClauseRecord], *, title: str) -> str:
+    """A submitted document as a page, from its stored passages (#297): each is
+    an element with `id="{clause_anchor_id(path)}"` holding its verbatim text,
+    escaped, in the order given (document order, `passage_number`). Nothing of
+    the document is read as markup, Markdown included: it is the text the
+    member submitted, which is what a claim will quote."""
+    blocks = "".join(
+        f'<div class="passage" id="{clause_anchor_id(p.clause_path)}">{html.escape(p.text)}</div>'
+        for p in passages
+    )
+    heading = html.escape(title)
+    return (
+        '<!doctype html><html lang="en-AU"><head><meta charset="utf-8">'
+        f"<title>{heading}</title><style>{_SUBMITTED_STYLE}</style></head>"
+        f"<body><main><h1>{heading}</h1>{blocks}</main></body></html>"
     )

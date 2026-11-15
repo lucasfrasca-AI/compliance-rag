@@ -74,7 +74,12 @@ from compliance_rag.corpus.models import (
     sha256_hex,
     validate_title,
 )
-from compliance_rag.corpus.submitted_parser import SubmittedFormat, segment_submitted_document
+from compliance_rag.corpus.submitted_parser import (
+    MAX_PASSAGES,
+    SubmittedFormat,
+    TooManyPassages,
+    segment_submitted_document,
+)
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 
 _CONCURRENT_READS = 16
@@ -284,7 +289,7 @@ class CorpusLifecycle:
         submitted_on: dt.date,
         submitted_by: str,
         title: str,
-    ) -> None:
+    ) -> int:
         """Store a document a member submits to be checked (#296, ADR-0053 U1,
         ADR-0059): a version of its own class, `submitted_document`, so
         versioning, the manifest, the position map, withdraw and purge are
@@ -307,9 +312,12 @@ class CorpusLifecycle:
         that isn't the instrument's; a version already submitted (a changed
         document is a new `version_id`, and an earlier version is never
         retired, because an assessment keeps the document it judged,
-        ADR-0034); a document with no words; and, while generation is offshore,
-        any passage the synthetic registry doesn't vouch for. That last check
-        is `TenantTextGate`'s, because the text never reaches the vector store
+        ADR-0034); a document with no words (`EmptyDocument`); one cut into more
+        than `MAX_PASSAGES` passages (`TooManyPassages`); and, while generation is offshore,
+        any passage the synthetic registry doesn't vouch for, or a document
+        whose raw bytes are not, whole, a registered submitted fixture's
+        (#297: an excerpt or a reordering of one is real data). Those last
+        checks are `TenantTextGate`'s, because the text never reaches the vector store
         the store-based gate (`assert_generation_allowed`) reads."""
         with telemetry.span(
             "corpus_lifecycle.submit_document",
@@ -330,11 +338,18 @@ class CorpusLifecycle:
                 user_id=submitted_by,
             )
             span.set_attribute("lifecycle.passages", len(passages))
-            TenantTextGate(self._generation_region, self._synthetic_registry).check(
+            if len(passages) > MAX_PASSAGES:
+                raise TooManyPassages(len(passages))
+            gate = TenantTextGate(self._generation_region, self._synthetic_registry)
+            # Offshore both must hold (#297, ADR-0026): every passage registered
+            # (which names the first that is not), then the whole document, by
+            # the hash of its raw bytes as uploaded.
+            gate.check(
                 tenant_id,
                 ((p.clause_id, p.canonical_text) for p in passages),
                 what="passage(s) of a submitted document",
             )
+            gate.check_document(source.encode("utf-8"))
             if (
                 await self._ledger.version_validity(
                     tenant_id=tenant_id, instrument_id=instrument_id, version_id=version_id
@@ -363,6 +378,7 @@ class CorpusLifecycle:
                 document_class=DocumentClass.SUBMITTED_DOCUMENT,
                 title=title,
             )
+            return len(passages)
 
     async def check_publishable(
         self,

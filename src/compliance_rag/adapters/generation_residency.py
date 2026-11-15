@@ -106,11 +106,36 @@ def assert_question_allowed(
     checks nothing."""
     if not is_offshore(generation_region):
         return
-    if asker.strip().lower() not in {t.strip().lower() for t in testers}:
+    if not _is_tester(asker, testers):
         raise GenerationResidencyError(
             f"generation runs in {generation_region}, outside Australia, during the build "
             "phase, so only a registered build-phase tester's question is sent there: anyone "
             "else's may hold real customer data (ADR-0023, ADR-0032)"
+        )
+
+
+def _is_tester(member: str, testers: AbstractSet[str]) -> bool:
+    return member.strip().lower() in {t.strip().lower() for t in testers}
+
+
+def assert_submission_allowed(
+    *, generation_region: str, submitter: str, testers: AbstractSet[str]
+) -> None:
+    """A document a member submits to be checked is typed or pasted fresh, as a
+    question is, and its claims are what the model reads (#297). Offshore, it
+    counts as real unless the operator registered its submitter as a build-phase
+    tester (ADR-0032), so a non-tester is refused before anything is parsed or
+    written, a document byte-identical to a registered fixture included: the
+    registry vouches for a fixture, and the tester rule is what lets a person
+    send anything at all. `submitter` is the member's email, compared as
+    `assert_question_allowed` compares it. Sydney checks nothing."""
+    if not is_offshore(generation_region):
+        return
+    if not _is_tester(submitter, testers):
+        raise GenerationResidencyError(
+            f"generation runs in {generation_region}, outside Australia, during the build "
+            "phase, so only a registered build-phase tester may submit a document to be "
+            "checked: anyone else's may hold real customer data (ADR-0023, ADR-0032)"
         )
 
 
@@ -132,6 +157,18 @@ class TenantTextGate:
     @classmethod
     def from_settings(cls, settings: Settings) -> TenantTextGate:
         return cls(settings.generation.region, SyntheticRegistry.load())
+
+    def check_document(self, raw: bytes) -> None:
+        """Offshore, a submitted document is synthetic only if its raw bytes are
+        a registered submitted fixture's (#297, ADR-0026); this is the
+        whole-document half, and `check` over its passages the other. Anything
+        else (an excerpt, a reordering, one byte changed) is real data."""
+        if is_offshore(self.generation_region) and not self.registry.vouches_for_document(raw):
+            raise GenerationResidencyError(
+                f"generation runs in {self.generation_region}, outside Australia, during the "
+                "build phase, and this submitted document isn't, byte for byte, a registered "
+                "synthetic fixture, so it's real data (ADR-0026, ADR-0032)"
+            )
 
     def check(self, tenant_id: str, texts: Iterable[tuple[str, str]], *, what: str) -> None:
         """`texts`: `(clause id, text)` pairs owned by `tenant_id`, about to be

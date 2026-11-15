@@ -141,6 +141,13 @@ def submitted_fixture_files() -> tuple[Path, ...]:
     )
 
 
+def submitted_fixture_documents() -> tuple[bytes, ...]:
+    """The raw bytes of every synthetic submitted document: what the operator
+    registers, whole, beside its passages (#297). A submission is synthetic
+    offshore only if its bytes are one of these."""
+    return tuple(p.read_bytes() for p in submitted_fixture_files())
+
+
 def submitted_fixture_clauses() -> tuple[ClauseRecord, ...]:
     """The passages of every synthetic submitted document, as `acme`'s: what the
     operator registers as synthetic (`scripts/register_synthetic_fixtures.py`),

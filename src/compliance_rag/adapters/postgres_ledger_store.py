@@ -36,6 +36,7 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    CheckRecord,
     Citation,
     LedgerStore,
     PolicyVersion,
@@ -56,6 +57,7 @@ from compliance_rag.adapters.interfaces import (
     UsageRecord,
     check_assessment_write,
     check_chat_exchange,
+    check_check_write,
 )
 from compliance_rag.assessment.coverage import (
     CoverageRow,
@@ -82,6 +84,7 @@ from compliance_rag.corpus.models import (
     validate_tenant_id,
     validate_title,
 )
+from compliance_rag.corpus.submitted_parser import SubmittedFormat
 from compliance_rag.settings import GeneratorName, Settings
 
 log = logging.getLogger(__name__)
@@ -290,6 +293,26 @@ def _flag_unreadable_absent(
                 turn_index,
                 position,
             )
+
+
+_CHECK_SELECT: LiteralString = (
+    "SELECT tenant_id, check_id, user_id, instrument_id, version_id, filename, "
+    "document_format, trace_id, created_at FROM submitted_check"
+)
+
+
+def _check_of_row(row: TupleRow) -> CheckRecord:
+    return CheckRecord(
+        tenant_id=str(row[0]),
+        check_id=str(row[1]),
+        user_id=str(row[2]),
+        instrument_id=str(row[3]),
+        version_id=str(row[4]),
+        filename=str(row[5]),
+        document_format=SubmittedFormat(str(row[6])),
+        trace_id=str(row[7]),
+        created_at=row[8],
+    )
 
 
 class LedgerUnreachable(ConnectionError):
@@ -600,6 +623,65 @@ class PostgresLedgerStore(LedgerStore):
             # the member's question and what they were shown, and a chain is
             # what `log.exception` prints.
             raise ValueError(f"chat turn refused: {exc.diag.message_primary}") from None
+
+    async def record_check(self, record: CheckRecord) -> None:
+        check_check_write(record)
+        try:
+            async with self._connection() as conn, conn.transaction():
+                # The version must be a submitted document's: the foreign key
+                # names the version, not its class.
+                row = await (
+                    await conn.execute(
+                        "SELECT document_class FROM instrument "
+                        "WHERE tenant_id = %s AND instrument_id = %s",
+                        (record.tenant_id, record.instrument_id),
+                    )
+                ).fetchone()
+                if row is not None and row[0] != DocumentClass.SUBMITTED_DOCUMENT.value:
+                    raise ValueError(f"{record.instrument_id} is not a submitted document")
+                await conn.execute(
+                    "INSERT INTO submitted_check (tenant_id, check_id, user_id, instrument_id, "
+                    "version_id, filename, document_format, trace_id, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
+                    (
+                        record.tenant_id,
+                        record.check_id,
+                        record.user_id,
+                        record.instrument_id,
+                        record.version_id,
+                        record.filename,
+                        record.document_format.value,
+                        record.trace_id,
+                    ),
+                )
+        except psycopg.errors.UniqueViolation as exc:
+            raise ValueError(
+                f"check {record.check_id} is already recorded, or "
+                f"{record.instrument_id}:{record.version_id} is already checked"
+            ) from exc
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(
+                f"tenant {record.tenant_id!r} isn't registered in the ledger, or "
+                f"{record.instrument_id}:{record.version_id} isn't recorded: a check points at "
+                "a document that is stored"
+            ) from exc
+        except psycopg.errors.CheckViolation as exc:
+            raise ValueError(f"check refused: {exc.diag.constraint_name}") from None
+
+    async def get_check(self, tenant_id: str, check_id: str) -> CheckRecord | None:
+        row = await self._fetchone(
+            f"{_CHECK_SELECT} WHERE tenant_id = %s AND check_id = %s", (tenant_id, check_id)
+        )
+        return None if row is None else _check_of_row(row)
+
+    async def check_of_version(
+        self, tenant_id: str, instrument_id: str, version_id: str
+    ) -> CheckRecord | None:
+        row = await self._fetchone(
+            f"{_CHECK_SELECT} WHERE tenant_id = %s AND instrument_id = %s AND version_id = %s",
+            (tenant_id, instrument_id, version_id),
+        )
+        return None if row is None else _check_of_row(row)
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         rows = await self._fetchall(

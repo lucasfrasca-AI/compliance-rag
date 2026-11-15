@@ -612,3 +612,56 @@ async def test_withdraw_and_purge_are_the_existing_operations(world: _World) -> 
         tenant_id=TENANT, instrument_id=instrument, version_id="v1"
     ) == ("admin", "member asked")
     assert world.retrieval.stored_chunk_ids == frozenset()
+
+
+async def test_offshore_a_document_that_is_not_a_registered_fixture_byte_for_byte_is_refused(
+    world: _World,
+) -> None:
+    """The lifecycle is where it is decided (ADR-0026, #297): an excerpt of a
+    fixture, whose every passage is registered, has no registered whole."""
+    source = PROPOSAL.read_text(encoding="utf-8")
+    excerpt = "\n\n".join(source.split("\n\n")[2:5]) + "\n"
+    for changed in (excerpt, source + "\n", source[:-1]):
+        with pytest.raises(GenerationResidencyError, match="byte for byte"):
+            await world.submit(changed)
+    world.assert_nothing_written()
+    await world.submit(source)  # itself passes
+
+
+async def test_the_lifecycle_refuses_more_than_the_passage_cap_before_any_write(
+    sydney: _World,
+) -> None:
+    """The cap is the lifecycle's, so every caller is bound by it, not only the
+    API (#297): one passage over is refused with nothing written, at the cap it
+    is stored."""
+    from compliance_rag.corpus.submitted_parser import MAX_PASSAGES, TooManyPassages
+
+    text = SubmittedFormat.TEXT
+    with pytest.raises(TooManyPassages, match="limit is 1,000"):
+        await sydney.submit("x\n\n" * (MAX_PASSAGES + 1), fmt=text)
+    sydney.assert_nothing_written()
+    stored = await sydney.submit("x\n\n" * MAX_PASSAGES, fmt=text)
+    assert len(stored) == MAX_PASSAGES
+
+
+async def test_the_lifecycle_says_how_many_passages_it_stored(world: _World) -> None:
+    source = PROPOSAL.read_text(encoding="utf-8")
+    count = await world.lifecycle.submit_document(
+        source,
+        document_format=SubmittedFormat.MARKDOWN,
+        instrument_id="acme/proposal",
+        tenant_id=TENANT,
+        version_id="v1",
+        submitted_on=SUBMITTED_ON,
+        submitted_by=MEMBER,
+        title="Customer insights programme",
+    )
+    assert count == len(_passages(source))
+
+
+async def test_a_document_with_no_words_is_refused_as_an_empty_document(sydney: _World) -> None:
+    from compliance_rag.corpus.submitted_parser import EmptyDocument
+
+    with pytest.raises(EmptyDocument):
+        await sydney.submit("  \n\n", fmt=SubmittedFormat.TEXT)
+    sydney.assert_nothing_written()
