@@ -308,6 +308,22 @@ means the ten each delivered whole, and its recall, delivered-recall, has
 floors and no target. Read here, "delivered list" means the reranked list,
 where the targets are.
 
+## Amendment: the first re-baseline (2026-11-15, #282)
+
+A floor is lowered only by the human's decision, with the drop tracked by an
+issue. It is never lowered to make a build pass. The first time this
+happened: #282 added s 7A, s 16C and Part IIIC Divisions 1–3 (244 clauses) to
+the selection, so the gate corpus grew to 1,023 clauses. Two law cross-clause
+cells fell:
+
+- fused, 4/9 → 5/18 (GQ-19, #343);
+- delivered-recall, 5/6 → 2/3 (GQ-20, #344).
+
+The human chose option (a) on 2026-11-15: re-baseline those two floors and
+track both regressions. Every other floor and every target is unchanged, and
+the strict xfails (#200, #221) stand. The appendix below is the 2026-10-15
+measurement and isn't rewritten.
+
 ## Appendix: every query, every list (2026-10-15)
 
 recall@10 on the gate corpus. `dense`, `sparse` and `fused` are from the fused

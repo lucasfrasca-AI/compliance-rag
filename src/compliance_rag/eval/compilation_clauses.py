@@ -1,7 +1,7 @@
 """The whole compilation's selected clauses, exactly as the parser emits them,
 committed for the recall gate (issue #180).
 
-The gate's law corpus is the 779 clauses the selection manifest puts in scope,
+The gate's law corpus is the 1023 clauses the selection manifest puts in scope,
 not the 75-clause excerpt: production retrieves over all of them, and the
 excerpt is an easier problem. The pinned compilation itself is a raw source
 and is never committed (`.gitignore`: `corpus/instruments/**/raw/`), so CI

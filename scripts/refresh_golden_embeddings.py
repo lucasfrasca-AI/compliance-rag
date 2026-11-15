@@ -3,7 +3,7 @@ the real `VertexEmbedder`, and write
 `corpus/golden/embeddings/gemini-embedding-001-1536.json` (issues #28, #180).
 
 What it embeds is `embedded_texts()`: each chunk of the gate corpus (the whole
-compilation's 779 selected clauses and the six Acme policies), each chunk of
+compilation's 1023 selected clauses and the six Acme policies), each chunk of
 the golden excerpt (a subset, so nothing extra in practice), and each golden
 query, once.
 
@@ -13,7 +13,7 @@ re-embedded on every run, so the file is one snapshot with one
 `generated_on` date, never a mix of vectors from different days; the run
 reports how far each text the previous snapshot already held has moved
 (1.000000 when the model hasn't). One request per text (`VertexEmbedder`).
-Cost: gemini-embedding-001 input at $0.15/1M tokens — ~15k tokens for the
+Cost: gemini-embedding-001 input at $0.15/1M tokens — ~22k tokens for the
 gate corpus, under a cent.
 
     uv run python -m scripts.refresh_golden_embeddings --dry-run   # counts only, no cloud call
