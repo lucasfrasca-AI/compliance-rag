@@ -19,7 +19,7 @@ from compliance_rag.adapters.fakes import (
     FakeRetrievalStore,
 )
 from compliance_rag.adapters.generation_residency import TenantTextGate
-from compliance_rag.adapters.interfaces import Generation
+from compliance_rag.adapters.interfaces import Generation, ReplyKind
 from compliance_rag.assessment.draft import DraftCitation
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION, AssessmentPipeline
 from compliance_rag.corpus.models import Chunk, ClauseRecord, DocumentClass, Scope
@@ -64,10 +64,20 @@ class ScriptedGenerator(FakeGenerator):
         self._replies = [json.dumps(r) for r in replies]
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         await super().generate(
-            system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
+            system=system,
+            cached_prefix=cached_prefix,
+            user=user,
+            max_tokens=max_tokens,
+            reply=reply,
         )
         return Generation(
             text=self._replies.pop(0), input_tokens=10, output_tokens=5, cost_usd=0.01

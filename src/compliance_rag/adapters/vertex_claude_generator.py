@@ -39,6 +39,7 @@ from compliance_rag.adapters.interfaces import (
     Generation,
     GenerationUnavailable,
     Generator,
+    ReplyKind,
     RetrievalAdmin,
     Unavailability,
 )
@@ -130,7 +131,12 @@ class VertexClaudeGenerator(Generator):
         cached_prefix: str | None,
         user: str,
         max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
+        # `reply` names the JSON shape asked for. This adapter sets no response
+        # schema (the prompt names the shape), so there is nothing to choose; the
+        # caller validates the reply either way.
+        del reply
         await self._assert_still_allowed()
         blocks: list[TextBlockParam] = [{"type": "text", "text": system}]
         if cached_prefix:

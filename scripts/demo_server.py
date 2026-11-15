@@ -108,6 +108,7 @@ from compliance_rag.adapters.interfaces import (
     GraphStore,
     Member,
     Profile,
+    ReplyKind,
     TokenVerifier,
     Unauthenticated,
 )
@@ -275,11 +276,21 @@ class RecordingGenerator(Generator):
         self._failures = failures
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         try:
             return await self._inner.generate(
-                system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
+                system=system,
+                cached_prefix=cached_prefix,
+                user=user,
+                max_tokens=max_tokens,
+                reply=reply,
             )
         except Exception as error:
             self._failures.record("generation (Gemini on Vertex)", error)

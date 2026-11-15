@@ -38,9 +38,10 @@ D-11 can't look healthy on a trace while every request paid full price.
 `cache_creation_input_tokens` is always 0: implicit caching has no write.
 
 **Structured output.** The reply is requested as JSON (`response_mime_type`)
-with a response schema, `REPLY_SCHEMA`: either an answer (`answer`,
-`citations`) or a repair (`clause_id`, `quote`), the two shapes
-`assessment/draft.py` parses. The schema helps the model and is never trusted:
+with a response schema chosen by the call's `ReplyKind`: `REPLY_SCHEMA` for an
+answer, either one (`answer`, `citations`) or a repair (`clause_id`, `quote`),
+the two shapes `assessment/draft.py` parses; `CLAIMS_SCHEMA` for the claims of a
+submitted document (`assessment/claims.py`, #298). The schema helps the model and is never trusted:
 `parse_draft` and `parse_repair` still validate strictly afterwards, and
 `tests/test_gemini_generator.py` holds the schema to those models.
 
@@ -89,9 +90,11 @@ from compliance_rag.adapters.generation_residency import (
     validate_generation_region,
 )
 from compliance_rag.adapters.interfaces import (
+    MAX_CLAIMS,
     Generation,
     GenerationUnavailable,
     Generator,
+    ReplyKind,
     RetrievalAdmin,
     Unavailability,
 )
@@ -222,8 +225,39 @@ REPLY_SCHEMA = types.Schema(
         _object(_CITATION, "clause_id", "quote"),
     ]
 )
-"""The two reply shapes of `assessment/draft.py`. One schema for both because
-the `Generator` interface carries no schema: the prompt says which is wanted."""
+"""The two reply shapes of `assessment/draft.py`, one schema for both: a call
+that wants an answer (`ReplyKind.ANSWER`, the default) or a repair says which in
+its prompt."""
+
+_CLAIM_STRINGS = types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING))
+
+CLAIMS_SCHEMA = _object(
+    {
+        "claims": types.Schema(
+            type=types.Type.ARRAY,
+            max_items=MAX_CLAIMS,
+            items=_object(
+                {
+                    "passage": types.Schema(type=types.Type.STRING),
+                    "quote": types.Schema(type=types.Type.STRING, min_length=1),
+                    "summary": types.Schema(type=types.Type.STRING, min_length=1),
+                    "obligation_ids": _CLAIM_STRINGS,
+                    "policy_clause_ids": _CLAIM_STRINGS,
+                },
+                "passage",
+                "quote",
+                "summary",
+                "obligation_ids",
+                "policy_clause_ids",
+            ),
+        )
+    },
+    "claims",
+)
+"""The reply of `ReplyKind.CLAIMS` (`assessment/claims.py`, #298): the claims of a
+submitted document. Held to `ClaimReply` by `tests/test_gemini_generator.py`.
+Like `REPLY_SCHEMA` it helps the model and is never trusted: `parse_claims`
+validates the reply strictly whatever the model was asked for."""
 
 
 class _ModelsLike(Protocol):
@@ -335,6 +369,7 @@ class GeminiGenerator(Generator):
         cached_prefix: str | None,
         user: str,
         max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         await self._assert_still_allowed()
         # The prefix first, then the question: the bytes that repeat across a
@@ -345,7 +380,7 @@ class GeminiGenerator(Generator):
             system_instruction=system,
             max_output_tokens=max_tokens + THINKING_HEADROOM_TOKENS,
             response_mime_type="application/json",
-            response_schema=REPLY_SCHEMA,
+            response_schema=CLAIMS_SCHEMA if reply is ReplyKind.CLAIMS else REPLY_SCHEMA,
             thinking_config=types.ThinkingConfig(thinking_level=_THINKING_LEVEL),
             # No tools are offered, so there is nothing to call automatically.
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),

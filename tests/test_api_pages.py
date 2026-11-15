@@ -44,6 +44,7 @@ from compliance_rag.adapters.interfaces import (
     Generation,
     Generator,
     PrefixMeasure,
+    ReplyKind,
     TurnOutcome,
     Unavailability,
     UnreadableCitation,
@@ -126,17 +127,33 @@ class Sequenced(FakeGenerator):
         self._queue = list(replies)
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         self._reply = self._queue.pop(0) if len(self._queue) > 1 else self._queue[0]
         return await super().generate(
-            system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
+            system=system,
+            cached_prefix=cached_prefix,
+            user=user,
+            max_tokens=max_tokens,
+            reply=reply,
         )
 
 
 class Exploding(FakeGenerator):
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         raise RuntimeError("the generator broke: SECRET-INTERNAL-DETAIL")
 

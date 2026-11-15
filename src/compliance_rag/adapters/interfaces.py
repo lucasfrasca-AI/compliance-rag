@@ -45,7 +45,7 @@ from compliance_rag.assessment.coverage import (
     QualifierOf,
 )
 from compliance_rag.assessment.environment import NotInEnvironment
-from compliance_rag.assessment.evidence import Evidence, Facts
+from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Facts
 from compliance_rag.corpus.models import (
     Chunk,
     ClauseRecord,
@@ -528,6 +528,106 @@ def check_check_write(record: CheckRecord) -> None:
         raise ValueError(
             f"{record.instrument_id}: a tenant's check points at one of that tenant's documents"
         )
+
+
+MAX_CLAIMS = 25
+"""The most claims one check keeps (#298, ADR-0053): a reply with more is
+refused whole, never cut to size."""
+
+_PASSAGE_PATH = re.compile(r"p[1-9][0-9]*")
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimRecord:
+    """One claim of a submitted document (#298, ADR-0059 Q2): a verbatim span of
+    one of its passages, with the model's one-line label and the obligations and
+    policy clauses the model picked to check it against (ADR-0053 F2). Always
+    `inferred`: a claim is extracted from prose (CONTEXT.md: Provenance tier),
+    and a claim is never promoted or mutated.
+
+    **The ledger does not carry the document's words.** The span is named by its
+    passage and character offsets in the document, with the sha256 of its text,
+    so a reader reads it back from the stored passage and the hash proves it is
+    the span the extraction found. A document purged (ADR-0021) takes its quotes
+    with it. The summary is the model's, and only labels the quote."""
+
+    claim_index: int
+    """1-based, in document order."""
+    passage: str
+    """The passage's clause path (`p3`): the anchor a finding opens the document at."""
+    quote_start: int
+    quote_end: int
+    """The span in the document's characters: `source[quote_start:quote_end]` is
+    the quote, inside the passage's own `char_start:char_end`."""
+    quote_sha256: str
+    summary: str
+    obligation_ids: tuple[str, ...]
+    """From the obligation digest, and only from it (ADR-0053 F2)."""
+    policy_clause_ids: tuple[str, ...]
+    """From the tenant policy prefix, and only from it."""
+    provenance: EvidenceProvenance = EvidenceProvenance.INFERRED
+
+
+RESERVATION_TTL = dt.timedelta(minutes=10)
+"""How long a reserved extraction may stay pending before another request may
+take it over: a request that died holding one (the process was killed, so nothing
+could mark it failed) must not block its check for good. Longer than any model
+call, which `GeminiGenerator` times out and retries within a few minutes."""
+
+
+class ExtractionAlreadyReserved(ValueError):
+    """The check is already extracted, or another request holds it right now."""
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimExtractionRecord:
+    """The claims extracted from one check's document: written once, with every
+    claim, when the extraction has been validated (ledger `check_extraction` and
+    `check_claim`). A check with no claim still has its extraction recorded, so a
+    document is extracted once and its cost is not spent again by a repeated
+    request. The extraction is reserved before the model is called
+    (`LedgerStore.reserve_extraction`), and this fills the reservation in."""
+
+    tenant_id: str
+    check_id: str
+    as_of: dt.date
+    """The date Track A decided the obligation digest on."""
+    trace_id: str
+    """The request that extracted them; every claim row carries it."""
+    claims_dropped: int
+    """How many the model returned that failed a check and were left out
+    (traced, with the reasons, on the extraction's span)."""
+    claims: tuple[ClaimRecord, ...]
+    created_at: dt.datetime | None = None
+    """Stamped by the ledger on write."""
+
+
+def check_claims_write(record: ClaimExtractionRecord) -> None:
+    """What every `LedgerStore` refuses before writing an extraction, in this
+    order; the database's own constraints refuse them again. What only a store
+    can refuse (a check it does not hold, one already extracted) comes after."""
+    if not record.trace_id.strip():
+        raise ValueError("an extraction carries the trace_id of its request")
+    if not record.check_id.strip():
+        raise ValueError("an extraction names its check")
+    if record.claims_dropped < 0:
+        raise ValueError("the number of claims dropped is not negative")
+    if len(record.claims) > MAX_CLAIMS:
+        raise ValueError(f"a check keeps at most {MAX_CLAIMS} claims")
+    for number, claim in enumerate(record.claims, start=1):
+        if claim.claim_index != number:
+            raise ValueError("claims are numbered 1, 2, 3 ... in document order")
+        if claim.provenance is not EvidenceProvenance.INFERRED:
+            raise ValueError("a claim is inferred: it is extracted from prose")
+        if _PASSAGE_PATH.fullmatch(claim.passage) is None:
+            raise ValueError(f"{claim.passage!r} is not a passage path (p1, p2, ...)")
+        if not 0 <= claim.quote_start < claim.quote_end:
+            raise ValueError("a claim's span is a non-empty range of the document")
+        if _SHA256_HEX.fullmatch(claim.quote_sha256) is None:
+            raise ValueError("a claim carries the sha256 of its quote")
+        if not claim.summary.strip() or len(claim.summary.splitlines()) != 1:
+            raise ValueError("a claim's summary is one non-blank line")
 
 
 # --------------------------------------------------------------------------
@@ -1279,6 +1379,43 @@ class LedgerStore(ABC):
         how the source route finds who owns a submitted document."""
 
     @abstractmethod
+    async def reserve_extraction(
+        self, tenant_id: str, check_id: str, *, as_of: dt.date, trace_id: str
+    ) -> None:
+        """Reserve a check's one extraction, atomically, before the model is
+        called (#298): of any number of concurrent requests exactly one succeeds,
+        and the rest raise `ExtractionAlreadyReserved` and must not call the
+        model. The reservation is pending until `record_claims` completes it or
+        `fail_extraction` releases it. A check whose last extraction failed, or
+        whose reservation has been pending longer than `RESERVATION_TTL`, may be
+        reserved again; one that is extracted may not. A `ValueError` for a
+        blank trace or check id, and for a check this tenant does not hold."""
+
+    @abstractmethod
+    async def fail_extraction(self, tenant_id: str, check_id: str) -> None:
+        """Release a pending reservation as failed, so the check can be extracted
+        again. Nothing happens to an extraction that is not pending, so it is safe
+        to call from every failure path."""
+
+    @abstractmethod
+    async def record_claims(self, record: ClaimExtractionRecord) -> None:
+        """Complete a reserved extraction with its claims (#298), the extraction
+        and every claim in one transaction: all of it lands or none of it does.
+        Append-only: a check's claims are never replaced. A `ValueError` and
+        nothing written for: a blank trace or check id, more than `MAX_CLAIMS`
+        claims, claims not numbered from 1 in order, one that is not `inferred`
+        or whose span, passage, hash or summary is not well formed
+        (`check_claims_write`); a check this tenant does not hold or has not
+        reserved (pending); a check already extracted."""
+
+    @abstractmethod
+    async def get_claims(self, tenant_id: str, check_id: str) -> ClaimExtractionRecord | None:
+        """The check's completed extraction, or None if it has none (not run,
+        pending or failed, or the tenant holds no such check). Not owner-keyed,
+        like `get_check`: who may see a check is `CheckRecord.visible_to`,
+        applied by every route first."""
+
+    @abstractmethod
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:
         """Append a question and what the member was shown for it to a chat
         (#162), in one transaction: both rows land or neither does, as the
@@ -1612,6 +1749,20 @@ class GenerationUnavailable(RuntimeError):
         self.reason = reason
 
 
+class ReplyKind(StrEnum):
+    """The shape of JSON a call asks the model to reply in, so an adapter that
+    can constrain the reply (Gemini's response schema) constrains it to the right
+    one. A request, never a guarantee: the caller validates the reply strictly
+    whatever the adapter did (CLAUDE.md: structured outputs are validated against
+    a schema before use)."""
+
+    ANSWER = "answer"
+    """An answer with its citations, or one repaired citation
+    (`assessment/draft.py`)."""
+    CLAIMS = "claims"
+    """The claims of a submitted document (`assessment/claims.py`, #298)."""
+
+
 class Generator(ABC):
     """Gemini 3.5 Flash on Vertex (ADR-0057), or Claude on Vertex while it is
     dormant. Never authors a citation (D-02)."""
@@ -1624,10 +1775,13 @@ class Generator(ABC):
         cached_prefix: str | None,
         user: str,
         max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         """Generate with a cached prompt prefix for the tenant policy corpus
-        (D-11). Raises `GenerationUnavailable` when the model refuses the
-        request for a reason `Unavailability` names."""
+        (D-11). `reply` names the JSON shape the call wants (`ReplyKind`); the
+        default is the answer's, so every call that does not say is unchanged.
+        Raises `GenerationUnavailable` when the model refuses the request for a
+        reason `Unavailability` names."""
 
 
 class CanonicalisationVersionMismatch(ValueError):

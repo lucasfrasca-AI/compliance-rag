@@ -20,12 +20,16 @@ import pytest
 
 from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
+    RESERVATION_TTL,
     AssessmentRecord,
     ChatAnswer,
     ChatCitation,
     ChatExchange,
     ChatTurn,
     CheckRecord,
+    ClaimExtractionRecord,
+    ClaimRecord,
+    ExtractionAlreadyReserved,
     LedgerStore,
     PolicyVersion,
     PrefixMeasure,
@@ -958,6 +962,160 @@ async def assert_check_contract(ledger: LedgerStore) -> None:
     assert await ledger.check_of_version("acme", "acme/check-3", "v1") is None
 
 
+def a_claim(index: int = 1, **changes: Any) -> ClaimRecord:  # Any: record fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "claim_index": index,
+        "passage": f"p{index}",
+        "quote_start": 10 * index,
+        "quote_end": 10 * index + 7,
+        "quote_sha256": "ab" * 32,
+        "summary": "Profiles are kept for 7 years.",
+        "obligation_ids": ("OB-PA-APP11-1", "OB-PA-APP11-2"),
+        "policy_clause_ids": (),
+    }
+    fields.update(changes)
+    return ClaimRecord(**fields)
+
+
+def an_extraction(*claims: ClaimRecord, **changes: Any) -> ClaimExtractionRecord:  # Any: fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "tenant_id": "acme",
+        "check_id": "c" * 32,
+        "as_of": JUN,
+        "trace_id": "a" * 32,
+        "claims_dropped": 1,
+        "claims": claims
+        or (a_claim(1), a_claim(2, obligation_ids=(), policy_clause_ids=("a:v:1",))),
+    }
+    fields.update(changes)
+    return ClaimExtractionRecord(**fields)
+
+
+async def assert_claims_contract(ledger: LedgerStore) -> None:
+    """The claims extracted from a check's document (#298): the extraction is
+    reserved atomically before the model is called, then completed once with its
+    claims, whole, as `inferred`, or released as failed; read by tenant and in
+    order; never replaced. The ledger holds a claim's span and hash, never its
+    words."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+    for instrument_id in ("acme/check-1", "acme/check-2", "acme/check-3", "acme/check-4"):
+        await ledger.record_version(
+            tenant_id="acme",
+            instrument_id=instrument_id,
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.SUBMITTED_DOCUMENT,
+            title="A document",
+        )
+    check_1, check_2, check_3, check_4 = "c" * 32, "e" * 32, "f" * 32, "9" * 32
+
+    # ---- nothing before it is recorded; a check the tenant holds is needed
+    assert await ledger.get_claims("acme", check_1) is None
+    with pytest.raises(ValueError, match="holds no check"):
+        await ledger.reserve_extraction("acme", check_1, as_of=JUN, trace_id="a" * 32)
+    with pytest.raises(ValueError, match=r"holds no check|reserved"):
+        await ledger.record_claims(an_extraction())
+    await ledger.record_check(a_check())
+
+    # ---- a reservation is what lets claims be recorded, and it is refused if blank
+    with pytest.raises(ValueError, match="reserved"):
+        await ledger.record_claims(an_extraction())
+    with pytest.raises(ValueError, match="trace_id"):
+        await ledger.reserve_extraction("acme", check_1, as_of=JUN, trace_id=" ")
+    await ledger.reserve_extraction("acme", check_1, as_of=JUN, trace_id="a" * 32)
+    assert await ledger.get_claims("acme", check_1) is None  # pending is not extracted
+    with pytest.raises(ExtractionAlreadyReserved):
+        await ledger.reserve_extraction("acme", check_1, as_of=JUN, trace_id="b" * 32)
+
+    # ---- recorded whole, stamped by the ledger, numbered in order
+    await ledger.record_claims(an_extraction())
+    stored = await ledger.get_claims("acme", check_1)
+    assert stored is not None and stored.created_at is not None
+    assert stored == an_extraction(created_at=stored.created_at)
+    assert [c.claim_index for c in stored.claims] == [1, 2]
+    assert stored.claims[0].obligation_ids == ("OB-PA-APP11-1", "OB-PA-APP11-2")  # in order
+    assert stored.claims[1].obligation_ids == ()
+    assert stored.claims[1].policy_clause_ids == ("a:v:1",)
+    assert {c.provenance.value for c in stored.claims} == {"inferred"}
+    assert (stored.as_of, stored.trace_id, stored.claims_dropped) == (JUN, "a" * 32, 1)
+
+    # ---- tenant-keyed: another tenant's read finds nothing
+    assert await ledger.get_claims("other-corp", check_1) is None
+    assert await ledger.get_claims("acme", "d" * 32) is None
+
+    # ---- once per check: never replaced, never reserved again, never released
+    with pytest.raises(ValueError, match="already extracted"):
+        await ledger.record_claims(an_extraction(a_claim(1, summary="Replaced.")))
+    with pytest.raises(ExtractionAlreadyReserved):
+        await ledger.reserve_extraction("acme", check_1, as_of=JUN, trace_id="b" * 32)
+    await ledger.fail_extraction("acme", check_1)  # no-op on an extraction that is done
+    assert await ledger.get_claims("acme", check_1) == stored
+
+    # ---- an extraction with no claim is recorded too, so a check is extracted once
+    await ledger.record_check(a_check(check_id=check_2, instrument_id="acme/check-2"))
+    await ledger.reserve_extraction("acme", check_2, as_of=JUN, trace_id="a" * 32)
+    await ledger.record_claims(an_extraction(check_id=check_2, claims=(), claims_dropped=0))
+    empty = await ledger.get_claims("acme", check_2)
+    assert empty is not None and empty.claims == () and empty.claims_dropped == 0
+    with pytest.raises(ExtractionAlreadyReserved):
+        await ledger.reserve_extraction("acme", check_2, as_of=JUN, trace_id="b" * 32)
+
+    # ---- of concurrent requests exactly one holds the reservation
+    await ledger.record_check(a_check(check_id=check_3, instrument_id="acme/check-3"))
+    raced = await asyncio.gather(
+        *(
+            ledger.reserve_extraction("acme", check_3, as_of=JUN, trace_id=f"{n}" * 32)
+            for n in range(1, 7)
+        ),
+        return_exceptions=True,
+    )
+    assert [r for r in raced if r is None] == [None]
+    assert all(isinstance(r, ExtractionAlreadyReserved) for r in raced if r is not None)
+
+    # ---- a failed extraction is released: it can be reserved again, and only then recorded
+    await ledger.fail_extraction("acme", check_3)
+    assert await ledger.get_claims("acme", check_3) is None
+    with pytest.raises(ValueError, match="reserved"):
+        await ledger.record_claims(an_extraction(check_id=check_3))  # not holding it any more
+    await ledger.reserve_extraction("acme", check_3, as_of=JUN, trace_id="c" * 32)
+
+    # ---- what an extraction names, refused before anything is written, and the
+    # reservation is not spent by a refusal
+    for changes, reason in (
+        ({"trace_id": " "}, "trace_id"),
+        ({"claims_dropped": -1}, "not negative"),
+        ({"claims": tuple(a_claim(n) for n in range(1, 27))}, "at most 25"),
+        ({"claims": (a_claim(2),)}, "numbered"),
+        ({"claims": (a_claim(1), a_claim(3))}, "numbered"),
+        ({"claims": (a_claim(1, provenance=EvidenceProvenance.ASSERTED),)}, "inferred"),
+        ({"claims": (a_claim(1, passage="3"),)}, "passage path"),
+        ({"claims": (a_claim(1, passage="p0"),)}, "passage path"),
+        ({"claims": (a_claim(1, quote_end=10),)}, "span"),
+        ({"claims": (a_claim(1, quote_start=-1),)}, "span"),
+        ({"claims": (a_claim(1, quote_sha256="xyz"),)}, "sha256"),
+        ({"claims": (a_claim(1, summary="two\nlines"),)}, "one non-blank line"),
+        ({"claims": (a_claim(1, summary="  "),)}, "one non-blank line"),
+    ):
+        with pytest.raises(ValueError, match=reason):
+            await ledger.record_claims(an_extraction(check_id=check_3, **changes))
+    assert await ledger.get_claims("acme", check_3) is None
+    await ledger.record_claims(an_extraction(check_id=check_3))  # the reservation was not spent
+    done = await ledger.get_claims("acme", check_3)
+    assert done is not None and len(done.claims) == 2
+
+    # ---- a fresh reservation is not taken over (the time-out is each store's own test)
+    await ledger.record_check(a_check(check_id=check_4, instrument_id="acme/check-4"))
+    await ledger.reserve_extraction("acme", check_4, as_of=JUN, trace_id="d" * 32)
+    with pytest.raises(ExtractionAlreadyReserved):  # not yet: someone may be working on it
+        await ledger.reserve_extraction("acme", check_4, as_of=JUN, trace_id="e" * 32)
+
+
+async def test_the_fake_ledger_satisfies_the_claims_contract() -> None:
+    await assert_claims_contract(FakeLedgerStore())
+
+
 async def test_the_fake_ledger_satisfies_the_check_contract() -> None:
     await assert_check_contract(FakeLedgerStore())
 
@@ -1117,3 +1275,39 @@ def test_what_an_answer_turn_may_hold_is_fixed_when_the_answer_is_built(
     ledger's, so it isn't part of the shared contract."""
     with pytest.raises(ValueError, match=why):
         build()
+
+
+async def _a_checked_document(ledger: LedgerStore) -> None:
+    await ledger.put_profile(Profile("acme"))
+    await ledger.record_version(
+        tenant_id="acme",
+        instrument_id="acme/check-1",
+        version_id="v1",
+        valid_from=JAN,
+        supersedes=None,
+        document_class=DocumentClass.SUBMITTED_DOCUMENT,
+        title="A document",
+    )
+    await ledger.record_check(a_check())
+
+
+async def test_the_fake_ledger_takes_over_a_reservation_held_past_the_time_out() -> None:
+    """A request that died holding one (the process was killed, so nothing marked
+    it failed) must not block its check for good (`RESERVATION_TTL`)."""
+    ledger = FakeLedgerStore()
+    await _a_checked_document(ledger)
+    await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="a" * 32)
+    key = ("acme", "c" * 32)
+    held = ledger._extractions[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._extractions[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        held, reserved_at=held.reserved_at - RESERVATION_TTL - dt.timedelta(seconds=1)
+    )
+    await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="b" * 32)  # taken over
+    await ledger.record_claims(an_extraction(trace_id="b" * 32))
+    # and one that is done is never taken over, however old
+    done = ledger._extractions[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._extractions[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        done, reserved_at=done.reserved_at - dt.timedelta(days=1)
+    )
+    with pytest.raises(ExtractionAlreadyReserved):
+        await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="c" * 32)

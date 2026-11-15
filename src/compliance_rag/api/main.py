@@ -52,7 +52,7 @@ from compliance_rag.adapters.firebase_auth import (
 from compliance_rag.adapters.gcs_clause_store import GCSClauseStore
 from compliance_rag.adapters.generation_residency import TenantTextGate
 from compliance_rag.adapters.generator_factory import build_generator
-from compliance_rag.adapters.interfaces import Generation, Generator, RetrievalAdmin
+from compliance_rag.adapters.interfaces import Generation, Generator, ReplyKind, RetrievalAdmin
 from compliance_rag.adapters.neo4j_graph import Neo4jGraph
 from compliance_rag.adapters.postgres_ledger_store import PostgresLedgerStore
 from compliance_rag.api.app import create_app
@@ -79,12 +79,22 @@ class GeneratorAtStartup(Generator):
         self._generator = await build_generator(self._settings, corpus=self._corpus)
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         if self._generator is None:
             raise RuntimeError("the generator starts with the app; it hasn't")
         return await self._generator.generate(
-            system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
+            system=system,
+            cached_prefix=cached_prefix,
+            user=user,
+            max_tokens=max_tokens,
+            reply=reply,
         )
 
 

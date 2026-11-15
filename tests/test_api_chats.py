@@ -37,6 +37,7 @@ from compliance_rag.adapters.interfaces import (
     Generation,
     LedgerStore,
     Profile,
+    ReplyKind,
     TurnOutcome,
     TurnRole,
     UnreadableCitation,
@@ -356,12 +357,22 @@ class GatedGenerator(FakeGenerator):
         self.release = asyncio.Event()
 
     async def generate(
-        self, *, system: str, cached_prefix: str | None, user: str, max_tokens: int
+        self,
+        *,
+        system: str,
+        cached_prefix: str | None,
+        user: str,
+        max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         self.started.set()
         await self.release.wait()
         return await super().generate(
-            system=system, cached_prefix=cached_prefix, user=user, max_tokens=max_tokens
+            system=system,
+            cached_prefix=cached_prefix,
+            user=user,
+            max_tokens=max_tokens,
+            reply=reply,
         )
 
 

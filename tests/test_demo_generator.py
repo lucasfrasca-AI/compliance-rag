@@ -35,7 +35,13 @@ from compliance_rag.adapters.fakes import (
     FakeReranker,
     FakeRetrievalStore,
 )
-from compliance_rag.adapters.interfaces import ChatAnswer, ChatExchange, LedgerStore, TurnOutcome
+from compliance_rag.adapters.interfaces import (
+    ChatAnswer,
+    ChatExchange,
+    LedgerStore,
+    ReplyKind,
+    TurnOutcome,
+)
 from compliance_rag.api import main as api_main
 from compliance_rag.api.app import create_app
 from compliance_rag.api.banner import TEMPLATE_DIR
@@ -503,3 +509,18 @@ async def test_the_root_redirects_to_the_chat_list_without_a_session() -> None:
         health = await c.get("/health")
     assert (response.status_code, response.headers["location"]) == (303, "/chats")
     assert health.status_code == 200
+
+
+async def test_the_demo_generator_and_the_startup_wrapper_meet_the_generator_contract() -> None:
+    from tests.contracts.test_interfaces import assert_generator_contract
+
+    await assert_generator_contract(FakeDemoGenerator())
+    wrapper = api_main.GeneratorAtStartup(
+        api_settings(),
+        corpus=FakeRetrievalStore(ledger=FakeLedgerStore()),
+    )
+    wrapper._generator = FakeGenerator()  # pyright: ignore[reportPrivateUsage]
+    await assert_generator_contract(wrapper)
+    # the shape reaches the generator it wraps
+    inner = wrapper._generator  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(inner, FakeGenerator) and inner.calls[-1]["reply"] is ReplyKind.CLAIMS

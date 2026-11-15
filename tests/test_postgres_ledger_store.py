@@ -32,6 +32,7 @@ from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
     ChatAnswer,
     ChatCitation,
+    ExtractionAlreadyReserved,
     PolicyVersion,
     Profile,
     SourceKind,
@@ -60,6 +61,7 @@ from tests.contracts.test_ledger import (
     an_exchange,
     assert_chat_contract,
     assert_check_contract,
+    assert_claims_contract,
     assert_environment_titles_contract,
     assert_ledger_contract,
     assert_refusal_outcomes_contract,
@@ -75,7 +77,7 @@ pytestmark = pytest.mark.skipif(
 
 _LEDGER_TABLES = (
     "tenant_instrument, corpus_removal_audit, finding, evidence, assessment, usage, chat, "
-    "submitted_check, "
+    "check_claim, check_extraction, submitted_check, "
     "document_manifest, clause_version, clause, instrument_version, instrument, app_user, tenant"
 )
 
@@ -138,6 +140,10 @@ async def test_postgres_satisfies_the_chat_contract(ledger: PostgresLedgerStore)
 
 async def test_postgres_satisfies_the_check_contract(ledger: PostgresLedgerStore) -> None:
     await assert_check_contract(ledger)
+
+
+async def test_postgres_satisfies_the_claims_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_claims_contract(ledger)
 
 
 async def test_postgres_satisfies_the_refusal_outcomes_contract(
@@ -665,3 +671,31 @@ async def test_a_corrupt_stored_blocked_element_reads_back_unreadable_in_its_pla
 def test_an_unreadable_blocked_entry_is_never_written_back() -> None:
     with pytest.raises(ValueError, match="isn't written back"):
         postgres_ledger_store._blocked_row(NO_CLAUSE)  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_postgres_takes_over_a_reservation_held_past_the_time_out(
+    ledger: PostgresLedgerStore,
+) -> None:
+    from tests.contracts.test_ledger import (
+        _a_checked_document,  # pyright: ignore[reportPrivateUsage]
+        an_extraction,
+    )
+
+    await _a_checked_document(ledger)
+    await ledger.reserve_extraction("acme", "c" * 32, as_of=dt.date(2026, 6, 1), trace_id="a" * 32)
+
+    async def backdate() -> None:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute("UPDATE check_extraction SET reserved_at = now() - interval '1 day'")
+
+    await backdate()
+    # taken over by the next request, which now holds it and can record
+    await ledger.reserve_extraction("acme", "c" * 32, as_of=dt.date(2026, 6, 1), trace_id="b" * 32)
+    await ledger.record_claims(an_extraction(trace_id="b" * 32))
+    await backdate()  # a done extraction is never taken over, however old
+    with pytest.raises(ExtractionAlreadyReserved):
+        await ledger.reserve_extraction(
+            "acme", "c" * 32, as_of=dt.date(2026, 6, 1), trace_id="c" * 32
+        )
+    done = await ledger.get_claims("acme", "c" * 32)
+    assert done is not None and done.trace_id == "b" * 32

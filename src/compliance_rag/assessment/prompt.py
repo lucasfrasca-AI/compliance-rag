@@ -187,7 +187,7 @@ def _boundary(clauses: Sequence[SourceClause]) -> str:
 
 
 def fence(
-    label: Literal["tenant_policies", "retrieved_clauses", "failed_quote"],
+    label: Literal["tenant_policies", "retrieved_clauses", "failed_quote", "submitted_document"],
     clauses: Sequence[SourceClause],
 ) -> str:
     """Clauses fenced under `label`, each block opened and closed by a

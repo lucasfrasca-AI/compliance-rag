@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import importlib
+import inspect
 
 import pytest
 
@@ -34,6 +36,7 @@ from compliance_rag.adapters.interfaces import (
     LawScope,
     LedgerStore,
     Profile,
+    ReplyKind,
     Reranker,
     RetrievalAdmin,
     RetrievalResult,
@@ -723,6 +726,18 @@ async def assert_generator_contract(generator: Generator) -> Generation:
     assert isinstance(generation, Generation) and generation.text
     assert generation.input_tokens >= 0 and generation.output_tokens >= 0
     assert isinstance(generation.cached_prefix_hit, bool)
+    # Every implementation takes the shape of JSON a call wants (#298), and a call
+    # that does not say wants an answer, as every call did before it existed.
+    claims = await generator.generate(
+        system="s",
+        cached_prefix="tenant policies",
+        user="q",
+        max_tokens=100,
+        reply=ReplyKind.CLAIMS,
+    )
+    assert isinstance(claims, Generation) and claims.text
+    reply = inspect.signature(type(generator).generate).parameters.get("reply")
+    assert reply is not None and reply.default is ReplyKind.ANSWER
     return generation
 
 
@@ -1154,3 +1169,38 @@ async def test_get_clause_is_scoped_to_its_tenant() -> None:
 
     assert await store.get_clause(acme_clause.clause_id, tenant_id="acme") == acme_clause
     assert await store.get_clause(beta_clause.clause_id, tenant_id="beta") == beta_clause
+
+
+def _every_generator_class() -> list[type[Generator]]:
+    """Every `Generator` loaded in this process, the production adapters imported
+    first so they are among them."""
+    for module in (
+        "compliance_rag.adapters.demo_generator",
+        "compliance_rag.adapters.gemini_generator",
+        "compliance_rag.adapters.vertex_claude_generator",
+        "compliance_rag.api.main",
+    ):
+        importlib.import_module(module)
+
+    found: list[type[Generator]] = []
+    pending = [Generator]
+    while pending:
+        for subclass in pending.pop().__subclasses__():
+            found.append(subclass)
+            pending.append(subclass)
+    return found
+
+
+def test_every_generator_implementation_takes_a_reply_kind_and_answers_by_default() -> None:
+    """What the contract above proves by calling, for every implementation loaded
+    here, test doubles and wrappers included: `reply` is a keyword whose default
+    is the answer's shape, so a wrapper that forgets to forward it fails here and
+    in pyright rather than sending a claims call to the answer schema."""
+    classes = _every_generator_class()
+    assert len(classes) >= 5
+    for cls in classes:
+        reply = inspect.signature(cls.generate).parameters.get("reply")
+        assert reply is not None, cls
+        assert reply.kind is inspect.Parameter.KEYWORD_ONLY and reply.default is ReplyKind.ANSWER, (
+            cls
+        )

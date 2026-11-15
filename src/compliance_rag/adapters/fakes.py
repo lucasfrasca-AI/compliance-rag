@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import zlib
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from opentelemetry import trace
 
@@ -19,6 +19,7 @@ from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
     NO_PREFIX,
+    RESERVATION_TTL,
     AccountDirectory,
     AccountStatus,
     AssessmentRecord,
@@ -28,8 +29,10 @@ from compliance_rag.adapters.interfaces import (
     ChatSummary,
     ChatTurn,
     CheckRecord,
+    ClaimExtractionRecord,
     ClauseStore,
     Embedder,
+    ExtractionAlreadyReserved,
     Generation,
     Generator,
     GraphStore,
@@ -41,6 +44,7 @@ from compliance_rag.adapters.interfaces import (
     PolicyVersion,
     Profile,
     RemovalAuditEntry,
+    ReplyKind,
     Reranker,
     RetrievalAdmin,
     RetrievalResult,
@@ -50,6 +54,7 @@ from compliance_rag.adapters.interfaces import (
     check_assessment_write,
     check_chat_exchange,
     check_check_write,
+    check_claims_write,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -418,6 +423,17 @@ class FakeRetrievalStore(RetrievalStore, RetrievalAdmin):
         return tuple(found)
 
 
+@dataclass(frozen=True, slots=True)
+class _Extraction:
+    """A check's extraction as the fake holds it: reserved, then done or failed."""
+
+    status: str  # "pending", "done" or "failed"
+    reserved_at: dt.datetime
+    as_of: dt.date
+    trace_id: str
+    record: ClaimExtractionRecord | None
+
+
 class FakeLedgerStore(LedgerStore):
     """Dictionaries keyed by tenant. Every row carries `tenant_id`."""
 
@@ -442,6 +458,7 @@ class FakeLedgerStore(LedgerStore):
         self._coverage: dict[tuple[str, str], dict[str, CoverageRow]] = {}
         self._chats: dict[tuple[str, str], list[ChatTurn]] = {}  # (tenant, chat) -> its turns
         self._checks: dict[tuple[str, str], CheckRecord] = {}  # (tenant, check) -> the check
+        self._extractions: dict[tuple[str, str], _Extraction] = {}  # the same key
         self._recorded_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
@@ -553,6 +570,51 @@ class FakeLedgerStore(LedgerStore):
             ),
             None,
         )
+
+    async def reserve_extraction(
+        self, tenant_id: str, check_id: str, *, as_of: dt.date, trace_id: str
+    ) -> None:
+        """No `await` between the read and the write, so of concurrent requests
+        one wins, as the database's single statement makes it."""
+        if not trace_id.strip() or not check_id.strip():
+            raise ValueError(
+                "an extraction carries the trace_id of its request and names its check"
+            )
+        key = (tenant_id, check_id)
+        if key not in self._checks:
+            raise ValueError(f"tenant {tenant_id!r} holds no check {check_id}")
+        held = self._extractions.get(key)
+        now = dt.datetime.now(dt.UTC)
+        if held is not None and not (
+            held.status == "failed"
+            or (held.status == "pending" and held.reserved_at < now - RESERVATION_TTL)
+        ):
+            raise ExtractionAlreadyReserved(f"check {check_id} is already extracted")
+        self._extractions[key] = _Extraction("pending", now, as_of, trace_id, None)
+
+    async def fail_extraction(self, tenant_id: str, check_id: str) -> None:
+        held = self._extractions.get((tenant_id, check_id))
+        if held is not None and held.status == "pending":
+            self._extractions[(tenant_id, check_id)] = replace(held, status="failed")
+
+    async def record_claims(self, record: ClaimExtractionRecord) -> None:
+        """Checked before anything is stored, in Postgres' order."""
+        check_claims_write(record)
+        key = (record.tenant_id, record.check_id)
+        if key not in self._checks:
+            raise ValueError(f"tenant {record.tenant_id!r} holds no check {record.check_id}")
+        held = self._extractions.get(key)
+        if held is not None and held.status == "done":
+            raise ValueError(f"check {record.check_id} is already extracted")
+        if held is None or held.status != "pending":
+            raise ValueError(f"check {record.check_id} has not been reserved for extraction")
+        self._extractions[key] = replace(
+            held, status="done", record=replace(record, created_at=self._now())
+        )
+
+    async def get_claims(self, tenant_id: str, check_id: str) -> ClaimExtractionRecord | None:
+        held = self._extractions.get((tenant_id, check_id))
+        return held.record if held is not None and held.status == "done" else None
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         turns = self._chats.get((tenant_id, chat_id), [])
@@ -989,6 +1051,7 @@ class FakeGenerator(Generator):
         cached_prefix: str | None,
         user: str,
         max_tokens: int,
+        reply: ReplyKind = ReplyKind.ANSWER,
     ) -> Generation:
         self.calls.append(
             {
@@ -996,6 +1059,7 @@ class FakeGenerator(Generator):
                 "cached_prefix": cached_prefix,
                 "user": user,
                 "max_tokens": max_tokens,
+                "reply": reply,
             }
         )
         return Generation(
