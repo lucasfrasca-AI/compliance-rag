@@ -1,7 +1,7 @@
 """The regression gate (issues #28, #180): recall@10 over the signed golden
 set, through `route()` on a real Qdrant server, on every build.
 
-The corpus is the gate corpus: the whole compilation's 779 selected clauses
+The corpus is the gate corpus: the whole compilation's 1023 selected clauses
 and the six Acme policies (`gate_chunks()`), not the 75-clause excerpt — the
 excerpt was an easier problem than production (ADR-0043). Dense vectors are
 real `gemini-embedding-001` output served from the checked-in cache
@@ -246,7 +246,7 @@ def test_the_open_targets_are_law_cross_clause_ranked_and_law_paraphrase_fused()
     law paraphrase under its 0.95 on the fused list (GQ-10). Each is a strict
     xfail in the gate that measures its list. When one is met, its xfail
     passes, strict xfail fails the build, and raising its floor to the new
-    value closes it here too. Delivered-recall's 0.833 doesn't close the first
+    value closes it here too. Delivered-recall doesn't close the first
     (ADR-0045)."""
     assert list(OPEN_TARGETS) == [
         Cell(FUSED, Category.PARAPHRASE, LAW),
@@ -290,11 +290,29 @@ def test_a_report_line_shows_a_cells_floor_and_target() -> None:
     fused = describe_cell(Cell(FUSED, Category.PARAPHRASE, LAW), 5 / 6)
     assert fused.endswith("floor 0.833, target 0.95")
     assert describe_cell(Cell(FUSED, Category.CROSS_CLAUSE, LAW), 4 / 9).endswith("target none")
-    delivered = describe_cell(Cell(DELIVERED, Category.CROSS_CLAUSE, LAW), 5 / 6)
+    delivered = describe_cell(Cell(DELIVERED, Category.CROSS_CLAUSE, LAW), 2 / 3)
     assert delivered.split() == [
-        *("delivered", "cross_clause", "library_law", "0.833"),
-        *("floor", "0.833,", "target", "none"),
+        *("delivered", "cross_clause", "library_law", "0.667"),
+        *("floor", "0.667,", "target", "none"),
     ]
+
+
+def test_two_floors_were_re_baselined_on_the_1023_clause_corpus_and_no_other() -> None:
+    """#282 grew the gate corpus from 779 to 1023 clauses, and two law
+    cross-clause cells fell. The human re-baselined exactly those two on
+    2026-11-15 (#282 / #340, option (a)), each tracked by its own issue:
+    fused 4/9 to 5/18 (GQ-19, #343), delivered 5/6 to 2/3 (GQ-20, #344).
+    Every other floor, and every target, is as it was."""
+    assert FLOORS[Cell(FUSED, Category.CROSS_CLAUSE, LAW)] == 5 / 18
+    assert FLOORS[Cell(DELIVERED, Category.CROSS_CLAUSE, LAW)] == 2 / 3
+    assert FLOORS[Cell(RERANKED, Category.CROSS_CLAUSE, LAW)] == 4 / 9
+    assert FLOORS[Cell(FUSED, Category.PARAPHRASE, LAW)] == 5 / 6
+    assert FLOORS[Cell(FUSED, Category.CROSS_CLAUSE, POLICY)] == 0.9
+    assert FLOORS[Cell(RERANKED, Category.CROSS_CLAUSE, POLICY)] == 0.9
+    assert FLOORS[Cell(DELIVERED, Category.CROSS_CLAUSE, POLICY)] == 0.9
+    others = {c: f for c, f in FLOORS.items() if c.category is not Category.CROSS_CLAUSE}
+    others.pop(Cell(FUSED, Category.PARAPHRASE, LAW))
+    assert set(others.values()) == {1.0}
 
 
 async def test_an_unsigned_golden_set_is_refused() -> None:

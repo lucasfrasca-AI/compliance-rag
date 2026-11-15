@@ -11,15 +11,1686 @@
   "s6da/",
   "s6e/",
   "s6ea/",
-  "s15"
+  "s15",
+  "s7a",
+  "s16c",
+  "s26wb",
+  "s26wc",
+  "s26wd",
+  "s26we",
+  "s26wf",
+  "s26wg",
+  "s26wh",
+  "s26wj",
+  "s26wk",
+  "s26wl",
+  "s26wm",
+  "s26wn",
+  "s26wp",
+  "s26wq",
+  "s26wr",
+  "s26ws",
+  "s26wt"
  ],
- "clause_count": 779,
+ "clause_count": 1023,
  "clauses": [
   {
    "clause_path": "s15",
    "heading": null,
    "text": "An APP entity must not do an act, or engage in a practice, that breaches an Australian Privacy Principle.",
    "canonical_text": "An APP entity must not do an act, or engage in a practice, that breaches an Australian Privacy Principle.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/1",
+   "heading": null,
+   "text": "This section applies if:",
+   "canonical_text": "This section applies if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/1/a",
+   "heading": null,
+   "text": "an APP entity discloses personal information about an individual to an overseas recipient; and",
+   "canonical_text": "an APP entity discloses personal information about an individual to an overseas recipient; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/1/b",
+   "heading": null,
+   "text": "Australian Privacy Principle 8.1 applies to the disclosure of the information; and",
+   "canonical_text": "Australian Privacy Principle 8.1 applies to the disclosure of the information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/1/c",
+   "heading": null,
+   "text": "the Australian Privacy Principles do not apply, under this Act, to an act done, or a practice engaged in, by the overseas recipient in relation to the information; and",
+   "canonical_text": "the Australian Privacy Principles do not apply, under this Act, to an act done, or a practice engaged in, by the overseas recipient in relation to the information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/1/d",
+   "heading": null,
+   "text": "the overseas recipient does an act, or engages in a practice, in relation to the information that would be a breach of the Australian Privacy Principles (other than Australian Privacy Principle 1) if those Australian Privacy Principles so applied to that act or practice.",
+   "canonical_text": "the overseas recipient does an act, or engages in a practice, in relation to the information that would be a breach of the Australian Privacy Principles (other than Australian Privacy Principle 1) if those Australian Privacy Principles so applied to that act or practice.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/2",
+   "heading": null,
+   "text": "The act done, or the practice engaged in, by the overseas recipient is taken, for the purposes of this Act:",
+   "canonical_text": "The act done, or the practice engaged in, by the overseas recipient is taken, for the purposes of this Act:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/2/a",
+   "heading": null,
+   "text": "to have been done, or engaged in, by the APP entity; and",
+   "canonical_text": "to have been done, or engaged in, by the APP entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s16c/2/b",
+   "heading": null,
+   "text": "to be a breach of those Australian Privacy Principles by the APP entity.",
+   "canonical_text": "to be a breach of those Australian Privacy Principles by the APP entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wb",
+   "heading": null,
+   "text": "For the purposes of this Part, entity includes a person who is a file number recipient.",
+   "canonical_text": "For the purposes of this Part, entity includes a person who is a file number recipient.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/1",
+   "heading": null,
+   "text": "If:",
+   "canonical_text": "If:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/1/a",
+   "heading": null,
+   "text": "an APP entity has disclosed personal information about one or more individuals to an overseas recipient; and",
+   "canonical_text": "an APP entity has disclosed personal information about one or more individuals to an overseas recipient; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/1/b",
+   "heading": null,
+   "text": "Australian Privacy Principle 8.1 applied to the disclosure of the personal information; and",
+   "canonical_text": "Australian Privacy Principle 8.1 applied to the disclosure of the personal information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/1/c",
+   "heading": null,
+   "text": "the overseas recipient holds the personal information;",
+   "canonical_text": "the overseas recipient holds the personal information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/1/d",
+   "heading": null,
+   "text": "this Part has effect as if: the personal information were held by the APP entity; and",
+   "canonical_text": "this Part has effect as if: the personal information were held by the APP entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/1/e",
+   "heading": null,
+   "text": "the APP entity were required under section 15 not to do an act, or engage in a practice, that breaches Australian Privacy Principle 11.1 in relation to the personal information.",
+   "canonical_text": "the APP entity were required under section 15 not to do an act, or engage in a practice, that breaches Australian Privacy Principle 11.1 in relation to the personal information.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/2",
+   "heading": null,
+   "text": "If:",
+   "canonical_text": "If:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/2/a",
+   "heading": null,
+   "text": "either:",
+   "canonical_text": "either:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/2/a/i",
+   "heading": null,
+   "text": "a credit provider has disclosed, under paragraph 21G(3)(b) or (c), credit eligibility information about one or more individuals to a related body corporate, or person, that does not have an Australian link; or",
+   "canonical_text": "a credit provider has disclosed, under paragraph 21G(3)(b) or (c), credit eligibility information about one or more individuals to a related body corporate, or person, that does not have an Australian link; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/2/a/ii",
+   "heading": null,
+   "text": "a credit provider has disclosed, under subsection 21M(1), credit eligibility information about one or more individuals to a body or person that does not have an Australian link; and",
+   "canonical_text": "a credit provider has disclosed, under subsection 21M(1), credit eligibility information about one or more individuals to a body or person that does not have an Australian link; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/2/b",
+   "heading": null,
+   "text": "the related body corporate, body or person holds the credit eligibility information;",
+   "canonical_text": "the related body corporate, body or person holds the credit eligibility information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/2/c",
+   "heading": null,
+   "text": "this Part has effect as if: the credit eligibility information were held by the credit provider; and",
+   "canonical_text": "this Part has effect as if: the credit eligibility information were held by the credit provider; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wc/2/d",
+   "heading": null,
+   "text": "the credit provider were required to comply with subsection 21S(1) in relation to the credit eligibility information.",
+   "canonical_text": "the credit provider were required to comply with subsection 21S(1) in relation to the credit eligibility information.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wd",
+   "heading": null,
+   "text": "If: has been, or is required to be, notified under section 75 of the My Health Records Act 2012, this Part does not apply in relation to the access, disclosure or loss.",
+   "canonical_text": "If: has been, or is required to be, notified under section 75 of the My Health Records Act 2012, this Part does not apply in relation to the access, disclosure or loss.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wd/a",
+   "heading": null,
+   "text": "an unauthorised access to information; or",
+   "canonical_text": "an unauthorised access to information; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wd/b",
+   "heading": null,
+   "text": "an unauthorised disclosure of information; or",
+   "canonical_text": "an unauthorised disclosure of information; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wd/c",
+   "heading": null,
+   "text": "a loss of information;",
+   "canonical_text": "a loss of information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1",
+   "heading": null,
+   "text": "This section applies if:",
+   "canonical_text": "This section applies if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/a",
+   "heading": null,
+   "text": "both:",
+   "canonical_text": "both:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/a/i",
+   "heading": null,
+   "text": "an APP entity holds personal information relating to one or more individuals; and",
+   "canonical_text": "an APP entity holds personal information relating to one or more individuals; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/a/ii",
+   "heading": null,
+   "text": "the APP entity is required under section 15 not to do an act, or engage in a practice, that breaches Australian Privacy Principle 11.1 in relation to the personal information; or",
+   "canonical_text": "the APP entity is required under section 15 not to do an act, or engage in a practice, that breaches Australian Privacy Principle 11.1 in relation to the personal information; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/b",
+   "heading": null,
+   "text": "both:",
+   "canonical_text": "both:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/b/i",
+   "heading": null,
+   "text": "a credit reporting body holds credit reporting information relating to one or more individuals; and",
+   "canonical_text": "a credit reporting body holds credit reporting information relating to one or more individuals; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/b/ii",
+   "heading": null,
+   "text": "the credit reporting body is required to comply with section 20Q in relation to the credit reporting information; or",
+   "canonical_text": "the credit reporting body is required to comply with section 20Q in relation to the credit reporting information; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/c",
+   "heading": null,
+   "text": "both:",
+   "canonical_text": "both:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/c/i",
+   "heading": null,
+   "text": "a credit provider holds credit eligibility information relating to one or more individuals; and",
+   "canonical_text": "a credit provider holds credit eligibility information relating to one or more individuals; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/c/ii",
+   "heading": null,
+   "text": "the credit provider is required to comply with subsection 21S(1) in relation to the credit eligibility information; or",
+   "canonical_text": "the credit provider is required to comply with subsection 21S(1) in relation to the credit eligibility information; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/d",
+   "heading": null,
+   "text": "both:",
+   "canonical_text": "both:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/d/i",
+   "heading": null,
+   "text": "a file number recipient holds tax file number information relating to one or more individuals; and",
+   "canonical_text": "a file number recipient holds tax file number information relating to one or more individuals; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/1/d/ii",
+   "heading": null,
+   "text": "the file number recipient is required under section 18 not to do an act, or engage in a practice, that breaches a section 17 rule that relates to the tax file number information.",
+   "canonical_text": "the file number recipient is required under section 18 not to do an act, or engage in a practice, that breaches a section 17 rule that relates to the tax file number information.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2",
+   "heading": null,
+   "text": "For the purposes of this Act, if:",
+   "canonical_text": "For the purposes of this Act, if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/a",
+   "heading": null,
+   "text": "both of the following conditions are satisfied:",
+   "canonical_text": "both of the following conditions are satisfied:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/a/i",
+   "heading": null,
+   "text": "there is unauthorised access to, or unauthorised disclosure of, the information;",
+   "canonical_text": "there is unauthorised access to, or unauthorised disclosure of, the information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/a/ii",
+   "heading": null,
+   "text": "a reasonable person would conclude that the access or disclosure would be likely to result in serious harm to any of the individuals to whom the information relates; or",
+   "canonical_text": "a reasonable person would conclude that the access or disclosure would be likely to result in serious harm to any of the individuals to whom the information relates; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/b",
+   "heading": null,
+   "text": "the information is lost in circumstances where:",
+   "canonical_text": "the information is lost in circumstances where:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/b/i",
+   "heading": null,
+   "text": "unauthorised access to, or unauthorised disclosure of, the information is likely to occur; and",
+   "canonical_text": "unauthorised access to, or unauthorised disclosure of, the information is likely to occur; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/b/ii",
+   "heading": null,
+   "text": "assuming that unauthorised access to, or unauthorised disclosure of, the information were to occur, a reasonable person would conclude that the access or disclosure would be likely to result in serious harm to any of the individuals to whom the information relates;",
+   "canonical_text": "assuming that unauthorised access to, or unauthorised disclosure of, the information were to occur, a reasonable person would conclude that the access or disclosure would be likely to result in serious harm to any of the individuals to whom the information relates;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/c",
+   "heading": null,
+   "text": "then: the access or disclosure covered by paragraph (a), or the loss covered by paragraph (b), is an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; and",
+   "canonical_text": "then: the access or disclosure covered by paragraph (a), or the loss covered by paragraph (b), is an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/2/d",
+   "heading": null,
+   "text": "an individual covered by subparagraph (a)(ii) or (b)(ii) is at risk from the eligible data breach.",
+   "canonical_text": "an individual covered by subparagraph (a)(ii) or (b)(ii) is at risk from the eligible data breach.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26we/3",
+   "heading": null,
+   "text": "Subsection (2) has effect subject to section 26WF.",
+   "canonical_text": "Subsection (2) has effect subject to section 26WF.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/1",
+   "heading": null,
+   "text": "If:",
+   "canonical_text": "If:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/1/a",
+   "heading": null,
+   "text": "an access to, or disclosure of, information is covered by paragraph 26WE(2)(a); and",
+   "canonical_text": "an access to, or disclosure of, information is covered by paragraph 26WE(2)(a); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/1/b",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the access or disclosure; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the access or disclosure; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/1/c",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so before the access or disclosure results in serious harm to any of the individuals to whom the information relates; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so before the access or disclosure results in serious harm to any of the individuals to whom the information relates; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/1/d",
+   "heading": null,
+   "text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to any of those individuals;",
+   "canonical_text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to any of those individuals;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/1/e",
+   "heading": null,
+   "text": "the access or disclosure is not, and is taken never to have been: an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonical_text": "the access or disclosure is not, and is taken never to have been: an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/1/f",
+   "heading": null,
+   "text": "an eligible data breach of any other entity.",
+   "canonical_text": "an eligible data breach of any other entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/2",
+   "heading": null,
+   "text": "If: this Part does not require: to take steps to notify the individual of the contents of a statement that relates to the access or disclosure.",
+   "canonical_text": "If: this Part does not require: to take steps to notify the individual of the contents of a statement that relates to the access or disclosure.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/2/a",
+   "heading": null,
+   "text": "an access to, or disclosure of, information is covered by paragraph 26WE(2)(a); and",
+   "canonical_text": "an access to, or disclosure of, information is covered by paragraph 26WE(2)(a); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/2/b",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the access or disclosure; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the access or disclosure; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/2/c",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so before the access or disclosure results in serious harm to a particular individual to whom the information relates; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so before the access or disclosure results in serious harm to a particular individual to whom the information relates; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/2/d",
+   "heading": null,
+   "text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to the individual;",
+   "canonical_text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to the individual;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/2/e",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/2/f",
+   "heading": null,
+   "text": "any other entity;",
+   "canonical_text": "any other entity;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/3",
+   "heading": null,
+   "text": "If:",
+   "canonical_text": "If:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/3/a",
+   "heading": null,
+   "text": "a loss of information is covered by paragraph 26WE(2)(b); and",
+   "canonical_text": "a loss of information is covered by paragraph 26WE(2)(b); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/3/b",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the loss; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the loss; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/3/c",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so before there is unauthorised access to, or unauthorised disclosure of, the information; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so before there is unauthorised access to, or unauthorised disclosure of, the information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/3/d",
+   "heading": null,
+   "text": "as a result of the action, there is no unauthorised access to, or unauthorised disclosure of, the information;",
+   "canonical_text": "as a result of the action, there is no unauthorised access to, or unauthorised disclosure of, the information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/3/e",
+   "heading": null,
+   "text": "the loss is not, and is taken never to have been: an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonical_text": "the loss is not, and is taken never to have been: an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/3/f",
+   "heading": null,
+   "text": "an eligible data breach of any other entity.",
+   "canonical_text": "an eligible data breach of any other entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4",
+   "heading": null,
+   "text": "If:",
+   "canonical_text": "If:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/a",
+   "heading": null,
+   "text": "a loss of information is covered by paragraph 26WE(2)(b); and",
+   "canonical_text": "a loss of information is covered by paragraph 26WE(2)(b); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/b",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the loss; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the loss; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/c",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so:",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/c/i",
+   "heading": null,
+   "text": "after there is unauthorised access to, or unauthorised disclosure of, the information; and",
+   "canonical_text": "after there is unauthorised access to, or unauthorised disclosure of, the information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/c/ii",
+   "heading": null,
+   "text": "before the access or disclosure results in serious harm to any of the individuals to whom the information relates; and",
+   "canonical_text": "before the access or disclosure results in serious harm to any of the individuals to whom the information relates; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/d",
+   "heading": null,
+   "text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to any of those individuals;",
+   "canonical_text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to any of those individuals;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/e",
+   "heading": null,
+   "text": "the loss is not, and is taken never to have been: an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonical_text": "the loss is not, and is taken never to have been: an eligible data breach of the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/4/f",
+   "heading": null,
+   "text": "an eligible data breach of any other entity.",
+   "canonical_text": "an eligible data breach of any other entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5",
+   "heading": null,
+   "text": "If: this Part does not require: to take steps to notify the individual of the contents of a statement that relates to the loss.",
+   "canonical_text": "If: this Part does not require: to take steps to notify the individual of the contents of a statement that relates to the loss.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/a",
+   "heading": null,
+   "text": "a loss of information is covered by paragraph 26WE(2)(b); and",
+   "canonical_text": "a loss of information is covered by paragraph 26WE(2)(b); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/b",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the loss; and",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, takes action in relation to the loss; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/c",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so:",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be, does so:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/c/i",
+   "heading": null,
+   "text": "after there is unauthorised access to, or unauthorised disclosure of, the information; and",
+   "canonical_text": "after there is unauthorised access to, or unauthorised disclosure of, the information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/c/ii",
+   "heading": null,
+   "text": "before the access or disclosure results in serious harm to a particular individual to whom the information relates; and",
+   "canonical_text": "before the access or disclosure results in serious harm to a particular individual to whom the information relates; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/d",
+   "heading": null,
+   "text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to the individual;",
+   "canonical_text": "as a result of the action, a reasonable person would conclude that the access or disclosure would not be likely to result in serious harm to the individual;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/e",
+   "heading": null,
+   "text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonical_text": "the APP entity, credit reporting body, credit provider or file number recipient, as the case may be; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wf/5/f",
+   "heading": null,
+   "text": "any other entity;",
+   "canonical_text": "any other entity;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg",
+   "heading": null,
+   "text": "For the purposes of this Division, in determining whether a reasonable person would conclude that an access to, or a disclosure of, information:",
+   "canonical_text": "For the purposes of this Division, in determining whether a reasonable person would conclude that an access to, or a disclosure of, information:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/a",
+   "heading": null,
+   "text": "would be likely; or",
+   "canonical_text": "would be likely; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/b",
+   "heading": null,
+   "text": "would not be likely;",
+   "canonical_text": "would not be likely;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/c",
+   "heading": null,
+   "text": "to result in serious harm to any of the individuals to whom the information relates, have regard to the following: the kind or kinds of information;",
+   "canonical_text": "to result in serious harm to any of the individuals to whom the information relates, have regard to the following: the kind or kinds of information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/d",
+   "heading": null,
+   "text": "the sensitivity of the information;",
+   "canonical_text": "the sensitivity of the information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/e",
+   "heading": null,
+   "text": "whether the information is protected by one or more security measures;",
+   "canonical_text": "whether the information is protected by one or more security measures;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/f",
+   "heading": null,
+   "text": "if the information is protected by one or more security measures—the likelihood that any of those security measures could be overcome;",
+   "canonical_text": "if the information is protected by one or more security measures-the likelihood that any of those security measures could be overcome;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/g",
+   "heading": null,
+   "text": "the persons, or the kinds of persons, who have obtained, or who could obtain, the information;",
+   "canonical_text": "the persons, or the kinds of persons, who have obtained, or who could obtain, the information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/h",
+   "heading": null,
+   "text": "if a security technology or methodology: the likelihood that the persons, or the kinds of persons, who: have obtained, or could obtain, information or knowledge required to circumvent the security technology or methodology;",
+   "canonical_text": "if a security technology or methodology: the likelihood that the persons, or the kinds of persons, who: have obtained, or could obtain, information or knowledge required to circumvent the security technology or methodology;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/h/i",
+   "heading": null,
+   "text": "was used in relation to the information; and",
+   "canonical_text": "was used in relation to the information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/h/ii",
+   "heading": null,
+   "text": "was designed to make the information unintelligible or meaningless to persons who are not authorised to obtain the information;",
+   "canonical_text": "was designed to make the information unintelligible or meaningless to persons who are not authorised to obtain the information;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/h/iii",
+   "heading": null,
+   "text": "have obtained, or who could obtain, the information; and",
+   "canonical_text": "have obtained, or who could obtain, the information; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/h/iv",
+   "heading": null,
+   "text": "have, or are likely to have, the intention of causing harm to any of the individuals to whom the information relates;",
+   "canonical_text": "have, or are likely to have, the intention of causing harm to any of the individuals to whom the information relates;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/i",
+   "heading": null,
+   "text": "the nature of the harm;",
+   "canonical_text": "the nature of the harm;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wg/j",
+   "heading": null,
+   "text": "any other relevant matters.",
+   "canonical_text": "any other relevant matters.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wh/1",
+   "heading": null,
+   "text": "This section applies if:",
+   "canonical_text": "This section applies if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wh/1/a",
+   "heading": null,
+   "text": "an entity is aware that there are reasonable grounds to suspect that there may have been an eligible data breach of the entity; and",
+   "canonical_text": "an entity is aware that there are reasonable grounds to suspect that there may have been an eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wh/1/b",
+   "heading": null,
+   "text": "the entity is not aware that there are reasonable grounds to believe that the relevant circumstances amount to an eligible data breach of the entity.",
+   "canonical_text": "the entity is not aware that there are reasonable grounds to believe that the relevant circumstances amount to an eligible data breach of the entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wh/2",
+   "heading": null,
+   "text": "The entity must:",
+   "canonical_text": "The entity must:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wh/2/a",
+   "heading": null,
+   "text": "carry out a reasonable and expeditious assessment of whether there are reasonable grounds to believe that the relevant circumstances amount to an eligible data breach of the entity; and",
+   "canonical_text": "carry out a reasonable and expeditious assessment of whether there are reasonable grounds to believe that the relevant circumstances amount to an eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wh/2/b",
+   "heading": null,
+   "text": "take all reasonable steps to ensure that the assessment is completed within 30 days after the entity becomes aware as mentioned in paragraph (1)(a).",
+   "canonical_text": "take all reasonable steps to ensure that the assessment is completed within 30 days after the entity becomes aware as mentioned in paragraph (1)(a).",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wj",
+   "heading": null,
+   "text": "If: that section does not apply in relation to those eligible data breaches of those other entities.",
+   "canonical_text": "If: that section does not apply in relation to those eligible data breaches of those other entities.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wj/a",
+   "heading": null,
+   "text": "an entity complies with section 26WH in relation to an eligible data breach of the entity; and",
+   "canonical_text": "an entity complies with section 26WH in relation to an eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wj/b",
+   "heading": null,
+   "text": "the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities;",
+   "canonical_text": "the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/1",
+   "heading": null,
+   "text": "This section applies if an entity is aware that there are reasonable grounds to believe that there has been an eligible data breach of the entity.",
+   "canonical_text": "This section applies if an entity is aware that there are reasonable grounds to believe that there has been an eligible data breach of the entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/2",
+   "heading": null,
+   "text": "The entity must:",
+   "canonical_text": "The entity must:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/2/a",
+   "heading": null,
+   "text": "both:",
+   "canonical_text": "both:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/2/a/i",
+   "heading": null,
+   "text": "prepare a statement that complies with subsection (3); and",
+   "canonical_text": "prepare a statement that complies with subsection (3); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/2/a/ii",
+   "heading": null,
+   "text": "give a copy of the statement to the Commissioner; and",
+   "canonical_text": "give a copy of the statement to the Commissioner; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/2/b",
+   "heading": null,
+   "text": "do so as soon as practicable after the entity becomes so aware.",
+   "canonical_text": "do so as soon as practicable after the entity becomes so aware.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/3",
+   "heading": null,
+   "text": "The statement referred to in subparagraph (2)(a)(i) must set out:",
+   "canonical_text": "The statement referred to in subparagraph (2)(a)(i) must set out:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/3/a",
+   "heading": null,
+   "text": "the identity and contact details of the entity; and",
+   "canonical_text": "the identity and contact details of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/3/b",
+   "heading": null,
+   "text": "a description of the eligible data breach that the entity has reasonable grounds to believe has happened; and",
+   "canonical_text": "a description of the eligible data breach that the entity has reasonable grounds to believe has happened; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/3/c",
+   "heading": null,
+   "text": "the particular kind or kinds of information concerned; and",
+   "canonical_text": "the particular kind or kinds of information concerned; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/3/d",
+   "heading": null,
+   "text": "recommendations about the steps that individuals should take in response to the eligible data breach that the entity has reasonable grounds to believe has happened.",
+   "canonical_text": "recommendations about the steps that individuals should take in response to the eligible data breach that the entity has reasonable grounds to believe has happened.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wk/4",
+   "heading": null,
+   "text": "If the entity has reasonable grounds to believe that the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities, the statement referred to in subparagraph (2)(a)(i) may also set out the identity and contact details of those other entities.",
+   "canonical_text": "If the entity has reasonable grounds to believe that the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities, the statement referred to in subparagraph (2)(a)(i) may also set out the identity and contact details of those other entities.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/1",
+   "heading": null,
+   "text": "This section applies if:",
+   "canonical_text": "This section applies if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/1/a",
+   "heading": null,
+   "text": "an entity is aware that there are reasonable grounds to believe that there has been an eligible data breach of the entity; and",
+   "canonical_text": "an entity is aware that there are reasonable grounds to believe that there has been an eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/1/b",
+   "heading": null,
+   "text": "the entity has prepared a statement that:",
+   "canonical_text": "the entity has prepared a statement that:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/1/b/i",
+   "heading": null,
+   "text": "complies with subsection 26WK(3); and",
+   "canonical_text": "complies with subsection 26WK(3); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/1/b/ii",
+   "heading": null,
+   "text": "relates to the eligible data breach that the entity has reasonable grounds to believe has happened.",
+   "canonical_text": "relates to the eligible data breach that the entity has reasonable grounds to believe has happened.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/2",
+   "heading": null,
+   "text": "The entity must:",
+   "canonical_text": "The entity must:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/2/a",
+   "heading": null,
+   "text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals to whom the relevant information relates—take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals to whom the relevant information relates; or",
+   "canonical_text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals to whom the relevant information relates-take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals to whom the relevant information relates; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/2/b",
+   "heading": null,
+   "text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach—take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach; or",
+   "canonical_text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach-take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/2/c",
+   "heading": null,
+   "text": "if neither paragraph (a) nor (b) applies:",
+   "canonical_text": "if neither paragraph (a) nor (b) applies:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/2/c/i",
+   "heading": null,
+   "text": "publish a copy of the statement on the entity’s website (if any); and",
+   "canonical_text": "publish a copy of the statement on the entity's website (if any); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/2/c/ii",
+   "heading": null,
+   "text": "take reasonable steps to publicise the contents of the statement.",
+   "canonical_text": "take reasonable steps to publicise the contents of the statement.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/3",
+   "heading": null,
+   "text": "The entity must comply with subsection (2) as soon as practicable after the completion of the preparation of the statement.",
+   "canonical_text": "The entity must comply with subsection (2) as soon as practicable after the completion of the preparation of the statement.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wl/4",
+   "heading": null,
+   "text": "If the entity normally communicates with a particular individual using a particular method, the notification to the individual under paragraph (2)(a) or (b) may use that method. This subsection does not limit paragraph (2)(a) or (b).",
+   "canonical_text": "If the entity normally communicates with a particular individual using a particular method, the notification to the individual under paragraph (2)(a) or (b) may use that method. This subsection does not limit paragraph (2)(a) or (b).",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wm",
+   "heading": null,
+   "text": "If: those sections do not apply in relation to those eligible data breaches of those other entities.",
+   "canonical_text": "If: those sections do not apply in relation to those eligible data breaches of those other entities.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wm/a",
+   "heading": null,
+   "text": "an entity complies with sections 26WK and 26WL in relation to an eligible data breach of the entity; and",
+   "canonical_text": "an entity complies with sections 26WK and 26WL in relation to an eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wm/b",
+   "heading": null,
+   "text": "the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities;",
+   "canonical_text": "the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wn",
+   "heading": null,
+   "text": "If:",
+   "canonical_text": "If:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wn/a",
+   "heading": null,
+   "text": "an entity is an enforcement body; and",
+   "canonical_text": "an entity is an enforcement body; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wn/b",
+   "heading": null,
+   "text": "the chief executive officer of the enforcement body believes on reasonable grounds that there has been an eligible data breach of the entity; and",
+   "canonical_text": "the chief executive officer of the enforcement body believes on reasonable grounds that there has been an eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wn/c",
+   "heading": null,
+   "text": "the chief executive officer of the enforcement body believes on reasonable grounds that compliance with section 26WL in relation to the eligible data breach would be likely to prejudice one or more enforcement related activities conducted by, or on behalf of, the enforcement body;",
+   "canonical_text": "the chief executive officer of the enforcement body believes on reasonable grounds that compliance with section 26WL in relation to the eligible data breach would be likely to prejudice one or more enforcement related activities conducted by, or on behalf of, the enforcement body;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wn/d",
+   "heading": null,
+   "text": "paragraph 26WK(3)(d) and section 26WL do not apply in relation to: the eligible data breach of the entity; and",
+   "canonical_text": "paragraph 26WK(3)(d) and section 26WL do not apply in relation to: the eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wn/e",
+   "heading": null,
+   "text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities—such an eligible data breach of those other entities.",
+   "canonical_text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities-such an eligible data breach of those other entities.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/1",
+   "heading": null,
+   "text": "For the purposes of this section, secrecy provision means a provision that:",
+   "canonical_text": "For the purposes of this section, secrecy provision means a provision that:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/1/a",
+   "heading": null,
+   "text": "is a provision of a law of the Commonwealth (other than this Act); and",
+   "canonical_text": "is a provision of a law of the Commonwealth (other than this Act); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/1/b",
+   "heading": null,
+   "text": "prohibits or regulates the use or disclosure of information.",
+   "canonical_text": "prohibits or regulates the use or disclosure of information.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/2",
+   "heading": null,
+   "text": "If compliance by an entity with subparagraph 26WK(2)(a)(ii) in relation to a statement would, to any extent, be inconsistent with a secrecy provision (other than a prescribed secrecy provision), subsection 26WK(2) does not apply to the entity, in relation to the statement, to the extent of the inconsistency.",
+   "canonical_text": "If compliance by an entity with subparagraph 26WK(2)(a)(ii) in relation to a statement would, to any extent, be inconsistent with a secrecy provision (other than a prescribed secrecy provision), subsection 26WK(2) does not apply to the entity, in relation to the statement, to the extent of the inconsistency.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/3",
+   "heading": null,
+   "text": "If compliance by an entity with section 26WL in relation to a statement would, to any extent, be inconsistent with a secrecy provision (other than a prescribed secrecy provision), section 26WL does not apply to the entity, in relation to the statement, to the extent of the inconsistency.",
+   "canonical_text": "If compliance by an entity with section 26WL in relation to a statement would, to any extent, be inconsistent with a secrecy provision (other than a prescribed secrecy provision), section 26WL does not apply to the entity, in relation to the statement, to the extent of the inconsistency.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/4",
+   "heading": null,
+   "text": "For the purposes of this section, prescribed secrecy provision means a secrecy provision that is specified in the regulations.",
+   "canonical_text": "For the purposes of this section, prescribed secrecy provision means a secrecy provision that is specified in the regulations.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/5",
+   "heading": null,
+   "text": "For the purposes of a prescribed secrecy provision: are taken not to be provisions that require or authorise the use or disclosure of information.",
+   "canonical_text": "For the purposes of a prescribed secrecy provision: are taken not to be provisions that require or authorise the use or disclosure of information.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/5/a",
+   "heading": null,
+   "text": "subparagraph 26WK(2)(a)(ii); and",
+   "canonical_text": "subparagraph 26WK(2)(a)(ii); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/5/b",
+   "heading": null,
+   "text": "section 26WL;",
+   "canonical_text": "section 26WL;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/6",
+   "heading": null,
+   "text": "If compliance by an entity with subparagraph 26WK(2)(a)(ii) in relation to a statement would, to any extent, be inconsistent with a prescribed secrecy provision, subsection 26WK(2) does not apply to the entity in relation to the statement.",
+   "canonical_text": "If compliance by an entity with subparagraph 26WK(2)(a)(ii) in relation to a statement would, to any extent, be inconsistent with a prescribed secrecy provision, subsection 26WK(2) does not apply to the entity in relation to the statement.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wp/7",
+   "heading": null,
+   "text": "If compliance by an entity with section 26WL in relation to a statement would, to any extent, be inconsistent with a prescribed secrecy provision, section 26WL does not apply to the entity in relation to the statement.",
+   "canonical_text": "If compliance by an entity with section 26WL in relation to a statement would, to any extent, be inconsistent with a prescribed secrecy provision, section 26WL does not apply to the entity in relation to the statement.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1",
+   "heading": null,
+   "text": "If the Commissioner:",
+   "canonical_text": "If the Commissioner:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/a",
+   "heading": null,
+   "text": "is aware that there are reasonable grounds to believe that there has been an eligible data breach of an entity; or",
+   "canonical_text": "is aware that there are reasonable grounds to believe that there has been an eligible data breach of an entity; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/b",
+   "heading": null,
+   "text": "is informed by an entity that the entity is aware that there are reasonable grounds to believe that there has been an eligible data breach of the entity;",
+   "canonical_text": "is informed by an entity that the entity is aware that there are reasonable grounds to believe that there has been an eligible data breach of the entity;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/c",
+   "heading": null,
+   "text": "the Commissioner may, by written notice given to the entity: declare that sections 26WK and 26WL do not apply in relation to:",
+   "canonical_text": "the Commissioner may, by written notice given to the entity: declare that sections 26WK and 26WL do not apply in relation to:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/c/i",
+   "heading": null,
+   "text": "the eligible data breach of the entity; and",
+   "canonical_text": "the eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/c/ii",
+   "heading": null,
+   "text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities—such an eligible data breach of those other entities; or",
+   "canonical_text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities-such an eligible data breach of those other entities; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/d",
+   "heading": null,
+   "text": "declare that subsection 26WL(3) has effect in relation to: as if that subsection required compliance with subsection 26WL(2) before the end of a period specified in the declaration.",
+   "canonical_text": "declare that subsection 26WL(3) has effect in relation to: as if that subsection required compliance with subsection 26WL(2) before the end of a period specified in the declaration.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/d/i",
+   "heading": null,
+   "text": "the eligible data breach of the entity; and",
+   "canonical_text": "the eligible data breach of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/1/d/ii",
+   "heading": null,
+   "text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities—such an eligible data breach of those other entities;",
+   "canonical_text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities-such an eligible data breach of those other entities;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/10",
+   "heading": null,
+   "text": "An entity is not entitled to make an application under paragraph (5)(b) in relation to an eligible data breach of the entity if:",
+   "canonical_text": "An entity is not entitled to make an application under paragraph (5)(b) in relation to an eligible data breach of the entity if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/10/a",
+   "heading": null,
+   "text": "the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities; and",
+   "canonical_text": "the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/10/b",
+   "heading": null,
+   "text": "one of those other entities has already made an application under paragraph (5)(b) in relation to the eligible data breach of the other entity.",
+   "canonical_text": "one of those other entities has already made an application under paragraph (5)(b) in relation to the eligible data breach of the other entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/11",
+   "heading": null,
+   "text": "If notice of a paragraph (1)(d) declaration has been given to an entity, the Commissioner may, by written notice given to the entity, extend the period specified in the declaration.",
+   "canonical_text": "If notice of a paragraph (1)(d) declaration has been given to an entity, the Commissioner may, by written notice given to the entity, extend the period specified in the declaration.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/2",
+   "heading": null,
+   "text": "The Commissioner’s power in paragraph (1)(d) may only be used to extend the time for compliance with subsection 26WL(2) to the end of a period that the Commissioner is satisfied is reasonable in the circumstances.",
+   "canonical_text": "The Commissioner's power in paragraph (1)(d) may only be used to extend the time for compliance with subsection 26WL(2) to the end of a period that the Commissioner is satisfied is reasonable in the circumstances.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/3",
+   "heading": null,
+   "text": "The Commissioner must not make a declaration under subsection (1) unless the Commissioner is satisfied that it is reasonable in the circumstances to do so, having regard to the following:",
+   "canonical_text": "The Commissioner must not make a declaration under subsection (1) unless the Commissioner is satisfied that it is reasonable in the circumstances to do so, having regard to the following:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/3/a",
+   "heading": null,
+   "text": "the public interest;",
+   "canonical_text": "the public interest;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/3/b",
+   "heading": null,
+   "text": "any relevant advice given to the Commissioner by:",
+   "canonical_text": "any relevant advice given to the Commissioner by:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/3/b/i",
+   "heading": null,
+   "text": "an enforcement body; or",
+   "canonical_text": "an enforcement body; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/3/b/ii",
+   "heading": null,
+   "text": "the Australian Signals Directorate;",
+   "canonical_text": "the Australian Signals Directorate;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/3/c",
+   "heading": null,
+   "text": "such other matters (if any) as the Commissioner considers relevant.",
+   "canonical_text": "such other matters (if any) as the Commissioner considers relevant.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/4",
+   "heading": null,
+   "text": "Paragraph (3)(b) does not limit the advice to which the Commissioner may have regard.",
+   "canonical_text": "Paragraph (3)(b) does not limit the advice to which the Commissioner may have regard.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/5",
+   "heading": null,
+   "text": "The Commissioner may give a notice of a declaration to an entity under subsection (1):",
+   "canonical_text": "The Commissioner may give a notice of a declaration to an entity under subsection (1):",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/5/a",
+   "heading": null,
+   "text": "on the Commissioner’s own initiative; or",
+   "canonical_text": "on the Commissioner's own initiative; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/5/b",
+   "heading": null,
+   "text": "on application made to the Commissioner by the entity.",
+   "canonical_text": "on application made to the Commissioner by the entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/6",
+   "heading": null,
+   "text": "An application by an entity under paragraph (5)(b) may be expressed to be:",
+   "canonical_text": "An application by an entity under paragraph (5)(b) may be expressed to be:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/6/a",
+   "heading": null,
+   "text": "an application for a paragraph (1)(c) declaration; or",
+   "canonical_text": "an application for a paragraph (1)(c) declaration; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/6/b",
+   "heading": null,
+   "text": "an application for a paragraph (1)(d) declaration; or",
+   "canonical_text": "an application for a paragraph (1)(d) declaration; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/6/c",
+   "heading": null,
+   "text": "an application for:",
+   "canonical_text": "an application for:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/6/c/i",
+   "heading": null,
+   "text": "a paragraph (1)(c) declaration; or",
+   "canonical_text": "a paragraph (1)(c) declaration; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/6/c/ii",
+   "heading": null,
+   "text": "in the event that the Commissioner is not disposed to make such a declaration—a paragraph (1)(d) declaration.",
+   "canonical_text": "in the event that the Commissioner is not disposed to make such a declaration-a paragraph (1)(d) declaration.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/7",
+   "heading": null,
+   "text": "If an entity applies to the Commissioner under paragraph (5)(b):",
+   "canonical_text": "If an entity applies to the Commissioner under paragraph (5)(b):",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/7/a",
+   "heading": null,
+   "text": "the Commissioner may refuse the application; and",
+   "canonical_text": "the Commissioner may refuse the application; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/7/b",
+   "heading": null,
+   "text": "if the Commissioner does so—the Commissioner must give written notice of the refusal to the entity.",
+   "canonical_text": "if the Commissioner does so-the Commissioner must give written notice of the refusal to the entity.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/8",
+   "heading": null,
+   "text": "If: the Commissioner is taken not to have refused the application.",
+   "canonical_text": "If: the Commissioner is taken not to have refused the application.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/8/a",
+   "heading": null,
+   "text": "an application for a paragraph (1)(d) declaration nominates a period to be specified in the declaration; and",
+   "canonical_text": "an application for a paragraph (1)(d) declaration nominates a period to be specified in the declaration; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/8/b",
+   "heading": null,
+   "text": "the Commissioner makes the declaration, but specifies a different period in the declaration;",
+   "canonical_text": "the Commissioner makes the declaration, but specifies a different period in the declaration;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/9",
+   "heading": null,
+   "text": "If an entity applies to the Commissioner under paragraph (5)(b) for a declaration that, to any extent, relates to an eligible data breach of the entity, sections 26WK and 26WL do not apply in relation to: until the Commissioner makes a decision in response to the application for the declaration.",
+   "canonical_text": "If an entity applies to the Commissioner under paragraph (5)(b) for a declaration that, to any extent, relates to an eligible data breach of the entity, sections 26WK and 26WL do not apply in relation to: until the Commissioner makes a decision in response to the application for the declaration.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/9/a",
+   "heading": null,
+   "text": "the eligible data breach; or",
+   "canonical_text": "the eligible data breach; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wq/9/b",
+   "heading": null,
+   "text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities—such an eligible data breach of those other entities;",
+   "canonical_text": "if the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities-such an eligible data breach of those other entities;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/1",
+   "heading": null,
+   "text": "If the Commissioner is aware that there are reasonable grounds to believe that there has been an eligible data breach of an entity, the Commissioner may, by written notice given to the entity, direct the entity to:",
+   "canonical_text": "If the Commissioner is aware that there are reasonable grounds to believe that there has been an eligible data breach of an entity, the Commissioner may, by written notice given to the entity, direct the entity to:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/1/a",
+   "heading": null,
+   "text": "prepare a statement that complies with subsection (4); and",
+   "canonical_text": "prepare a statement that complies with subsection (4); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/1/b",
+   "heading": null,
+   "text": "give a copy of the statement to the Commissioner.",
+   "canonical_text": "give a copy of the statement to the Commissioner.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/10",
+   "heading": null,
+   "text": "An entity must comply with a direction under subsection (1) as soon as practicable after the direction is given.",
+   "canonical_text": "An entity must comply with a direction under subsection (1) as soon as practicable after the direction is given.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/2",
+   "heading": null,
+   "text": "The direction must also require the entity to:",
+   "canonical_text": "The direction must also require the entity to:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/2/a",
+   "heading": null,
+   "text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals to whom the relevant information relates—take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals to whom the relevant information relates; or",
+   "canonical_text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals to whom the relevant information relates-take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals to whom the relevant information relates; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/2/b",
+   "heading": null,
+   "text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach—take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach; or",
+   "canonical_text": "if it is practicable for the entity to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach-take such steps as are reasonable in the circumstances to notify the contents of the statement to each of the individuals who are at risk from the eligible data breach; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/2/c",
+   "heading": null,
+   "text": "if neither paragraph (a) nor (b) applies:",
+   "canonical_text": "if neither paragraph (a) nor (b) applies:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/2/c/i",
+   "heading": null,
+   "text": "publish a copy of the statement on the entity’s website (if any); and",
+   "canonical_text": "publish a copy of the statement on the entity's website (if any); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/2/c/ii",
+   "heading": null,
+   "text": "take reasonable steps to publicise the contents of the statement.",
+   "canonical_text": "take reasonable steps to publicise the contents of the statement.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/3",
+   "heading": null,
+   "text": "Before giving a direction to an entity under subsection (1), the Commissioner must invite the entity to make a submission to the Commissioner in relation to the direction within the period specified in the invitation.",
+   "canonical_text": "Before giving a direction to an entity under subsection (1), the Commissioner must invite the entity to make a submission to the Commissioner in relation to the direction within the period specified in the invitation.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/4",
+   "heading": null,
+   "text": "The statement referred to in paragraph (1)(a) must set out:",
+   "canonical_text": "The statement referred to in paragraph (1)(a) must set out:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/4/a",
+   "heading": null,
+   "text": "the identity and contact details of the entity; and",
+   "canonical_text": "the identity and contact details of the entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/4/b",
+   "heading": null,
+   "text": "a description of the eligible data breach that the Commissioner has reasonable grounds to believe has happened; and",
+   "canonical_text": "a description of the eligible data breach that the Commissioner has reasonable grounds to believe has happened; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/4/c",
+   "heading": null,
+   "text": "the particular kind or kinds of information concerned; and",
+   "canonical_text": "the particular kind or kinds of information concerned; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/4/d",
+   "heading": null,
+   "text": "recommendations about the steps that individuals should take in response to the eligible data breach that the Commissioner has reasonable grounds to believe has happened.",
+   "canonical_text": "recommendations about the steps that individuals should take in response to the eligible data breach that the Commissioner has reasonable grounds to believe has happened.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/5",
+   "heading": null,
+   "text": "A direction under subsection (1) may also require the statement referred to in paragraph (1)(a) to set out specified information that relates to the eligible data breach that the Commissioner has reasonable grounds to believe has happened.",
+   "canonical_text": "A direction under subsection (1) may also require the statement referred to in paragraph (1)(a) to set out specified information that relates to the eligible data breach that the Commissioner has reasonable grounds to believe has happened.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6",
+   "heading": null,
+   "text": "In deciding whether to give a direction to an entity under subsection (1), the Commissioner must have regard to the following:",
+   "canonical_text": "In deciding whether to give a direction to an entity under subsection (1), the Commissioner must have regard to the following:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6/a",
+   "heading": null,
+   "text": "any relevant advice given to the Commissioner by:",
+   "canonical_text": "any relevant advice given to the Commissioner by:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6/a/i",
+   "heading": null,
+   "text": "an enforcement body; or",
+   "canonical_text": "an enforcement body; or",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6/a/ii",
+   "heading": null,
+   "text": "the Australian Signals Directorate;",
+   "canonical_text": "the Australian Signals Directorate;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6/b",
+   "heading": null,
+   "text": "any relevant submission that was made by the entity:",
+   "canonical_text": "any relevant submission that was made by the entity:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6/b/i",
+   "heading": null,
+   "text": "in response to an invitation under subsection (3); and",
+   "canonical_text": "in response to an invitation under subsection (3); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6/b/ii",
+   "heading": null,
+   "text": "within the period specified in the invitation;",
+   "canonical_text": "within the period specified in the invitation;",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/6/c",
+   "heading": null,
+   "text": "such other matters (if any) as the Commissioner considers relevant.",
+   "canonical_text": "such other matters (if any) as the Commissioner considers relevant.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/7",
+   "heading": null,
+   "text": "Paragraph (6)(a) does not limit the advice to which the Commissioner may have regard.",
+   "canonical_text": "Paragraph (6)(a) does not limit the advice to which the Commissioner may have regard.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/8",
+   "heading": null,
+   "text": "If the Commissioner is aware that there are reasonable grounds to believe that the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities, a direction under subsection (1) may also require the statement referred to in paragraph (1)(a) to set out the identity and contact details of those other entities.",
+   "canonical_text": "If the Commissioner is aware that there are reasonable grounds to believe that the access, disclosure or loss that constituted the eligible data breach of the entity is an eligible data breach of one or more other entities, a direction under subsection (1) may also require the statement referred to in paragraph (1)(a) to set out the identity and contact details of those other entities.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wr/9",
+   "heading": null,
+   "text": "If an entity normally communicates with a particular individual using a particular method, the notification to the individual mentioned in paragraph (2)(a) or (b) may use that method. This subsection does not limit paragraph (2)(a) or (b).",
+   "canonical_text": "If an entity normally communicates with a particular individual using a particular method, the notification to the individual mentioned in paragraph (2)(a) or (b) may use that method. This subsection does not limit paragraph (2)(a) or (b).",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26ws",
+   "heading": null,
+   "text": "An entity is not required to comply with a direction under subsection 26WR(1) if:",
+   "canonical_text": "An entity is not required to comply with a direction under subsection 26WR(1) if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26ws/a",
+   "heading": null,
+   "text": "the entity is an enforcement body; and",
+   "canonical_text": "the entity is an enforcement body; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26ws/b",
+   "heading": null,
+   "text": "the chief executive officer of the enforcement body believes on reasonable grounds that compliance with the direction would be likely to prejudice one or more enforcement related activities conducted by, or on behalf of, the enforcement body.",
+   "canonical_text": "the chief executive officer of the enforcement body believes on reasonable grounds that compliance with the direction would be likely to prejudice one or more enforcement related activities conducted by, or on behalf of, the enforcement body.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/1",
+   "heading": null,
+   "text": "For the purposes of this section, secrecy provision means a provision that:",
+   "canonical_text": "For the purposes of this section, secrecy provision means a provision that:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/1/a",
+   "heading": null,
+   "text": "is a provision of a law of the Commonwealth (other than this Act); and",
+   "canonical_text": "is a provision of a law of the Commonwealth (other than this Act); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/1/b",
+   "heading": null,
+   "text": "prohibits or regulates the use or disclosure of information.",
+   "canonical_text": "prohibits or regulates the use or disclosure of information.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/2",
+   "heading": null,
+   "text": "If compliance by an entity with paragraph 26WR(1)(b) or subsection 26WR(2) in relation to a statement would, to any extent, be inconsistent with a secrecy provision (other than a prescribed secrecy provision), paragraph 26WR(1)(b) or subsection 26WR(2), as the case may be, does not apply to the entity, in relation to the statement, to the extent of the inconsistency.",
+   "canonical_text": "If compliance by an entity with paragraph 26WR(1)(b) or subsection 26WR(2) in relation to a statement would, to any extent, be inconsistent with a secrecy provision (other than a prescribed secrecy provision), paragraph 26WR(1)(b) or subsection 26WR(2), as the case may be, does not apply to the entity, in relation to the statement, to the extent of the inconsistency.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/3",
+   "heading": null,
+   "text": "For the purposes of this section, prescribed secrecy provision means a secrecy provision that is specified in the regulations.",
+   "canonical_text": "For the purposes of this section, prescribed secrecy provision means a secrecy provision that is specified in the regulations.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/4",
+   "heading": null,
+   "text": "For the purposes of a prescribed secrecy provision: are taken not to be provisions that require or authorise the use or disclosure of information.",
+   "canonical_text": "For the purposes of a prescribed secrecy provision: are taken not to be provisions that require or authorise the use or disclosure of information.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/4/a",
+   "heading": null,
+   "text": "paragraph 26WR(1)(b); and",
+   "canonical_text": "paragraph 26WR(1)(b); and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/4/b",
+   "heading": null,
+   "text": "subsection 26WR(2);",
+   "canonical_text": "subsection 26WR(2);",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s26wt/5",
+   "heading": null,
+   "text": "If compliance by an entity with paragraph 26WR(1)(b) or subsection 26WR(2) in relation to a statement would, to any extent, be inconsistent with a prescribed secrecy provision, paragraph 26WR(1)(b) or subsection 26WR(2), as the case may be, does not apply to the entity in relation to the statement.",
+   "canonical_text": "If compliance by an entity with paragraph 26WR(1)(b) or subsection 26WR(2) in relation to a statement would, to any extent, be inconsistent with a prescribed secrecy provision, paragraph 26WR(1)(b) or subsection 26WR(2), as the case may be, does not apply to the entity in relation to the statement.",
    "canonicalisation_version": 2
   },
   {
@@ -3820,6 +5491,62 @@
    "heading": null,
    "text": "The Commissioner must make the register available to the public in the way that the Commissioner determines. However, the Commissioner must not make available to the public in the register information other than that described in subsection (3).",
    "canonical_text": "The Commissioner must make the register available to the public in the way that the Commissioner determines. However, the Commissioner must not make available to the public in the register information other than that described in subsection (3).",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/1",
+   "heading": null,
+   "text": "This Act applies, with the prescribed modifications (if any), in relation to an act or practice described in subsection (2) or (3) as if:",
+   "canonical_text": "This Act applies, with the prescribed modifications (if any), in relation to an act or practice described in subsection (2) or (3) as if:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/1/a",
+   "heading": null,
+   "text": "the act or practice were an act done, or practice engaged in, by an organisation; and",
+   "canonical_text": "the act or practice were an act done, or practice engaged in, by an organisation; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/1/b",
+   "heading": null,
+   "text": "the agency mentioned in that subsection were the organisation.",
+   "canonical_text": "the agency mentioned in that subsection were the organisation.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/2",
+   "heading": null,
+   "text": "Subsection (1) applies to acts done, and practices engaged in, by a prescribed agency. Regulations for this purpose may prescribe an agency only if it is specified in Part I of Schedule 2 to the Freedom of Information Act 1982.",
+   "canonical_text": "Subsection (1) applies to acts done, and practices engaged in, by a prescribed agency. Regulations for this purpose may prescribe an agency only if it is specified in Part I of Schedule 2 to the Freedom of Information Act 1982.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/3",
+   "heading": null,
+   "text": "Subsection (1) also applies to acts and practices that:",
+   "canonical_text": "Subsection (1) also applies to acts and practices that:",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/3/a",
+   "heading": null,
+   "text": "are done or engaged in by an agency specified in Division 1 of Part II of Schedule 2 to the Freedom of Information Act 1982 in relation to documents in respect of its commercial activities or the commercial activities of another entity; and",
+   "canonical_text": "are done or engaged in by an agency specified in Division 1 of Part II of Schedule 2 to the Freedom of Information Act 1982 in relation to documents in respect of its commercial activities or the commercial activities of another entity; and",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/3/b",
+   "heading": null,
+   "text": "relate to those commercial activities.",
+   "canonical_text": "relate to those commercial activities.",
+   "canonicalisation_version": 2
+  },
+  {
+   "clause_path": "s7a/4",
+   "heading": null,
+   "text": "This section has effect despite subparagraph 7(1)(a)(i), paragraph 7(1)(c) and subsection 7(2).",
+   "canonical_text": "This section has effect despite subparagraph 7(1)(a)(i), paragraph 7(1)(c) and subsection 7(2).",
    "canonicalisation_version": 2
   },
   {

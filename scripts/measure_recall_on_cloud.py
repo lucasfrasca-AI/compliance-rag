@@ -2,7 +2,7 @@
 its numbers come at least once from the store that will serve answers, not only
 from a container.
 
-Two measurements, both on the gate's corpus (the whole compilation's 779
+Two measurements, both on the gate's corpus (the whole compilation's 1023
 selected clauses, ADR-0043), so every difference below is cloud versus
 container on the same corpus:
 
