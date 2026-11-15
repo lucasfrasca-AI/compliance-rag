@@ -42,6 +42,11 @@ from compliance_rag.corpus.models import (
     sha256_hex,
     stable_id,
 )
+from compliance_rag.corpus.second_source import (
+    SecondSource,
+    second_sources_json,
+    second_sources_of_json,
+)
 
 
 class RevisionMode(StrEnum):
@@ -113,6 +118,9 @@ class RevisionPlan:
     added: tuple[ClauseRecord, ...]
     removed: tuple[RemovedClause, ...]
     unchanged: int
+    second_sources: tuple[SecondSource, ...] = ()
+    """The clauses whose text the parse completed from a second source of the
+    same compilation, and each source's sha256 (ADR-0058)."""
 
     @property
     def mode(self) -> RevisionMode:
@@ -156,6 +164,7 @@ def plan_revision(
     stored_texts: Mapping[str, str],
     stored_source_html_sha256: str,
     stored_incomplete: Mapping[str, Incomplete],
+    second_sources: Sequence[SecondSource] = (),
 ) -> RevisionPlan:
     """The plan, from a fresh parse (the clauses a selection keeps, of one
     version) and what is stored for `stored_version_id`: its manifest (path to
@@ -229,6 +238,7 @@ def plan_revision(
         added=added,
         removed=removed,
         unchanged=len(fresh) - len(changed) - len(added),
+        second_sources=tuple(second_sources),
     )
 
 
@@ -289,10 +299,18 @@ def check_acknowledgement(
         )
 
 
-def check_correction(plan: RevisionPlan, *, pinned_source_sha256: str) -> None:
+def check_correction(
+    plan: RevisionPlan,
+    *,
+    pinned_source_sha256: str,
+    pinned_second_sources: Mapping[str, str] | None = None,
+) -> None:
     """A correction is of the same law: the version's own pinned source,
-    parsed to the same anchored HTML, over the same clause set. Anything else
-    is refused, before the acknowledgement is looked at."""
+    parsed to the same anchored HTML, over the same clause set, and each
+    clause the parse completed from a second source completed from that
+    source's pinned bytes, and only those clauses (`pinned_second_sources`,
+    clause path to sha256, ADR-0058). Anything else is refused, before the
+    acknowledgement is looked at."""
     where = f"{plan.instrument_id}:{plan.version_id}"
     if plan.mode is not RevisionMode.CORRECT:
         raise RevisionRefused(
@@ -303,6 +321,15 @@ def check_correction(plan: RevisionPlan, *, pinned_source_sha256: str) -> None:
             f"{where}: the source parsed (sha256 {plan.source_sha256}) is not the version's "
             f"pinned source ({pinned_source_sha256}). A correction proves the law didn't change "
             "by being parsed from the same bytes; different bytes are a new compilation (amend)"
+        )
+    parsed = {s.clause_path: s.sha256 for s in plan.second_sources}
+    pinned = dict(pinned_second_sources or {})
+    if parsed != pinned:
+        raise RevisionRefused(
+            f"{where}: the parse completed {parsed} from a second source, but the version pins "
+            f"{pinned}. A clause's second source is the same compilation's other rendering, "
+            "pinned by its own sha256 (ADR-0058); other bytes, or a clause it doesn't pin, are "
+            "not a correction"
         )
     if plan.source_html_sha256 != plan.stored_source_html_sha256:
         raise RevisionRefused(
@@ -399,6 +426,10 @@ class RevisionRecord:
     corpus_tag: str | None
     findings_citing: int
     clauses: tuple[RevisedClause, ...] = field(default=())
+    second_sources: tuple[SecondSource, ...] = field(default=())
+    """The clauses the parse completed from a second source, with its sha256,
+    beside `source_sha256` (ADR-0058). Empty, and absent from the JSON, for
+    every revision of a version with one source."""
 
     def __post_init__(self) -> None:
         if not (self.by.strip() and self.reason.strip()):
@@ -436,7 +467,7 @@ class RevisionRecord:
         return self.clauses
 
     def to_json(self) -> dict[str, object]:
-        return {
+        document: dict[str, object] = {
             "revision_id": self.revision_id,
             "mode": self.mode.value,
             "instrument_id": self.instrument_id,
@@ -451,6 +482,11 @@ class RevisionRecord:
             "findings_citing": self.findings_citing,
             "clauses": {c.clause_path: c.to_json() for c in self.clauses},
         }
+        if self.second_sources:
+            # Only when there is one: a record of a one-source version reads as
+            # it did before ADR-0058.
+            document["second_sources"] = second_sources_json(self.second_sources)
+        return document
 
     @classmethod
     def from_json(cls, data: Mapping[str, object]) -> RevisionRecord:
@@ -470,13 +506,15 @@ class RevisionRecord:
             corpus_tag=cast("str | None", data["corpus_tag"]),
             findings_citing=int(cast("int", data["findings_citing"])),
             clauses=tuple(RevisedClause.from_json(path, entry) for path, entry in clauses.items()),
+            second_sources=second_sources_of_json(data.get("second_sources")),
         )
 
     def trail_entry(self, entry: RevisedClause) -> str:
         """What a corrected Clause node's `corrections` trail gains: the same
         shape as ADR-0031's (when, by, why, the previous value), plus the
         revision it belongs to and the source bytes it was parsed from. The
-        previous incompleteness is on it when that is what changed (ADR-0047)."""
+        previous incompleteness is on it when that is what changed (ADR-0047). A
+        clause completed from a second source names it too (ADR-0058)."""
         if entry.previous_sha256 is None:
             raise ValueError("only a corrected clause has a trail entry")
         previous: dict[str, object] = {"canonical_sha256": entry.previous_sha256}
@@ -491,9 +529,18 @@ class RevisionRecord:
                 "mode": self.mode.value,
                 "source_sha256": self.source_sha256,
                 "previous": previous,
-            },
+            }
+            | _second_source_of(self.second_sources, entry.clause_path),
             sort_keys=True,
         )
+
+
+def _second_source_of(sources: Sequence[SecondSource], clause_path: str) -> dict[str, object]:
+    """A trail entry's `second_source`, for a clause completed from one."""
+    for source in sources:
+        if source.clause_path == clause_path:
+            return {"second_source": source.to_json()}
+    return {}
 
 
 def check_revision_hashes(
@@ -613,6 +660,7 @@ def record_of(
         corpus_tag=corpus_tag,
         findings_citing=acknowledgement.findings_citing,
         clauses=tuple(clauses),
+        second_sources=plan.second_sources,
     )
 
 
