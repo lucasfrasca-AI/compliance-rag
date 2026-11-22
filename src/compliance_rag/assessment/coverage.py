@@ -17,10 +17,17 @@ an unknown node its unknown ones. So:
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import NamedTuple, cast
+from typing import Final, NamedTuple, cast
+
+OBLIGATION_ID_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]*")
+"""What an obligation id may be (`OB-PA-APP11-1`): no space, bracket, quote or
+newline, so an id cannot reshape the marker it is written into. Here, with the
+coverage that names the ids, so the ledger's records (`adapters/interfaces.py`)
+and the obligation digest hold one definition."""
 
 
 class Truth(StrEnum):

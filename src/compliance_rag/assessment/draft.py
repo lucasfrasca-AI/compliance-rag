@@ -44,6 +44,14 @@ class MalformedGeneration(ValueError):
     """The model's reply isn't a valid `DraftAnswer`; nothing in it is used."""
 
 
+def unfenced(text: str) -> str:
+    """The JSON inside a reply: the reply itself, or the body of the single
+    ```json fence models commonly wrap it in. Nothing else is stripped."""
+    body = text.strip()
+    fenced = _FENCED.match(body)
+    return fenced.group("body").strip() if fenced else body
+
+
 def parse_draft(text: str) -> DraftAnswer:
     """Strict: one JSON object matching `DraftAnswer`, optionally inside a
     single ```json fence — the one wrapper models commonly add. Anything else

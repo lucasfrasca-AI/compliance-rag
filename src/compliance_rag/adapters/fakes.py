@@ -18,6 +18,7 @@ from opentelemetry import trace
 from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
+    FINDINGS_RESERVATION_TTL,
     NO_PREFIX,
     RESERVATION_TTL,
     AccountDirectory,
@@ -28,11 +29,14 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    CheckNotExtracted,
     CheckRecord,
     ClaimExtractionRecord,
     ClauseStore,
     Embedder,
     ExtractionAlreadyReserved,
+    FindingsAlreadyReserved,
+    FindingsRecord,
     Generation,
     Generator,
     GraphStore,
@@ -55,6 +59,7 @@ from compliance_rag.adapters.interfaces import (
     check_chat_exchange,
     check_check_write,
     check_claims_write,
+    check_findings_write,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -434,6 +439,17 @@ class _Extraction:
     record: ClaimExtractionRecord | None
 
 
+@dataclass(frozen=True, slots=True)
+class _FindingsRun:
+    """A check's findings run as the fake holds it: reserved, then done or failed."""
+
+    status: str  # "pending", "done" or "failed"
+    reserved_at: dt.datetime
+    trace_id: str
+    """The request that holds the reservation: only it may complete or release it."""
+    record: FindingsRecord | None
+
+
 class FakeLedgerStore(LedgerStore):
     """Dictionaries keyed by tenant. Every row carries `tenant_id`."""
 
@@ -459,6 +475,7 @@ class FakeLedgerStore(LedgerStore):
         self._chats: dict[tuple[str, str], list[ChatTurn]] = {}  # (tenant, chat) -> its turns
         self._checks: dict[tuple[str, str], CheckRecord] = {}  # (tenant, check) -> the check
         self._extractions: dict[tuple[str, str], _Extraction] = {}  # the same key
+        self._findings_runs: dict[tuple[str, str], _FindingsRun] = {}  # the same key
         self._recorded_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
@@ -615,6 +632,85 @@ class FakeLedgerStore(LedgerStore):
     async def get_claims(self, tenant_id: str, check_id: str) -> ClaimExtractionRecord | None:
         held = self._extractions.get((tenant_id, check_id))
         return held.record if held is not None and held.status == "done" else None
+
+    async def reserve_findings(self, tenant_id: str, check_id: str, *, trace_id: str) -> None:
+        """No `await` between the read and the write, so of concurrent requests
+        one wins, as the database's single statement makes it."""
+        if not trace_id.strip() or not check_id.strip():
+            raise ValueError(
+                "a findings run carries the trace_id of its request and names its check"
+            )
+        key = (tenant_id, check_id)
+        if key not in self._checks:
+            raise ValueError(f"tenant {tenant_id!r} holds no check {check_id}")
+        extracted = self._extractions.get(key)
+        if extracted is None or extracted.status != "done":
+            raise CheckNotExtracted(f"check {check_id} has not been extracted")
+        held = self._findings_runs.get(key)
+        now = dt.datetime.now(dt.UTC)
+        if held is not None and not (
+            held.status == "failed"
+            or (held.status == "pending" and held.reserved_at < now - FINDINGS_RESERVATION_TTL)
+        ):
+            raise FindingsAlreadyReserved(f"check {check_id} already has its findings")
+        self._findings_runs[key] = _FindingsRun("pending", now, trace_id, None)
+
+    async def fail_findings(self, tenant_id: str, check_id: str, *, trace_id: str) -> None:
+        held = self._findings_runs.get((tenant_id, check_id))
+        if held is not None and held.status == "pending" and held.trace_id == trace_id:
+            self._findings_runs[(tenant_id, check_id)] = replace(held, status="failed")
+
+    async def record_findings(self, record: FindingsRecord) -> None:
+        """Checked before anything is stored, in Postgres' order: the one
+        transaction Postgres gives is all of it or none."""
+        assessment = record.assessment
+        extraction = self._extractions.get((assessment.tenant_id, assessment.check_id or ""))
+        claims = (
+            None
+            if extraction is None or extraction.record is None
+            else len(extraction.record.claims)
+        )
+        check_findings_write(record, claims)
+        assert assessment.check_id is not None  # check_findings_write refused a record without
+        key = (assessment.tenant_id, assessment.check_id)
+        held = self._findings_runs.get(key)
+        if held is None or held.status == "failed":
+            raise ValueError(f"check {assessment.check_id} has not been reserved")
+        if held.status == "done":
+            raise ValueError(f"check {assessment.check_id} already has its findings")
+        if held.trace_id != assessment.trace_id:
+            raise ValueError(
+                f"check {assessment.check_id}: the findings reservation is no longer this run's"
+            )
+        if assessment.tenant_id not in self._profiles:
+            raise ValueError(f"tenant {assessment.tenant_id!r} isn't registered in the ledger")
+        assessment_key = (assessment.tenant_id, assessment.assessment_id)
+        if assessment_key in self._assessments:
+            raise ValueError(f"assessment {assessment.assessment_id} is already recorded")
+        self._assessments[assessment_key] = assessment
+        self._coverage[assessment_key] = {row.obligation_id: row for row in record.coverage}
+        for finding in record.findings:
+            self._findings.append(
+                (assessment.tenant_id, tuple(c.clause_id for c in finding.citations))
+            )
+        self._usage.extend(record.usage)
+        self._findings_runs[key] = replace(held, status="done", record=record)
+
+    async def get_findings(self, tenant_id: str, check_id: str) -> FindingsRecord | None:
+        held = self._findings_runs.get((tenant_id, check_id))
+        if held is None or held.status != "done" or held.record is None:
+            return None
+        record = held.record
+        ordered = sorted(
+            record.findings,
+            key=lambda f: (
+                f.claim_index,
+                f.obligation_id is None,
+                f.obligation_id or f.policy_clause_id or "",
+            ),
+        )
+        coverage = tuple(sorted(record.coverage, key=lambda row: row.obligation_id))
+        return replace(record, findings=tuple(ordered), coverage=coverage)
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         turns = self._chats.get((tenant_id, chat_id), [])
