@@ -181,22 +181,29 @@ class PageError(Exception):
 
 
 def render(request: Request, name: str, *, status: int = 200, **context: object) -> HTMLResponse:
-    """Every page is drawn here, and `is_admin` (whether the nav links the admin
-    panel) is set here, from the one place that decides it: `page_caller`, which
-    records the reader's role on the request once. A page cannot forget it, and an
-    error page, drawn without a resolved reader, never shows the link. The flag
-    shows or hides a link and nothing else: the panel's routes check the role on
-    every request.
+    """Every page is drawn here, and `is_admin` (whether the sidebar links the
+    admin panel) is set here, from the one place that decides it: `page_caller`,
+    which records the reader's role on the request once. A page cannot forget it,
+    and an error page, drawn without a resolved reader, never shows the link. The
+    flag shows or hides a link and nothing else: the panel's routes check the role
+    on every request. The sidebar's email (`member_email`) comes from the same
+    place and is shown as text; `current_path` only marks the page's own link.
 
     The demo generator's banner (#292) is set here too, for the same reason: the
     one place every page and fragment is made, so none can lack it. `banner` is
     the page's (the deployment runs the demo); `fake_banner` is the words, for a
     turn the ledger records the demo as having written."""
     shown = bool(getattr(request.state, "is_admin", False))
+    email = getattr(request.state, "member_email", None)
     banner = banner_text(services_of(request).settings)
     return HTMLResponse(
         ENV.get_template(name).render(
-            is_admin=shown, banner=banner, fake_banner=FAKE_BANNER, **context
+            is_admin=shown,
+            member_email=email if isinstance(email, str) else None,
+            current_path=request.url.path,
+            banner=banner,
+            fake_banner=FAKE_BANNER,
+            **context,
         ),
         status_code=status,
         headers=PAGE_HEADERS,
@@ -252,6 +259,7 @@ async def page_caller(
         raise PageError(503, "Try again shortly", "Sign-in can't be checked right now.") from None
     caller = await current_caller(request, member)
     request.state.is_admin = is_admin(services_of(request).settings, caller.member.email)
+    request.state.member_email = caller.member.email
     return caller
 
 

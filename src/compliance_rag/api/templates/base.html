@@ -5,26 +5,61 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {#- htmx's defaults insert an inline <style> and allow eval; the CSP forbids both. -#}
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyEnabled":false}'>
-<title>{% block title %}{% endblock %} - Compliance Ask</title>
+<title>{% block title %}{% endblock %} - Contextum</title>
+<link rel="icon" type="image/png" href="/static/contextum-logo.png">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/banner.css">
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 {% include "_banner.html" %}
-<header class="bar">
-<a class="brand" href="/chats">Compliance Ask</a>
-<nav aria-label="Main">
-<a href="/chats">Chats</a>
-<a href="/chats/new">New chat</a>
-<a href="/checks/new">Check a document</a>
+{#- The Contextum shell (#353): a sidebar, the page's own <main> in the
+    centre, and a right-hand slot (`#sources`) a page may fill. Every page
+    extends this file, so its nav and role follow the reader (`render`). -#}
+{% macro nav_link(href, label, active) %}
+<a href="{{ href }}"{% if active %} aria-current="page"{% endif %}>{{ label }}</a>
+{% endmacro %}
+<div class="shell">
+<nav class="sidebar" aria-label="Main">
+<a class="brand" href="/chats">
+<span>Contextum</span>
+</a>
+<div class="nav-section">
+<p class="nav-heading">Ask</p>
+<ul>
+<li>{{ nav_link("/chats/new", "New chat", current_path == "/chats/new") }}</li>
+<li>{{ nav_link("/chats", "Chats", current_path == "/chats" or (current_path.startswith("/chats/") and current_path != "/chats/new")) }}</li>
+</ul>
+</div>
+<div class="nav-section">
+<p class="nav-heading">Check</p>
+<ul>
+<li>{{ nav_link("/checks/new", "Check a document", current_path == "/checks/new") }}</li>
+</ul>
+</div>
 {% if is_admin %}
-<a href="/admin/subscriptions">Subscriptions</a>
-<a href="/admin/questionnaire">Questionnaire</a>
+<div class="nav-section">
+<p class="nav-heading">Admin</p>
+<ul>
+<li>{{ nav_link("/admin/subscriptions", "Subscriptions", current_path.startswith("/admin/subscriptions")) }}</li>
+<li>{{ nav_link("/admin/questionnaire", "Questionnaire", current_path.startswith("/admin/questionnaire")) }}</li>
+</ul>
+</div>
+{% endif %}
+<div class="me">
+{% if member_email %}
+<span class="avatar" aria-hidden="true">{{ member_email[:1] | upper }}</span>
+<span class="me-email">{{ member_email }}</span>
 {% endif %}
 <button type="button" class="link" data-sign-out>Sign out</button>
+</div>
 </nav>
-</header>
+<div class="workspace">
 {% block body %}{% endblock %}
+{#- The right-hand slot. A page fills it (the chat's citation area now; the
+    shared Sources panel, #354, next); empty, it takes no room. -#}
+<aside id="sources" class="sources" aria-label="Sources">{% block sources %}{% endblock %}</aside>
+</div>
+</div>
 <script src="/static/vendor/htmx/htmx.min.js" defer></script>
 <script type="module" src="/static/ask.js"></script>
 </body>

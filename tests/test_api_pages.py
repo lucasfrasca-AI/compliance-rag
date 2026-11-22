@@ -993,6 +993,7 @@ async def test_no_page_has_an_inline_script_handler_style_or_a_foreign_asset(quo
         "/static/vendor/htmx/htmx.min.js",
     ]
     assert [a["href"] for a in chat.where("link")] == [
+        "/static/contextum-logo.png",  # the favicon (#353)
         "/static/app.css",
         "/static/banner.css",
     ]
@@ -1095,4 +1096,6 @@ async def test_the_pages_are_made_for_a_phone(member: httpx.AsyncClient) -> None
     assert re.findall(r"@media \((min|max)-width: [\d.]+rem\)", css) == ["min"]
     assert not re.search(r"(?<!-)width:\s*\d+(\.\d+)?px", css) and "min-width: 3" not in css
     assert "overflow-wrap: anywhere" in css  # a long clause id can't widen the page
-    assert "position: fixed" in css  # the panel is a sheet over the screen until there's room
+    # the shell is a top bar and the citation slot stacks under the page until
+    # there's room (#353): the one width query is the sidebar's column
+    assert "@media (min-width: 60rem)" in css and "grid-template-columns: var(--sidebar-w)" in css
