@@ -55,6 +55,7 @@ from compliance_rag.adapters.interfaces import (
     RemovalAuditEntry,
     ReplyKind,
     Reranker,
+    Reservation,
     RetrievalAdmin,
     RetrievalResult,
     RetrievalStore,
@@ -65,6 +66,7 @@ from compliance_rag.adapters.interfaces import (
     check_check_write,
     check_claims_write,
     check_findings_write,
+    check_run_of,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -606,15 +608,6 @@ class FakeLedgerStore(LedgerStore):
             raise ValueError(f"limit is 1 to {CHECK_PAGE_MAX}, not {limit}")
         now = dt.datetime.now(dt.UTC)
 
-        def run_of(held: _Extraction | _FindingsRun | None, ttl: dt.timedelta) -> CheckRun | None:
-            if held is None:
-                return None
-            if held.status == "failed":
-                return CheckRun.FAILED
-            if held.status == "pending" and held.reserved_at >= now - ttl:
-                return CheckRun.RUNNING
-            return None
-
         rows: list[CheckListing] = []
         for (tenant, check_id), record in self._checks.items():
             if tenant != tenant_id or not record.visible_to(uid, admin=admin):
@@ -623,11 +616,21 @@ class FakeLedgerStore(LedgerStore):
             extraction = self._extractions.get((tenant, check_id))
             findings = self._findings_runs.get((tenant, check_id))
             if findings is not None and findings.status == "done":
-                stage, run = CheckStage.FINDINGS, None
+                stage = CheckStage.FINDINGS
             elif extraction is not None and extraction.status == "done":
-                stage, run = CheckStage.CLAIMS, run_of(findings, FINDINGS_RESERVATION_TTL)
+                stage = CheckStage.CLAIMS
             else:
-                stage, run = CheckStage.SUBMITTED, run_of(extraction, RESERVATION_TTL)
+                stage = CheckStage.SUBMITTED
+            run = check_run_of(
+                None
+                if extraction is None
+                else Reservation(extraction.status, extraction.reserved_at < now - RESERVATION_TTL),
+                None
+                if findings is None
+                else Reservation(
+                    findings.status, findings.reserved_at < now - FINDINGS_RESERVATION_TTL
+                ),
+            )
             rows.append(
                 CheckListing(
                     check_id=check_id,
@@ -771,6 +774,22 @@ class FakeLedgerStore(LedgerStore):
         )
         coverage = tuple(sorted(record.coverage, key=lambda row: row.obligation_id))
         return replace(record, findings=tuple(ordered), coverage=coverage)
+
+    async def check_run(self, tenant_id: str, check_id: str) -> CheckRun:
+        now = dt.datetime.now(dt.UTC)
+        key = (tenant_id, check_id)
+        extraction = self._extractions.get(key)
+        findings = self._findings_runs.get(key)
+        return check_run_of(
+            None
+            if extraction is None
+            else Reservation(extraction.status, extraction.reserved_at < now - RESERVATION_TTL),
+            None
+            if findings is None
+            else Reservation(
+                findings.status, findings.reserved_at < now - FINDINGS_RESERVATION_TTL
+            ),
+        )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         turns = self._chats.get((tenant_id, chat_id), [])

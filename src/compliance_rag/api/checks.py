@@ -4,9 +4,10 @@
 stores it as a `submitted_document` through `CorpusLifecycle.submit_document`
 and nothing else (#296: no store is written from here), then records the check
 in the ledger. **No model is called**: claim extraction is its own request
-(`check_claims.py`, #298), and findings (#299) and the report (#300) are later
-tickets. `GET /v1/checks/{id}` reads the stored
-document back, passage by passage. The pages are `check_pages.py`'s.
+(`check_claims.py`, #298) and findings another (`check_findings.py`, #299).
+`GET /v1/checks/{id}` reads the stored
+document back, passage by passage, with its claims and its report once it has them
+(`check_report.py`, which owns that route, #300). The pages are `check_pages.py`'s.
 
 **The request has no `synthetic` field** (#78, ADR-0026). The body is
 `{filename, content, title?}` and refuses any other key (422), so an upload
@@ -398,24 +399,4 @@ def passage_json(p: ClauseRecord) -> dict[str, object]:
         "text": p.text,
         "char_start": p.char_start,
         "char_end": p.char_end,
-    }
-
-
-@router.get("/checks/{check_id}")
-async def get_check(request: Request, who: CurrentCaller, check_id: str) -> dict[str, object]:
-    view = await read_check(services_of(request), who, check_id)
-    if view is None:
-        raise HTTPException(404, NOT_FOUND)
-    record = view.record
-    return {
-        "check_id": record.check_id,
-        "title": view.title,
-        "filename": record.filename,
-        "format": record.document_format.value,
-        "submitted_at": record.created_at.isoformat() if record.created_at else None,
-        "mine": view.mine,
-        "href": f"/checks/{record.check_id}",
-        "source_href": source_path(record.instrument_id),
-        "trace_id": record.trace_id,
-        "passages": [passage_json(p) for p in view.passages],
     }

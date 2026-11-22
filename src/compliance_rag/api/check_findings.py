@@ -225,6 +225,14 @@ async def findings_json(
 ) -> dict[str, object]:
     """A recorded findings run as a member is shown it: one builder for the
     stream's `findings` event and for `GET`, so the two cannot drift."""
+    return (await findings_with_titles(services, tenant_id, check_id, record))[0]
+
+
+async def findings_with_titles(
+    services: ApiServices, tenant_id: str, check_id: str, record: FindingsRecord
+) -> tuple[dict[str, object], Titles]:
+    """`findings_json`, and the policy titles it read (one read per render), for a caller
+    that names the same policies again (the report's banner and coverage statement)."""
     assessment = record.assessment
     rows = {r.obligation_id: r for r in record.coverage}
     cited = {c.clause_id for f in record.findings for c in f.citations}
@@ -236,7 +244,7 @@ async def findings_json(
     titles = await services.ledger.version_titles(tenant_id, cited_policy_versions(named))
     texts = await _canonical_texts(services, cited)
     tally = {o.value: sum(f.outcome is o for f in record.findings) for o in FindingOutcome}
-    return {
+    payload: dict[str, object] = {
         "check_id": check_id,
         "assessment_id": assessment.assessment_id,
         "as_of": assessment.as_of.isoformat(),
@@ -266,6 +274,7 @@ async def findings_json(
             for d in policy_disagreements(record.findings)
         ],
     }
+    return payload, titles
 
 
 @router.post("/checks/{check_id}/findings")

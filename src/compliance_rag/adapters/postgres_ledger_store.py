@@ -57,12 +57,14 @@ from compliance_rag.adapters.interfaces import (
     FindingsAlreadyReserved,
     FindingsRecord,
     LedgerStore,
+    PolicyChecked,
     PolicyVersion,
     PrefixMeasure,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
     RemovalOutcome,
+    Reservation,
     SourceKind,
     SourceVersion,
     StoredNotInEnvironment,
@@ -80,6 +82,7 @@ from compliance_rag.adapters.interfaces import (
     check_check_write,
     check_claims_write,
     check_findings_write,
+    check_run_of,
 )
 from compliance_rag.assessment.coverage import (
     CoverageRow,
@@ -346,14 +349,6 @@ def _claim_of_row(row: TupleRow) -> ClaimRecord:
     )
 
 
-def _run_of(status: object, fresh: bool) -> CheckRun | None:
-    """A reservation's state for a list (`CheckRun`): failed, or pending and not
-    yet past its time-out; a stale pending one is neither (its request died)."""
-    if status == "failed":
-        return CheckRun.FAILED
-    return CheckRun.RUNNING if status == "pending" and fresh else None
-
-
 def _check_of_row(row: TupleRow) -> CheckRecord:
     return CheckRecord(
         tenant_id=str(row[0]),
@@ -368,6 +363,13 @@ def _check_of_row(row: TupleRow) -> CheckRecord:
     )
 
 
+def _policies_json(policies: tuple[PolicyChecked, ...]) -> list[dict[str, str]]:
+    return [
+        {"instrument_id": x.instrument_id, "version_id": x.version_id, "title": x.title}
+        for x in policies
+    ]
+
+
 async def _write_assessment(
     conn: psycopg.AsyncConnection[TupleRow], record: AssessmentRecord, rows: tuple[CoverageRow, ...]
 ) -> None:
@@ -375,7 +377,7 @@ async def _write_assessment(
     await conn.execute(
         "INSERT INTO assessment (tenant_id, assessment_id, user_id, corpus_version, "
         "corpus_sha, mapping_version, mapping_sha, as_of, trace_id, check_id, facts, "
-        "facts_sha256) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "facts_sha256, policies) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             record.tenant_id,
             record.assessment_id,
@@ -389,6 +391,7 @@ async def _write_assessment(
             record.check_id,
             None if record.facts is None else Jsonb(record.facts.json()),
             None if record.facts is None else record.facts.sha256,
+            None if record.policies is None else Jsonb(_policies_json(record.policies)),
         ),
     )
     async with conn.cursor() as cursor:
@@ -679,7 +682,7 @@ class PostgresLedgerStore(LedgerStore):
     async def get_assessment(self, tenant_id: str, assessment_id: str) -> AssessmentRecord | None:
         row = await self._fetchone(
             "SELECT user_id, corpus_version, corpus_sha, mapping_version, mapping_sha, as_of, "
-            "trace_id, check_id, facts, facts_sha256 FROM assessment "
+            "trace_id, check_id, facts, facts_sha256, policies FROM assessment "
             "WHERE tenant_id = %s AND assessment_id = %s",
             (tenant_id, assessment_id),
         )
@@ -823,11 +826,11 @@ class PostgresLedgerStore(LedgerStore):
         # One read: the stage and the run state come from two LEFT JOINs on the
         # reservations' primary keys, the title from the version the foreign key
         # guarantees, so the number of checks never changes the number of queries.
-        # The order is `submitted_check_listing`'s (0027).
+        # The order is the indexes' of migration 0028.
         select: LiteralString = (
             "SELECT c.check_id, c.user_id, c.filename, v.title, c.created_at, "
-            "e.status, e.status = 'pending' AND e.reserved_at >= clock_timestamp() - %s, "
-            "f.status, f.status = 'pending' AND f.reserved_at >= clock_timestamp() - %s "
+            "e.status, e.reserved_at < clock_timestamp() - %s, "
+            "f.status, f.reserved_at < clock_timestamp() - %s "
             "FROM submitted_check c "
             "JOIN instrument_version v ON (v.tenant_id, v.instrument_id, v.version_id) = "
             "(c.tenant_id, c.instrument_id, c.version_id) "
@@ -857,13 +860,14 @@ class PostgresLedgerStore(LedgerStore):
         rows = await self._fetchall(sql + order, tuple(params))
         listings: list[CheckListing] = []
         for r in rows:
-            extraction, extracting, findings, finding = r[5], r[6], r[7], r[8]
-            if findings == "done":
-                stage, run = CheckStage.FINDINGS, None
-            elif extraction == "done":
-                stage, run = CheckStage.CLAIMS, _run_of(findings, bool(finding))
+            extraction = None if r[5] is None else Reservation(str(r[5]), bool(r[6]))
+            findings = None if r[7] is None else Reservation(str(r[7]), bool(r[8]))
+            if findings is not None and findings.status == "done":
+                stage = CheckStage.FINDINGS
+            elif extraction is not None and extraction.status == "done":
+                stage = CheckStage.CLAIMS
             else:
-                stage, run = CheckStage.SUBMITTED, _run_of(extraction, bool(extracting))
+                stage = CheckStage.SUBMITTED
             listings.append(
                 CheckListing(
                     check_id=str(r[0]),
@@ -872,7 +876,7 @@ class PostgresLedgerStore(LedgerStore):
                     title=str(r[3]),
                     created_at=r[4],
                     stage=stage,
-                    run=run,
+                    run=check_run_of(extraction, findings),
                 )
             )
         return tuple(listings)
@@ -1149,13 +1153,30 @@ class PostgresLedgerStore(LedgerStore):
         except (psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation) as exc:
             raise ValueError(f"findings refused: {exc.diag.constraint_name}") from None
 
+    async def check_run(self, tenant_id: str, check_id: str) -> CheckRun:
+        extraction = await self._fetchone(
+            "SELECT status, reserved_at < clock_timestamp() - %s FROM check_extraction "
+            "WHERE tenant_id = %s AND check_id = %s",
+            (RESERVATION_TTL, tenant_id, check_id),
+        )
+        findings = await self._fetchone(
+            "SELECT status, reserved_at < clock_timestamp() - %s FROM check_findings_run "
+            "WHERE tenant_id = %s AND check_id = %s",
+            (FINDINGS_RESERVATION_TTL, tenant_id, check_id),
+        )
+        return check_run_of(
+            None if extraction is None else Reservation(str(extraction[0]), bool(extraction[1])),
+            None if findings is None else Reservation(str(findings[0]), bool(findings[1])),
+        )
+
     async def get_findings(self, tenant_id: str, check_id: str) -> FindingsRecord | None:
         async with self._connection() as conn:
             head = await (
                 await conn.execute(
                     "SELECT a.assessment_id, a.user_id, a.corpus_version, a.corpus_sha, "
                     "a.mapping_version, a.mapping_sha, a.as_of, a.trace_id, a.check_id, "
-                    "a.facts, a.facts_sha256 FROM assessment a JOIN check_findings_run r "
+                    "a.facts, a.facts_sha256, a.policies FROM assessment a "
+                    "JOIN check_findings_run r "
                     "ON r.tenant_id = a.tenant_id AND r.check_id = a.check_id "
                     "WHERE a.tenant_id = %s AND a.check_id = %s AND r.status = 'done'",
                     (tenant_id, check_id),
@@ -1603,4 +1624,12 @@ def assessment_from_row(tenant_id: str, assessment_id: str, row: TupleRow) -> As
         facts=FactsSnapshot.of_json(row[8], str(row[9]))
         if len(row) > 9 and row[8] is not None
         else None,
+        policies=_policies_of_json(row[10]) if len(row) > 10 and row[10] is not None else None,
+    )
+
+
+def _policies_of_json(value: object) -> tuple[PolicyChecked, ...]:
+    return tuple(
+        PolicyChecked(str(x["instrument_id"]), str(x["version_id"]), str(x["title"]))
+        for x in cast("list[dict[str, object]]", value)
     )

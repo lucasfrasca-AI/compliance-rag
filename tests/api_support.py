@@ -202,3 +202,26 @@ def fake_api_services(**fields: Any) -> ApiServices:  # Any: ApiServices fields
         ),
     }
     return ApiServices(**{**defaults, **fields})
+
+
+FORBIDDEN_JS_APIS = (
+    "innerHTML",
+    "outerHTML",
+    "insertAdjacentHTML",
+    "document.write",
+    "eval(",
+    "new Function",
+    "createContextualFragment",
+    "DOMParser",
+)
+"""What a page's script never uses: every way of turning a string into markup or code. Text
+from the server goes in with `textContent`, and the one HTML that reaches a page is htmx's swap
+of the server's own autoescaped fragment."""
+
+
+def assert_script_writes_no_html(script: str) -> None:
+    """The one check every served script is held to (ask.js, checks.js, check_run.js, admin.js):
+    none of `FORBIDDEN_JS_APIS`, and no absolute URL."""
+    for forbidden in FORBIDDEN_JS_APIS:
+        assert forbidden not in script, forbidden
+    assert "http://" not in script and "https://" not in script

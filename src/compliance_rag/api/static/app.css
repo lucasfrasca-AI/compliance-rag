@@ -404,3 +404,35 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .pill-quiet { color: var(--muted); background: none; border-color: var(--line); }
 .chat-list .pill { margin: 0 0.4rem 0 0; padding: 0.05rem 0.6rem; }
 .pager { display: flex; gap: 1rem; }
+/* The findings report (#300). Scoped to `.report`, so the shell is untouched. One column
+   on a phone; the shell's right-hand slot (`#sources`) holds the cited clauses. */
+.report { min-width: 0; }
+.report .count { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
+.report h2 { margin-top: 1.5rem; }
+.report .claim { margin: 0.4rem 0; }
+.report .claim-quote { font-style: normal; }
+.report .claim-quote::before { content: "\201C"; }
+.report .claim-quote::after { content: "\201D"; }
+.report .target { margin: 0.4rem 0; }
+.report .settle { background: var(--warn-bg); border-radius: 6px; padding: 0.4rem 0.7rem; }
+.report .finding[data-verdict="conflicts"] { border-left-color: var(--bad); }
+.report .finding[data-verdict="not_addressed"] { border-left-color: var(--warn); }
+.report .finding[data-verdict="ambiguous"] { border-left-color: var(--warn); }
+.report .finding[data-verdict="consistent"] { border-left-color: var(--ok); }
+.report .finding[data-verdict="conflicts"] .verdict { color: var(--bad); }
+.report .finding[data-verdict="consistent"] .verdict { color: var(--ok); }
+.report .finding[data-verdict="not_addressed"] .verdict,
+.report .finding[data-verdict="ambiguous"] .verdict { color: var(--warn); }
+.report .disagreement { border-left-color: var(--bad); background: var(--bad-bg); }
+.report .disagreement ul { padding-left: 1.1rem; }
+.report .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.report .questions { margin: 0.25rem 0; padding-left: 1.1rem; }
+.report .coverage h3 { margin-top: 0.9rem; }
+.report .coverage ul { margin: 0.25rem 0; padding-left: 1.1rem; }
+.report .run .row { margin: 0.5rem 0; }
+.report .document { margin-top: 2rem; }
+.report .passage mark.quoted { background: var(--warn-bg); color: inherit; border-radius: 3px; padding: 0 0.1rem; }
+
+#sources .clause-text { white-space: pre-wrap; margin: 0.4rem 0; }
+#sources .source { scroll-margin-top: 4rem; }
+#sources .source:target { outline: 3px solid var(--gold); }

@@ -44,12 +44,14 @@ from compliance_rag.adapters.interfaces import (
     FindingsAlreadyReserved,
     FindingsRecord,
     LedgerStore,
+    PolicyChecked,
     PolicyVersion,
     PrefixMeasure,
     Profile,
     RemovalAction,
     RemovalAuditEntry,
     RemovalOutcome,
+    RunStage,
     SourceKind,
     SourceVersion,
     TurnOutcome,
@@ -1418,6 +1420,13 @@ def findings_coverage() -> tuple[CoverageRow, ...]:
     )
 
 
+POLICIES = (
+    PolicyChecked("acme/marketing-policy", "v1", "Acme Pty Ltd — Marketing Policy (Internal)"),
+    PolicyChecked("acme/privacy-policy", "v1", "Acme Pty Ltd — Privacy Policy"),
+)
+"""The policy versions a run sent in its prefix: recorded with its assessment (#300)."""
+
+
 def a_findings_run(
     check_id: str = "c" * 32, *findings: FindingRecord, **changes: Any
 ) -> FindingsRecord:  # Any: record fields
@@ -1431,6 +1440,7 @@ def a_findings_run(
         trace_id=changes.pop("trace_id", "a" * 32),
         check_id=check_id,
         facts=changes.pop("facts", FACTS),
+        policies=changes.pop("policies", POLICIES),
     )
     fields: dict[str, Any] = {  # Any: record fields
         "assessment": assessment,
@@ -1557,6 +1567,9 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
         ("foreign_usage", "tenant's"),
         ("no_check", "check it judged"),
         ("no_facts", "facts it was decided on"),
+        ("no_policies", "policy versions it sent"),
+        ("a_policy_version_twice", "once"),
+        ("a_policy_with_no_title", "id, version and title"),
     ):
         base = a_findings_run(check_1)
         findings = list(base.findings)
@@ -1608,6 +1621,17 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
             run = replace(base, assessment=replace(base.assessment, check_id=None))
         elif change == "no_facts":
             run = replace(base, assessment=replace(base.assessment, facts=None))
+        elif change == "no_policies":
+            run = replace(base, assessment=replace(base.assessment, policies=None))
+        elif change == "a_policy_version_twice":
+            run = replace(base, assessment=replace(base.assessment, policies=POLICIES * 2))
+        elif change == "a_policy_with_no_title":
+            run = replace(
+                base,
+                assessment=replace(
+                    base.assessment, policies=(PolicyChecked("acme/privacy-policy", "v1", " "),)
+                ),
+            )
         elif change == "withheld_with_a_failure_reason":
             findings[3] = replace(findings[3], detail=FailureReason.NO_FINDING_RETURNED)
         if findings != list(base.findings):
@@ -1632,6 +1656,8 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
     # the facts the run was decided on come back as written, and are what they hashed
     assert stored.assessment.facts == FACTS
     assert stored.assessment.facts is not None and stored.assessment.facts.sha256 == FACTS.sha256
+    # and the policy versions it sent, with their titles as recorded then (#300, F7)
+    assert stored.assessment.policies == POLICIES
     assert (await ledger.get_assessment("acme", run.assessment.assessment_id)) is not None
     assert stored.coverage == tuple(sorted(run.coverage, key=lambda r: r.obligation_id))
     ordered = sorted(
@@ -1733,6 +1759,58 @@ async def assert_findings_contract(ledger: LedgerStore) -> None:
     assert await ledger.get_findings("acme", check_3) is not None
 
 
+async def assert_check_run_contract(ledger: LedgerStore) -> None:
+    """Where a check's run stands, from its reservations (#300): the stage reserved and
+    within its time-out is running; a failed or abandoned one is failed; a done run is
+    neither. Reads only."""
+    await _a_checked_document(ledger)
+    check = "c" * 32
+    assert await ledger.check_run("acme", check) == CheckRun()  # not started
+    assert await ledger.check_run("other-corp", check) == CheckRun()  # not this tenant's
+    await ledger.reserve_extraction("acme", check, as_of=JUN, trace_id="a" * 32)
+    assert await ledger.check_run("acme", check) == CheckRun(running=RunStage.CLAIMS)
+    await ledger.fail_extraction("acme", check)
+    assert await ledger.check_run("acme", check) == CheckRun(failed=RunStage.CLAIMS)
+    await ledger.reserve_extraction("acme", check, as_of=JUN, trace_id="b" * 32)
+    await ledger.record_claims(an_extraction(trace_id="b" * 32))
+    assert await ledger.check_run("acme", check) == CheckRun()  # extracted, findings not begun
+    await ledger.reserve_findings("acme", check, trace_id="c" * 32)
+    assert await ledger.check_run("acme", check) == CheckRun(running=RunStage.FINDINGS)
+    await ledger.fail_findings("acme", check, trace_id="c" * 32)
+    assert await ledger.check_run("acme", check) == CheckRun(failed=RunStage.FINDINGS)
+    await ledger.reserve_findings("acme", check, trace_id="d" * 32)
+    await ledger.record_findings(a_findings_run(check, usage=(), trace_id="d" * 32))
+    assert await ledger.check_run("acme", check) == CheckRun()  # done: nothing running or failed
+    assert await ledger.check_run("other-corp", check) == CheckRun()
+
+
+async def test_the_fake_ledger_satisfies_the_check_run_contract() -> None:
+    await assert_check_run_contract(FakeLedgerStore())
+
+
+async def test_a_reservation_pending_past_its_time_out_is_failed_not_running() -> None:
+    """The one rule is `check_run_of`: a request that died holding a reservation is not a
+    run in progress, so the page offers the run again (it may be taken over)."""
+    ledger = FakeLedgerStore()
+    await _a_checked_document(ledger)
+    check = "c" * 32
+    await ledger.reserve_extraction("acme", check, as_of=JUN, trace_id="a" * 32)
+    key = ("acme", check)
+    held = ledger._extractions[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._extractions[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        held, reserved_at=held.reserved_at - RESERVATION_TTL - dt.timedelta(seconds=1)
+    )
+    assert await ledger.check_run("acme", check) == CheckRun(failed=RunStage.CLAIMS)
+    await ledger.reserve_extraction("acme", check, as_of=JUN, trace_id="b" * 32)
+    await ledger.record_claims(an_extraction(trace_id="b" * 32))
+    await ledger.reserve_findings("acme", check, trace_id="c" * 32)
+    findings = ledger._findings_runs[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._findings_runs[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        findings, reserved_at=findings.reserved_at - FINDINGS_RESERVATION_TTL - dt.timedelta(1)
+    )
+    assert await ledger.check_run("acme", check) == CheckRun(failed=RunStage.FINDINGS)
+
+
 async def test_the_fake_ledger_satisfies_the_findings_contract() -> None:
     await assert_findings_contract(FakeLedgerStore())
 
@@ -1827,13 +1905,13 @@ async def assert_check_list_contract(ledger: LedgerStore) -> None:
     everything = await ledger.list_checks("acme", "admin-uid", admin=True, limit=50)
     assert [c.check_id for c in everything] == [ids[n] for n in (7, 6, 5, 4, 3, 2, 1)]
     assert [(c.title, c.stage, c.run) for c in everything] == [
-        ("Eta", CheckStage.CLAIMS, CheckRun.FAILED),
-        ("Zeta", CheckStage.CLAIMS, CheckRun.RUNNING),
-        ("Epsilon", CheckStage.SUBMITTED, CheckRun.FAILED),
-        ("Delta", CheckStage.SUBMITTED, CheckRun.RUNNING),
-        ("Gamma", CheckStage.FINDINGS, None),
-        ("Beta", CheckStage.CLAIMS, None),
-        ("Alpha", CheckStage.SUBMITTED, None),
+        ("Eta", CheckStage.CLAIMS, CheckRun(failed=RunStage.FINDINGS)),
+        ("Zeta", CheckStage.CLAIMS, CheckRun(running=RunStage.FINDINGS)),
+        ("Epsilon", CheckStage.SUBMITTED, CheckRun(failed=RunStage.CLAIMS)),
+        ("Delta", CheckStage.SUBMITTED, CheckRun(running=RunStage.CLAIMS)),
+        ("Gamma", CheckStage.FINDINGS, CheckRun()),
+        ("Beta", CheckStage.CLAIMS, CheckRun()),
+        ("Alpha", CheckStage.SUBMITTED, CheckRun()),
     ]
     assert everything[0].user_id == "uid-2" and everything[0].filename == "file-7.md"
     stamps = [c.created_at for c in everything]
@@ -1890,29 +1968,30 @@ async def assert_check_list_contract(ledger: LedgerStore) -> None:
     own_finding = a_verdict(1, finding_id="f6" + "0" * 30, obligation_id="OB-PA-APP11-1")
     await ledger.record_findings(a_findings_run(ids[6], own_finding, usage=(), trace_id="b" * 32))
     done = {c.check_id: c for c in await ledger.list_checks("acme", "uid-1", admin=False, limit=9)}
-    assert (done[ids[6]].stage, done[ids[6]].run) == (CheckStage.FINDINGS, None)
+    assert (done[ids[6]].stage, done[ids[6]].run) == (CheckStage.FINDINGS, CheckRun())
     # a failed extraction, run again to its end, is claims
     await ledger.reserve_extraction("acme", ids[5], as_of=JUN, trace_id="b" * 32)
     await ledger.record_claims(an_extraction(check_id=ids[5], trace_id="b" * 32))
     again = {c.check_id: c for c in await ledger.list_checks("acme", "uid-2", admin=False, limit=9)}
-    assert (again[ids[5]].stage, again[ids[5]].run) == (CheckStage.CLAIMS, None)
+    assert (again[ids[5]].stage, again[ids[5]].run) == (CheckStage.CLAIMS, CheckRun())
 
 
 async def test_the_fake_ledger_satisfies_the_check_list_contract() -> None:
     await assert_check_list_contract(FakeLedgerStore())
 
 
-async def test_the_fake_ledger_does_not_call_a_reservation_past_its_time_out_running() -> None:
-    """A request that died holding a reservation is not running anything (`CheckRun`)."""
+async def test_the_fake_ledger_lists_a_reservation_past_its_time_out_as_not_running() -> None:
+    """A request that died holding a reservation is not running anything: the list says
+    what `check_run_of` says, that the run was abandoned and may be made again."""
     ledger = FakeLedgerStore()
     await _a_checked_document(ledger)
     await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="a" * 32)
     (row,) = await ledger.list_checks("acme", "uid-1", admin=False, limit=5)
-    assert (row.stage, row.run) == (CheckStage.SUBMITTED, CheckRun.RUNNING)
+    assert (row.stage, row.run) == (CheckStage.SUBMITTED, CheckRun(running=RunStage.CLAIMS))
     key = ("acme", "c" * 32)
     held = ledger._extractions[key]  # pyright: ignore[reportPrivateUsage]
     ledger._extractions[key] = replace(  # pyright: ignore[reportPrivateUsage]
         held, reserved_at=held.reserved_at - RESERVATION_TTL - dt.timedelta(seconds=1)
     )
     (row,) = await ledger.list_checks("acme", "uid-1", admin=False, limit=5)
-    assert (row.stage, row.run) == (CheckStage.SUBMITTED, None)
+    assert (row.stage, row.run) == (CheckStage.SUBMITTED, CheckRun(failed=RunStage.CLAIMS))

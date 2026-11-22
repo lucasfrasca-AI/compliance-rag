@@ -68,6 +68,7 @@ from tests.api_support import (
     SECOND,
     TENANT,
     api_settings,
+    assert_script_writes_no_html,
     bearer,
     fake_api_services,
     mint,
@@ -941,9 +942,7 @@ async def test_the_check_pages_hold_no_inline_script_handler_or_style(sydney: Wo
 
 def test_checks_js_never_writes_html() -> None:
     script = (STATIC_DIR / "checks.js").read_text()
-    for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
-        assert forbidden not in script, forbidden
-    assert "http://" not in script and "https://" not in script
+    assert_script_writes_no_html(script)
     assert 'fetch("/v1/checks"' in script
     # the limit is the server's, handed over by the template, not written twice
     assert "204800" not in script and "200 KiB" not in script

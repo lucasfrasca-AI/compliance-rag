@@ -52,7 +52,16 @@ from compliance_rag.graph.mappings import MappingSet
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
 from compliance_rag.settings import Settings
 from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifier
-from tests.api_support import MEMBER, SECOND, TENANT, api_settings, bearer, fake_api_services, mint
+from tests.api_support import (
+    MEMBER,
+    SECOND,
+    TENANT,
+    api_settings,
+    assert_script_writes_no_html,
+    bearer,
+    fake_api_services,
+    mint,
+)
 
 SECRET = "s3cr3t-" + "k" * 40
 ORIGIN = "https://api"
@@ -541,18 +550,7 @@ async def test_a_hostile_id_in_the_url_is_echoed_as_text_if_at_all(admin: World)
 
 def test_admin_js_never_writes_html_and_is_not_inline() -> None:
     script = (STATIC_DIR / "admin.js").read_text()
-    for forbidden in (
-        "innerHTML",
-        "outerHTML",
-        "insertAdjacentHTML",
-        "document.write",
-        "eval(",
-        "new Function",
-        "createContextualFragment",
-        "DOMParser",
-    ):
-        assert forbidden not in script, forbidden
-    assert "http://" not in script and "https://" not in script
+    assert_script_writes_no_html(script)
 
 
 async def test_the_panel_is_made_for_a_phone(admin: World) -> None:

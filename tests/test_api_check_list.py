@@ -4,9 +4,10 @@ sidebar's Checks link with the reader's five latest under it.
 Everything is real but the stores, which are the fakes (`test_api_checks.py`'s
 world, through `test_api_pages.client_for`). The members are `lead@acme.example`
 (an admin, uid `uid-123`), `second@acme.example` (uid `uid-second`, not an admin)
-and a third reader, who signs in as the same listed email under another uid (`uid-third`): visibility is
-by uid (ADR-0036), so they are two members. Each is signed in on the one client
-in turn, so each request is one reader's, by the session cookie.
+and a third reader, who signs in as the same listed email under another uid
+(`uid-third`): visibility is by uid (ADR-0036), so they are two members. Each is
+signed in on the one client in turn, so each request is one reader's, by the
+session cookie.
 
 The ledger's own contract (visibility, order, stage, paging, the one read) is
 `tests/contracts/test_ledger.py`'s; what is pinned here is what the page and the

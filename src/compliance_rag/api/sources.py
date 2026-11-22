@@ -86,15 +86,19 @@ def _not_found() -> HTTPException:
     return HTTPException(404, NOT_FOUND, headers=SOURCE_HEADERS)
 
 
+def source_page_href(instrument_id: str, version_id: str) -> str:
+    """Where a version opens as a page, at its top: the API's source route. The one place
+    the route's path is built; `source_href` adds the clause's anchor."""
+    return f"/v1/sources/{quote(instrument_id, safe='/')}/{quote(version_id, safe='')}"
+
+
 def source_href(clause_id: str) -> str:
     """Where a citation of `clause_id` opens: the API's source route for its
     version, at the clause's anchor. Built from the id alone, so a chat read
     back links as the live answer did."""
     instrument_id, version_id, clause_path = parse_stable_id(clause_id)
-    return (
-        f"/v1/sources/{quote(instrument_id, safe='/')}/{quote(version_id, safe='')}"
-        f"#{quote(clause_anchor_id(clause_path), safe='')}"
-    )
+    anchor = quote(clause_anchor_id(clause_path), safe="")
+    return f"{source_page_href(instrument_id, version_id)}#{anchor}"
 
 
 async def _library_source(

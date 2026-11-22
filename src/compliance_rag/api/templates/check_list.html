@@ -15,8 +15,10 @@
 <span class="chat-name">{{ c.title | truncate(140, True) }}</span>
 <span class="meta">
 <span class="pill {{ 'pill-ok' if c.stage.value == 'findings' else 'pill-quiet' }}">{{ c.stage.value }}</span>
-{% if c.run %}
-<span class="pill {{ 'pill-warn' if c.run.value == 'failed' else 'pill-quiet' }}">{{ c.run.value }}</span>
+{% if c.run.running %}
+<span class="pill pill-quiet">running</span>
+{% elif c.run.failed %}
+<span class="pill pill-warn">failed</span>
 {% endif %}
 submitted <time datetime="{{ c.created_at.isoformat() }}">{{ c.created_at | sydney }}</time>
 {% if admin and c.user_id != me %}· another member's{% endif %}
