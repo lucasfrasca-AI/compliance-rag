@@ -76,3 +76,21 @@ Check batch 2 put ten questions, each with a recommended option (a). On
   summary only labels it (#298). It is held to one line, a bounded length and no
   fence boundary of its request, and #299 must fence it as data whenever it
   re-enters a prompt.
+
+## Amendment (2026-11-22): a conditional finding carries no verdict
+
+Put to the human on 2026-11-22, with (a) recommended: when Track A can't
+decide whether an obligation applies, the conditional finding is built by
+code from Track A's questions, states the condition, and carries no verdict;
+or (b) one extra model call per undecided obligation gives ADR-0053 F4's
+"would conflict with APP 8.1 if the APPs apply" form. The human chose:
+
+> Condition only, no verdict
+
+So F4's example wording is not produced. A conditional finding names the
+obligation and the questionnaire facts that would decide it, with no model
+call (#299, PR #350). The report (#300) lists conditional findings under
+their own heading after the four verdicts of F8, in claim order, since they
+have no verdict to sort by. Answering the questionnaire and re-checking
+gives a firm finding in a new assessment; the earlier one is unchanged
+(ADR-0034).

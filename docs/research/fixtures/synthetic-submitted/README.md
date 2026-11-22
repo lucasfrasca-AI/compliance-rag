@@ -13,5 +13,5 @@ tenant `acme`, so the residency gate treats it as synthetic.
 - `acme-vendor-onboarding-request.txt`: plain text, with an indented paragraph.
 
 author: model:claude-opus-5-5 (drafted for #296)
-reviewed_by: PENDING (the human)
+reviewed_by: Lucas Frasca (signed 2026-11-22 as synthetic test data, "Sign them")
 date: 2026-11-15
