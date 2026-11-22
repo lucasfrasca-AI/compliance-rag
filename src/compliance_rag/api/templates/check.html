@@ -5,7 +5,6 @@
 {#- One page, three states by what the ledger holds (`check_report.State`): `new`
     (offer the run), `extracted` (claims, no findings: offer the rest of the run) and
     `reported` (the findings report). Reload reads only the ledger. -#}
-<div class="report-layout">
 <main class="page report" data-state="{{ state }}">
 <div class="title-row">
 <h1>{{ title }}</h1>
@@ -75,13 +74,15 @@
 </ol>
 </section>
 </main>
+{% if not report %}
+<script type="module" src="/static/check_run.js"></script>
+{% endif %}
+{% endblock %}
+{#- The cited clauses fill the shell's right-hand slot; the shared Sources panel (#354) replaces this. -#}
+{% block sources %}
 {% if report %}
 {% with sources = report.sources %}
 {% include "_sources.html" %}
 {% endwith %}
-{% endif %}
-</div>
-{% if not report %}
-<script type="module" src="/static/check_run.js"></script>
 {% endif %}
 {% endblock %}

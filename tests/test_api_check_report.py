@@ -209,7 +209,7 @@ async def test_a_check_with_no_claims_offers_the_run_and_shows_the_stored_docume
     scripts = [a["src"] for a in parsed.where("script")]
     assert "/static/check_run.js" in scripts
     assert parsed.where("li", **{"class": "passage"})  # the document, as stored
-    assert not parsed.where("aside", id="sources")
+    assert not parsed.where("section", **{"class": "cited"})
     assert (await check_json(w, check_id))["state"] == "new"
     assert (await check_json(w, check_id))["report"] is None
 
@@ -237,7 +237,7 @@ async def test_a_check_with_claims_and_no_findings_offers_the_rest_and_marks_the
     for claim in claims:
         assert claim["quote"] in " ".join(unescape(html).split())
         assert f"#{claim['anchor']}" in html
-    assert not parsed.where("aside", id="sources")
+    assert not parsed.where("section", **{"class": "cited"})
 
 
 async def test_a_check_with_findings_is_the_report_and_offers_no_run() -> None:
@@ -248,7 +248,8 @@ async def test_a_check_with_findings_is_the_report_and_offers_no_run() -> None:
     assert main["data-state"] == "reported"
     assert not parsed.where("button", id="run-check") and not parsed.where("section", id="run")
     assert "/static/check_run.js" not in [a["src"] for a in parsed.where("script")]
-    assert parsed.where("aside", id="sources") and parsed.where("section", id="coverage")
+    assert parsed.where("section", **{"class": "cited"}) and parsed.where("section", id="coverage")
+    assert parsed.where("aside", id="sources")  # the shell's slot, which the cards fill
     assert (await check_json(w, check_id))["state"] == "reported"
 
 

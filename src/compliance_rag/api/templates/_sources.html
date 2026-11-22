@@ -1,8 +1,8 @@
 {#- The citation panel of a report. It takes `sources`, a list of cards, and nothing
-    else, so the shared Sources panel can replace this file without touching the
-    report. A citation in a finding links to its card here (`#src-N`); a card shows the
+    else, so the shared Sources panel (#354) can replace this file without touching the
+    report. It fills the shell's right-hand slot (`base.html`, block `sources`). A citation in a finding links to its card here (`#src-N`); a card shows the
     clause's own stored text and opens the clause in its source in a new tab. -#}
-<aside id="sources" class="sources" aria-label="Cited clauses">
+<section class="cited" aria-label="Cited clauses">
 <h2>Cited clauses</h2>
 {% if sources %}
 <p class="note">Each is the clause's own text, checked against the stored source. Open one at the clause to read it in place.</p>
@@ -30,4 +30,4 @@
 {% else %}
 <p class="note">No finding in this report cites a clause.</p>
 {% endif %}
-</aside>
+</section>
