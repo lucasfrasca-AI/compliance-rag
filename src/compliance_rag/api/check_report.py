@@ -9,10 +9,12 @@ arranged: the same bytes after a reload, because they are the same rows.
 
 **Three states**, by what the ledger holds, and the one place the API decides it:
 `new` (no claims: the next step is to extract them), `extracted` (claims, no findings:
-the next step is to make the findings) and `reported`. A run still going shows nowhere
-in the ledger (its reservation is not readable), so its stage progress is the page's
-own, from the stream it is watching (`static/check_run.js`); a page loaded mid-run
-shows the state the ledger has, and the run endpoints refuse a second run (409).
+the next step is to make the findings) and `reported`. **A run in progress** is read from
+the ledger's reservations (`LedgerStore.check_run`): `running` names the stage reserved
+and still within its time-out (`claims` or `findings`), `failed` the stage whose last run
+failed or was abandoned, so a page loaded mid-run shows the stage line and no "Run check"
+button, and `static/check_run.js` polls `GET /v1/checks/{id}/run` until the run ends, then
+reloads. A failed run says so and offers the run again, as the reservation allows.
 
 **Order (F8).** Verdicts in the order `conflicts`, `not_addressed`, `ambiguous`,
 `consistent`, then claim order, and no severity score or count of any kind that ranks
@@ -26,8 +28,8 @@ and sit **under their own headings after the four**, each in claim order:
    which verdict class the model chose); shown as withheld with our word for why and
    the clauses that blocked it, never as an error;
 3. **failed**: no finding could be made, with our word for why.
-A claim that was picked nothing to be checked against has no finding at all and is
-listed on its own, so its silence is never read as compliance.
+A claim with no finding recorded against it is listed on its own, so its silence is
+never read as compliance; the ledger holds its picks, so it says when there were none.
 
 **The banner (Q6)** names the policies that disagree about a claim: one policy's
 finding is `conflicts` and another policy's is `consistent` or `ambiguous`
@@ -35,12 +37,11 @@ finding is `conflicts` and another policy's is `consistent` or `ambiguous`
 Policies are named by title and version.
 
 **The coverage statement (F7)**: the instruments and versions Track A assessed, the
-tenant's policies by version and title, `as_of`, the corpus and mapping versions
-with their SHAs, the facts the assessment read (their hash), what was not checked and
-that obligations the model did not pick are not reported. The policies are the
-versions in force on `as_of` together with any a finding names: the findings run does
-not record the exact prefix it sent, so a policy withdrawn since and named by no finding
-is not listed (a recorded prefix is a follow-up).
+policy versions the run sent (recorded with the assessment, ledger 0027, ADR-0034: exactly
+those, with the titles recorded then), `as_of`, the corpus and mapping versions with their
+SHAs, the facts the assessment read (their hash), what was not checked and that obligations
+the model did not pick are not reported. An assessment recorded before the policy versions
+were kept shows the policies its findings name and says so.
 
 **Citations** open in the sources panel (`_sources.html`): one card per cited clause with
 its canonical text (D-02), never the model's quote alone, and a link that opens the
@@ -59,12 +60,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
 from typing import Any, Final, cast
-from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.interfaces import (
+    CheckRun,
     ClaimExtractionRecord,
     FindingOutcome,
     FindingRecord,
@@ -72,16 +73,17 @@ from compliance_rag.adapters.interfaces import (
     Verdict,
 )
 from compliance_rag.api.check_claims import claims_json
-from compliance_rag.api.check_findings import facts_json, findings_json
+from compliance_rag.api.check_findings import facts_json, findings_with_titles
 from compliance_rag.api.checks import (
     NOT_FOUND,
     CheckView,
     passage_json,
     read_check,
     source_path,
+    visible_check,
 )
 from compliance_rag.api.deps import ApiServices, Caller, CurrentCaller, services_of
-from compliance_rag.api.sources import source_href
+from compliance_rag.api.sources import source_href, source_page_href
 from compliance_rag.api.tenant import version_json
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
 from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite
@@ -139,26 +141,18 @@ class CheckState:
     view: CheckView
     extraction: ClaimExtractionRecord | None
     findings: FindingsRecord | None
+    run: CheckRun
+    """Where its run stands, from the reservations."""
+    claims: tuple[Json, ...]
+    """The recorded claims, each with its quote read back from the stored passage
+    (`check_claims.claims_json`), made once when the state is read; none before the
+    extraction."""
 
     @property
     def state(self) -> State:
         if self.extraction is None:
             return State.NEW
         return State.EXTRACTED if self.findings is None else State.REPORTED
-
-    @property
-    def claim_views(self) -> list[dict[str, object]]:
-        """The claims as a report names them (`claim_view`): for a page that lists the
-        claims before there are findings."""
-        return [claim_view(c, self.view.record.check_id) for c in self.claims]
-
-    @property
-    def claims(self) -> list[Json]:
-        """The recorded claims, each with its quote read back from the stored passage
-        (`check_claims.claims_json`); none before the extraction."""
-        if self.extraction is None:
-            return []
-        return cast("list[Json]", claims_json(self.extraction, self.view.passages)["claims"])
 
 
 async def read_state(services: ApiServices, who: Caller, check_id: str) -> CheckState | None:
@@ -171,7 +165,13 @@ async def read_state(services: ApiServices, who: Caller, check_id: str) -> Check
     findings = (
         None if extraction is None else await services.ledger.get_findings(who.tenant_id, check_id)
     )
-    return CheckState(view, extraction, findings)
+    claims = (
+        ()
+        if extraction is None
+        else tuple(cast("list[Json]", claims_json(extraction, view.passages)["claims"]))
+    )
+    run = await services.ledger.check_run(who.tenant_id, check_id)
+    return CheckState(view, extraction, findings, run, claims)
 
 
 # ---- the document, with its claims marked ----------------------------------------------
@@ -236,6 +236,12 @@ def passage_views(
 # ---- the report -------------------------------------------------------------------------
 
 
+def claim_views(state: CheckState) -> list[dict[str, object]]:
+    """The state's claims as a report names them, for a page that lists them before there
+    are findings."""
+    return [claim_view(c, state.view.record.check_id) for c in state.claims]
+
+
 def claim_view(claim: Json, check_id: str) -> dict[str, object]:
     """A claim as the report names it: its number, the model's label, the document's own
     words and where they are (the passage's anchor on the check's page)."""
@@ -249,22 +255,16 @@ def claim_view(claim: Json, check_id: str) -> dict[str, object]:
     }
 
 
-def _law_target(finding: FindingRecord, rows: dict[str, CoverageRow]) -> dict[str, object]:
+def _law_target(obligation_id: str, rows: dict[str, CoverageRow]) -> dict[str, object]:
     """The obligation a finding is against, named by the clause it is set out in (the first
     of its coverage row's citations is the obligation's own, `ObligationCoverage.citations`)
     and its id."""
-    assert finding.obligation_id is not None
-    row = rows[finding.obligation_id]
+    row = rows[obligation_id]
     first = row.citations[0] if row.citations else None
     return {
-        "label": cite(first, NO_TITLES) if first else finding.obligation_id,
+        "label": cite(first, NO_TITLES) if first else obligation_id,
         "href": source_href(first) if first else None,
     }
-
-
-def _open(instrument_id: str, version_id: str) -> str:
-    """Where a version opens as a page: the source route, at the top."""
-    return f"/v1/sources/{quote(instrument_id, safe='/')}/{quote(version_id, safe='')}"
 
 
 def _policy_ref(clause_id: str, titles: Titles) -> dict[str, object]:
@@ -310,7 +310,7 @@ def _finding_view(
     rows: dict[str, CoverageRow],
 ) -> dict[str, object]:
     if finding.obligation_id is not None:
-        target = _law_target(finding, rows)
+        target = _law_target(finding.obligation_id, rows)
     else:
         target = {"label": shown["cite"], "href": shown["href"]}
     return {
@@ -348,16 +348,15 @@ def _sources(findings: Sequence[Json]) -> list[Json]:
 
 
 async def _coverage_statement(
-    services: ApiServices,
-    record: FindingsRecord,
-    titles: Titles,
+    services: ApiServices, record: FindingsRecord, titles: Titles
 ) -> dict[str, object]:
     """F7. The instruments are those of the obligations Track A assessed (the instrument of
     the clause each obligation is set out in), with how many of them apply or might and
-    so were open to the model; the policies are those in force on `as_of` and any a finding
-    names."""
+    so were open to the model. The policies are exactly the versions the run sent, as
+    recorded with the assessment. An assessment recorded before they were kept
+    (`policies_recorded` false) lists the policies its findings name, from `titles`, and the
+    page says so."""
     assessment = record.assessment
-    tenant_id = assessment.tenant_id
     in_scope: dict[tuple[str, str], int] = {}
     for row in record.coverage:
         if not row.citations:
@@ -366,14 +365,15 @@ async def _coverage_statement(
         key = (instrument_id, version_id)
         in_scope[key] = in_scope.get(key, 0) + (row.outcome is not Outcome.NOT_APPLICABLE)
     law_titles = await services.ledger.version_titles(PUBLIC_TENANT_ID, in_scope)
-    policies = {
-        (v.instrument_id, v.version_id)
-        for v in await services.ledger.policy_versions(tenant_id, as_of=assessment.as_of)
-    }
-    for finding in record.findings:
-        if finding.policy_clause_id is not None:
-            policies.add(parse_stable_id(finding.policy_clause_id)[:2])
-    policy_titles = {**titles, **await services.ledger.version_titles(tenant_id, policies)}
+    if assessment.policies is not None:
+        policies = [(x.instrument_id, x.version_id, x.title) for x in assessment.policies]
+    else:
+        named = {
+            parse_stable_id(f.policy_clause_id)[:2]
+            for f in record.findings
+            if f.policy_clause_id is not None
+        }
+        policies = [(i, v, titles.get((i, v), i)) for i, v in sorted(named)]
     return {
         "as_of": assessment.as_of.isoformat(),
         "instruments": [
@@ -381,19 +381,20 @@ async def _coverage_statement(
                 "instrument_id": instrument_id,
                 "version_id": version_id,
                 "title": law_titles.get((instrument_id, version_id), instrument_id),
-                "href": _open(instrument_id, version_id),
+                "href": source_page_href(instrument_id, version_id),
                 "obligations_open_to_the_model": in_scope[(instrument_id, version_id)],
             }
             for instrument_id, version_id in sorted(in_scope)
         ],
+        "policies_recorded": assessment.policies is not None,
         "policies": [
             {
                 "instrument_id": instrument_id,
                 "version_id": version_id,
-                "title": policy_titles.get((instrument_id, version_id), instrument_id),
-                "href": _open(instrument_id, version_id),
+                "title": title,
+                "href": source_page_href(instrument_id, version_id),
             }
-            for instrument_id, version_id in sorted(policies)
+            for instrument_id, version_id, title in sorted(policies)
         ],
         "corpus_version": version_json(assessment.corpus),
         "mapping_version": version_json(assessment.mapping),
@@ -410,9 +411,10 @@ async def report_json(services: ApiServices, state: CheckState) -> dict[str, obj
     record = state.findings
     assert record is not None  # a report is of recorded findings
     check_id = state.view.record.check_id
-    payload = cast(
-        "Json", await findings_json(services, state.view.record.tenant_id, check_id, record)
-    )
+    shown, titles = await findings_with_titles(
+        services, state.view.record.tenant_id, check_id, record
+    )  # the titles of every policy the findings name, read once
+    payload = cast("Json", shown)
     claims = {int(c["index"]): claim_view(c, check_id) for c in state.claims}
     rows = {r.obligation_id: r for r in record.coverage}
     ordered = sorted(
@@ -433,15 +435,12 @@ async def report_json(services: ApiServices, state: CheckState) -> dict[str, obj
         {"verdict": v.value, "heading": VERDICT_HEADINGS[v], "findings": by_verdict[v]}
         for v in VERDICT_ORDER
     ]
-    policy_clauses = {
-        str(d[side]["policy_clause_id"])
-        for d in payload["policy_disagreements"]
-        for side in ("conflicts", "with")
-    }
-    titles = await services.ledger.version_titles(
-        state.view.record.tenant_id, {parse_stable_id(c)[:2] for c in policy_clauses}
-    )
     answered = {f.claim_index for f in record.findings}
+    # what the model picked to check each claim against is in the ledger with the claim
+    picked = {
+        c.claim_index: len(c.obligation_ids) + len(c.policy_clause_ids)
+        for c in (state.extraction.claims if state.extraction else ())
+    }
     return {
         "assessment_id": payload["assessment_id"],
         "as_of": payload["as_of"],
@@ -452,7 +451,9 @@ async def report_json(services: ApiServices, state: CheckState) -> dict[str, obj
         "conditional": of_outcome(FindingOutcome.CONDITIONAL),
         "withheld": of_outcome(FindingOutcome.WITHHELD),
         "failed": of_outcome(FindingOutcome.FAILED),
-        "claims_without_findings": [c for i, c in sorted(claims.items()) if i not in answered],
+        "claims_without_findings": [
+            {**c, "picked": picked[i]} for i, c in sorted(claims.items()) if i not in answered
+        ],
         "sources": _sources([f for v in VERDICT_ORDER for f in by_verdict[v]]),  # as displayed
         "coverage_statement": await _coverage_statement(services, record, titles),
         "questionnaire_href": QUESTIONNAIRE_HREF,
@@ -472,6 +473,7 @@ async def read_report(
             return None
         span.set_attribute("check.found", True)
         span.set_attribute("check.state", found.state.value)
+        span.set_attribute("check.running", found.run.running.value if found.run.running else "")
         if found.findings is None:
             return found, None
         for outcome in FindingOutcome:
@@ -504,8 +506,26 @@ async def get_check(request: Request, who: CurrentCaller, check_id: str) -> dict
         "trace_id": record.trace_id,
         "passages": [passage_json(p) for p in state.view.passages],
         "state": state.state.value,
+        "running": state.run.running.value if state.run.running else None,
+        "failed": state.run.failed.value if state.run.failed else None,
         "claims": None
         if state.extraction is None
         else claims_json(state.extraction, state.view.passages),
         "report": report,
+    }
+
+
+@router.get("/checks/{check_id}/run")
+async def get_check_run(request: Request, who: CurrentCaller, check_id: str) -> dict[str, object]:
+    """Where the check's run stands, for a page that is waiting on it: the stage running now
+    and the stage whose last run failed (`LedgerStore.check_run`), and nothing else, so it
+    is cheap to poll. The same 404 as the check for one that is not the caller's."""
+    services = services_of(request)
+    if await visible_check(services, who, check_id) is None:
+        raise HTTPException(404, NOT_FOUND)
+    run = await services.ledger.check_run(who.tenant_id, check_id)
+    return {
+        "check_id": check_id,
+        "running": run.running.value if run.running else None,
+        "failed": run.failed.value if run.failed else None,
     }

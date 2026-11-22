@@ -120,6 +120,7 @@ from compliance_rag.adapters.interfaces import (
     Generation,
     GenerationUnavailable,
     LawScope,
+    PolicyChecked,
     PolicyCorpus,
     ReplyKind,
     SourceVersion,
@@ -726,6 +727,23 @@ class _Run:
         self._digest = ObligationDigest.of(coverage)
         self._prefix: str | None = None
 
+    def _policies_sent(self) -> tuple[PolicyChecked, ...]:
+        """The policy versions in the prefix just sent, with the titles recorded for them
+        (#300, ADR-0053 F7): recorded with the assessment, so what a report says it
+        checked is what was sent, not what is in force when it is read. A title the
+        ledger holds none for (it holds one for every policy, ADR-0049) is the
+        instrument id, never blank."""
+        return tuple(
+            PolicyChecked(
+                instrument_id,
+                version_id,
+                self._titles.get((instrument_id, version_id)) or instrument_id,
+            )
+            for instrument_id, version_id in sorted(
+                cited_policy_versions(p.clause_id for p in self._policies)
+            )
+        )
+
     # -- the run ---------------------------------------------------------------------
 
     async def go(self) -> FindingsRun:
@@ -790,6 +808,7 @@ class _Run:
                     trace_id=current_trace_id(),
                     check_id=self._check_id,
                     facts=self._facts,
+                    policies=self._policies_sent(),
                 ),
                 coverage=tuple(
                     sorted(

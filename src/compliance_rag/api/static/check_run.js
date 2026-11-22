@@ -5,6 +5,10 @@
 // are recorded it reloads the page: the report is drawn by the server from the ledger,
 // never built here, so it is the same after a reload as on screen.
 //
+// A page loaded while a run is going (the server draws it with data-running, from the
+// ledger's reservation) makes no request of its own: it polls GET /v1/checks/{id}/run
+// until nothing is running, then reloads to show the report, or the failure.
+//
 // Nothing from the server is ever written as HTML: text goes in with textContent. The
 // server decides everything that matters (who may run, what is refused, what a finding
 // is). This only carries the requests and says what the server said.
@@ -23,7 +27,8 @@ class Refused extends Error {
   }
 }
 
-const STAGES = ["coverage", "claims", "findings"];
+const STAGES = ["claims", "findings"];
+const POLL_MS = 3000;
 
 function stageItem(stage) {
   return document.querySelector(`#progress [data-stage="${stage}"]`);
@@ -124,11 +129,10 @@ function onError(data) {
 }
 
 async function extractClaims(checkId) {
-  setStage("coverage", "running");
+  setStage("claims", "running");
   const last = await post(`/v1/checks/${checkId}/claims`, (name, data) => {
     if (name === "coverage") {
-      setStage("coverage", "done", countsText(data.counts));
-      setStage("claims", "running");
+      setStage("claims", "running", countsText(data.counts));
     } else if (name === "claims") {
       const n = Number(data.accepted);
       setStage("claims", "done", `${n} ${n === 1 ? "claim" : "claims"}`);
@@ -163,7 +167,6 @@ async function runCheck() {
   let finished = false;
   try {
     if (run.dataset.claims === "done") {
-      setStage("coverage", "done", "already done");
       setStage("claims", "done", "already found");
     } else if (!(await extractClaims(checkId))) {
       if (streamError === null) failRunning();
@@ -208,6 +211,39 @@ async function runCheck() {
   if (finished) window.location.assign(window.location.pathname);
 }
 
+/** A run this page did not start: wait for it, then show what it left. */
+async function watch(checkId) {
+  let shown = run.dataset.running;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    try {
+      const response = await fetch(`/v1/checks/${checkId}/run`, { credentials: "same-origin" });
+      if (response.status === 401) {
+        window.location.assign("/signin");
+        return;
+      }
+      if (response.ok) {
+        const now = await response.json();
+        if (!now.running) {
+          window.location.assign(window.location.pathname);
+          return;
+        }
+        if (now.running !== shown) {
+          shown = now.running;
+          for (const stage of STAGES) {
+            setStage(stage, stage === shown ? "running" : "done");
+          }
+        }
+      }
+    } catch {
+      // the connection dropped: try again at the next tick
+    }
+  }
+}
+
 button?.addEventListener("click", () => {
   runCheck();
 });
+if (run?.dataset.running && CHECK_ID.test(String(run.dataset.checkId))) {
+  watch(run.dataset.checkId);
+}

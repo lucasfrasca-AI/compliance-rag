@@ -31,7 +31,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from compliance_rag.api.check_report import passage_views, read_report
+from compliance_rag.api.check_report import claim_views, passage_views, read_report
 from compliance_rag.api.checks import MAX_DOCUMENT_BYTES, source_path
 from compliance_rag.api.deps import services_of
 from compliance_rag.api.pages import PageCaller, PageError, render
@@ -59,7 +59,6 @@ async def check_page(request: Request, who: PageCaller, check_id: str) -> HTMLRe
     if found is None:
         raise _no_such_check()
     state, report = found
-    claims = state.claims
     return render(
         request,
         "check.html",
@@ -69,7 +68,8 @@ async def check_page(request: Request, who: PageCaller, check_id: str) -> HTMLRe
         source_href=source_path(state.view.record.instrument_id),
         state=state.state.value,
         passages=state.view.passages,
-        passage_views=passage_views(state.view.passages, claims),
-        claims=state.claim_views,
+        passage_views=passage_views(state.view.passages, state.claims),
+        claims=claim_views(state),
+        run=state.run,
         report=report,
     )

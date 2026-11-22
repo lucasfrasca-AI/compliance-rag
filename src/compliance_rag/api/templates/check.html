@@ -18,23 +18,34 @@
 {% if report %}
 {% include "_report.html" %}
 {% else %}
-<section class="card run" id="run" data-check-id="{{ check.check_id }}" data-claims="{{ 'done' if state == 'extracted' else 'todo' }}">
-{% if state == "extracted" %}
+{#- `run.running` is the stage a reservation in the ledger says is going now: the page then
+    shows the stage line, no button, and `check_run.js` waits for it to end. `run.failed` is
+    a stage whose last run did not complete: said, and the run offered again. -#}
+{% set running = run.running.value if run.running else "" %}
+<section class="card run" id="run" data-check-id="{{ check.check_id }}" data-claims="{{ 'done' if state == 'extracted' else 'todo' }}" data-running="{{ running }}">
+{% if running %}
+<h2>This check is running</h2>
+<p>{{ "The document is being read for its claims." if running == "claims" else "Each claim is being checked against your policies and the law." }} This page updates itself when the run ends.</p>
+{% elif state == "extracted" %}
 <h2>The claims are found; the findings are not made yet</h2>
 <p>{{ claims | length }} {{ "claim was" if claims | length == 1 else "claims were" }} found in the document. Running the check now makes a finding for each one against your policies and the law.</p>
 {% else %}
 <h2>Check this document</h2>
 <p>Running the check reads the document for the claims it makes, then checks each claim against your policies and the law.</p>
 {% endif %}
+{% if run.failed %}
+<p class="card error" data-failed="{{ run.failed.value }}" role="note">The last run of {{ "the claims" if run.failed.value == "claims" else "the findings" }} didn't complete, and nothing unverified was kept. You can run it again.</p>
+{% endif %}
 <p class="note">The document is sent to the model. Nothing is shown until every citation has been checked against its clause, and nothing here is a score.</p>
-<noscript><p class="card notice">Running a check needs JavaScript.</p></noscript>
+<noscript><p class="card notice">{{ "Reload this page to see where the run has got to." if running else "Running a check needs JavaScript." }}</p></noscript>
+{% if not running %}
 <div class="row">
 <button type="button" id="run-check">Run check</button>
 </div>
-<ol id="progress" class="progress" aria-label="Progress" hidden>
-<li data-stage="coverage" data-state="waiting"><span class="stage-name">Checking which obligations apply to you</span> <span class="stage-detail" data-detail></span></li>
-<li data-stage="claims" data-state="waiting"><span class="stage-name">Reading the document for claims</span> <span class="stage-detail" data-detail></span></li>
-<li data-stage="findings" data-state="waiting"><span class="stage-name">Checking each claim and verifying every citation</span> <span class="stage-detail" data-detail></span></li>
+{% endif %}
+<ol id="progress" class="progress" aria-label="Progress"{% if not running %} hidden{% endif %}>
+<li data-stage="claims" data-state="{{ 'running' if running == 'claims' else ('done' if running == 'findings' else 'waiting') }}"><span class="stage-name">Reading the document for claims</span> <span class="stage-detail" data-detail></span></li>
+<li data-stage="findings" data-state="{{ 'running' if running == 'findings' else 'waiting' }}"><span class="stage-name">Checking each claim and verifying every citation</span> <span class="stage-detail" data-detail></span></li>
 </ol>
 <div id="run-notice" class="card outcome notice" role="alert" hidden></div>
 </section>

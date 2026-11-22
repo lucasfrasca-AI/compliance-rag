@@ -25,7 +25,7 @@
 {% if report.disagreements %}
 <section class="card disagreement" role="note" aria-label="Your policies disagree" data-disagreements>
 <h2>Your policies disagree</h2>
-<p>For {{ "this claim" if report.disagreements | length == 1 else "these claims" }}, one of your policies conflicts with the claim and another does not. Which one governs is for you to decide.</p>
+<p>For {{ "this claim" if report.disagreements | length == 1 else "these claims" }}, one of your policies conflicts with the claim and another does not.</p>
 <ul>
 {% for d in report.disagreements %}
 <li data-claim="{{ d.claim.index }}">
@@ -120,7 +120,7 @@
 
 {% if report.failed %}
 <section class="failed-group" data-outcome="failed" aria-labelledby="h-failed">
-<h2 id="h-failed">Not checked <span class="count">{{ report.failed | length }}</span></h2>
+<h2 id="h-failed">Couldn't be checked <span class="count">{{ report.failed | length }}</span></h2>
 <p class="note">No finding could be made for these. Nothing is shown for them, and nothing here says they are fine.</p>
 {% for f in report.failed %}
 <article class="card finding error" data-finding="{{ f.finding_id }}" data-outcome="failed">
@@ -135,11 +135,14 @@
 
 {% if report.claims_without_findings %}
 <section class="unchecked" aria-labelledby="h-unchecked">
-<h2 id="h-unchecked">Claims with nothing to check them against <span class="count">{{ report.claims_without_findings | length }}</span></h2>
-<p class="note">The model picked no obligation or policy clause for these claims, so there is no finding. That is not a finding that they are compliant.</p>
+<h2 id="h-unchecked">Claims with no finding <span class="count">{{ report.claims_without_findings | length }}</span></h2>
+<p class="note">No finding was recorded against these claims. That is not a finding that they are compliant.</p>
 {% for c in report.claims_without_findings %}
 <article class="card notice" data-claim="{{ c.index }}">
 {{ claim_ref(c) }}
+{% if not c.picked %}
+<p class="note">The model picked no obligation or policy clause to check it against.</p>
+{% endif %}
 </article>
 {% endfor %}
 </section>
@@ -165,8 +168,11 @@
 <li data-policy="{{ p.instrument_id }}"><a href="{{ p.href }}" target="_blank" rel="noopener noreferrer">{{ p.title }}</a>, version <code>{{ p.version_id }}</code></li>
 {% endfor %}
 </ul>
-{% else %}
-<p>None of your policies were in force on this date.</p>
+{% elif cs.policies_recorded %}
+<p>No policy was sent: none of your policies was in force on this date.</p>
+{% endif %}
+{% if not cs.policies_recorded %}
+<p class="note" data-policies-not-recorded>Recorded before policy versions were kept. {{ "These are the policies its findings name; the full set checked was not recorded." if cs.policies else "The full set of policies checked was not recorded." }}</p>
 {% endif %}
 <h3>Basis</h3>
 <ul>

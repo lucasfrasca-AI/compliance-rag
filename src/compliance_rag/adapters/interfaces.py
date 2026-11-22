@@ -444,6 +444,16 @@ class LoadedSources:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyChecked:
+    """One tenant policy version a findings run sent the model in its prefix, with the
+    title the ledger recorded for it (ADR-0049) as it was then (#300, ADR-0053 F7)."""
+
+    instrument_id: str
+    version_id: str
+    title: str
+
+
+@dataclass(frozen=True, slots=True)
 class AssessmentRecord:
     """A recorded assessment (ledger `assessment`): for whom, for what date,
     against which corpus and mapping versions, in which request. Reproducible
@@ -466,6 +476,11 @@ class AssessmentRecord:
     every evidence row with its value, and their sha256. Recorded with the
     assessment of a check, in the same transaction; it records what was read and
     does not reconstruct facts as of a past date (#123)."""
+    policies: tuple[PolicyChecked, ...] | None = None
+    """The exact policy versions the findings run sent in its prefix, recorded in the
+    same transaction as the assessment (ADR-0034): what a coverage statement lists under
+    "Policies checked". `None` for an assessment recorded before they were kept (ledger
+    0027), and for a coverage assessment, which sends no policies."""
 
 
 def check_assessment_write(record: AssessmentRecord, rows: tuple[CoverageRow, ...]) -> None:
@@ -866,6 +881,49 @@ class CheckNotExtracted(ValueError):
     """The check has no completed extraction, so it has no claims to check."""
 
 
+class RunStage(StrEnum):
+    """The two model runs of a check: the claims' extraction (#298) and the findings (#299)."""
+
+    CLAIMS = "claims"
+    FINDINGS = "findings"
+
+
+@dataclass(frozen=True, slots=True)
+class Reservation:
+    """A run's reservation as a reader sees it: its status and whether, pending, it has
+    outlived its time-out (so another request may take it over and it is not running)."""
+
+    status: str  # "pending", "done" or "failed"
+    lapsed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CheckRun:
+    """Where a check's run stands, from its reservations (#300): the stage running now (a
+    reservation pending within its time-out) and the stage whose last run failed or was
+    abandoned (so the member may run it again). Both `None` for a check not started and for
+    one whose findings are done."""
+
+    running: RunStage | None = None
+    failed: RunStage | None = None
+
+
+def check_run_of(extraction: Reservation | None, findings: Reservation | None) -> CheckRun:
+    """The one rule, for every `LedgerStore`: the extraction first, then, once it is done,
+    the findings."""
+    if extraction is None:
+        return CheckRun()
+    if extraction.status == "pending" and not extraction.lapsed:
+        return CheckRun(running=RunStage.CLAIMS)
+    if extraction.status != "done":
+        return CheckRun(failed=RunStage.CLAIMS)
+    if findings is None or findings.status == "done":
+        return CheckRun()
+    if findings.status == "pending" and not findings.lapsed:
+        return CheckRun(running=RunStage.FINDINGS)
+    return CheckRun(failed=RunStage.FINDINGS)
+
+
 def check_findings_write(record: FindingsRecord, claim_count: int | None = None) -> None:
     """What every `LedgerStore` refuses before writing a findings run, in this
     order; the database's constraints refuse the rest again. `claim_count` is how
@@ -875,6 +933,17 @@ def check_findings_write(record: FindingsRecord, claim_count: int | None = None)
         raise ValueError("a findings run records the check it judged")
     if record.assessment.facts is None:
         raise ValueError("a findings run records the facts it was decided on (ADR-0034)")
+    if record.assessment.policies is None:
+        raise ValueError("a findings run records the policy versions it sent (ADR-0053 F7)")
+    if len({(x.instrument_id, x.version_id) for x in record.assessment.policies}) != len(
+        record.assessment.policies
+    ):
+        raise ValueError("a findings run names a policy version once")
+    if any(
+        not x.instrument_id.strip() or not x.version_id.strip() or not x.title.strip()
+        for x in record.assessment.policies
+    ):
+        raise ValueError("a policy version a findings run sent has its id, version and title")
     seen: set[tuple[int, str | None, str | None]] = set()
     covered = {row.obligation_id: row for row in record.coverage}
     for finding in record.findings:
@@ -1729,6 +1798,13 @@ class LedgerStore(ABC):
         obligations before policy clauses, each by id, bytewise. Not owner-keyed,
         like `get_claims`: who may see a check is `CheckRecord.visible_to`,
         applied by every route first. The usage rows are the run's own."""
+
+    @abstractmethod
+    async def check_run(self, tenant_id: str, check_id: str) -> CheckRun:
+        """Where the check's run stands, from its reservations (`check_run_of`): the stage
+        reserved and still within its time-out, or the stage that failed or was abandoned.
+        Reads only; reserves nothing. An empty `CheckRun` for a check with no run, and for
+        one whose findings are done."""
 
     @abstractmethod
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:

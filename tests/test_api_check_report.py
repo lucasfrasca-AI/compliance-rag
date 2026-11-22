@@ -19,9 +19,10 @@ import json
 import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from html import unescape
+from dataclasses import replace
+from html import escape, unescape
 from typing import Any, cast
-from urllib.parse import urldefrag
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -29,16 +30,20 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from compliance_rag.api import check_claims, questionnaire
 from compliance_rag.api.check_report import Segment, segments_of
-from compliance_rag.corpus.models import CANONICALISATION_VERSION, PUBLIC_TENANT_ID
+from compliance_rag.corpus.models import (
+    CANONICALISATION_VERSION,
+    PUBLIC_TENANT_ID,
+    clause_anchor_id,
+)
 from compliance_rag.eval.golden_corpus import (
     POLICY_INSTRUMENT_IDS,
     POLICY_TENANT_ID,
     POLICY_VERSION_ID,
+    gate_law_clauses,
     policy_source,
     policy_titles,
 )
-from compliance_rag.eval.harness import law_source_html
-from tests.api_support import bearer
+from tests.api_support import assert_script_writes_no_html, bearer
 from tests.findings_support import (
     APP8_1,
     CLAIM_1,
@@ -50,11 +55,13 @@ from tests.findings_support import (
     D4_2_2,
     D5_1_1,
     DAY,
+    TENANT,
     CheckModel,
     Say,
     honest,
     opening,
     passages_in,
+    read_findings_prompt,
     worked_claims,
 )
 from tests.test_api_check_findings import (
@@ -84,13 +91,19 @@ def _a_fixed_day(monkeypatch: pytest.MonkeyPatch) -> None:
 async def publish_sources(w: World) -> None:
     """The law's anchored source and each policy's Markdown, as the source route serves
     them: the golden world holds the clauses and their records but not the sources, and a
-    link in a report is only as good as the page it opens."""
+    link in a report is only as good as the page it opens. The whole compilation's own HTML
+    is not in the repository (the excerpt lacks APP 8), so the law's page is one element per
+    selected clause under the anchor the source route links to (`clause_anchor_id`)."""
+    law = "<!doctype html><html><body>" + "".join(
+        f'<p id="{clause_anchor_id(c.clause_path)}">{escape(c.canonical_text)}</p>'
+        for c in gate_law_clauses()
+    )
     await w.clauses.put_manifest(
         "privacy-act-1988",
         "C2026C00227",
         tenant_id=PUBLIC_TENANT_ID,
         canonicalisation_version=CANONICALISATION_VERSION,
-        source_html=law_source_html(),
+        source_html=law + "</body></html>",
     )
     for filename, instrument_id in POLICY_INSTRUMENT_IDS.items():
         await w.clauses.put_manifest(
@@ -186,13 +199,13 @@ async def test_a_check_with_no_claims_offers_the_run_and_shows_the_stored_docume
     (run,) = parsed.where("section", id="run")
     assert run["data-check-id"] == check_id and run["data-claims"] == "todo"
     assert parsed.where("button", id="run-check")
+    assert run["data-running"] == ""
     assert [a["data-stage"] for a in parsed.where("li") if "data-stage" in a] == [
-        "coverage",
         "claims",
         "findings",
     ]
     (progress,) = parsed.where("ol", id="progress")
-    assert "hidden" in progress  # the stage line is shown while it runs
+    assert "hidden" in progress  # the stage line is shown when the member runs it
     scripts = [a["src"] for a in parsed.where("script")]
     assert "/static/check_run.js" in scripts
     assert parsed.where("li", **{"class": "passage"})  # the document, as stored
@@ -237,6 +250,76 @@ async def test_a_check_with_findings_is_the_report_and_offers_no_run() -> None:
     assert "/static/check_run.js" not in [a["src"] for a in parsed.where("script")]
     assert parsed.where("aside", id="sources") and parsed.where("section", id="coverage")
     assert (await check_json(w, check_id))["state"] == "reported"
+
+
+# ---- a page loaded while the check is running -----------------------------------------------
+
+
+async def test_a_page_loaded_mid_extraction_shows_the_stage_and_no_run_button() -> None:
+    w = await world()
+    check_id = await submit(w)
+    await w.ledger.reserve_extraction(TENANT, check_id, as_of=DAY, trace_id="a" * 32)
+    parsed = scan(await page(w, check_id))
+    assert not parsed.where("button", id="run-check")  # a second run is not offered
+    (run,) = parsed.where("section", id="run")
+    assert run["data-running"] == "claims" and run["data-claims"] == "todo"
+    (progress,) = parsed.where("ol", id="progress")
+    assert "hidden" not in progress  # the stage line is shown
+    stages = {a["data-stage"]: a["data-state"] for a in parsed.where("li") if "data-stage" in a}
+    assert stages == {"claims": "running", "findings": "waiting"}
+    assert "/static/check_run.js" in [a["src"] for a in parsed.where("script")]  # it polls
+    shown = await check_json(w, check_id)
+    assert shown["state"] == "new" and shown["running"] == "claims" and shown["failed"] is None
+    async with w.client(SUBMITTER_TOKEN) as client:
+        light = (await client.get(f"/v1/checks/{check_id}/run")).json()
+        assert light == {"check_id": check_id, "running": "claims", "failed": None}
+        # nothing is claimed of a check that is not theirs
+        assert (await client.get(f"/v1/checks/{'0' * 32}/run")).status_code == 404
+    async with w.client(THIRD_TOKEN) as client:
+        assert (await client.get(f"/v1/checks/{check_id}/run")).status_code == 404
+
+
+async def test_a_page_loaded_mid_findings_shows_the_claims_done_and_the_findings_running() -> None:
+    w = await world()
+    check_id = await submit(w)
+    await extract(w, check_id)
+    await w.ledger.reserve_findings(TENANT, check_id, trace_id="b" * 32)
+    parsed = scan(await page(w, check_id))
+    assert not parsed.where("button", id="run-check")
+    stages = {a["data-stage"]: a["data-state"] for a in parsed.where("li") if "data-stage" in a}
+    assert stages == {"claims": "done", "findings": "running"}
+    shown = await check_json(w, check_id)
+    assert shown["state"] == "extracted" and shown["running"] == "findings"
+    # the run ends (released as its own failure path would, then made again): the light
+    # endpoint says nothing is running, and the page is the report
+    await w.ledger.fail_findings(TENANT, check_id, trace_id="b" * 32)
+    _, events = await find(w, check_id)
+    assert events[-1][0] == "findings"
+    async with w.client(SUBMITTER_TOKEN) as client:
+        assert (await client.get(f"/v1/checks/{check_id}/run")).json()["running"] is None
+    assert (await check_json(w, check_id))["state"] == "reported"
+
+
+async def test_a_failed_run_says_so_and_can_be_run_again() -> None:
+    w = await world()
+    check_id = await submit(w)
+    await w.ledger.reserve_extraction(TENANT, check_id, as_of=DAY, trace_id="a" * 32)
+    await w.ledger.fail_extraction(TENANT, check_id)
+    html = await page(w, check_id)
+    parsed = scan(html)
+    assert parsed.where("button", id="run-check")  # as the reservation allows, it can be made again
+    (failure,) = parsed.where("p", **{"data-failed": "claims"})
+    assert "didn't complete" in html and failure
+    assert (await check_json(w, check_id))["failed"] == "claims"
+    await extract(w, check_id)  # and it can
+    await w.ledger.reserve_findings(TENANT, check_id, trace_id="b" * 32)
+    await w.ledger.fail_findings(TENANT, check_id, trace_id="b" * 32)
+    parsed = scan(await page(w, check_id))
+    assert parsed.where("button", id="run-check") and parsed.where(
+        "p", **{"data-failed": "findings"}
+    )
+    (run,) = parsed.where("section", id="run")
+    assert run["data-claims"] == "done" and run["data-running"] == ""
 
 
 # ---- the order (F8): verdicts, then claim order; no score --------------------------------
@@ -320,31 +403,68 @@ async def test_the_report_is_identical_after_reload() -> None:
 # ---- every link opens ---------------------------------------------------------------------
 
 
-async def test_every_citation_and_claim_link_returns_200_and_every_card_is_there() -> None:
-    w, check_id = await reported()
-    html = await page(w, check_id)
+async def assert_every_link_opens(w: World, check_id: str, html: str) -> int:
+    """Every link of the page opens: a source link returns 200 **and its fragment's anchor
+    is an element of the source it opens** (not just any 200); a claim link is the page's own
+    passage anchor; a citation link is a card of the panel. Returns how many source links."""
     parsed = scan(html)
     hrefs = [a["href"] or "" for a in parsed.where("a")]
-    sources = {urldefrag(h)[0] for h in hrefs if h.startswith("/v1/sources/")}
-    assert sources  # citations, targets, policies and instruments all open a source
+    sources = {h for h in hrefs if h.startswith("/v1/sources/")}
     async with browser(w) as client:
-        for path in sorted(sources):
-            assert (await client.get(path)).status_code == 200, path
-        # a claim opens the document at its passage: the page, whose element has the anchor
-        claims = {h for h in hrefs if h.startswith(f"/checks/{check_id}#")}
-        assert claims
+        for href in sorted(sources):
+            path, _, fragment = href.partition("#")
+            response = await client.get(path)
+            assert response.status_code == 200, href
+            if fragment:
+                assert f'id="{unquote(fragment)}"' in response.text, href
         assert (await client.get(f"/checks/{check_id}")).status_code == 200
     ids = {a["id"] for _, a in parsed.elements if a.get("id")}
-    for href in claims:
+    for href in (h for h in hrefs if h.startswith(f"/checks/{check_id}#") or h.startswith("#")):
         assert href.split("#", 1)[1] in ids, href
-    # a citation in a finding opens its card in the panel
-    for href in (h for h in hrefs if h.startswith("#src-")):
-        assert href[1:] in ids, href
+    return len(sources)
+
+
+async def test_every_citation_and_claim_link_returns_200_and_its_anchor_exists() -> None:
+    w, check_id = await reported()
+    html = await page(w, check_id)
+    assert await assert_every_link_opens(w, check_id, html) > 10  # targets, cards, policies, law
+    parsed = scan(html)
+    hrefs = [a["href"] or "" for a in parsed.where("a")]
+    assert [h for h in hrefs if h.startswith(f"/checks/{check_id}#")]  # claims
+    assert [h for h in hrefs if h.startswith("#src-")]  # citations, into the panel
     shown = (await check_json(w, check_id))["report"]
     cited = {c["clause_id"] for g in shown["groups"] for f in g["findings"] for c in f["citations"]}
     assert cited == {s["clause_id"] for s in shown["sources"]}
-    cards = parsed.where("article", **{"class": "card source"})
-    assert len(cards) == len(shown["sources"])
+    assert len(parsed.where("article", **{"class": "card source"})) == len(shown["sources"])
+
+
+async def test_every_link_opens_in_a_report_with_each_kind_of_finding() -> None:
+    cited_outside = f"{APP8_1.rsplit(':', 1)[0]}:s6c/2"
+
+    def script(seen: Any) -> str:  # Any: a findings prompt
+        asked = read_findings_prompt(seen)
+        if CLAIM_3 in asked.quote:
+            return "not a set of findings: " + SECRET  # claim 3 fails
+        return honest(
+            {
+                CLAIM_2: {  # claim 2's policy finding is withheld
+                    D4_2_1: Say(
+                        "conflicts", cites=((D4_2_1, opening(D4_2_1)), (cited_outside, SECRET))
+                    )
+                }
+            }
+        )(seen)
+
+    w, check_id = await reported(CheckModel(findings=script), evidence=UNKNOWN_FY2023)
+    shown = (await check_json(w, check_id))["report"]
+    assert shown["withheld"] and shown["conditional"] and shown["failed"]
+    html = await page(w, check_id)
+    for outcome in ("withheld", "conditional", "failed"):
+        assert f'data-outcome="{outcome}"' in html
+    assert await assert_every_link_opens(w, check_id, html) > 5
+    # the targets of those findings are among the links that were fetched
+    targets = {f["target_href"] for k in ("withheld", "conditional", "failed") for f in shown[k]}
+    assert targets and all(t in html.replace("&#34;", '"') for t in targets if t)
 
 
 async def test_a_citation_card_is_the_clauses_own_text_and_opens_it_in_a_new_tab() -> None:
@@ -385,6 +505,7 @@ async def test_the_banner_names_the_policies_that_disagree_by_title_and_version(
     section = html.split("data-disagreements", 1)[1].split("</section>", 1)[0]
     assert PRIVACY_POLICY in section and "version v1" in section
     assert MARKETING_POLICY in section and "Consistent" in section
+    assert "governs" not in html  # Q6 only names the policies; which prevails is not said
 
 
 async def test_an_ambiguous_policy_verdict_disagrees_with_a_conflict_too() -> None:
@@ -469,6 +590,8 @@ async def test_a_failed_finding_says_why_under_its_own_heading() -> None:
     assert shown["failed"] and all("wasn't taking requests" in f["failed"] for f in shown["failed"])
     html = await page(w, check_id)
     assert 'id="h-failed"' in html and 'data-outcome="failed"' in html
+    assert "Couldn't be checked" in html  # not "Not checked", which is the statement's
+    assert html.count("Not checked: anything else.") == 1
     assert "nothing here says they are fine" in html
     assert html.index('id="h-failed"') > html.index('id="h-consistent"')
     # what did verify is still there, ahead of it
@@ -525,6 +648,13 @@ async def test_the_coverage_statement_names_what_was_checked_and_what_was_not() 
     policies = {p["instrument_id"]: p for p in cs["policies"]}
     assert len(policies) == 6 and all(p["title"] and p["version_id"] for p in policies.values())
     assert "acme/privacy-policy" in policies
+    # exactly what the run sent, as it recorded it with the assessment
+    assert cs["policies_recorded"] is True
+    stored = await w.ledger.get_findings(TENANT, check_id)
+    assert stored is not None and stored.assessment.policies is not None
+    sent = {(x.instrument_id, x.version_id): x.title for x in stored.assessment.policies}
+    assert sent == {(i, "v1"): policy_titles()[i] for i in POLICY_INSTRUMENT_IDS.values()}
+    assert {(p["instrument_id"], p["version_id"]): p["title"] for p in cs["policies"]} == sent
     assert cs["corpus_version"] == {"tag": "corpus-2026.10", "sha": "a" * 40, "untagged": False}
     assert cs["mapping_version"]["tag"] == "mappings-2026.10"
     assert cs["mapping_version"]["sha"] == "b" * 40
@@ -549,7 +679,44 @@ async def test_the_coverage_statement_names_what_was_checked_and_what_was_not() 
     assert section.count("version <code>") >= 7  # an instrument and six policies, by version
 
 
-async def test_a_claim_with_nothing_picked_is_listed_and_not_read_as_compliant() -> None:
+async def test_a_policy_withdrawn_since_is_still_listed_because_it_was_sent() -> None:
+    """The statement says what was sent, not what is in force when it is read."""
+    w, check_id = await reported()
+    before = (await check_json(w, check_id))["report"]
+    await w.ledger.end_version(
+        tenant_id=TENANT, instrument_id="acme/employee-policy", version_id="v1", valid_to=DAY
+    )
+    in_force = {v.instrument_id for v in await w.ledger.policy_versions(TENANT, as_of=DAY)}
+    assert "acme/employee-policy" not in in_force  # it is no longer in force on that date
+    after = (await check_json(w, check_id))["report"]
+    assert after["coverage_statement"] == before["coverage_statement"]
+    assert "acme/employee-policy" in {
+        p["instrument_id"] for p in after["coverage_statement"]["policies"]
+    }
+
+
+async def test_an_assessment_recorded_before_policy_versions_were_kept_says_so() -> None:
+    """What is derivable (the policies its findings name) is listed, with the one line."""
+    w, check_id = await reported()
+    key = (TENANT, check_id)
+    held = w.ledger._findings_runs[key]  # pyright: ignore[reportPrivateUsage]
+    assert held.record is not None
+    older = replace(held.record, assessment=replace(held.record.assessment, policies=None))
+    w.ledger._findings_runs[key] = replace(held, record=older)  # pyright: ignore[reportPrivateUsage]
+    cs = (await check_json(w, check_id))["report"]["coverage_statement"]
+    assert cs["policies_recorded"] is False
+    named = {p["instrument_id"] for p in cs["policies"]}
+    assert named == {
+        "acme/privacy-policy",
+        "acme/marketing-policy",
+        "acme/vendor-policy",
+    }  # those the findings name, no more
+    html = await page(w, check_id)
+    assert "Recorded before policy versions were kept" in html
+    assert "data-policies-not-recorded" in html
+
+
+async def test_a_claim_with_no_finding_is_listed_and_not_read_as_compliant() -> None:
     picks = {
         CLAIM_1: ((), (D1_3_2, D5_1_1)),
         CLAIM_2: (("OB-PA-APP8-1",), (D4_2_1,)),
@@ -563,8 +730,11 @@ async def test_a_claim_with_nothing_picked_is_listed_and_not_read_as_compliant()
     shown = (await check_json(w, check_id))["report"]
     assert [c["index"] for c in shown["claims_without_findings"]] == [4]
     html = await page(w, check_id)
-    assert "Claims with nothing to check them against" in html
+    assert "No finding was recorded against these claims" in html
     assert "That is not a finding that they are compliant" in html
+    # the ledger holds the picks, so it can say this one had none
+    assert shown["claims_without_findings"][0]["picked"] == 0
+    assert "picked no obligation or policy clause" in html
 
 
 async def test_a_document_with_no_claims_still_has_a_report_that_says_what_it_covered() -> None:
@@ -654,17 +824,42 @@ async def submit_hostile(w: World, content: str) -> str:
     return str(response.json()["check_id"])
 
 
-async def test_the_report_page_holds_no_inline_script_handler_or_style() -> None:
-    w, check_id = await reported(Unavailable(lambda n: n == 3), evidence=UNKNOWN_FY2023)
-    for token in (SUBMITTER_TOKEN, ADMIN_TOKEN):
-        parsed = scan(await page(w, check_id, token))
-        for tag, attrs in parsed.elements:
-            assert tag != "style"
-            assert "style" not in attrs and not [k for k in attrs if k.startswith("on")]
-            if tag == "script":
-                assert (attrs["src"] or "").startswith("/static/")
-            for key in ("src", "href", "action"):
-                assert not re.match(r"(?i)\s*(javascript:|data:|https?:|//)", attrs.get(key) or "")
+def assert_no_inline_script_handler_or_style(html: str) -> None:
+    parsed = scan(html)
+    for tag, attrs in parsed.elements:
+        assert tag != "style"
+        assert "style" not in attrs and not [k for k in attrs if k.startswith("on")]
+        if tag == "script":
+            assert (attrs["src"] or "").startswith("/static/")
+        for key in ("src", "href", "action"):
+            assert not re.match(r"(?i)\s*(javascript:|data:|https?:|//)", attrs.get(key) or "")
+    assert "".join(parsed.text).count("<script") == 0
+
+
+async def test_the_page_holds_no_inline_script_handler_or_style_in_any_state() -> None:
+    """The `new`, `extracted`, running, failed and `reported` states of the one page, drawn for
+    the submitter and for an admin."""
+    w = await world(CheckModel(findings=MIXED), evidence=UNKNOWN_FY2023)
+    await publish_sources(w)
+    check_id = await submit(w)
+    states = {"new": await page(w, check_id)}
+    await w.ledger.reserve_extraction(TENANT, check_id, as_of=DAY, trace_id="a" * 32)
+    states["running claims"] = await page(w, check_id)
+    await w.ledger.fail_extraction(TENANT, check_id)
+    states["failed claims"] = await page(w, check_id)
+    await extract(w, check_id)
+    states["extracted"] = await page(w, check_id)
+    await w.ledger.reserve_findings(TENANT, check_id, trace_id="b" * 32)
+    states["running findings"] = await page(w, check_id)
+    await w.ledger.fail_findings(TENANT, check_id, trace_id="b" * 32)
+    states["failed findings"] = await page(w, check_id)
+    await find(w, check_id)
+    states["reported"] = await page(w, check_id)
+    states["reported (admin)"] = await page(w, check_id, ADMIN_TOKEN)
+    assert len(states) == 8
+    for name, html in states.items():
+        assert_no_inline_script_handler_or_style(html)
+        assert "/static/" in html, name
 
 
 # ---- the document, cut at the claims' quotes ----------------------------------------------
@@ -697,23 +892,14 @@ def test_the_run_script_streams_the_stages_and_never_writes_html() -> None:
     from tests.test_api_pages import STATIC_DIR
 
     script = (STATIC_DIR / "check_run.js").read_text()
-    for forbidden in (
-        "innerHTML",
-        "outerHTML",
-        "insertAdjacentHTML",
-        "document.write",
-        "eval(",
-        "new Function",
-        "createContextualFragment",
-        "DOMParser",
-    ):
-        assert forbidden not in script, forbidden
-    assert "http://" not in script and "https://" not in script
-    # the claims, then the findings, each streamed; the stage line is the three stages
+    assert_script_writes_no_html(script)
+    # the claims, then the findings, each streamed; the stage line is the two stages
     assert script.index("/claims`") < script.index("/findings`")
     assert 'headers: { Accept: "text/event-stream" }' in script
-    for stage in ("coverage", "claims", "findings"):
+    for stage in ("claims", "findings"):
         assert f'setStage("{stage}", "running")' in script
+    # a page loaded mid-run polls the light run endpoint, then reloads
+    assert "/run`" in script and "setTimeout" in script and "dataset.running" in script
     # when the findings are recorded the page is reloaded, so the server draws the report
     assert "window.location.assign(window.location.pathname)" in script
     assert "textContent" in script
