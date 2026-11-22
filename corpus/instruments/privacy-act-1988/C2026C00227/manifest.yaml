@@ -34,6 +34,10 @@
 # (`s26wb` never selects `s26wba`). Six of these sections (26WD, 26WG, 26WJ,
 # 26WM, 26WN, 26WS) hold a chapeau clause at the bare path itself, which a
 # `/` prefix would miss (238 clauses, not the 244 the human signed).
+# 2026-11-22: Lucas Frasca confirmed ("Yes, covered") that his groups 1-5
+# signature covers the six bare entries s26wd, s26wg, s26wj, s26wm, s26wn and
+# s26ws, each selecting the section's own chapeau clause with its paragraphs,
+# which is what makes the Part IIIC count 244 rather than 238 (#282, #340).
 author: "model: Claude Opus 5.5 — drafted s6da/, s6ea/, s15 (2026-10-12) and the s7a, s16c and s26wb-s26wt entries (#282, 2026-11-11), added to Lucas Frasca's 2026-09-24 selection"
 reviewed_by: "Lucas Frasca"
 date: 2026-11-11
