@@ -1,14 +1,20 @@
-"""The Check pages (#297, ADR-0053 I1, I2 and I6): server-rendered, as the Ask
+"""The Check pages (#297, #300; ADR-0053 I1, I2, I3 and I6): server-rendered, as the Ask
 pages are (`pages.py`), under the same CSP and the same headers.
 
 - `GET /checks/new`: where a member submits a document, a form whose script
   (`static/checks.js`) reads the chosen file and posts it to `POST /v1/checks`
   with the session cookie, then opens the new check. Markdown and plain text
   only, and the page says so.
-- `GET /checks/{id}`: the stored document, passage by passage, each passage an
-  element with its anchor (`clause-p1`, ...), the same ids the source route
-  serves (`/v1/sources/<the document>/v1#clause-p1`), so a later finding opens
-  the document at its claim. Nothing is extracted or judged yet (#298, #299).
+- `GET /checks/{id}`: one page in three states, by what the ledger holds
+  (`check_report.State`). With no claims it offers "Run check"; with claims and no
+  findings it offers the rest of the run; with findings it is the report: the findings
+  ordered by verdict, the policies' banner, the coverage statement and the citation panel
+  (`_sources.html`). `static/check_run.js` makes the two run requests and shows their
+  stages as they stream, then reloads, so the report on screen is always the ledger's,
+  drawn by the server (it never builds HTML from the stream). The stored document is below,
+  each passage an element with its anchor (`clause-p1`, ...), the same ids the source route
+  serves (`/v1/sources/<the document>/v1#clause-p1`), a claim's words marked in it, so a
+  claim opens the document at its quote.
 
 **Visibility** is `checks.read_check`'s, the one reader the JSON route uses: a
 check that is not the caller's (and the caller is not an admin) is the same 404
@@ -25,10 +31,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from compliance_rag.api.checks import MAX_DOCUMENT_BYTES, read_check, source_path
+from compliance_rag.api.check_report import passage_views, read_report
+from compliance_rag.api.checks import MAX_DOCUMENT_BYTES, source_path
 from compliance_rag.api.deps import services_of
 from compliance_rag.api.pages import PageCaller, PageError, render
-from compliance_rag.corpus.models import clause_anchor_id
 
 router = APIRouter()
 
@@ -49,16 +55,21 @@ async def new_check_page(request: Request, _: PageCaller) -> HTMLResponse:
 
 @router.get("/checks/{check_id}", response_class=HTMLResponse)
 async def check_page(request: Request, who: PageCaller, check_id: str) -> HTMLResponse:
-    view = await read_check(services_of(request), who, check_id)
-    if view is None:
+    found = await read_report(services_of(request), who, check_id)
+    if found is None:
         raise _no_such_check()
+    state, report = found
+    claims = state.claims
     return render(
         request,
         "check.html",
-        check=view.record,
-        title=view.title,
-        passages=view.passages,
-        mine=view.mine,
-        source_href=source_path(view.record.instrument_id),
-        anchor=clause_anchor_id,
+        check=state.view.record,
+        title=state.view.title,
+        mine=state.view.mine,
+        source_href=source_path(state.view.record.instrument_id),
+        state=state.state.value,
+        passages=state.view.passages,
+        passage_views=passage_views(state.view.passages, claims),
+        claims=state.claim_views,
+        report=report,
     )

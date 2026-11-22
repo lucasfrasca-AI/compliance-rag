@@ -1,0 +1,8 @@
+{#- A claim as a report names it (`check_report._claim_view`): its number, the
+    document's own words, and the link that opens the document at them. The summary
+    is the extraction model's, shown labelled as such (ADR-0059). Autoescaped; nothing
+    is marked safe. -#}
+{% macro claim_ref(c) %}
+<p class="claim"><a class="claim-link" href="{{ c.href }}">Claim {{ c.index }}</a> in the document: <q class="claim-quote">{{ c.quote }}</q></p>
+<p class="note">The model's label for it, not checked: {{ c.summary }}</p>
+{% endmacro %}
