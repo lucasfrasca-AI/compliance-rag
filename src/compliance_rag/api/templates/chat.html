@@ -1,14 +1,16 @@
 {% extends "base.html" %}
 {% block title %}{{ heading }}{% endblock %}
+{% block body_class %}page-chat{% endblock %}
 {% block body %}
-<div class="chat" id="chat" data-chat-id="{{ chat_id or '' }}">
 <main class="conversation">
+<div class="chat" id="chat" data-chat-id="{{ chat_id or '' }}">
 <h1>{{ heading }}</h1>
 <noscript><p class="card notice">Asking a question needs JavaScript. Chats you have already had can still be read.</p></noscript>
 <div id="turns" class="turns">
 {% include "_turns.html" %}
 </div>
 <p id="pending-question" class="turn turn-question pending" hidden></p>
+{#- The stream, as a quiet step line: the same events, said once each. -#}
 <ol id="progress" class="progress" aria-label="Progress" hidden>
 <li data-stage="coverage" data-state="waiting"><span class="stage-name">Checking which obligations apply to you</span> <span class="stage-detail" data-detail></span></li>
 <li data-stage="retrieval" data-state="waiting"><span class="stage-name">Finding the relevant clauses</span> <span class="stage-detail" data-detail></span></li>
@@ -25,14 +27,18 @@
 <span class="note">Up to 2,000 characters.</span>
 </div>
 </form>
+</div>
 </main>
-<aside id="panel" class="panel" aria-label="Source" hidden>
+{% endblock %}
+{#- The citation area keeps its behaviour (`ask.js` opens it); it sits in the
+    shell's right-hand slot, where the shared Sources panel (#354) replaces it. -#}
+{% block sources %}
+<section id="panel" class="panel" aria-label="Source" hidden>
 <div class="panel-head">
 <h2 id="panel-title">Source</h2>
 <button type="button" id="panel-close">Close</button>
 </div>
 {#- Nothing in it can run: sandbox="" here, and the source route's own CSP. -#}
 <iframe id="panel-frame" title="The cited clause in its source" sandbox="" referrerpolicy="no-referrer"></iframe>
-</aside>
-</div>
+</section>
 {% endblock %}

@@ -1,7 +1,27 @@
-:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-body { margin: 0; display: grid; place-items: center; min-height: 100vh; }
-main { width: min(24rem, 100% - 2rem); }
+/* The sign-in page (#280, #353): the shell's palette (app.css, loaded first),
+   in a card in the middle of the screen. The shell's layout rules are scoped to
+   `body.shell-page`, so this page's body is its own. */
+body { display: grid; place-items: center; min-height: 100vh; }
+main { width: min(24rem, 100% - 2rem); padding-block: 2rem; }
+.signin-brand { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; }
+.signin-brand::before {
+  content: "";
+  width: 4.5rem;
+  height: 4.5rem;
+  background: url("/static/contextum-logo.png") center / contain no-repeat;
+}
+.signin-brand span { font-size: 1.6rem; font-weight: 600; color: var(--strong); letter-spacing: 0.01em; }
+main h1 { font-size: 1.1rem; text-align: center; color: var(--muted); font-weight: 500; }
 form { display: grid; gap: 1rem; }
-label { display: grid; gap: 0.25rem; }
-input, button { font: inherit; padding: 0.5rem; }
-#signin-status { min-height: 1.5em; }
+label { display: grid; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
+input, button { font: inherit; padding: 0.5rem 0.6rem; }
+input {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--strong);
+}
+input:focus-visible { outline: none; border-color: var(--gold); }
+#google-sign-in, #sign-out { background: none; color: var(--gold); font-weight: 500; }
+#google-sign-in { width: 100%; }
+#signin-status { min-height: 1.5em; color: var(--muted); }

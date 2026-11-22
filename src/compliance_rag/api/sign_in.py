@@ -160,13 +160,18 @@ async def sign_in_page(request: Request) -> HTMLResponse:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in</title>
+<title>Sign in - Contextum</title>
+<link rel="icon" type="image/png" href="/static/contextum-logo.png">
+<link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/signin.css">
 <link rel="stylesheet" href="/static/banner.css">
 </head>
 <body>
 {banner}
 <main id="signin" {attributes}>
+<div class="signin-brand">
+<span>Contextum</span>
+</div>
 <h1>Sign in</h1>
 <form id="signin-form" autocomplete="on">
 <label>Email <input name="email" type="email" autocomplete="username" required></label>

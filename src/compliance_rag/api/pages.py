@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from dataclasses import dataclass
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -180,23 +181,84 @@ class PageError(Exception):
         self.message = message
 
 
+@dataclass(frozen=True, slots=True)
+class NavItem:
+    href: str
+    label: str
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class NavSection:
+    heading: str
+    items: tuple[NavItem, ...]
+
+
+_NAV: tuple[tuple[str, tuple[tuple[str, str, str], ...], bool], ...] = (
+    # (heading, ((href, label, the path it is active for),), admins only)
+    ("Ask", (("/chats/new", "New chat", "/chats/new"), ("/chats", "Chats", "/chats")), False),
+    ("Check", (("/checks/new", "Check a document", "/checks/new"),), False),
+    (
+        "Admin",
+        (
+            ("/admin/subscriptions", "Subscriptions", "/admin/subscriptions"),
+            ("/admin/questionnaire", "Questionnaire", "/admin/questionnaire"),
+        ),
+        True,
+    ),
+)
+"""The sidebar, once: each link with the path it is the home of. A path belongs
+to the link whose path is its longest match (itself or a parent), so
+`/chats/new` is New chat and `/chats/<id>` is Chats."""
+
+
+def nav_sections(path: str, *, admin: bool) -> list[NavSection]:
+    """The sidebar for a reader at `path`: the sections they may see, each link
+    marked active if it is the longest match for `path`. Shown or hidden only;
+    the routes check the role on every request."""
+    shown = [(h, items) for h, items, admins_only in _NAV if admin or not admins_only]
+
+    def match(home: str) -> int:
+        return len(home) if path == home or path.startswith(f"{home}/") else 0
+
+    best = max((match(home) for _, items in shown for _, _, home in items), default=0)
+    return [
+        NavSection(
+            heading,
+            tuple(
+                NavItem(href, label, best > 0 and match(home) == best)
+                for href, label, home in items
+            ),
+        )
+        for heading, items in shown
+    ]
+
+
 def render(request: Request, name: str, *, status: int = 200, **context: object) -> HTMLResponse:
-    """Every page is drawn here, and `is_admin` (whether the nav links the admin
-    panel) is set here, from the one place that decides it: `page_caller`, which
-    records the reader's role on the request once. A page cannot forget it, and an
-    error page, drawn without a resolved reader, never shows the link. The flag
-    shows or hides a link and nothing else: the panel's routes check the role on
-    every request.
+    """Every page is drawn here, and `is_admin` (whether the sidebar links the
+    admin panel) is set here, from the one place that decides it: `page_caller`,
+    which records the reader's role on the request once. A page cannot forget it,
+    and an error page, drawn without a resolved reader, never shows the link. The
+    flag shows or hides a link and nothing else: the panel's routes check the role
+    on every request. The sidebar's email (`member_email`) comes from the same
+    place and is shown as text; `nav` is the sidebar, built here once for the reader
+    and the path.
 
     The demo generator's banner (#292) is set here too, for the same reason: the
     one place every page and fragment is made, so none can lack it. `banner` is
     the page's (the deployment runs the demo); `fake_banner` is the words, for a
     turn the ledger records the demo as having written."""
     shown = bool(getattr(request.state, "is_admin", False))
+    email = getattr(request.state, "member_email", None)
     banner = banner_text(services_of(request).settings)
     return HTMLResponse(
         ENV.get_template(name).render(
-            is_admin=shown, banner=banner, fake_banner=FAKE_BANNER, **context
+            is_admin=shown,
+            member_email=email if isinstance(email, str) else None,
+            nav=nav_sections(request.url.path, admin=shown),
+            banner=banner,
+            fake_banner=FAKE_BANNER,
+            **context,
         ),
         status_code=status,
         headers=PAGE_HEADERS,
@@ -252,6 +314,7 @@ async def page_caller(
         raise PageError(503, "Try again shortly", "Sign-in can't be checked right now.") from None
     caller = await current_caller(request, member)
     request.state.is_admin = is_admin(services_of(request).settings, caller.member.email)
+    request.state.member_email = caller.member.email
     return caller
 
 

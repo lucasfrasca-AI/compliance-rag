@@ -1,97 +1,141 @@
-/* The Ask pages (#281). One stylesheet, served beside the pages: the CSP allows
-   no inline style, so nothing is styled by attribute. Mobile first: the
-   conversation is one column at phone width, and the citation panel is a sheet
-   over the bottom of the screen; from 60rem it sits beside the conversation. */
+/* The Contextum shell and the Ask pages (#281, #353). One stylesheet, served
+   beside the pages: the CSP allows no inline style, so nothing is styled by
+   attribute. One dark theme, no gradients, 8px radius, 1px borders.
+
+   Mobile first: below 60rem the sidebar is a top bar and the right-hand slot
+   (#sources) stacks under the page; from 60rem the sidebar is a column of its
+   own beside the page, and the slot sits to its right. That is the one
+   breakpoint. */
 :root {
-  color-scheme: light dark;
-  --ink: #1b2129;
-  --muted: #566170;
-  --line: #d6dce3;
-  --paper: #f5f6f8;
-  --card: #ffffff;
-  --accent: #1f4f9c;
-  --ok: #17663f;
-  --ok-bg: #e7f4ec;
-  --bad: #a52019;
-  --bad-bg: #fbeceb;
-  --warn: #8a5a00;
-  --warn-bg: #fff3d9;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ink: #e8ebef;
-    --muted: #a3adba;
-    --line: #34404d;
-    --paper: #12171d;
-    --card: #1b232c;
-    --accent: #8db4f5;
-    --ok: #7fd1a3;
-    --ok-bg: #16301f;
-    --bad: #ff9a92;
-    --bad-bg: #3a1c1a;
-    --warn: #f2c46d;
-    --warn-bg: #3a2d0f;
-  }
+  color-scheme: dark;
+  /* the palette */
+  --bg: #0f1e3d;
+  --side: #16264a;
+  --card: #16264a;
+  --card-2: #1b2d55;
+  --line: #263a66;
+  --ink: #e6e9f0;
+  --strong: #ffffff;
+  --muted: #8a94a8;
+  --gold: #c9a227;
+  --ok: #2e9e6b;
+  --warn: #d08a2e;
+  --bad: #e2705c;
+  --radius: 8px;
+  --ok-bg: rgba(46, 158, 107, 0.16);
+  --warn-bg: rgba(208, 138, 46, 0.16);
+  --bad-bg: rgba(226, 112, 92, 0.14);
+  --sidebar-w: 16.25rem;
+  --sources-w: clamp(16rem, 28vw, 22.5rem);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.5;
+  font-size: 0.95rem;
+  line-height: 1.6;
   color: var(--ink);
-  background: var(--paper);
+  background: var(--bg);
   overflow-wrap: anywhere;
 }
-a { color: var(--accent); }
+a { color: var(--gold); }
 code { font-size: 0.85em; }
-h1 { font-size: 1.3rem; margin: 0 0 0.75rem; }
-h2 { font-size: 1rem; margin: 0 0 0.4rem; }
+h1 { font-size: 1.4rem; font-weight: 600; color: var(--strong); margin: 0 0 0.75rem; }
+h2 { font-size: 1rem; font-weight: 600; margin: 0 0 0.4rem; }
 h3 { font-size: 1.05rem; margin: 0 0 0.4rem; }
 h4 { font-size: 0.95rem; margin: 1rem 0 0.35rem; }
 [hidden] { display: none !important; }
 
-.bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
-  padding: 0.6rem 1rem;
-  background: var(--card);
-  border-bottom: 1px solid var(--line);
-}
-.brand { font-weight: 700; color: var(--ink); text-decoration: none; }
-.bar nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: center; }
-
 button, .button, textarea { font: inherit; }
 button, .button {
   display: inline-block;
-  padding: 0.5rem 0.95rem;
-  border-radius: 6px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--paper);
+  padding: 0.45rem 0.95rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--gold);
+  background: var(--gold);
+  color: var(--bg);
+  font-weight: 600;
   cursor: pointer;
   text-decoration: none;
 }
-button:disabled { opacity: 0.6; cursor: progress; }
+button:disabled { opacity: 0.5; cursor: progress; }
 button.link {
   background: none;
   border: none;
   padding: 0;
-  color: var(--accent);
+  font-weight: 400;
+  color: var(--gold);
   text-decoration: underline;
 }
-#panel-close {
-  background: none;
-  color: var(--accent);
-  padding: 0.3rem 0.7rem;
-}
-:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button.secondary, #panel-close { background: none; color: var(--gold); font-weight: 500; }
+#panel-close { padding: 0.3rem 0.7rem; }
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
-.page { padding: 1rem; max-width: 70rem; margin: 0 auto; }
-.narrow { max-width: 42rem; }
+/* The shell: a sidebar, the page, and a right-hand slot. On a phone the
+   sidebar is a bar across the top and the slot stacks under the page. */
+body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
+.shell { flex: 1; display: block; min-width: 0; }
+.sidebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  padding: 0.6rem 1rem;
+  background: var(--side);
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 0.6rem; text-decoration: none; }
+/* The logo is the stylesheet's (img-src 'self'), so no page holds an <img> and the
+   pages' "markup stays text" tests stay meaningful. */
+.brand::before {
+  content: "";
+  flex: none;
+  width: 2.125rem;
+  height: 2.125rem;
+  background: url("/static/contextum-logo.png") center / contain no-repeat;
+}
+.brand span { font-size: 1.25rem; font-weight: 600; color: var(--strong); letter-spacing: 0.01em; }
+.nav-section { display: contents; }
+.nav-heading { display: none; }
+.nav-section ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.1rem 0.9rem; }
+.nav-section a {
+  display: block;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.nav-section a:hover { color: var(--strong); }
+.nav-section a[aria-current="page"] { color: var(--strong); background: var(--card-2); }
+.me { display: flex; align-items: center; gap: 0.6rem; margin-left: auto; }
+.me-email {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.me button.link { color: var(--muted); font-size: 0.85rem; }
+.me button.link:hover { color: var(--strong); }
+.avatar {
+  width: 1.875rem;
+  height: 1.875rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  color: var(--strong);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.workspace { min-width: 0; }
+.sources { border-top: 1px solid var(--line); padding: 1rem; }
+.sources:empty, .page-chat:not(.panel-open) .sources { display: none; }
+
+.page { padding: 1rem; margin: 0 auto; }
 .title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .note, .meta { color: var(--muted); font-size: 0.85rem; }
 .meta { margin: 0.5rem 0 0; }
@@ -103,12 +147,12 @@ button.link {
   padding: 0.75rem 1rem;
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   color: var(--ink);
   text-decoration: none;
 }
-.chat-list a:hover { border-color: var(--accent); }
-.chat-name { display: block; font-weight: 600; }
+.chat-list a:hover { border-color: var(--gold); }
+.chat-name { display: block; font-weight: 600; color: var(--strong); }
 
 /* The admin pages (#302). */
 .sub-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
@@ -121,12 +165,11 @@ button.link {
   padding: 0.75rem 1rem;
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
-.sub-list li[data-state="subscribed"] { border-left: 6px solid var(--ok); }
+.sub-list li[data-state="subscribed"] { border-left: 4px solid var(--ok); }
 .sub-name { min-width: 0; }
 .sub-list form { margin: 0; }
-button.secondary { background: none; color: var(--accent); }
 
 /* The questionnaire (#304). */
 .questionnaire .route { margin: 1.25rem 0 0; }
@@ -138,14 +181,14 @@ button.secondary { background: none; color: var(--accent); }
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--card);
+  background: var(--bg);
   color: var(--ink);
   font: inherit;
   max-width: 100%;
 }
 .questionnaire label.inline { display: inline-flex; gap: 0.4rem; align-items: center; }
 .questionnaire .answers { list-style: none; margin: 0.4rem 0; padding: 0; display: grid; gap: 0.4rem; }
-.questionnaire .answers li { padding: 0.4rem 0.6rem; background: var(--paper); border-radius: 6px; }
+.questionnaire .answers li { padding: 0.4rem 0.6rem; background: var(--bg); border-radius: 6px; }
 .questionnaire .answers li[data-current="false"] { color: var(--muted); text-decoration: line-through; }
 .questionnaire .answers li[data-current="false"] .meta { text-decoration: none; }
 .questionnaire .plain { padding-left: 1.1rem; }
@@ -155,9 +198,8 @@ button.secondary { background: none; color: var(--accent); }
 .flag-conflict { background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad); }
 .flag-line { margin: 0.3rem 0; }
 
-/* The chat: one column; the panel is a sheet until there is room beside it. */
-.chat { display: block; }
-.conversation { padding: 1rem; max-width: 52rem; margin: 0 auto; min-width: 0; }
+/* The chat: one column. */
+.conversation { padding: 1rem; min-width: 0; }
 .turn { margin: 0 0 1.25rem; }
 .label {
   font-size: 0.75rem;
@@ -170,26 +212,26 @@ button.secondary { background: none; color: var(--accent); }
 .turn-question .question-text, .turn-question.pending {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 0.6rem 0.85rem;
+  color: var(--strong);
 }
 .turn-question.pending { white-space: pre-wrap; }
 
 .card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-left-width: 6px;
-  border-radius: 8px;
+  border-left-width: 4px;
+  border-radius: var(--radius);
   padding: 0.85rem 1rem;
   margin: 0 0 0.75rem;
 }
 .card p { margin: 0.4rem 0; }
-.card.verified { border-left-color: var(--ok); }
-.card.withheld, .card.error { border-left-color: var(--bad); }
+.card.withheld, .card.error { border-left-color: var(--warn); }
+.card.error { border-left-color: var(--bad); }
 .card.not-in-environment, .card.notice { border-left-color: var(--warn); }
 .verdict { font-weight: 700; }
-.verdict-ok { color: var(--ok); }
-.verdict-bad { color: var(--bad); }
+.verdict-bad { color: var(--warn); }
 .flag {
   display: inline-block;
   font-size: 0.72rem;
@@ -205,72 +247,147 @@ button.secondary { background: none; color: var(--accent); }
 .incomplete-summary h4 { margin-top: 0; }
 .incomplete-summary ul { margin: 0.25rem 0; padding-left: 1.1rem; }
 
-.citations { margin: 0; padding-left: 1.5rem; }
+/* A verified answer is its words, a status pill under them, and its citations.
+   The pill is outside the answer's text; each [n] marker is an empty element
+   whose number is drawn here, so neither changes what the text says. */
+.outcome.verified { margin: 0 0 0.75rem; }
+.outcome.verified .answer-text { color: var(--ink); font-size: 1rem; line-height: 1.7; }
+.marker { color: var(--gold); font-size: 0.72em; font-weight: 600; margin-left: 0.1em; }
+.marker::before { content: attr(data-n); }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.8rem 0 0.2rem;
+  padding: 0.25rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: 1px solid;
+}
+.pill-ok { color: #bfebd5; background: var(--ok-bg); border-color: rgba(46, 158, 107, 0.55); }
+.pill-warn { color: #f6d3a8; background: var(--warn-bg); border-color: rgba(208, 138, 46, 0.55); }
+
+.citations { list-style: none; margin: 0; padding: 0; }
 .citations li { padding: 0.4rem 0; border-top: 1px solid var(--line); }
 .citations li:first-child { border-top: none; }
 .cite { font-weight: 600; }
+.cite-n { color: var(--gold); font-weight: 600; margin-right: 0.35rem; font-variant-numeric: tabular-nums; }
 .blocked { margin: 0; padding-left: 1.25rem; }
 
-/* Progress: the stage running now pulses; reduced motion keeps it still. */
-.progress { margin: 0 0 0.75rem; padding: 0.75rem 1rem 0.75rem 2.2rem; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
-.progress li { margin: 0.2rem 0; color: var(--muted); }
-.progress li[data-state="running"] { color: var(--accent); font-weight: 600; }
-.progress li[data-state="done"] { color: var(--ok); }
-.progress li[data-state="done"]::marker { content: "\2713  "; }
-.progress li[data-state="failed"] { color: var(--bad); }
-.progress li[data-state="failed"]::marker { content: "\2717  "; }
-.progress li[data-state="running"]::marker { content: "\25CF  "; }
-.stage-detail { font-weight: 400; color: var(--muted); font-size: 0.85rem; }
-@media (prefers-reduced-motion: no-preference) {
-  .progress li[data-state="running"] { animation: pulse 1.2s ease-in-out infinite alternate; }
+/* The stream, as a quiet step line: the stage running now pulses; reduced
+   motion keeps it still. */
+.progress {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0 0 0 1rem;
+  border-left: 1px solid var(--line);
+  font-size: 0.8rem;
+  color: var(--muted);
 }
-@keyframes pulse { from { opacity: 0.55; } to { opacity: 1; } }
+.progress li { position: relative; margin: 0.2rem 0; color: var(--muted); }
+.progress li::before {
+  content: "";
+  position: absolute;
+  left: -1.29rem;
+  top: 0.55rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--line);
+}
+.progress li[data-state="running"] { color: var(--gold); }
+.progress li[data-state="running"]::before { background: var(--gold); }
+.progress li[data-state="done"]::before { background: var(--ok); }
+.progress li[data-state="failed"] { color: var(--bad); }
+.progress li[data-state="failed"]::before { background: var(--bad); }
+.stage-detail { font-weight: 400; color: var(--muted); font-size: 0.8rem; }
+@media (prefers-reduced-motion: no-preference) {
+  .progress li[data-state="running"]::before { animation: pulse 1s ease-in-out infinite alternate; }
+}
+@keyframes pulse { from { opacity: 0.25; } to { opacity: 1; } }
 
 .ask { display: grid; gap: 0.5rem; margin-top: 1rem; }
-.ask label { font-weight: 600; }
+.ask label { font-weight: 600; color: var(--strong); }
 .ask textarea {
   width: 100%;
   min-height: 5rem;
   padding: 0.6rem;
   border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--strong);
+  resize: vertical;
+}
+.ask textarea:focus-visible { outline: none; border-color: var(--gold); }
+.ask input[type="text"], .ask input[type="file"] {
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--card);
   color: var(--ink);
-  resize: vertical;
+  padding: 0.4rem 0.5rem;
 }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
 
-/* The citation panel: a sheet over the bottom of a phone screen. */
-.panel {
-  position: fixed;
-  inset: auto 0 0 0;
-  height: 70vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--card);
-  border-top: 2px solid var(--accent);
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
-  z-index: 10;
-}
+/* The chat's citation area, in the slot (#sources) the shell gives it. */
+.panel { display: flex; flex-direction: column; height: 70vh; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.4rem 1rem; border-bottom: 1px solid var(--line); }
-.panel-head h2 { margin: 0; }
-#panel-frame { flex: 1; width: 100%; border: 0; background: #fff; }
-.panel-open .conversation { padding-bottom: 72vh; }
+.panel-head h2 { margin: 0; color: var(--gold); }
+#panel-frame { flex: 1; width: 100%; border: 0; border-radius: 0 0 var(--radius) var(--radius); background: #fff; }
 
 @media (min-width: 60rem) {
-  .chat { display: grid; grid-template-columns: minmax(0, 1fr); }
-  body.panel-open .chat { grid-template-columns: minmax(0, 1fr) minmax(24rem, 38rem); }
-  .conversation { margin: 0; width: 100%; max-width: 52rem; justify-self: center; }
-  .panel {
-    position: sticky;
-    inset: auto;
-    top: 0;
-    height: 100vh;
-    border-top: 0;
-    border-left: 2px solid var(--accent);
-    box-shadow: none;
+  /* the sidebar is its own column; the page and the slot scroll on their own */
+  body.shell-page { height: 100vh; overflow: hidden; }
+  .shell {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   }
-  .panel-open .conversation { padding-bottom: 1rem; }
+  .sidebar {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 0;
+    padding: 1.1rem 0.9rem;
+    overflow-y: auto;
+    border-bottom: none;
+    border-right: 1px solid var(--line);
+  }
+  .brand { padding: 0 0.35rem 0.5rem; }
+  .nav-section { display: block; margin-top: 1.2rem; }
+  .nav-heading {
+    display: block;
+    margin: 0 0 0.3rem;
+    padding: 0 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .nav-section ul { display: block; }
+  .me {
+    margin: auto 0 0;
+    padding: 1rem 0.4rem 0;
+    border-top: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .me-email { flex: 1; }
+  .workspace {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .workspace > main { overflow-y: auto; min-width: 0; }
+  /* the page's column is at most 760px, centred, whatever the room */
+  .page, .conversation { padding: 1.5rem max(1.5rem, calc((100% - 47.5rem) / 2)); }
+  .sources {
+    width: var(--sources-w);
+    overflow-y: auto;
+    border-top: none;
+    border-left: 1px solid var(--line);
+  }
+  .panel { height: 100%; }
 }
 
 /* A check's document, passage by passage (#297). */

@@ -6,11 +6,16 @@
 //  2. when the stream ends, has htmx swap in the server-rendered turns
 //     (GET /chats/{id}/turns), so every outcome is drawn by the server's
 //     templates from what the ledger recorded, never built here;
-//  3. opens a citation's source in the side panel.
+//  3. opens a citation's source in the side panel;
+//  4. numbers the cites in a verified answer: an empty <sup class="marker"
+//     data-n="[n]"> after each place the text names one, whose number the
+//     stylesheet draws, so the answer's text content is never changed.
 //
 // Nothing from the server is ever written as HTML here: text goes in with
 // textContent. The only HTML that reaches the page is htmx's swap of the
 // server's own autoescaped fragment.
+
+import { segments } from "./markers.js";
 
 const CHAT_ID = /^[0-9a-f]{32}$/;
 const SOURCE_PREFIX = "/v1/sources/";
@@ -28,6 +33,38 @@ document.addEventListener("click", async (event) => {
     window.location.assign("/signin");
   }
 });
+
+// ---- the [n] markers ------------------------------------------------------------------
+
+/** Puts the markers into every verified answer's text that has none yet. The
+ * answer's own text is split into text nodes around them and nothing else is
+ * touched; if the text content differs afterwards, it is put back as it was. */
+function placeMarkers(root) {
+  for (const answer of root.querySelectorAll(".verified .answer-text:not([data-marked])")) {
+    answer.dataset.marked = "";
+    const list = answer.closest(".verified")?.querySelector("ol.citations");
+    if (!list) continue;
+    const cites = [...list.children].map((item) => {
+      const cite = item.querySelector(".cite");
+      return item.dataset.citation === "unreadable" || !cite ? null : cite.textContent;
+    });
+    const original = answer.textContent;
+    const parts = segments(original, cites);
+    if (!parts.some((part) => "marker" in part)) continue;
+    answer.replaceChildren(
+      ...parts.map((part) => {
+        if ("text" in part) return document.createTextNode(part.text);
+        const marker = document.createElement("sup");
+        marker.className = "marker";
+        marker.dataset.n = `[${part.marker}]`;
+        return marker;
+      }),
+    );
+    if (answer.textContent !== original) answer.textContent = original;
+  }
+}
+
+placeMarkers(document);
 
 // ---- the citation panel ---------------------------------------------------------------
 
@@ -262,6 +299,7 @@ async function ask(question) {
     } catch {
       fragmentFailed = true;
     }
+    placeMarkers(document);
     const last = document.querySelector("#turns .turn:last-child");
     if (fragmentFailed) {
       setNotice("The answer could not be shown. Reload this chat to read it.");

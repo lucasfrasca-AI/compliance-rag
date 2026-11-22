@@ -479,7 +479,7 @@ async def test_a_withheld_answer_shows_its_blocked_citations_and_reason_and_none
     assert [n for n, _ in events][-1] == "answer"
     assert outcomes(fragment) == ["withheld"]  # not an error state
     words = text_of(fragment)
-    assert "Answer withheld" in words and "A citation didn't match its clause" in words
+    assert "Answer withheld" in words and "Withheld — a citation didn't match its clause" in words
     assert "Citations that did not verify" in words
     (blocked,) = scan(fragment).where("li", **{"data-blocked": NOT_RETRIEVED})
     assert blocked and "s 6C(2)" in words
@@ -493,7 +493,10 @@ async def test_an_answer_citing_nothing_is_withheld_with_its_own_reason() -> Non
         _, fragment = await ask(c)
     assert outcomes(fragment) == ["withheld"]
     words = text_of(fragment)
-    assert "The answer cited no clause" in words and "Citations that did not verify" not in words
+    assert (
+        "Withheld — the answer cited no clause" in words
+        and "Citations that did not verify" not in words
+    )
     assert "Acme is probably fine." not in fragment
 
 
@@ -993,6 +996,7 @@ async def test_no_page_has_an_inline_script_handler_style_or_a_foreign_asset(quo
         "/static/vendor/htmx/htmx.min.js",
     ]
     assert [a["href"] for a in chat.where("link")] == [
+        "/static/contextum-logo.png",  # the favicon (#353)
         "/static/app.css",
         "/static/banner.css",
     ]
@@ -1070,7 +1074,7 @@ async def test_the_chat_page_has_the_form_the_progress_and_a_sandboxed_citation_
     (frame,) = parsed.where("iframe")
     assert frame["sandbox"] == "" and "src" not in frame  # every capability off; nothing loaded
     assert frame["referrerpolicy"] == "no-referrer"
-    (panel,) = parsed.where("aside", id="panel")
+    (panel,) = parsed.where("section", id="panel")
     assert "hidden" in panel
     assert [a["data-stage"] for t, a in parsed.elements if t == "li" and "data-stage" in a] == [
         "coverage",
@@ -1095,4 +1099,6 @@ async def test_the_pages_are_made_for_a_phone(member: httpx.AsyncClient) -> None
     assert re.findall(r"@media \((min|max)-width: [\d.]+rem\)", css) == ["min"]
     assert not re.search(r"(?<!-)width:\s*\d+(\.\d+)?px", css) and "min-width: 3" not in css
     assert "overflow-wrap: anywhere" in css  # a long clause id can't widen the page
-    assert "position: fixed" in css  # the panel is a sheet over the screen until there's room
+    # the shell is a top bar and the citation slot stacks under the page until
+    # there's room (#353): the one width query is the sidebar's column
+    assert "@media (min-width: 60rem)" in css and "grid-template-columns: var(--sidebar-w)" in css
