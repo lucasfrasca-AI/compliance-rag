@@ -28,6 +28,7 @@ from compliance_rag.api import (
     chats,
     check_claims,
     check_findings,
+    check_list,
     check_pages,
     checks,
     pages,
@@ -114,6 +115,7 @@ def create_app(services: ApiServices, *, redirect_root: bool = True) -> FastAPI:
     app.include_router(sign_in.router)
     app.include_router(pages.router)
     app.include_router(check_pages.router)
+    app.include_router(check_list.router)
     app.include_router(admin.router)
     app.include_router(questionnaire.router)
     app.add_exception_handler(pages.SignInRequired, pages.sign_in_required)

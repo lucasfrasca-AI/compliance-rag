@@ -365,7 +365,7 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
     letter-spacing: 0.08em;
     color: var(--muted);
   }
-  .nav-section ul { display: block; }
+  .nav-section ul, .nav-section ul.nav-recent { display: block; }
   .me {
     margin: auto 0 0;
     padding: 1rem 0.4rem 0;
@@ -397,3 +397,10 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .passage-number { flex: none; font-variant-numeric: tabular-nums; color: var(--muted); text-decoration: none; min-width: 2rem; }
 .passage-text { margin: 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 #check-form input { display: block; margin: 0.25rem 0 0.75rem; max-width: 100%; font: inherit; }
+
+/* The list of checks and the sidebar's recent ones (#355). */
+.nav-section ul.nav-recent { margin: 0.1rem 0 0.2rem 0.6rem; display: none; }
+.nav-section .nav-recent a { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill-quiet { color: var(--muted); background: none; border-color: var(--line); }
+.chat-list .pill { margin: 0 0.4rem 0 0; padding: 0.05rem 0.6rem; }
+.pager { display: flex; gap: 1rem; }

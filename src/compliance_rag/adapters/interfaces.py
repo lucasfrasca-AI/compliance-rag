@@ -545,6 +545,58 @@ def check_check_write(record: CheckRecord) -> None:
         )
 
 
+class CheckStage(StrEnum):
+    """How far a check has got, from what the ledger holds (#355): the document
+    is stored (`SUBMITTED`), its claims are extracted (`CLAIMS`, the extraction
+    is done, however few claims it found), its findings are made (`FINDINGS`)."""
+
+    SUBMITTED = "submitted"
+    CLAIMS = "claims"
+    FINDINGS = "findings"
+
+
+class CheckRun(StrEnum):
+    """What a check's latest run is doing, when it is not at rest (#355): a
+    reservation held and not yet past its time-out (`RUNNING`), or the last run
+    released as failed (`FAILED`). A reservation held past its time-out is
+    neither: its request died, and the run may be taken over (`RESERVATION_TTL`)."""
+
+    RUNNING = "running"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckListing:
+    """One row of a list of checks (#355): metadata only. It carries no document
+    text and no claim text, so a list is never a disclosure of what a check says."""
+
+    check_id: str
+    user_id: str
+    """The submitter's uid (ADR-0036)."""
+    filename: str
+    title: str
+    """The document's title (its `instrument_version`), which is the filename
+    unless the member gave one."""
+    created_at: dt.datetime
+    stage: CheckStage
+    run: CheckRun | None
+    """The stage's next run, when one is under way or its last attempt failed:
+    claims extraction when the stage is `SUBMITTED`, findings when it is `CLAIMS`."""
+
+
+@dataclass(frozen=True, slots=True)
+class CheckCursor:
+    """Where a page of checks ends: the last row's `created_at` and `check_id`.
+    The next page is the rows strictly older, in the list's order."""
+
+    created_at: dt.datetime
+    check_id: str
+
+
+CHECK_PAGE_MAX = 100
+"""The most checks one `list_checks` call returns."""
+
+
 MAX_CLAIMS = 25
 """The most claims one check keeps (#298, ADR-0053): a reply with more is
 refused whole, never cut to size."""
@@ -1645,6 +1697,24 @@ class LedgerStore(ABC):
         """The check, or None if this tenant has none by that id. Not owner-keyed:
         who may see it is `CheckRecord.visible_to`, which every route applies,
         so a read here is never itself a disclosure."""
+
+    @abstractmethod
+    async def list_checks(
+        self,
+        tenant_id: str,
+        uid: str,
+        *,
+        admin: bool,
+        limit: int,
+        before: CheckCursor | None = None,
+    ) -> tuple[CheckListing, ...]:
+        """The checks `uid` may see (#355), newest first, ties by id descending
+        (bytewise): the rule is `CheckRecord.visible_to`, so an admin has the
+        tenant's and anyone else their own. `before` continues after the last row
+        of a page: only rows strictly older in that order. At most `limit`
+        (1 to `CHECK_PAGE_MAX`; `ValueError` otherwise). **One read, whatever the
+        number of rows**: each row's stage, run state and title come with it.
+        Metadata only, never a document's or a claim's words."""
 
     @abstractmethod
     async def check_of_version(

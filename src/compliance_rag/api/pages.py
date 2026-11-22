@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, cast
 
@@ -48,8 +49,9 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from compliance_rag import telemetry
 from compliance_rag.adapters.demo_generator import FAKE_BANNER
-from compliance_rag.adapters.interfaces import ACCOUNT_DISABLED
+from compliance_rag.adapters.interfaces import ACCOUNT_DISABLED, CheckListing
 from compliance_rag.api.banner import TEMPLATE_DIR, banner_text
 from compliance_rag.api.chats import read_chat
 from compliance_rag.api.deps import (
@@ -77,6 +79,10 @@ PAGE_HEADERS = {
 fragment and its JSON refusals included (`PageHeaders`)."""
 
 PAGE_PREFIXES = ("/chats", "/checks", "/admin")
+
+CHECKS_PATH = "/checks"
+SIDEBAR_CHECKS = 5
+"""How many of the reader's recent checks the sidebar links."""
 
 HEADING_CHARS = 80
 _CHAT_ID = re.compile(UUID4_HEX)
@@ -186,6 +192,8 @@ class NavItem:
     href: str
     label: str
     active: bool
+    children: tuple[NavItem, ...] = ()
+    """Links shown under this one: the Checks link's recent checks (#355)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +205,14 @@ class NavSection:
 _NAV: tuple[tuple[str, tuple[tuple[str, str, str], ...], bool], ...] = (
     # (heading, ((href, label, the path it is active for),), admins only)
     ("Ask", (("/chats/new", "New chat", "/chats/new"), ("/chats", "Chats", "/chats")), False),
-    ("Check", (("/checks/new", "Check a document", "/checks/new"),), False),
+    (
+        "Check",
+        (
+            ("/checks/new", "Check a document", "/checks/new"),
+            (CHECKS_PATH, "Checks", CHECKS_PATH),
+        ),
+        False,
+    ),
     (
         "Admin",
         (
@@ -212,24 +227,36 @@ to the link whose path is its longest match (itself or a parent), so
 `/chats/new` is New chat and `/chats/<id>` is Chats."""
 
 
-def nav_sections(path: str, *, admin: bool) -> list[NavSection]:
+def nav_sections(
+    path: str, *, admin: bool, recent: Sequence[CheckListing] = ()
+) -> list[NavSection]:
     """The sidebar for a reader at `path`: the sections they may see, each link
     marked active if it is the longest match for `path`. Shown or hidden only;
-    the routes check the role on every request."""
+    the routes check the role on every request.
+
+    `recent` is the reader's latest checks (#355), linked under Checks. A recent
+    check's own page marks that link, not Checks above it; `/checks/new` is
+    Check a document's alone, as the longest match."""
     shown = [(h, items) for h, items, admins_only in _NAV if admin or not admins_only]
 
     def match(home: str) -> int:
         return len(home) if path == home or path.startswith(f"{home}/") else 0
 
     best = max((match(home) for _, items in shown for _, _, home in items), default=0)
+    children = tuple(
+        NavItem(f"{CHECKS_PATH}/{c.check_id}", c.title, path == f"{CHECKS_PATH}/{c.check_id}")
+        for c in recent
+    )
+    on_a_child = any(child.active for child in children)
+
+    def item(href: str, label: str, home: str) -> NavItem:
+        active = best > 0 and match(home) == best
+        if home != CHECKS_PATH:
+            return NavItem(href, label, active)
+        return NavItem(href, label, active and not on_a_child, children)
+
     return [
-        NavSection(
-            heading,
-            tuple(
-                NavItem(href, label, best > 0 and match(home) == best)
-                for href, label, home in items
-            ),
-        )
+        NavSection(heading, tuple(item(href, label, home) for href, label, home in items))
         for heading, items in shown
     ]
 
@@ -255,7 +282,7 @@ def render(request: Request, name: str, *, status: int = 200, **context: object)
         ENV.get_template(name).render(
             is_admin=shown,
             member_email=email if isinstance(email, str) else None,
-            nav=nav_sections(request.url.path, admin=shown),
+            nav=nav_sections(request.url.path, admin=shown, recent=recent_checks_of(request)),
             banner=banner,
             fake_banner=FAKE_BANNER,
             **context,
@@ -263,6 +290,14 @@ def render(request: Request, name: str, *, status: int = 200, **context: object)
         status_code=status,
         headers=PAGE_HEADERS,
     )
+
+
+def recent_checks_of(request: Request) -> tuple[CheckListing, ...]:
+    """The checks the sidebar links, as `page_caller` (or the list page, which
+    already holds them) set them on this request; none on a page drawn without
+    a resolved reader."""
+    held = getattr(request.state, "recent_checks", ())
+    return held if isinstance(held, tuple) else ()  # pyright: ignore[reportUnknownVariableType]
 
 
 def is_htmx(request: Request) -> bool:
@@ -315,7 +350,29 @@ async def page_caller(
     caller = await current_caller(request, member)
     request.state.is_admin = is_admin(services_of(request).settings, caller.member.email)
     request.state.member_email = caller.member.email
+    if request.url.path != CHECKS_PATH:  # the list page's own read gives the sidebar its five
+        request.state.recent_checks = await sidebar_checks(request, caller)
     return caller
+
+
+async def sidebar_checks(request: Request, caller: Caller) -> tuple[CheckListing, ...]:
+    """The reader's latest checks for the sidebar: those they may see
+    (`CheckRecord.visible_to`), so an admin's are the tenant's. One indexed read
+    (`LedgerStore.list_checks`, ledger 0027). A ledger that can't be reached
+    leaves the sidebar without them rather than taking an unrelated page down."""
+    with telemetry.span("api.check.recent") as span:
+        try:
+            recent = await services_of(request).ledger.list_checks(
+                caller.tenant_id,
+                caller.member.uid,
+                admin=bool(request.state.is_admin),
+                limit=SIDEBAR_CHECKS,
+            )
+        except ConnectionError:  # the Postgres ledger's `LedgerUnreachable` is one
+            span.set_attribute("check.recent_unavailable", True)
+            return ()
+        span.set_attribute("check.recent", len(recent))
+        return recent
 
 
 PageCaller = Annotated[Caller, Depends(page_caller)]

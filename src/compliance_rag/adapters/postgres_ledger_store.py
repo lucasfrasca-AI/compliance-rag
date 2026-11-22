@@ -30,6 +30,7 @@ from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
+    CHECK_PAGE_MAX,
     FINDINGS_RESERVATION_TTL,
     RESERVATION_TTL,
     AssessmentRecord,
@@ -39,8 +40,12 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    CheckCursor,
+    CheckListing,
     CheckNotExtracted,
     CheckRecord,
+    CheckRun,
+    CheckStage,
     Citation,
     ClaimExtractionRecord,
     ClaimRecord,
@@ -339,6 +344,14 @@ def _claim_of_row(row: TupleRow) -> ClaimRecord:
         policy_clause_ids=tuple(str(i) for i in cast("list[object]", row[7])),
         provenance=EvidenceProvenance(str(row[8])),
     )
+
+
+def _run_of(status: object, fresh: bool) -> CheckRun | None:
+    """A reservation's state for a list (`CheckRun`): failed, or pending and not
+    yet past its time-out; a stale pending one is neither (its request died)."""
+    if status == "failed":
+        return CheckRun.FAILED
+    return CheckRun.RUNNING if status == "pending" and fresh else None
 
 
 def _check_of_row(row: TupleRow) -> CheckRecord:
@@ -795,6 +808,74 @@ class PostgresLedgerStore(LedgerStore):
             (tenant_id, instrument_id, version_id),
         )
         return None if row is None else _check_of_row(row)
+
+    async def list_checks(
+        self,
+        tenant_id: str,
+        uid: str,
+        *,
+        admin: bool,
+        limit: int,
+        before: CheckCursor | None = None,
+    ) -> tuple[CheckListing, ...]:
+        if not 1 <= limit <= CHECK_PAGE_MAX:
+            raise ValueError(f"limit is 1 to {CHECK_PAGE_MAX}, not {limit}")
+        # One read: the stage and the run state come from two LEFT JOINs on the
+        # reservations' primary keys, the title from the version the foreign key
+        # guarantees, so the number of checks never changes the number of queries.
+        # The order is `submitted_check_listing`'s (0027).
+        select: LiteralString = (
+            "SELECT c.check_id, c.user_id, c.filename, v.title, c.created_at, "
+            "e.status, e.status = 'pending' AND e.reserved_at >= clock_timestamp() - %s, "
+            "f.status, f.status = 'pending' AND f.reserved_at >= clock_timestamp() - %s "
+            "FROM submitted_check c "
+            "JOIN instrument_version v ON (v.tenant_id, v.instrument_id, v.version_id) = "
+            "(c.tenant_id, c.instrument_id, c.version_id) "
+            "LEFT JOIN check_extraction e "
+            "ON (e.tenant_id, e.check_id) = (c.tenant_id, c.check_id) "
+            "LEFT JOIN check_findings_run f "
+            "ON (f.tenant_id, f.check_id) = (c.tenant_id, c.check_id) "
+            "WHERE c.tenant_id = %s"
+        )
+        order: LiteralString = ' ORDER BY c.created_at DESC, c.check_id COLLATE "C" DESC LIMIT %s'
+        params: list[Any] = [
+            RESERVATION_TTL,
+            FINDINGS_RESERVATION_TTL,
+            tenant_id,
+        ]  # Any: SQL params
+        sql = select
+        if not admin:
+            sql += " AND c.user_id = %s"
+            params.append(uid)
+        if before is not None:
+            sql += (
+                " AND (c.created_at < %s OR "
+                '(c.created_at = %s AND c.check_id COLLATE "C" < %s COLLATE "C"))'
+            )
+            params += [before.created_at, before.created_at, before.check_id]
+        params.append(limit)
+        rows = await self._fetchall(sql + order, tuple(params))
+        listings: list[CheckListing] = []
+        for r in rows:
+            extraction, extracting, findings, finding = r[5], r[6], r[7], r[8]
+            if findings == "done":
+                stage, run = CheckStage.FINDINGS, None
+            elif extraction == "done":
+                stage, run = CheckStage.CLAIMS, _run_of(findings, bool(finding))
+            else:
+                stage, run = CheckStage.SUBMITTED, _run_of(extraction, bool(extracting))
+            listings.append(
+                CheckListing(
+                    check_id=str(r[0]),
+                    user_id=str(r[1]),
+                    filename=str(r[2]),
+                    title=str(r[3]),
+                    created_at=r[4],
+                    stage=stage,
+                    run=run,
+                )
+            )
+        return tuple(listings)
 
     async def reserve_extraction(
         self, tenant_id: str, check_id: str, *, as_of: dt.date, trace_id: str

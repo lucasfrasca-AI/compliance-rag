@@ -20,6 +20,7 @@ import pytest
 
 from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
+    CHECK_PAGE_MAX,
     FINDINGS_RESERVATION_TTL,
     RESERVATION_TTL,
     AssessmentRecord,
@@ -28,8 +29,11 @@ from compliance_rag.adapters.interfaces import (
     ChatCitation,
     ChatExchange,
     ChatTurn,
+    CheckCursor,
     CheckNotExtracted,
     CheckRecord,
+    CheckRun,
+    CheckStage,
     ClaimExtractionRecord,
     ClaimRecord,
     ExtractionAlreadyReserved,
@@ -1752,3 +1756,163 @@ async def test_the_fake_ledger_takes_over_a_findings_reservation_held_past_the_t
     )
     with pytest.raises(FindingsAlreadyReserved):  # one that is done is never taken over
         await ledger.reserve_findings("acme", "c" * 32, trace_id="c" * 32)
+
+
+# ---- the list of checks (#355) ---------------------------------------------------------
+
+
+async def assert_check_list_contract(ledger: LedgerStore) -> None:
+    """The list of checks (#355): newest first, by visibility (`CheckRecord.visible_to`),
+    each with the stage the ledger holds, in one read, metadata only, and paged by a
+    cursor."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+
+    ids = {n: f"{n:x}" * 32 for n in range(1, 10)}  # 1111..., 2222..., ..., 9999...
+
+    async def submitted(n: int, uid: str, title: str, tenant: str = "acme") -> str:
+        check_id = ids[n]
+        await ledger.record_version(
+            tenant_id=tenant,
+            instrument_id=f"{tenant}/check-{n}",
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.SUBMITTED_DOCUMENT,
+            title=title,
+        )
+        await ledger.record_check(
+            a_check(
+                tenant_id=tenant,
+                check_id=check_id,
+                user_id=uid,
+                instrument_id=f"{tenant}/check-{n}",
+                filename=f"file-{n}.md",
+            )
+        )
+        return check_id
+
+    async def extracted(check_id: str, trace_id: str = "a" * 32) -> None:
+        await ledger.reserve_extraction("acme", check_id, as_of=JUN, trace_id=trace_id)
+        await ledger.record_claims(an_extraction(check_id=check_id, trace_id=trace_id))
+
+    # nothing to list, for anyone
+    assert await ledger.list_checks("acme", "uid-1", admin=False, limit=10) == ()
+    assert await ledger.list_checks("acme", "uid-1", admin=True, limit=10) == ()
+
+    # one check in each state, oldest first
+    await submitted(1, "uid-1", "Alpha")  # submitted
+    await submitted(2, "uid-2", "Beta")
+    await extracted(ids[2])  # claims
+    await submitted(3, "uid-1", "Gamma")
+    await extracted(ids[3])
+    await ledger.reserve_findings("acme", ids[3], trace_id="a" * 32)
+    await ledger.record_findings(a_findings_run(ids[3]))  # findings
+    await submitted(4, "uid-1", "Delta")
+    await ledger.reserve_extraction("acme", ids[4], as_of=JUN, trace_id="a" * 32)  # running
+    await submitted(5, "uid-2", "Epsilon")
+    await ledger.reserve_extraction("acme", ids[5], as_of=JUN, trace_id="a" * 32)
+    await ledger.fail_extraction("acme", ids[5])  # submitted, failed
+    await submitted(6, "uid-1", "Zeta")
+    await extracted(ids[6])
+    await ledger.reserve_findings("acme", ids[6], trace_id="a" * 32)  # claims, running
+    await submitted(7, "uid-2", "Eta")
+    await extracted(ids[7])
+    await ledger.reserve_findings("acme", ids[7], trace_id="a" * 32)
+    await ledger.fail_findings("acme", ids[7], trace_id="a" * 32)  # claims, failed
+    # a check in another tenant never shows, to its own submitter or anyone
+    await submitted(8, "uid-1", "Theta", tenant="other-corp")
+
+    # ---- an admin has the tenant's, newest first, each with its stage and title
+    everything = await ledger.list_checks("acme", "admin-uid", admin=True, limit=50)
+    assert [c.check_id for c in everything] == [ids[n] for n in (7, 6, 5, 4, 3, 2, 1)]
+    assert [(c.title, c.stage, c.run) for c in everything] == [
+        ("Eta", CheckStage.CLAIMS, CheckRun.FAILED),
+        ("Zeta", CheckStage.CLAIMS, CheckRun.RUNNING),
+        ("Epsilon", CheckStage.SUBMITTED, CheckRun.FAILED),
+        ("Delta", CheckStage.SUBMITTED, CheckRun.RUNNING),
+        ("Gamma", CheckStage.FINDINGS, None),
+        ("Beta", CheckStage.CLAIMS, None),
+        ("Alpha", CheckStage.SUBMITTED, None),
+    ]
+    assert everything[0].user_id == "uid-2" and everything[0].filename == "file-7.md"
+    stamps = [c.created_at for c in everything]
+    assert stamps == sorted(stamps, reverse=True)
+    stored = await ledger.get_check("acme", ids[7])
+    assert stored is not None and everything[0].created_at == stored.created_at
+
+    # ---- a member has their own and no one else's
+    mine = await ledger.list_checks("acme", "uid-1", admin=False, limit=50)
+    assert [c.check_id for c in mine] == [ids[n] for n in (6, 4, 3, 1)]
+    assert {c.user_id for c in mine} == {"uid-1"}
+    theirs = await ledger.list_checks("acme", "uid-2", admin=False, limit=50)
+    assert [c.check_id for c in theirs] == [ids[n] for n in (7, 5, 2)]
+    assert await ledger.list_checks("acme", "stranger", admin=False, limit=50) == ()
+    # the same uid in another tenant is that tenant's alone
+    other = await ledger.list_checks("other-corp", "uid-1", admin=False, limit=50)
+    assert [(c.check_id, c.title) for c in other] == [(ids[8], "Theta")]
+    other_admin = await ledger.list_checks("other-corp", "x", admin=True, limit=5)
+    assert [c.check_id for c in other_admin] == [ids[8]]
+    assert await ledger.list_checks("ghost", "uid-1", admin=True, limit=5) == ()
+
+    # ---- a page is at most `limit`, and the cursor continues strictly after its last row
+    first = await ledger.list_checks("acme", "admin-uid", admin=True, limit=3)
+    assert [c.check_id for c in first] == [ids[n] for n in (7, 6, 5)]
+    cursor = CheckCursor(first[-1].created_at, first[-1].check_id)
+    second = await ledger.list_checks("acme", "admin-uid", admin=True, limit=3, before=cursor)
+    assert [c.check_id for c in second] == [ids[n] for n in (4, 3, 2)]
+    cursor = CheckCursor(second[-1].created_at, second[-1].check_id)
+    third = await ledger.list_checks("acme", "admin-uid", admin=True, limit=3, before=cursor)
+    assert [c.check_id for c in third] == [ids[1]]
+    cursor = CheckCursor(third[-1].created_at, third[-1].check_id)
+    assert await ledger.list_checks("acme", "admin-uid", admin=True, limit=3, before=cursor) == ()
+    # a cursor applies the visibility rule too
+    after = CheckCursor(mine[0].created_at, mine[0].check_id)
+    rest = await ledger.list_checks("acme", "uid-1", admin=False, limit=9, before=after)
+    assert [c.check_id for c in rest] == [ids[n] for n in (4, 3, 1)]
+    # at one instant, rows are ordered by id, descending: the cursor's id is the tie-break
+    same_instant = CheckCursor(first[0].created_at, "0" * 32)  # the newest row's id is above it
+    older = await ledger.list_checks("acme", "a", admin=True, limit=9, before=same_instant)
+    assert [c.check_id for c in older] == [ids[n] for n in (6, 5, 4, 3, 2, 1)]
+    same_instant = CheckCursor(first[0].created_at, "~" * 32)
+    top = await ledger.list_checks("acme", "a", admin=True, limit=1, before=same_instant)
+    assert [c.check_id for c in top] == [ids[7]]
+
+    # ---- a limit that is not a page is refused, not clipped
+    for limit in (0, -1, CHECK_PAGE_MAX + 1):
+        with pytest.raises(ValueError, match="limit"):
+            await ledger.list_checks("acme", "uid-1", admin=True, limit=limit)
+    assert len(await ledger.list_checks("acme", "uid-1", admin=True, limit=CHECK_PAGE_MAX)) == 7
+
+    # ---- a run done is at rest: findings recorded, nothing running
+    await ledger.fail_findings("acme", ids[6], trace_id="a" * 32)
+    await ledger.reserve_findings("acme", ids[6], trace_id="b" * 32)  # failed, taken again
+    own_finding = a_verdict(1, finding_id="f6" + "0" * 30, obligation_id="OB-PA-APP11-1")
+    await ledger.record_findings(a_findings_run(ids[6], own_finding, usage=(), trace_id="b" * 32))
+    done = {c.check_id: c for c in await ledger.list_checks("acme", "uid-1", admin=False, limit=9)}
+    assert (done[ids[6]].stage, done[ids[6]].run) == (CheckStage.FINDINGS, None)
+    # a failed extraction, run again to its end, is claims
+    await ledger.reserve_extraction("acme", ids[5], as_of=JUN, trace_id="b" * 32)
+    await ledger.record_claims(an_extraction(check_id=ids[5], trace_id="b" * 32))
+    again = {c.check_id: c for c in await ledger.list_checks("acme", "uid-2", admin=False, limit=9)}
+    assert (again[ids[5]].stage, again[ids[5]].run) == (CheckStage.CLAIMS, None)
+
+
+async def test_the_fake_ledger_satisfies_the_check_list_contract() -> None:
+    await assert_check_list_contract(FakeLedgerStore())
+
+
+async def test_the_fake_ledger_does_not_call_a_reservation_past_its_time_out_running() -> None:
+    """A request that died holding a reservation is not running anything (`CheckRun`)."""
+    ledger = FakeLedgerStore()
+    await _a_checked_document(ledger)
+    await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="a" * 32)
+    (row,) = await ledger.list_checks("acme", "uid-1", admin=False, limit=5)
+    assert (row.stage, row.run) == (CheckStage.SUBMITTED, CheckRun.RUNNING)
+    key = ("acme", "c" * 32)
+    held = ledger._extractions[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._extractions[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        held, reserved_at=held.reserved_at - RESERVATION_TTL - dt.timedelta(seconds=1)
+    )
+    (row,) = await ledger.list_checks("acme", "uid-1", admin=False, limit=5)
+    assert (row.stage, row.run) == (CheckStage.SUBMITTED, None)

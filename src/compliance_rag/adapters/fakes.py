@@ -18,6 +18,7 @@ from opentelemetry import trace
 from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
+    CHECK_PAGE_MAX,
     FINDINGS_RESERVATION_TTL,
     NO_PREFIX,
     RESERVATION_TTL,
@@ -29,8 +30,12 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    CheckCursor,
+    CheckListing,
     CheckNotExtracted,
     CheckRecord,
+    CheckRun,
+    CheckStage,
     ClaimExtractionRecord,
     ClauseStore,
     Embedder,
@@ -587,6 +592,61 @@ class FakeLedgerStore(LedgerStore):
             ),
             None,
         )
+
+    async def list_checks(
+        self,
+        tenant_id: str,
+        uid: str,
+        *,
+        admin: bool,
+        limit: int,
+        before: CheckCursor | None = None,
+    ) -> tuple[CheckListing, ...]:
+        if not 1 <= limit <= CHECK_PAGE_MAX:
+            raise ValueError(f"limit is 1 to {CHECK_PAGE_MAX}, not {limit}")
+        now = dt.datetime.now(dt.UTC)
+
+        def run_of(held: _Extraction | _FindingsRun | None, ttl: dt.timedelta) -> CheckRun | None:
+            if held is None:
+                return None
+            if held.status == "failed":
+                return CheckRun.FAILED
+            if held.status == "pending" and held.reserved_at >= now - ttl:
+                return CheckRun.RUNNING
+            return None
+
+        rows: list[CheckListing] = []
+        for (tenant, check_id), record in self._checks.items():
+            if tenant != tenant_id or not record.visible_to(uid, admin=admin):
+                continue
+            assert record.created_at is not None  # stamped by `record_check`
+            extraction = self._extractions.get((tenant, check_id))
+            findings = self._findings_runs.get((tenant, check_id))
+            if findings is not None and findings.status == "done":
+                stage, run = CheckStage.FINDINGS, None
+            elif extraction is not None and extraction.status == "done":
+                stage, run = CheckStage.CLAIMS, run_of(findings, FINDINGS_RESERVATION_TTL)
+            else:
+                stage, run = CheckStage.SUBMITTED, run_of(extraction, RESERVATION_TTL)
+            rows.append(
+                CheckListing(
+                    check_id=check_id,
+                    user_id=record.user_id,
+                    filename=record.filename,
+                    title=self._titles.get(
+                        (tenant, record.instrument_id, record.version_id), record.filename
+                    ),
+                    created_at=record.created_at,
+                    stage=stage,
+                    run=run,
+                )
+            )
+        rows.sort(key=lambda r: (r.created_at, r.check_id), reverse=True)
+        if before is not None:
+            rows = [
+                r for r in rows if (r.created_at, r.check_id) < (before.created_at, before.check_id)
+            ]
+        return tuple(rows[:limit])
 
     async def reserve_extraction(
         self, tenant_id: str, check_id: str, *, as_of: dt.date, trace_id: str

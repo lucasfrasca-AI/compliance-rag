@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Checks{% endblock %}
+{% block body %}
+<main class="page">
+<div class="title-row">
+<h1>Checks</h1>
+<a class="button" href="/checks/new">Check a document</a>
+</div>
+<p class="note">{% if admin %}Every check in this workspace, newest first.{% else %}Only you can see these (and this workspace's admins), newest first.{% endif %}</p>
+{% if checks %}
+<ul class="chat-list">
+{% for c in checks %}
+<li>
+<a href="/checks/{{ c.check_id }}">
+<span class="chat-name">{{ c.title | truncate(140, True) }}</span>
+<span class="meta">
+<span class="pill {{ 'pill-ok' if c.stage.value == 'findings' else 'pill-quiet' }}">{{ c.stage.value }}</span>
+{% if c.run %}
+<span class="pill {{ 'pill-warn' if c.run.value == 'failed' else 'pill-quiet' }}">{{ c.run.value }}</span>
+{% endif %}
+submitted <time datetime="{{ c.created_at.isoformat() }}">{{ c.created_at | sydney }}</time>
+{% if admin and c.user_id != me %}· another member's{% endif %}
+</span>
+</a>
+</li>
+{% endfor %}
+</ul>
+<p class="note pager">
+{% if paged %}<a href="/checks">Newest</a>{% endif %}
+{% if older %}<a href="/checks?before={{ older | urlencode }}" rel="next">Older</a>{% endif %}
+</p>
+{% elif paged %}
+<p class="empty">No older checks. <a href="/checks">Back to the newest.</a></p>
+{% else %}
+<p class="empty">No checks yet. <a href="/checks/new">Check a document.</a></p>
+{% endif %}
+</main>
+{% endblock %}
