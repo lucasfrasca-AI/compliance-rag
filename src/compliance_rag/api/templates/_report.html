@@ -1,0 +1,190 @@
+{#- The findings report (#300), drawn from `check_report.report_json`: the ledger's
+    findings and nothing the browser says. Order (ADR-0053 F8): the four verdicts, then
+    the findings that have none, each under its own heading. No score anywhere. Every
+    value is autoescaped; nothing is marked safe. -#}
+{% from "_claim.html" import claim_ref %}
+
+{% macro citations(f) %}
+{% if f.citations %}
+<ul class="citations" aria-label="Citations">
+{% for c in f.citations %}
+<li data-citation="{{ c.clause_id }}"><a class="cite" href="#{{ c.source }}" data-source-card>{{ c.cite }}</a> <span class="meta">version {{ c.version_id }}</span>{% if c.incomplete %} <span class="flag flag-incomplete">Incomplete</span>{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endmacro %}
+
+{% macro target(f) %}
+<p class="target">{{ "Law" if f.kind == "law" else "Policy" }}:
+{% if f.target_href %}<a class="cite" href="{{ f.target_href }}" target="_blank" rel="noopener noreferrer">{{ f.label }}</a>{% else %}<span class="cite">{{ f.label }}</span>{% endif %}
+{% if f.kind == "law" %} <span class="meta">obligation <code>{{ f.obligation_id }}</code></span>{% endif %}</p>
+{% endmacro %}
+
+<p class="meta">As of <time datetime="{{ report.as_of }}">{{ report.as_of }}</time> · trace <code>{{ report.trace_id }}</code> · every finding is inferred from the document's claims; none is confirmed</p>
+
+{% if report.disagreements %}
+<section class="card disagreement" role="note" aria-label="Your policies disagree" data-disagreements>
+<h2>Your policies disagree</h2>
+<p>For {{ "this claim" if report.disagreements | length == 1 else "these claims" }}, one of your policies conflicts with the claim and another does not.</p>
+<ul>
+{% for d in report.disagreements %}
+<li data-claim="{{ d.claim.index }}">
+{{ claim_ref(d.claim) }}
+<ul>
+{% for p in d.conflicts %}
+<li><strong>Conflicts:</strong> <a href="{{ p.href }}" target="_blank" rel="noopener noreferrer">{{ p.cite }}</a> <span class="meta">version {{ p.version_id }}</span></li>
+{% endfor %}
+{% for p in d.others %}
+<li><strong>{{ p.verdict | replace("_", " ") | capitalize }}:</strong> <a href="{{ p.href }}" target="_blank" rel="noopener noreferrer">{{ p.cite }}</a> <span class="meta">version {{ p.version_id }}</span></li>
+{% endfor %}
+</ul>
+</li>
+{% endfor %}
+</ul>
+</section>
+{% endif %}
+
+{% for g in report.groups %}
+{% if g.findings %}
+<section class="verdict-group" data-verdict="{{ g.verdict }}" aria-labelledby="h-{{ g.verdict }}">
+<h2 id="h-{{ g.verdict }}">{{ g.heading }} <span class="count">{{ g.findings | length }}</span></h2>
+{% for f in g.findings %}
+<article class="card finding" data-finding="{{ f.finding_id }}" data-outcome="verdict" data-verdict="{{ g.verdict }}">
+<h3><span class="verdict">{{ g.heading }}</span></h3>
+{{ target(f) }}
+{{ claim_ref(f.claim) }}
+{% if f.settle_by %}
+<p class="settle"><strong>What would settle it</strong>, in the model's words: {{ f.settle_by.text }}</p>
+{% endif %}
+{{ citations(f) }}
+</article>
+{% endfor %}
+</section>
+{% endif %}
+{% endfor %}
+
+{% if report.conditional %}
+<section class="conditional" data-outcome="conditional" aria-labelledby="h-conditional">
+<h2 id="h-conditional">Conditional <span class="count">{{ report.conditional | length }}</span></h2>
+<p class="note">These obligations might apply to you, but a fact about your workspace is missing, so no verdict is given. Each says which facts would decide it.</p>
+{% for f in report.conditional %}
+<article class="card finding notice" data-finding="{{ f.finding_id }}" data-outcome="conditional">
+<h3><span class="verdict">No verdict yet</span></h3>
+{{ target(f) }}
+{{ claim_ref(f.claim) }}
+<p>{{ f.conditional.reason }}</p>
+{% if f.conditional.questions %}
+<h4>What would decide it</h4>
+<ul class="questions">
+{% for q in f.conditional.questions %}
+<li data-field="{{ q.field }}">{{ q.question }} <span class="meta">({{ q.period }})</span></li>
+{% endfor %}
+</ul>
+{% endif %}
+</article>
+{% endfor %}
+<p class="actions">
+{% if is_admin %}
+<a class="button" href="{{ report.questionnaire_href }}">Answer in the questionnaire</a>
+{% else %}
+<span class="note">A workspace admin can answer these in the questionnaire.</span>
+{% endif %}
+<a class="button secondary" href="{{ report.recheck_href }}">Check the document again</a>
+</p>
+<p class="note">A report never changes. After the questions are answered, submit the document again: that is a new check with a new report.</p>
+</section>
+{% endif %}
+
+{% if report.withheld %}
+<section class="withheld-group" data-outcome="withheld" aria-labelledby="h-withheld">
+<h2 id="h-withheld">Withheld <span class="count">{{ report.withheld | length }}</span></h2>
+<p class="note">A finding is withheld when a citation could not be matched to its clause, or when it cited nothing. Its verdict is not shown, and neither is anything the model wrote for it. This is not an error: the check did its job (ADR-0003).</p>
+{% for f in report.withheld %}
+<article class="card finding withheld" data-finding="{{ f.finding_id }}" data-outcome="withheld">
+<h3><span class="verdict verdict-bad">Withheld</span></h3>
+{{ target(f) }}
+{{ claim_ref(f.claim) }}
+<p>{{ f.withheld[0] | upper }}{{ f.withheld[1:] }}</p>
+{% if f.blocked %}
+<h4>Citations that did not verify</h4>
+<ul class="blocked">
+{% for b in f.blocked %}
+<li data-blocked="{{ b.clause_id }}"><span class="cite">{{ b.cite }}</span></li>
+{% endfor %}
+</ul>
+{% endif %}
+</article>
+{% endfor %}
+</section>
+{% endif %}
+
+{% if report.failed %}
+<section class="failed-group" data-outcome="failed" aria-labelledby="h-failed">
+<h2 id="h-failed">Couldn't be checked <span class="count">{{ report.failed | length }}</span></h2>
+<p class="note">No finding could be made for these. Nothing is shown for them, and nothing here says they are fine.</p>
+{% for f in report.failed %}
+<article class="card finding error" data-finding="{{ f.finding_id }}" data-outcome="failed">
+<h3><span class="verdict verdict-bad">No finding</span></h3>
+{{ target(f) }}
+{{ claim_ref(f.claim) }}
+<p>{{ f.failed[0] | upper }}{{ f.failed[1:] }}</p>
+</article>
+{% endfor %}
+</section>
+{% endif %}
+
+{% if report.claims_without_findings %}
+<section class="unchecked" aria-labelledby="h-unchecked">
+<h2 id="h-unchecked">Claims with no finding <span class="count">{{ report.claims_without_findings | length }}</span></h2>
+<p class="note">No finding was recorded against these claims. That is not a finding that they are compliant.</p>
+{% for c in report.claims_without_findings %}
+<article class="card notice" data-claim="{{ c.index }}">
+{{ claim_ref(c) }}
+{% if not c.picked %}
+<p class="note">The model picked no obligation or policy clause to check it against.</p>
+{% endif %}
+</article>
+{% endfor %}
+</section>
+{% endif %}
+
+{% with cs = report.coverage_statement %}
+<section class="card coverage" id="coverage" aria-labelledby="h-coverage" data-coverage-statement>
+<h2 id="h-coverage">What this report covers</h2>
+<h3>Instruments checked</h3>
+{% if cs.instruments %}
+<ul>
+{% for i in cs.instruments %}
+<li data-instrument="{{ i.instrument_id }}"><a href="{{ i.href }}" target="_blank" rel="noopener noreferrer">{{ i.title }}</a>, version <code>{{ i.version_id }}</code> <span class="meta">({{ i.obligations_open_to_the_model }} of its obligations apply to you or might)</span></li>
+{% endfor %}
+</ul>
+{% else %}
+<p>No instrument.</p>
+{% endif %}
+<h3>Policies checked</h3>
+{% if cs.policies %}
+<ul>
+{% for p in cs.policies %}
+<li data-policy="{{ p.instrument_id }}"><a href="{{ p.href }}" target="_blank" rel="noopener noreferrer">{{ p.title }}</a>, version <code>{{ p.version_id }}</code></li>
+{% endfor %}
+</ul>
+{% elif cs.policies_recorded %}
+<p>No policy was sent: none of your policies was in force on this date.</p>
+{% endif %}
+{% if not cs.policies_recorded %}
+<p class="note" data-policies-not-recorded>Recorded before policy versions were kept. {{ "These are the policies its findings name; the full set checked was not recorded." if cs.policies else "The full set of policies checked was not recorded." }}</p>
+{% endif %}
+<h3>Basis</h3>
+<ul>
+<li>As of <time datetime="{{ cs.as_of }}">{{ cs.as_of }}</time></li>
+<li>Corpus <code>{{ cs.corpus_version.tag or "untagged" }}</code>, commit <code>{{ cs.corpus_version.sha }}</code></li>
+<li>Mappings <code>{{ cs.mapping_version.tag or "untagged" }}</code>, commit <code>{{ cs.mapping_version.sha }}</code></li>
+{% if cs.facts %}
+<li>Facts about your workspace read: {{ cs.facts.evidence | length }}, hash <code>{{ cs.facts.sha256 }}</code></li>
+{% endif %}
+<li>Obligations in force: {{ cs.obligations.applicable }} apply, {{ cs.obligations.unassessable }} could not be decided, {{ cs.obligations.not_applicable }} do not apply</li>
+</ul>
+<h3>Not checked</h3>
+<p><strong>Not checked: {{ cs.not_checked }}.</strong> {{ cs.not_reported }}</p>
+</section>
+{% endwith %}

@@ -74,6 +74,7 @@ from tests.api_support import (
     PROJECT,
     TENANT,
     api_settings,
+    assert_script_writes_no_html,
     bearer,
     fake_api_services,
     mint,
@@ -1019,18 +1020,7 @@ def test_no_template_marks_anything_safe_or_turns_escaping_off() -> None:
 
 def test_ask_js_never_writes_html_and_htmx_cant_eval() -> None:
     script = (STATIC_DIR / "ask.js").read_text()
-    for forbidden in (
-        "innerHTML",
-        "outerHTML",
-        "insertAdjacentHTML",
-        "document.write",
-        "eval(",
-        "new Function",
-        "createContextualFragment",
-        "DOMParser",
-    ):
-        assert forbidden not in script, forbidden
-    assert "http://" not in script and "https://" not in script
+    assert_script_writes_no_html(script)
     # htmx is configured, on every page, not to insert a style or to eval
     base = (TEMPLATE_DIR / "base.html").read_text()
     config = re.search(r'name="htmx-config" content=\'([^\']+)\'', base)
@@ -1095,8 +1085,9 @@ async def test_the_pages_are_made_for_a_phone(member: httpx.AsyncClient) -> None
         assert viewport["content"] == "width=device-width, initial-scale=1", path
     css = (STATIC_DIR / "app.css").read_text()
     # mobile first: the base rules are the one-column phone layout, and room
-    # beside the conversation for the panel is the only thing a width adds
-    assert re.findall(r"@media \((min|max)-width: [\d.]+rem\)", css) == ["min"]
+    # beside the conversation for the panel (and, #300, beside the report for the cited
+    # clauses) is the only thing a width adds
+    assert set(re.findall(r"@media \((min|max)-width: [\d.]+rem\)", css)) == {"min"}
     assert not re.search(r"(?<!-)width:\s*\d+(\.\d+)?px", css) and "min-width: 3" not in css
     assert "overflow-wrap: anywhere" in css  # a long clause id can't widen the page
     # the shell is a top bar and the citation slot stacks under the page until

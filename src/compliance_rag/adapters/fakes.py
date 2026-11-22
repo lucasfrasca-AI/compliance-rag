@@ -31,6 +31,7 @@ from compliance_rag.adapters.interfaces import (
     ChatTurn,
     CheckNotExtracted,
     CheckRecord,
+    CheckRun,
     ClaimExtractionRecord,
     ClauseStore,
     Embedder,
@@ -50,6 +51,7 @@ from compliance_rag.adapters.interfaces import (
     RemovalAuditEntry,
     ReplyKind,
     Reranker,
+    Reservation,
     RetrievalAdmin,
     RetrievalResult,
     RetrievalStore,
@@ -60,6 +62,7 @@ from compliance_rag.adapters.interfaces import (
     check_check_write,
     check_claims_write,
     check_findings_write,
+    check_run_of,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -711,6 +714,22 @@ class FakeLedgerStore(LedgerStore):
         )
         coverage = tuple(sorted(record.coverage, key=lambda row: row.obligation_id))
         return replace(record, findings=tuple(ordered), coverage=coverage)
+
+    async def check_run(self, tenant_id: str, check_id: str) -> CheckRun:
+        now = dt.datetime.now(dt.UTC)
+        key = (tenant_id, check_id)
+        extraction = self._extractions.get(key)
+        findings = self._findings_runs.get(key)
+        return check_run_of(
+            None
+            if extraction is None
+            else Reservation(extraction.status, extraction.reserved_at < now - RESERVATION_TTL),
+            None
+            if findings is None
+            else Reservation(
+                findings.status, findings.reserved_at < now - FINDINGS_RESERVATION_TTL
+            ),
+        )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         turns = self._chats.get((tenant_id, chat_id), [])

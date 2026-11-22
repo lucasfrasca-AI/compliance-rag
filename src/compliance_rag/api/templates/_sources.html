@@ -1,0 +1,33 @@
+{#- The citation panel of a report. It takes `sources`, a list of cards, and nothing
+    else, so the shared Sources panel (#354) can replace this file without touching the
+    report. It fills the shell's right-hand slot (`base.html`, block `sources`). A citation in a finding links to its card here (`#src-N`); a card shows the
+    clause's own stored text and opens the clause in its source in a new tab. -#}
+<section class="cited" aria-label="Cited clauses">
+<h2>Cited clauses</h2>
+{% if sources %}
+<p class="note">Each is the clause's own text, checked against the stored source. Open one at the clause to read it in place.</p>
+{% for s in sources %}
+<article class="card source" id="{{ s.id }}" data-source="{{ s.clause_id }}">
+<h3>{{ s.cite }}</h3>
+<p class="meta">version {{ s.version_id }}</p>
+{% if s.text %}
+<p class="clause-text">{{ s.text }}</p>
+{% else %}
+<p class="note">The text of this clause is no longer held.</p>
+{% endif %}
+{% for q in s.quotes %}
+<p class="meta">Quoted in a finding: <q>{{ q }}</q></p>
+{% endfor %}
+{% if s.incomplete %}
+<p class="reasons"><span class="flag flag-incomplete">Incomplete</span> The law sets more here than the text held. Read the source before relying on it.</p>
+{% for r in s.incomplete %}
+<p class="reasons">{{ r.detail }}</p>
+{% endfor %}
+{% endif %}
+<p><a class="button secondary" href="{{ s.href }}" target="_blank" rel="noopener noreferrer">Open at the clause</a></p>
+</article>
+{% endfor %}
+{% else %}
+<p class="note">No finding in this report cites a clause.</p>
+{% endif %}
+</section>

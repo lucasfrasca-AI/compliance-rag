@@ -41,7 +41,16 @@ from compliance_rag.assessment.evidence import Evidence, EvidenceProvenance, Fac
 from compliance_rag.eval.applicability import load_applicability_set
 from compliance_rag.graph.mappings import load_mapping_set
 from compliance_rag.settings import Settings
-from tests.api_support import MEMBER, SECOND, TENANT, api_settings, bearer, fake_api_services, mint
+from tests.api_support import (
+    MEMBER,
+    SECOND,
+    TENANT,
+    api_settings,
+    assert_script_writes_no_html,
+    bearer,
+    fake_api_services,
+    mint,
+)
 from tests.test_api_admin_subscriptions import parsed, words
 from tests.test_applicability_gate import CORPUS_MAPPINGS, fake_for
 
@@ -990,8 +999,7 @@ async def test_an_answer_that_echoes_into_a_notice_is_text_too(admin: World) -> 
 
 def test_the_pages_script_is_the_admin_script_and_writes_no_html() -> None:
     script = (STATIC_DIR / "admin.js").read_text()
-    for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
-        assert forbidden not in script, forbidden
+    assert_script_writes_no_html(script)
 
 
 async def test_the_page_is_made_for_a_phone(admin: World) -> None:
