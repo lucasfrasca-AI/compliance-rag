@@ -2,10 +2,12 @@
 // the tests: no DOM here, and nothing that writes HTML.
 //
 // `segments(text, cites)` cuts the verified text into pieces, in order: either
-// `{ text }` (a stretch of the answer, exactly as it was) or `{ marker: n }`
-// (where citation n, 1-based in `cites`' order, is named). Putting the `text`
-// pieces back together gives `text` again, character for character: a marker is
-// a place between two pieces, never a change to either.
+// `{ text }` (a stretch of the answer, exactly as it was) or `{ marker: n, at }`
+// (citation n, 1-based in `cites`' order, is named just before offset `at` of
+// `text`: the marker sits there, between the pieces either side). Putting the
+// `text` pieces back together gives `text` again, character for character: a
+// marker is a place between two pieces, never a change to either. All the
+// decisions are here; the page only turns each piece into a node.
 //
 // A cite is found where the answer names it by its own display form (`cite`).
 // Where two cites could start at the same place the longer wins ("APP 11.10"
@@ -20,6 +22,7 @@ export function segments(text, cites) {
   });
   const parts = [];
   let rest = text;
+  let consumed = 0;
   for (;;) {
     let best = null;
     for (const mark of marks) {
@@ -39,7 +42,8 @@ export function segments(text, cites) {
     }
     let end = best.at + best.mark.needle.length;
     if (rest.charAt(end) === '"' || rest.charAt(end) === "”") end += 1;
-    parts.push({ text: rest.slice(0, end) }, { marker: best.mark.n });
+    consumed += end;
+    parts.push({ text: rest.slice(0, end) }, { marker: best.mark.n, at: consumed });
     rest = rest.slice(end);
   }
 }

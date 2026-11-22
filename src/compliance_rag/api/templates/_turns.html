@@ -94,8 +94,13 @@
 {#- The text alone, as the verifier passed it. `ask.js` adds empty [n] marker
     elements after each cite in it, so its text content never changes. -#}
 <p class="answer-text">{{ t.text }}</p>
-{% set checked = t.citations | length %}
-<p class="pill pill-ok" data-pill="verified">✓ Verified — {{ checked }} of {{ checked }} citations checked</p>
+{#- N of M: M is every citation shown, N the readable ones. An unreadable stored
+    citation asserts nothing, so it is not counted as checked. -#}
+{% set counted = namespace(readable=0) %}
+{% for c in t.citations %}
+{% if not c.get("unreadable") %}{% set counted.readable = counted.readable + 1 %}{% endif %}
+{% endfor %}
+<p class="pill pill-ok" data-pill="verified">✓ Verified — {{ counted.readable }} of {{ t.citations | length }} citations checked</p>
 {% if t.incomplete %}
 <div class="incomplete-summary" data-incomplete-summary role="note">
 <h4>Incomplete clauses cited</h4>
@@ -119,7 +124,6 @@
 {% else %}
 <section class="card outcome withheld" data-outcome="withheld" aria-label="Withheld answer">
 <h3><span class="verdict verdict-bad">Answer withheld</span></h3>
-<p>{{ t.withheld[0] | upper }}{{ t.withheld[1:] }}</p>
 <p class="pill pill-warn" data-pill="withheld">Withheld — {{ t.withheld }}</p>
 <p class="note">Nothing the model wrote is shown: its prose can repeat a quote the verifier refused (ADR-0003). This is not an error; the check did its job.</p>
 {% if t.blocked %}

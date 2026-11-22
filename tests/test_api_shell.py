@@ -15,6 +15,7 @@ What is pinned here is the shell, not each page's content (`test_api_pages.py`,
 
 from __future__ import annotations
 
+import datetime as dt
 import html
 import json
 import os
@@ -22,18 +23,39 @@ import re
 import shutil
 import subprocess
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 
 from compliance_rag.adapters.fakes import FakeGenerator
+from compliance_rag.adapters.interfaces import (
+    ChatAnswer,
+    ChatCitation,
+    ChatExchange,
+    TurnOutcome,
+    UnreadableCitation,
+    UnreadableReason,
+)
+from compliance_rag.api.pages import nav_sections
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY, STATIC_DIR
 from compliance_rag.eval.golden_corpus import golden_clauses
-from tests.api_support import MEMBER, SECOND, bearer, mint
-from tests.test_api_answers import NOT_RETRIEVED, SECRET_QUOTE
+from tests.api_support import MEMBER, SECOND, TENANT, bearer, mint
+from tests.test_api_answers import AS_OF, NOT_RETRIEVED, QUESTION, SECRET_QUOTE
+from tests.test_api_answers import _ledger as acme_ledger  # pyright: ignore[reportPrivateUsage]
 from tests.test_api_answers import _reply as reply_of  # pyright: ignore[reportPrivateUsage]
-from tests.test_api_pages import APP11, client_for, outcomes, scan, text_of
+from tests.test_api_pages import (
+    ANSWER,
+    APP11,
+    LAW_VERSION,
+    S6DA,
+    UID,
+    client_for,
+    outcomes,
+    scan,
+    text_of,
+)
 from tests.test_api_pages import ask as ask_in_chat
 
 ADMIN_LINKS = ("/admin/subscriptions", "/admin/questionnaire")
@@ -381,12 +403,20 @@ def test_markers_are_placed_after_each_cite_and_the_text_is_never_altered(
     parts = run_markers(text, cites)
     # the text, put back together from its pieces, is the text, character for character
     assert "".join(str(p["text"]) for p in parts if "text" in p) == text
-    markers = [p["marker"] for p in parts if "marker" in p]
-    named = [c for c in cites if c and c in text]
-    assert len(markers) >= len(named) if named else markers == []
+    seen = ""
     for p in parts:
         assert ("text" in p) != ("marker" in p)
-        assert "marker" not in p or isinstance(p["marker"], int)
+        if "text" in p:
+            seen += str(p["text"])
+        else:
+            # a marker's position is where the pieces before it end
+            assert p["at"] == len(seen) and isinstance(p["marker"], int)
+            cite = cites[int(str(p["marker"])) - 1]
+            assert cite and seen.rstrip('"”').endswith(cite)
+    # a cite the text never names has no marker
+    markers = {p["marker"] for p in parts if "marker" in p}
+    for n, cite in enumerate(cites, start=1):
+        assert (n in markers) == bool(cite and cite in text), (n, cite)
 
 
 @NEEDS_NODE
@@ -394,21 +424,56 @@ def test_the_longest_cite_wins_and_a_closing_quote_stays_before_the_marker() -> 
     parts = run_markers('See "APP 11.10" and APP 11.1.', ["APP 11.1", "APP 11.10"])
     assert parts == [
         {"text": 'See "APP 11.10"'},
-        {"marker": 2},
+        {"marker": 2, "at": 15},
         {"text": " and APP 11.1"},
-        {"marker": 1},
+        {"marker": 1, "at": 28},
         {"text": "."},
     ]
 
 
-def test_ask_js_places_markers_as_empty_elements_so_the_text_content_is_untouched() -> None:
+@NEEDS_NODE
+async def test_the_real_chat_answer_keeps_its_text_whole_and_is_marked_where_it_cites(
+    quote: str,
+) -> None:
+    """The fixture is what a member's chat holds: the API's answer and the
+    citations the server drew beside it. The marker pieces are `markers.js`'s,
+    run on exactly those."""
+    said = "Acme must take reasonable steps (APP 11.1), and APP 11.1 applies again."
+    async with await client_for(FakeGenerator(reply_of((APP11, quote), answer=said))) as client:
+        await signed_in(client, SECOND)
+        events, fragment = await ask_in_chat(client)
+        (answer,) = [d for n, d in events if n == "answer"]
+    assert answer["verified"] is True and answer["text"] == said
+    shown = [
+        html.unescape(c)
+        for c in re.findall(
+            r'<li class="citation"[^>]*>.*?<[^>]*class="cite"[^>]*>(.*?)</', fragment, re.S
+        )
+    ]
+    assert shown == ["APP 11.1"]
+    # the real citation, then one the text never names
+    parts = run_markers(answer["text"], [*shown, "s 6D(4)(a)"])
+    first = said.index("APP 11.1") + len("APP 11.1")
+    second = said.index("APP 11.1", first) + len("APP 11.1")
+    # exactly two markers, in order, both for citation 1, none for the absent cite
+    assert [p for p in parts if "marker" in p] == [
+        {"marker": 1, "at": first},
+        {"marker": 1, "at": second},
+    ]
+    assert [p["text"] for p in parts if "text" in p] == [
+        said[:first],
+        said[first:second],
+        said[second:],
+    ]
+    assert "".join(str(p["text"]) for p in parts if "text" in p) == answer["text"]
+
+
+def test_ask_js_only_loops_over_the_pure_pieces_and_writes_no_html() -> None:
     script = (STATIC_DIR / "ask.js").read_text()
     markers = (STATIC_DIR / "markers.js").read_text()
     assert 'from "./markers.js"' in script
     for forbidden in ("innerHTML", "insertAdjacentHTML", "outerHTML"):
         assert forbidden not in markers and forbidden not in script
-    # a marker is an empty <sup> whose number the stylesheet draws: textContent is untouched
-    assert "data-n" in markers or "dataset.n" in script
     css = (STATIC_DIR / "app.css").read_text()
     assert re.search(r"\.marker::(before|after)\s*\{[^}]*attr\(data-n\)", css)
 
@@ -430,3 +495,122 @@ def test_the_stylesheets_draw_the_logo_from_static_and_it_is_there() -> None:
     for sheet in ("app.css", "signin.css"):
         assert 'url("/static/contextum-logo.png")' in (STATIC_DIR / sheet).read_text(), sheet
     assert Path(STATIC_DIR / "contextum-logo.png").read_bytes().startswith(b"\x89PNG")
+
+
+# ---- an honest pill, the reason once ------------------------------------------------------------
+
+
+async def test_the_withheld_reason_is_said_once_in_the_pill_under_its_heading(
+    quote: str,
+) -> None:
+    prose = f'Section 6C(2) says "{SECRET_QUOTE}".'
+    generator = FakeGenerator(reply_of((APP11, quote), (NOT_RETRIEVED, SECRET_QUOTE), answer=prose))
+    async with await client_for(generator) as client:
+        await signed_in(client, SECOND)
+        events, fragment = await ask_in_chat(client)
+        (answer,) = [d for n, d in events if n == "answer"]
+    words = text_of(fragment)
+    assert "Answer withheld" in words and f"Withheld — {answer['withheld']}" in words
+    assert words.lower().count(answer["withheld"].lower()) == 1  # no second, capitalised copy
+    assert "Citations that did not verify" in words and "Nothing the model wrote is shown" in words
+
+
+async def pill_for(citations: tuple[object, ...] | None) -> str:
+    """The verified pill's words for a chat whose stored answer holds `citations`
+    (None: the one readable citation it was recorded with)."""
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    await ledger.record_chat_exchange(
+        ChatExchange(
+            tenant_id=TENANT,
+            chat_id=chat_id,
+            user_id=UID,
+            question=QUESTION,
+            answer=ChatAnswer(TurnOutcome.VERIFIED, ANSWER, (ChatCitation(APP11, LAW_VERSION),)),
+            as_of=dt.date.fromisoformat(AS_OF),
+            trace_id="7" * 32,
+        )
+    )
+    if citations is not None:
+        turns = ledger._chats[(TENANT, chat_id)]  # pyright: ignore[reportPrivateUsage]
+        turns[1] = replace(turns[1], citations=citations)
+    async with await client_for(FakeGenerator(), ledger=ledger) as client:
+        await signed_in(client, SECOND)
+        page = (await client.get(f"/chats/{chat_id}")).text
+    match = re.search(r'<p class="pill pill-ok"[^>]*>(.*?)</p>', page, re.S)
+    assert match is not None
+    return text_of(match.group(1))
+
+
+async def test_the_pill_says_n_of_n_when_every_citation_is_readable() -> None:
+    both = (ChatCitation(APP11, LAW_VERSION), ChatCitation(S6DA, LAW_VERSION))
+    assert await pill_for(both) == "✓ Verified — 2 of 2 citations checked"
+    assert await pill_for(None) == "✓ Verified — 1 of 1 citations checked"
+
+
+async def test_the_pill_counts_only_readable_citations_as_checked() -> None:
+    mixed = (
+        ChatCitation(APP11, LAW_VERSION),
+        UnreadableCitation(UnreadableReason.BAD_INCOMPLETE, S6DA, LAW_VERSION),
+        UnreadableCitation(UnreadableReason.NOT_AN_OBJECT),
+    )
+    assert await pill_for(mixed) == "✓ Verified — 1 of 3 citations checked"
+
+
+# ---- the nav, built once --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "admin", "active"),
+    [
+        ("/chats", False, ["/chats"]),
+        ("/chats/new", False, ["/chats/new"]),
+        (f"/chats/{'a' * 32}", False, ["/chats"]),
+        ("/checks/new", False, ["/checks/new"]),
+        ("/admin/subscriptions", True, ["/admin/subscriptions"]),
+        ("/admin/questionnaire", True, ["/admin/questionnaire"]),
+        ("/admin/subscriptions", False, []),  # a member has no such link to mark
+        ("/chatsfoo", False, []),  # a parent is a whole path segment, not a string prefix
+        ("/", False, []),
+    ],
+)
+def test_the_nav_marks_the_longest_match_and_shows_admin_only_to_admins(
+    path: str, admin: bool, active: list[str]
+) -> None:
+    sections = nav_sections(path, admin=admin)
+    assert [s.heading for s in sections] == (
+        ["Ask", "Check", "Admin"] if admin else ["Ask", "Check"]
+    )
+    assert [i.href for s in sections for i in s.items if i.active] == active
+
+
+# ---- the sign-in page and the shell do not fight over the body ------------------------------
+
+
+async def test_the_sign_in_button_is_full_width_and_the_shells_body_rules_are_scoped() -> None:
+    signin = (STATIC_DIR / "signin.css").read_text()
+    assert re.search(r"#google-sign-in\s*\{\s*width:\s*100%", signin)
+    app = (STATIC_DIR / "app.css").read_text()
+    # every rule that lays the page out through `body` is the shell's body class's
+    assert not re.search(r"^\s*body\s*\{[^}]*(?<![-\w])(display|height|overflow)\s*:", app, re.M)
+    assert "body.shell-page" in app
+    assert "overflow" not in signin and "height: auto" not in signin  # nothing undone
+    async with await client_for(FakeGenerator()) as client:
+        signin_page = scan((await client.get("/signin")).text)
+        await signed_in(client, SECOND)
+        chats_page = scan((await client.get("/chats")).text)
+    (signin_body,) = [a for t, a in signin_page.elements if t == "body"]
+    (chats_body,) = [a for t, a in chats_page.elements if t == "body"]
+    assert "shell-page" not in signin_body.get("class", "")
+    assert "shell-page" in chats_body["class"]
+
+
+async def test_the_chat_citation_area_is_a_labelled_section_not_a_second_aside(
+    quote: str,
+) -> None:
+    async with await client_for(FakeGenerator(reply_of((APP11, quote)))) as client:
+        await signed_in(client, SECOND)
+        page = scan((await client.get("/chats/new")).text)
+    (panel,) = page.where("section", id="panel")
+    assert panel["aria-label"] == "Source" and "hidden" in panel
+    assert len(page.where("aside")) == 1  # the one slot

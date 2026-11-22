@@ -22,9 +22,6 @@
   --warn: #d08a2e;
   --bad: #e2705c;
   --radius: 8px;
-  /* the names the pages were written with */
-  --paper: var(--bg);
-  --accent: var(--gold);
   --ok-bg: rgba(46, 158, 107, 0.16);
   --warn-bg: rgba(208, 138, 46, 0.16);
   --bad-bg: rgba(226, 112, 92, 0.14);
@@ -76,7 +73,7 @@ button.secondary, #panel-close { background: none; color: var(--gold); font-weig
 
 /* The shell: a sidebar, the page, and a right-hand slot. On a phone the
    sidebar is a bar across the top and the slot stacks under the page. */
-body { display: flex; flex-direction: column; min-height: 100vh; }
+body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .shell { flex: 1; display: block; min-width: 0; }
 .sidebar {
   display: flex;
@@ -234,7 +231,6 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .card.error { border-left-color: var(--bad); }
 .card.not-in-environment, .card.notice { border-left-color: var(--warn); }
 .verdict { font-weight: 700; }
-.verdict-ok { color: var(--ok); }
 .verdict-bad { color: var(--warn); }
 .flag {
   display: inline-block;
@@ -341,7 +337,7 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 
 @media (min-width: 60rem) {
   /* the sidebar is its own column; the page and the slot scroll on their own */
-  body { height: 100vh; overflow: hidden; }
+  body.shell-page { height: 100vh; overflow: hidden; }
   .shell {
     min-height: 0;
     display: grid;

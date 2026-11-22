@@ -1,12 +1,7 @@
 /* The sign-in page (#280, #353): the shell's palette (app.css, loaded first),
-   in a card in the middle of the screen. Its body overrides the shell's. */
-body {
-  display: grid;
-  place-items: center;
-  height: auto;
-  min-height: 100vh;
-  overflow: visible;
-}
+   in a card in the middle of the screen. The shell's layout rules are scoped to
+   `body.shell-page`, so this page's body is its own. */
+body { display: grid; place-items: center; min-height: 100vh; }
 main { width: min(24rem, 100% - 2rem); padding-block: 2rem; }
 .signin-brand { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; }
 .signin-brand::before {
@@ -28,4 +23,5 @@ input {
 }
 input:focus-visible { outline: none; border-color: var(--gold); }
 #google-sign-in, #sign-out { background: none; color: var(--gold); font-weight: 500; }
+#google-sign-in { width: 100%; }
 #signin-status { min-height: 1.5em; color: var(--muted); }
