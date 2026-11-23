@@ -1,0 +1,37 @@
+{#- The Sources panel's cards (#354): `source_list` draws the cards of the panel
+    (`_sources_panel.html`), and the same macro draws them again, out of band, after an answer
+    (`_turns_fragment.html`), so a card is one thing wherever it is drawn. A card is one
+    cited clause: its title, its version, the clause's own stored text and the link that
+    opens it. Every value is autoescaped; nothing is marked safe. -#}
+{% macro source_list(sources, empty, oob=False) %}
+{#- The cards, in a wrapper of their own: after an answer, the fragment replaces it (`hx-swap-oob`). -#}
+<div id="sp-list" class="sp-list" data-sp-list{% if oob %} hx-swap-oob="true"{% endif %}>
+{% if sources %}
+<p class="note">Each is the clause's own text, checked against the stored source. Open one at the clause to read it here.</p>
+{% for s in sources %}
+<article class="card source" id="{{ s.id }}" data-source="{{ s.clause_id }}">
+<h3>{{ s.title }}</h3>
+<p class="meta">version {{ s.version_id }}</p>
+{% if s.text %}
+<p class="clause-text">{{ s.text }}</p>
+{% else %}
+<p class="note">The text of this clause is no longer held.</p>
+{% endif %}
+{% for q in s.quotes %}
+<p class="meta">Quoted in a finding: <q>{{ q }}</q></p>
+{% endfor %}
+{% if s.incomplete %}
+<p class="reasons"><span class="flag flag-incomplete">Incomplete</span> The law sets more here than the text held. Read the source before relying on it.</p>
+{% for r in s.incomplete %}
+<p class="reasons">{{ r.detail }}</p>
+{% endfor %}
+{% endif %}
+{#- The fallback is the link itself: with script it opens in the panel; without, in a new tab. -#}
+<p><a class="button secondary" href="{{ s.href }}" data-source-link data-source-title="{{ s.title }}" target="_blank" rel="noopener noreferrer">Open at the clause</a></p>
+</article>
+{% endfor %}
+{% else %}
+<p class="note">{{ empty }}</p>
+{% endif %}
+</div>
+{% endmacro %}

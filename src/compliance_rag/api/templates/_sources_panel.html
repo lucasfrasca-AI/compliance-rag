@@ -1,0 +1,29 @@
+{#- The Sources panel (#354, ADR-0053 I1 and I2): the one citation panel the chat page and
+    every check page share, in the shell's right-hand slot (`base.html`, block `sources`).
+    It takes `sources`, a list of cards (`source_panel.chat_cards` and `report_cards`), and
+    `empty`, the words for a panel with none. A card is one cited clause: its title, its
+    version, the clause's own stored text and a link that opens it in its source. A click on
+    that link (or on any `[data-source-link]` on the page, a citation or a claim) shows the
+    source in the panel's own same-origin frame, at the anchor; the link is a plain link
+    without script. `static/sources.js` is the panel's one script. Every value is
+    autoescaped; nothing is marked safe. The cards are `_source_cards.html`'s. -#}
+{% from "_source_cards.html" import source_list %}
+<section id="sources-panel" class="sources-panel" aria-label="Sources" data-view="list">
+<div class="sp-head">
+<h2>Sources</h2>
+<button type="button" class="secondary sp-toggle" data-sp-toggle aria-expanded="true" aria-controls="sp-body">Collapse</button>
+</div>
+<div id="sp-body" class="sp-body">
+{{ source_list(sources, empty) }}
+<div class="sp-viewer" data-sp-viewer>
+<div class="sp-viewer-head">
+<button type="button" class="secondary" data-sp-close>Back to sources</button>
+<a class="sp-fallback" data-sp-fallback href="/chats" target="_blank" rel="noopener noreferrer">Open in a new tab</a>
+</div>
+<p class="sp-title" data-sp-title></p>
+{#- Nothing in it can run: sandbox="" here, and the source route's own CSP. -#}
+<iframe class="sp-frame" data-sp-frame title="The cited text in its source" sandbox="" referrerpolicy="no-referrer"></iframe>
+</div>
+</div>
+</section>
+<script type="module" src="/static/sources.js"></script>

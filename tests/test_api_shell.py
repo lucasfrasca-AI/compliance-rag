@@ -241,26 +241,47 @@ async def test_the_sign_in_page_shows_the_logo_and_the_name_in_the_same_palette(
 # ---- the Sources slot ----------------------------------------------------------------
 
 
-async def test_every_page_has_the_one_sources_slot_and_only_the_chat_fills_it(quote: str) -> None:
+async def test_every_page_has_the_one_sources_slot_and_the_chat_and_check_pages_fill_it(
+    quote: str,
+) -> None:
     async with await client_for(FakeGenerator(reply_of((APP11, quote)))) as client:
         await signed_in(client, SECOND)
         pages = await every_page(client)
-    chat_pages = {"/chats/new"} | {n for n in pages if re.fullmatch(r"/chats/[0-9a-f]{32}", n)}
+    filled = (
+        {"/chats/new"}
+        | {n for n in pages if re.fullmatch(r"/chats/[0-9a-f]{32}", n)}
+        | {n for n in pages if re.fullmatch(r"/checks/[0-9a-f]{32}", n)}
+    )
+    assert len(filled) == 3
     for name, response in pages.items():
         parsed = scan(response.text)
         assert len(parsed.where("aside", id="sources")) == 1, name
         (slot,) = re.findall(
             r'<aside id="sources"[^>]*>(.*?)</aside>\s*</div>', response.text, re.S
         ) or [""]
-        assert ('id="panel"' in slot) == (name in chat_pages), name
-    # the chat's citation area keeps its behaviour, inside the slot
+        assert ('id="sources-panel"' in slot) == (name in filled), name
+        assert len(parsed.where("section", id="sources-panel")) == (name in filled), name
+    # the one panel is the same markup on the chat and the check page (#354)
     chat = next(r.text for n, r in pages.items() if n.startswith("/chats/") and n != "/chats/new")
-    inside = re.search(r'<aside id="sources".*?</aside>\s*</div>', chat, re.S)
-    assert inside is not None
-    slot = scan(inside.group(0))
-    (frame,) = slot.where("iframe")
-    assert frame["sandbox"] == "" and "src" not in frame
-    assert slot.where("button", id="panel-close")
+    check = next(r.text for n, r in pages.items() if re.fullmatch(r"/checks/[0-9a-f]{32}", n))
+    heads: list[str] = []
+    viewers: list[str] = []
+    for page in (chat, check):
+        inside = re.search(r'<aside id="sources".*?</aside>\s*</div>', page, re.S)
+        assert inside is not None
+        slot = scan(inside.group(0))
+        (frame,) = slot.where("iframe")
+        assert frame["sandbox"] == "" and "src" not in frame
+        assert slot.where("button", **{"data-sp-close": ""})
+        (toggle,) = slot.where("button", **{"data-sp-toggle": ""})  # the panel collapses
+        assert toggle["aria-expanded"] == "true" and toggle["aria-controls"] == "sp-body"
+        assert [a["src"] for a in slot.where("script")] == ["/static/sources.js"]
+        head = re.search(r'<section id="sources-panel".*?<div id="sp-body"[^>]*>', page, re.S)
+        viewer = re.search(r'<div class="sp-viewer".*?</section>', page, re.S)
+        assert head is not None and viewer is not None
+        heads.append(head.group(0))
+        viewers.append(viewer.group(0))
+    assert heads[0] == heads[1] and viewers[0] == viewers[1]  # one partial, drawn twice
 
 
 # ---- no inline anything; the CSP as it was -------------------------------------------------------
@@ -468,6 +489,74 @@ async def test_the_real_chat_answer_keeps_its_text_whole_and_is_marked_where_it_
     assert "".join(str(p["text"]) for p in parts if "text" in p) == answer["text"]
 
 
+SOURCE_HREF = STATIC_DIR / "source_href.js"
+
+
+def run_source_url(data_href: str | None, href: str | None) -> str | None:
+    """`source_href.js`'s one pure function, run under Node."""
+    assert NODE is not None
+    script = (
+        f"import {{ sourceUrl }} from {json.dumps(SOURCE_HREF.as_uri())};"
+        f"console.log(JSON.stringify(sourceUrl({json.dumps(data_href)}, {json.dumps(href)})));"
+    )
+    done = subprocess.run(
+        [NODE, "--input-type=module", "-e", script], capture_output=True, text=True, check=True
+    )
+    return json.loads(done.stdout)
+
+
+@NEEDS_NODE
+@pytest.mark.parametrize(
+    ("data_href", "href", "framed"),
+    [
+        # a citation or a card: its own href, the source route and the clause's anchor
+        (
+            None,
+            "/v1/sources/privacy-act-1988/C2026C00227#clause-s6d",
+            "/v1/sources/privacy-act-1988/C2026C00227#clause-s6d",
+        ),
+        # a policy's: its instrument id holds a slash
+        (
+            None,
+            "/v1/sources/acme/privacy-policy/v1#clause-3-1",
+            "/v1/sources/acme/privacy-policy/v1#clause-3-1",
+        ),
+        # a claim: the document at its passage, whatever its own href (the page's) says
+        (
+            "/v1/sources/acme/doc/v1#clause-p3",
+            "/checks/abc#clause-p3",
+            "/v1/sources/acme/doc/v1#clause-p3",
+        ),
+        ("", "/v1/sources/x/v1", "/v1/sources/x/v1"),
+        # anything but this service's source route is left to the browser
+        (None, "/checks/abc#clause-p3", None),
+        (None, "https://evil.example/v1/sources/x/v1", None),
+        (None, "//evil.example/v1/sources/x/v1", None),
+        (None, "javascript:alert(1)", None),
+        (None, "/v1/sources/", None),
+        (None, "/v1/sources/x\\..\\y", None),
+        (None, "/v1/sources/x\n/v1", None),
+        ("/v1/answers", "/v1/sources/x/v1", None),  # data-source-href wins, and it is refused
+        (None, None, None),
+    ],
+)
+def test_the_sources_panel_frames_only_the_source_route(
+    data_href: str | None, href: str | None, framed: str | None
+) -> None:
+    assert run_source_url(data_href, href) == framed
+
+
+def test_sources_js_is_the_one_panel_script_and_writes_no_html() -> None:
+    script = (STATIC_DIR / "sources.js").read_text()
+    pure = SOURCE_HREF.read_text()
+    assert 'from "./source_href.js"' in script
+    for forbidden in ("innerHTML", "insertAdjacentHTML", "outerHTML", "eval(", "document.write"):
+        assert forbidden not in script and forbidden not in pure
+    # the chat's script no longer has a panel of its own: one implementation (#354)
+    ask = (STATIC_DIR / "ask.js").read_text()
+    assert "panel-frame" not in ask and "data-source-link" not in ask and "SOURCE_PREFIX" not in ask
+
+
 def test_ask_js_only_loops_over_the_pure_pieces_and_writes_no_html() -> None:
     script = (STATIC_DIR / "ask.js").read_text()
     markers = (STATIC_DIR / "markers.js").read_text()
@@ -605,12 +694,12 @@ async def test_the_sign_in_button_is_full_width_and_the_shells_body_rules_are_sc
     assert "shell-page" in chats_body["class"]
 
 
-async def test_the_chat_citation_area_is_a_labelled_section_not_a_second_aside(
+async def test_the_sources_panel_is_a_labelled_section_not_a_second_aside(
     quote: str,
 ) -> None:
     async with await client_for(FakeGenerator(reply_of((APP11, quote)))) as client:
         await signed_in(client, SECOND)
         page = scan((await client.get("/chats/new")).text)
-    (panel,) = page.where("section", id="panel")
-    assert panel["aria-label"] == "Source" and "hidden" in panel
+    (panel,) = page.where("section", id="sources-panel")
+    assert panel["aria-label"] == "Sources" and panel["data-view"] == "list"
     assert len(page.where("aside")) == 1  # the one slot

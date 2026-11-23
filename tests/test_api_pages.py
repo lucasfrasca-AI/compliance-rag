@@ -389,7 +389,7 @@ async def test_sign_in_new_chat_ask_open_a_citation_follow_up_and_history(quote:
         # 3. a numbered citation, opening its source at the clause
         parsed = scan(fragment)
         assert parsed.where("ol", **{"class": "citations"})
-        (link,) = parsed.where("a", **{"data-source-link": ""})
+        (link,) = parsed.where("a", **{"data-source-link": "", "class": "cite"})
         assert link["href"] == "/v1/sources/privacy-act-1988/C2026C00227#clause-sch1-app11-1"
         assert "APP 11.1" in text_of(fragment)
         path, anchor = link["href"].split("#")
@@ -397,6 +397,20 @@ async def test_sign_in_new_chat_ask_open_a_citation_follow_up_and_history(quote:
         assert source.status_code == 200
         assert f'id="{anchor}"' in source.text
         assert "sandbox" in source.headers["content-security-policy"]
+        # the same response carries the Sources panel's cards (#354), out of band: the
+        # citation is a card with the instrument and clause as its title, and the same link
+        (swap,) = parsed.where("div", id="sp-list")
+        assert swap["hx-swap-oob"] == "true"
+        (card,) = parsed.where("article", **{"class": "card source"})
+        assert card["data-source"] == "privacy-act-1988:C2026C00227:sch1/app11/1"
+        (open_link,) = [
+            a
+            for a in parsed.where("a", **{"data-source-link": ""})
+            if a["class"] == "button secondary"
+        ]
+        assert open_link["href"] == link["href"]
+        assert open_link["data-source-title"] == "Privacy Act 1988 — APP 11.1"
+        assert (await client.get(open_link["href"].split("#")[0])).status_code == 200
 
         # 4. a follow-up in the same chat: the model is given the first exchange
         follow_events, follow_fragment = await ask(client, FOLLOW_UP, chat_id=chat_id)
@@ -715,7 +729,8 @@ async def test_an_unreadable_stored_citation_stays_in_place_marked_and_is_not_a_
         response = await client.get(f"/chats/{chat_id}")
     assert response.status_code == 200
     parsed = scan(response.text)
-    assert len(parsed.where("a", **{"data-source-link": ""})) == 1
+    assert len(parsed.where("a", **{"data-source-link": "", "class": "cite"})) == 1
+    assert len(parsed.where("article", **{"class": "card source"})) == 1  # none for unreadable
     assert len(parsed.where("li", **{"data-citation": "unreadable"})) == 2
     assert text_of(response.text).count("Unreadable") == 2
 
@@ -990,10 +1005,11 @@ async def test_no_page_has_an_inline_script_handler_style_or_a_foreign_asset(quo
             for key in ("src", "href", "action"):
                 value = attrs.get(key, "")
                 assert not re.match(r"(?i)\s*(javascript:|data:|https?:|//)", value), (name, value)
-    # the chat page loads exactly htmx and the one script of ours, from here
+    # the chat page loads exactly htmx and the two scripts of ours, from here
     chat = scan(pages[f"/chats/{several}"].text)
     assert sorted(a["src"] for a in chat.where("script")) == [
         "/static/ask.js",
+        "/static/sources.js",
         "/static/vendor/htmx/htmx.min.js",
     ]
     assert [a["href"] for a in chat.where("link")] == [
@@ -1064,8 +1080,8 @@ async def test_the_chat_page_has_the_form_the_progress_and_a_sandboxed_citation_
     (frame,) = parsed.where("iframe")
     assert frame["sandbox"] == "" and "src" not in frame  # every capability off; nothing loaded
     assert frame["referrerpolicy"] == "no-referrer"
-    (panel,) = parsed.where("section", id="panel")
-    assert "hidden" in panel
+    (panel,) = parsed.where("section", id="sources-panel")  # the shared Sources panel (#354)
+    assert panel["data-view"] == "list"
     assert [a["data-stage"] for t, a in parsed.elements if t == "li" and "data-stage" in a] == [
         "coverage",
         "retrieval",
@@ -1073,7 +1089,7 @@ async def test_the_chat_page_has_the_form_the_progress_and_a_sandboxed_citation_
     ]
     (progress,) = parsed.where("ol", id="progress")
     assert "hidden" in progress
-    assert parsed.where("button", id="panel-close") and parsed.where("form", id="ask-form")
+    assert parsed.where("button", **{"data-sp-close": ""}) and parsed.where("form", id="ask-form")
     assert parsed.where("button", type="button", **{"data-sign-out": ""})
 
 

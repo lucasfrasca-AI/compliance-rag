@@ -67,8 +67,7 @@ button.link {
   color: var(--gold);
   text-decoration: underline;
 }
-button.secondary, #panel-close { background: none; color: var(--gold); font-weight: 500; }
-#panel-close { padding: 0.3rem 0.7rem; }
+button.secondary { background: none; color: var(--gold); font-weight: 500; }
 :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
 /* The shell: a sidebar, the page, and a right-hand slot. On a phone the
@@ -133,7 +132,7 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 }
 .workspace { min-width: 0; }
 .sources { border-top: 1px solid var(--line); padding: 1rem; }
-.sources:empty, .page-chat:not(.panel-open) .sources { display: none; }
+.sources:empty { display: none; }
 
 .page { padding: 1rem; margin: 0 auto; }
 .title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
@@ -329,11 +328,32 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
 
-/* The chat's citation area, in the slot (#sources) the shell gives it. */
-.panel { display: flex; flex-direction: column; height: 70vh; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.4rem 1rem; border-bottom: 1px solid var(--line); }
-.panel-head h2 { margin: 0; color: var(--gold); }
-#panel-frame { flex: 1; width: 100%; border: 0; border-radius: 0 0 var(--radius) var(--radius); background: #fff; }
+/* The Sources panel (#354), in the slot (#sources) the shell gives it: one panel for the chat
+   page and every check page. Everything is scoped to `.sources-panel`. The cards stack under
+   the page on a phone; the source, when one is open, takes the panel's place in it. */
+.sources-panel { display: flex; flex-direction: column; gap: 0.75rem; min-height: 100%; }
+.sp-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.sp-head h2 { margin: 0; color: var(--gold); }
+.sp-toggle { padding: 0.3rem 0.7rem; }
+.sp-body { display: flex; flex-direction: column; gap: 0.75rem; flex: 1; min-height: 0; }
+.sources-panel[data-view="source"] .sp-list,
+.sources-panel[data-view="list"] .sp-viewer { display: none; }
+.sp-viewer { display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-height: 0; }
+.sp-viewer-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.sp-viewer-head button { padding: 0.3rem 0.7rem; }
+.sp-title { margin: 0; color: var(--strong); font-weight: 600; }
+.sp-frame { flex: 1; width: 100%; min-height: 60vh; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+.sources-panel .clause-text {
+  white-space: pre-wrap;
+  margin: 0.4rem 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  line-clamp: 8;
+  overflow: hidden;
+}
+.sources-panel .source { scroll-margin-top: 4rem; }
+.sources-panel .source:target { outline: 3px solid var(--gold); }
 
 @media (min-width: 60rem) {
   /* the sidebar is its own column; the page and the slot scroll on their own */
@@ -387,7 +407,11 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
     border-top: none;
     border-left: 1px solid var(--line);
   }
-  .panel { height: 100%; }
+  .sp-frame { min-height: 0; }
+  /* collapsed, the slot is a rail with the one button, set on its side */
+  .sources-collapsed .sources { width: 3.25rem; padding: 0.75rem 0.4rem; }
+  .sources-collapsed .sp-head h2 { display: none; }
+  .sources-collapsed .sp-toggle { writing-mode: vertical-rl; padding: 0.7rem 0.3rem; }
 }
 
 /* A check's document, passage by passage (#297). */
@@ -426,7 +450,3 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .report .run .row { margin: 0.5rem 0; }
 .report .document { margin-top: 2rem; }
 .report .passage mark.quoted { background: var(--warn-bg); color: inherit; border-radius: 3px; padding: 0 0.1rem; }
-
-#sources .clause-text { white-space: pre-wrap; margin: 0.4rem 0; }
-#sources .source { scroll-margin-top: 4rem; }
-#sources .source:target { outline: 3px solid var(--gold); }

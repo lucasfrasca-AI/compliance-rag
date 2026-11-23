@@ -1,0 +1,5 @@
+{#- The turns, and with them the Sources panel's cards (#354): `ask.js` has htmx swap this in
+    after an answer. The cards are an out-of-band swap, so one request refreshes both. -#}
+{% from "_source_cards.html" import source_list %}
+{% include "_turns.html" %}
+{{ source_list(sources, "Citations in a verified answer appear here.", oob=True) }}
