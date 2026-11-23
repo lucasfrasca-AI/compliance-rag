@@ -52,6 +52,21 @@ if (panel) {
     back.focus({ preventScroll: true });
   }
 
+  /** What the source is called: the link's own title, else the title of the card of the
+   * clause it cites (an inline citation names only the clause, a card the instrument too),
+   * else the link's text. */
+  function titleOf(link) {
+    if (link.dataset.sourceTitle) return link.dataset.sourceTitle;
+    const clause = link.closest("[data-citation]")?.dataset.citation;
+    if (clause) {
+      for (const card of panel.querySelectorAll("article.source")) {
+        const title = card.querySelector("a[data-source-title]")?.dataset.sourceTitle;
+        if (card.dataset.source === clause && title) return title;
+      }
+    }
+    return (link.textContent || "").trim();
+  }
+
   function closeSource() {
     if (panel.dataset.view !== "source") return;
     showList();
@@ -72,7 +87,7 @@ if (panel) {
     if (url === null) return;
     event.preventDefault();
     opener = link;
-    showSource(url, (link.dataset.sourceTitle || link.textContent || "").trim());
+    showSource(url, titleOf(link));
   });
 
   // A citation in a finding jumps to its card (`#src-N`): make sure the card is on show.
