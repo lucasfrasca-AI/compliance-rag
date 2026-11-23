@@ -2,7 +2,7 @@
     findings and nothing the browser says. Order (ADR-0053 F8): the four verdicts, then
     the findings that have none, each under its own heading. No score anywhere. Every
     value is autoescaped; nothing is marked safe. -#}
-{% from "_claim.html" import claim_ref %}
+{% from "_claim.html" import claim_ref with context %}
 
 {% macro citations(f) %}
 {% if f.citations %}
@@ -39,7 +39,7 @@
 
 {% macro target(f) %}
 <p class="target">{{ "Law" if f.kind == "law" else "Policy" }}:
-{% if f.target_href %}<a class="cite" href="{{ f.target_href }}" target="_blank" rel="noopener noreferrer">{{ f.label }}</a>{% else %}<span class="cite">{{ f.label }}</span>{% endif %}
+{% if f.target_href %}<a class="cite" href="{{ f.target_href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ f.label }}</a>{% else %}<span class="cite">{{ f.label }}</span>{% endif %}
 {% if f.kind == "law" %} <span class="meta">obligation <code>{{ f.obligation_id }}</code></span>{% endif %}</p>
 {% endmacro %}
 
@@ -57,10 +57,10 @@
 {{ claim_ref(d.claim) }}
 <ul>
 {% for p in d.conflicts %}
-<li><strong>Conflicts:</strong> <a href="{{ p.href }}" target="_blank" rel="noopener noreferrer">{{ p.cite }}</a> <span class="meta">version {{ p.version_id }}</span></li>
+<li><strong>Conflicts:</strong> <a href="{{ p.href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ p.cite }}</a> <span class="meta">version {{ p.version_id }}</span></li>
 {% endfor %}
 {% for p in d.others %}
-<li><strong>{{ p.verdict | replace("_", " ") | capitalize }}:</strong> <a href="{{ p.href }}" target="_blank" rel="noopener noreferrer">{{ p.cite }}</a> <span class="meta">version {{ p.version_id }}</span></li>
+<li><strong>{{ p.verdict | replace("_", " ") | capitalize }}:</strong> <a href="{{ p.href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ p.cite }}</a> <span class="meta">version {{ p.version_id }}</span></li>
 {% endfor %}
 </ul>
 </li>
@@ -225,7 +225,7 @@
 {% if cs.instruments %}
 <ul>
 {% for i in cs.instruments %}
-<li data-instrument="{{ i.instrument_id }}"><a href="{{ i.href }}" target="_blank" rel="noopener noreferrer">{{ i.title }}</a>, version <code>{{ i.version_id }}</code> <span class="meta">({{ i.obligations_open_to_the_model }} of its obligations apply to you or might)</span></li>
+<li data-instrument="{{ i.instrument_id }}"><a href="{{ i.href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ i.title }}</a>, version <code>{{ i.version_id }}</code> <span class="meta">({{ i.obligations_open_to_the_model }} of its obligations apply to you or might)</span></li>
 {% endfor %}
 </ul>
 {% else %}
@@ -235,7 +235,7 @@
 {% if cs.policies %}
 <ul>
 {% for p in cs.policies %}
-<li data-policy="{{ p.instrument_id }}"><a href="{{ p.href }}" target="_blank" rel="noopener noreferrer">{{ p.title }}</a>, version <code>{{ p.version_id }}</code></li>
+<li data-policy="{{ p.instrument_id }}"><a href="{{ p.href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ p.title }}</a>, version <code>{{ p.version_id }}</code></li>
 {% endfor %}
 </ul>
 {% elif cs.policies_recorded %}

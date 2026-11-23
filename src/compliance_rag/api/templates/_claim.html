@@ -1,8 +1,11 @@
 {#- A claim as a report names it (`check_report.claim_view`): its number, the
-    document's own words, and the link that opens the document at them. The summary
-    is the extraction model's, shown labelled as such (ADR-0059). Autoescaped; nothing
-    is marked safe. -#}
+    document's own words, and the link that opens the document at them. In the Sources panel
+    the link shows the stored document at the quote's passage (`data-source-href`: the source
+    route and the passage's anchor); without script it jumps to the passage on this page. The
+    summary is the extraction model's, shown labelled as such (ADR-0059). Autoescaped; nothing
+    is marked safe. Imported `with context`: `source_href` is the page's own document, as the
+    source route serves it. -#}
 {% macro claim_ref(c) %}
-<p class="claim"><a class="claim-link" href="{{ c.href }}">Claim {{ c.index }}</a> in the document: <q class="claim-quote">{{ c.quote }}</q></p>
+<p class="claim"><a class="claim-link" href="{{ c.href }}" data-source-link data-source-href="{{ source_href }}#{{ c.anchor | urlencode }}" data-title="Claim {{ c.index }}, in the document">Claim {{ c.index }}</a> in the document: <q class="claim-quote">{{ c.quote }}</q></p>
 <p class="note">The model's label for it, not checked: {{ c.summary }}</p>
 {% endmacro %}

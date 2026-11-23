@@ -1,13 +1,14 @@
 // The Ask pages' one script (#281). Same origin, served beside the page, so the
-// CSP needs no inline script. It does three things:
+// CSP needs no inline script. (A citation opening in the Sources panel is
+// `sources.js`, shared with the check pages, #354.) It does three things:
 //
 //  1. streams POST /v1/answers (fetch, not EventSource, which can't POST) with
 //     the session cookie, and shows stage progress from the events;
 //  2. when the stream ends, has htmx swap in the server-rendered turns
 //     (GET /chats/{id}/turns), so every outcome is drawn by the server's
-//     templates from what the ledger recorded, never built here;
-//  3. opens a citation's source in the side panel;
-//  4. numbers the cites in a verified answer: an empty <sup class="marker"
+//     templates from what the ledger recorded, never built here (the same
+//     response refreshes the Sources panel's cards, out of band);
+//  3. numbers the cites in a verified answer: an empty <sup class="marker"
 //     data-n="[n]"> after each place the text names one, whose number the
 //     stylesheet draws, so the answer's text content is never changed.
 //
@@ -18,7 +19,6 @@
 import { segments } from "./markers.js";
 
 const CHAT_ID = /^[0-9a-f]{32}$/;
-const SOURCE_PREFIX = "/v1/sources/";
 
 const $ = (id) => document.getElementById(id);
 
@@ -65,38 +65,6 @@ function placeMarkers(root) {
 }
 
 placeMarkers(document);
-
-// ---- the citation panel ---------------------------------------------------------------
-
-function closePanel() {
-  const panel = $("panel");
-  if (!panel) return;
-  panel.hidden = true;
-  $("panel-frame").removeAttribute("src");
-  document.body.classList.remove("panel-open");
-}
-
-document.addEventListener("click", (event) => {
-  const panel = $("panel");
-  const target = event.target instanceof Element ? event.target : null;
-  const link = target?.closest("a[data-source-link]");
-  if (!panel || !link) return;
-  const href = link.getAttribute("href") ?? "";
-  // Only this service's own source route, whatever the link says.
-  if (!href.startsWith(SOURCE_PREFIX)) return;
-  event.preventDefault();
-  $("panel-title").textContent = link.textContent;
-  // The anchor in the href scrolls the source to the clause.
-  $("panel-frame").setAttribute("src", href);
-  panel.hidden = false;
-  document.body.classList.add("panel-open");
-  $("panel-close").focus();
-});
-
-$("panel-close")?.addEventListener("click", closePanel);
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closePanel();
-});
 
 // ---- asking ---------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block body %}
-{% from "_claim.html" import claim_ref %}
+{% from "_claim.html" import claim_ref with context %}
 {#- One page, three states by what the ledger holds (`check_report.State`): `new`
     (offer the run), `extracted` (claims, no findings: offer the rest of the run) and
     `reported` (the findings report). Reload reads only the ledger. -#}
@@ -78,11 +78,9 @@
 <script type="module" src="/static/check_run.js"></script>
 {% endif %}
 {% endblock %}
-{#- The cited clauses fill the shell's right-hand slot; the shared Sources panel (#354) replaces this. -#}
+{#- The shared Sources panel (#354): the report's cited clauses, and any claim's passage. -#}
 {% block sources %}
-{% if report %}
-{% with sources = report.sources %}
-{% include "_sources.html" %}
+{% with empty = "No finding in this report cites a clause." if report else "Open a claim to read the document here at its passage. The clauses the findings cite appear here once they are made." %}
+{% include "_sources_panel.html" %}
 {% endwith %}
-{% endif %}
 {% endblock %}

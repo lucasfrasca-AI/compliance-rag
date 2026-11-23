@@ -8,13 +8,13 @@ pages are (`pages.py`), under the same CSP and the same headers.
 - `GET /checks/{id}`: one page in three states, by what the ledger holds
   (`check_report.State`). With no claims it offers "Run check"; with claims and no
   findings it offers the rest of the run; with findings it is the report: the findings
-  ordered by verdict, the policies' banner, the coverage statement and the citation panel
-  (`_sources.html`). `static/check_run.js` makes the two run requests and shows their
-  stages as they stream, then reloads, so the report on screen is always the ledger's,
-  drawn by the server (it never builds HTML from the stream). The stored document is below,
-  each passage an element with its anchor (`clause-p1`, ...), the same ids the source route
-  serves (`/v1/sources/<the document>/v1#clause-p1`), a claim's words marked in it, so a
-  claim opens the document at its quote.
+  ordered by verdict, the policies' banner, the coverage statement and the Sources panel
+  (`_sources_panel.html`, shared with the chat page). `static/check_run.js` makes the two run
+  requests and shows their stages as they stream, then reloads, so the report on screen is
+  always the ledger's, drawn by the server (it never builds HTML from the stream). The stored
+  document is below, each passage an element with its anchor (`clause-p1`, ...), the same
+  ids the source route serves (`/v1/sources/<the document>/v1#clause-p1`), a claim's words
+  marked in it, so a claim opens the document at its quote, in the Sources panel.
 
 The report's claims and verdict findings carry buttons (confirm or reject a claim, accept a
 verdict or withdraw the acceptance, #301): `static/check_decisions.js` POSTs the decision to
@@ -33,6 +33,8 @@ every template for all three).
 
 from __future__ import annotations
 
+from typing import cast
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
@@ -40,6 +42,7 @@ from compliance_rag.api.check_report import claim_views, passage_views, read_rep
 from compliance_rag.api.checks import MAX_DOCUMENT_BYTES, source_path
 from compliance_rag.api.deps import services_of
 from compliance_rag.api.pages import PageCaller, PageError, render
+from compliance_rag.api.source_panel import report_cards
 
 router = APIRouter()
 
@@ -64,6 +67,13 @@ async def check_page(request: Request, who: PageCaller, check_id: str) -> HTMLRe
     if found is None:
         raise _no_such_check()
     state, report = found
+    cards = (
+        []
+        if report is None
+        else await report_cards(
+            services_of(request), cast("list[dict[str, object]]", report["sources"])
+        )
+    )
     return render(
         request,
         "check.html",
@@ -77,4 +87,5 @@ async def check_page(request: Request, who: PageCaller, check_id: str) -> HTMLRe
         claims=claim_views(state),
         run=state.run,
         report=report,
+        sources=cards,
     )
