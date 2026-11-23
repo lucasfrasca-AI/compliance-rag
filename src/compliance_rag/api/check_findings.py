@@ -51,6 +51,12 @@ An error event names our word for what went wrong, never the model's or the
 provider's: `residency`, `generation_unavailable`, `policy_corpus_too_large`,
 `graph_changed` or `internal`. The streaming and reservation skeleton is
 `check_runs.py`'s, shared with `/claims`.
+
+**Derived findings** (#306, F6): the tenant's approved `implements` mappings are read with the
+facts and handed to the run, which derives, by code and with no model call, a finding against
+the mapped obligation from the claim's finding against the mapped policy clause. A derived
+finding says where it comes from (`derived_from`, `mapping_id`) and is cited to the policy
+clause and to the obligation. `derivation_skipped` names any derivation planned and not made.
 """
 
 from __future__ import annotations
@@ -168,6 +174,7 @@ def _finding_json(
         else {"text": finding.settle_by, "source": "model"},
         "provenance": finding.provenance.value,
         "derived_from": finding.derived_from,
+        "mapping_id": finding.mapping_id,
         "citations": [
             {
                 **citation_json(c.clause_id, c.version_id, c.incomplete, titles),
@@ -341,6 +348,9 @@ async def run_findings(request: Request, who: CurrentCaller, check_id: str) -> S
         if source is None:
             raise LookupError(f"{check.instrument_id}:{check.version_id}: no stored source")
         assessor = services.findings_assessor()
+        # the tenant's policy mappings, read once with the facts: the approved `implements`
+        # ones derive findings (#306, F6), nothing else changes a finding
+        mappings = await services.ledger.policy_mappings(who.tenant_id)
         made = await run.spawn(
             lambda: assessor.run(
                 tenant_id=who.tenant_id,
@@ -355,6 +365,7 @@ async def run_findings(request: Request, who: CurrentCaller, check_id: str) -> S
                 corpus=corpus,
                 mapping=mapping,
                 evidence=evidence,
+                policy_mappings=mappings,
             )
         )
         stored = await services.ledger.get_findings(who.tenant_id, check_id)
@@ -375,6 +386,7 @@ async def run_findings(request: Request, who: CurrentCaller, check_id: str) -> S
                     for r in made.refused
                 ],
                 "skipped": list(made.skipped),
+                "derivation_skipped": list(made.derivation_skipped),
                 "calls": len(made.generations),
                 "generator": services.settings.generator,
                 "cost_usd": made.cost_usd,

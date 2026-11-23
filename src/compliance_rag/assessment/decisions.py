@@ -15,6 +15,13 @@ never stored.
 - the finding is `asserted` only when **both** are. A claim confirmation alone leaves the
   finding `inferred`, and so does an acceptance alone.
 
+**A finding derived from an approved mapping** (#306, ADR-0059 C1, `mapping_derivation.py`) has
+three inputs, and is as sure as the weakest: its claim; the verdict of the policy finding it
+carries over, accepted when a person accepts *that* finding (a derived finding's own verdict is
+not accepted separately, the store refuses it); and the mapping, `asserted` by the admin's
+approval and no higher. The approval makes only the mapping link certain: it lifts neither
+the claim nor the verdict, so a derived finding is never above its claim's tier.
+
 A claim confirmation is not evidence (CONTEXT.md): it creates no evidence row and no
 coverage changes. Nothing here reads or writes either. A rejected claim's findings leave
 the report (`check_report`), which still names who rejected it.
@@ -35,6 +42,20 @@ from compliance_rag.adapters.interfaces import (
     FindingRecord,
 )
 from compliance_rag.assessment.evidence import EvidenceProvenance
+
+
+MAPPING_TIER = EvidenceProvenance.ASSERTED
+"""What an approved mapping is: the admin said so. It is the one input of a derived finding that
+an approval raises, and it is the strongest a tier can be, so it never lifts the finding."""
+
+
+def weakest(*tiers: EvidenceProvenance) -> EvidenceProvenance:
+    """The tier of a finding from its inputs' (F5, D-06): `asserted` only when every input is."""
+    return (
+        EvidenceProvenance.ASSERTED
+        if all(t is EvidenceProvenance.ASSERTED for t in tiers)
+        else EvidenceProvenance.INFERRED
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,14 +107,18 @@ class Decisions:
         accepted (and not withdrawn since). A withheld, failed or conditional finding has no
         verdict to accept, so it is always `inferred`."""
         has_verdict = finding.outcome is FindingOutcome.VERDICT  # the one predicate
-        accepted = has_verdict and self.accepted(finding.finding_id) is not None
+        # a derived finding's verdict is its source's, so it is the source's acceptance
+        # that counts (#306)
+        accepted_id = finding.derived_from or finding.finding_id
+        accepted = has_verdict and self.accepted(accepted_id) is not None
         return EvidenceProvenance.ASSERTED if accepted else EvidenceProvenance.INFERRED
 
     def finding_tier(self, finding: FindingRecord) -> EvidenceProvenance:
-        """The finding's one tier: the weakest of its claim's and its verdict's (F5, D-06).
-        `asserted` only when the claim is confirmed **and** the verdict is accepted."""
-        both = (
-            self.claim_tier(finding.claim_index) is EvidenceProvenance.ASSERTED
-            and self.verdict_tier(finding) is EvidenceProvenance.ASSERTED
-        )
-        return EvidenceProvenance.ASSERTED if both else EvidenceProvenance.INFERRED
+        """The finding's one tier: the weakest of its inputs (F5, ADR-0059 C1, D-06): its
+        claim's, its verdict's and, for a finding derived from an approved mapping, the
+        mapping's (`MAPPING_TIER`). `asserted` only when the claim is confirmed **and** the
+        verdict is accepted, and a derived finding is no more than its claim."""
+        inputs = [self.claim_tier(finding.claim_index), self.verdict_tier(finding)]
+        if finding.derived:
+            inputs.append(MAPPING_TIER)
+        return weakest(*inputs)
