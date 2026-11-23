@@ -68,6 +68,7 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.api.check_runs import CheckRun, ErrorBody, event, run_stream
 from compliance_rag.api.checks import NOT_FOUND, read_passages, visible_check
+from compliance_rag.api.decision_view import standing_json
 from compliance_rag.api.deps import (
     CurrentCaller,
     counts,
@@ -76,6 +77,7 @@ from compliance_rag.api.deps import (
     today,
 )
 from compliance_rag.assessment.claims import claim_quote
+from compliance_rag.assessment.decisions import Decisions
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.obligation_digest import ObligationDigest
 from compliance_rag.assessment.policies import tenant_policies
@@ -108,12 +110,21 @@ def _error(failed: Exception) -> ErrorBody | None:
 
 
 def claims_json(
-    record: ClaimExtractionRecord, passages: tuple[ClauseRecord, ...]
+    record: ClaimExtractionRecord,
+    passages: tuple[ClauseRecord, ...],
+    decisions: Decisions | None = None,
 ) -> dict[str, object]:
     """A recorded extraction as a member is shown it. The quote is read back from
     the stored passage (the ledger holds only its span and hash, `claim_quote`),
     so it is the document's own words, and a passage that no longer matches is an
-    integrity failure, never a different quote."""
+    integrity failure, never a different quote.
+
+    **Without `decisions`** (the run's own `claims` event) each claim says what was
+    extracted: `provenance` `inferred`. **With them** (`GET /v1/checks/{id}`, #301) it
+    says where the claim stands now instead: its `tier` (`asserted` once a member
+    confirmed it, computed when read) and its current `decision` (confirmed or rejected,
+    by whom and when, or null). The recorded `provenance` is then not said, so the two
+    cannot disagree; the stored claim itself never changes."""
     return {
         "check_id": record.check_id,
         "as_of": record.as_of.isoformat(),
@@ -131,7 +142,14 @@ def claims_json(
                 "summary": c.summary,
                 "obligation_ids": list(c.obligation_ids),
                 "policy_clause_ids": list(c.policy_clause_ids),
-                "provenance": c.provenance.value,
+                **(
+                    {"provenance": c.provenance.value}
+                    if decisions is None
+                    else {
+                        "tier": decisions.claim_tier(c.claim_index).value,
+                        "decision": standing_json(decisions.claims.get(c.claim_index)),
+                    }
+                ),
             }
             for c in record.claims
         ],

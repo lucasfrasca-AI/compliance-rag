@@ -457,6 +457,13 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .report .coverage h3 { margin-top: 0.9rem; }
 .report .coverage ul { margin: 0.25rem 0; padding-left: 1.1rem; }
 .report .run .row { margin: 0.5rem 0; }
+/* What a member decided (#301): a finding's tier and the buttons that change it. */
+.report .tier, .report .standing { margin: 0.4rem 0; color: var(--muted); font-size: 0.9rem; }
+.report .flag-tier-asserted { background: none; color: var(--ok); border: 1px solid var(--ok); }
+.report .flag-tier-inferred { background: none; color: var(--muted); border: 1px solid var(--line); }
+.report .flag-tier-rejected { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); }
+.report .decide { margin: 0.5rem 0 0.25rem; }
+.report #decision-notice { margin-top: 0.5rem; }
 .report .document { margin-top: 2rem; }
 .report .passage mark.quoted { background: var(--warn-bg); color: inherit; border-radius: 3px; padding: 0 0.1rem; }
 

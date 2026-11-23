@@ -56,7 +56,6 @@ from compliance_rag.adapters.interfaces import ACCOUNT_DISABLED, CheckListing
 from compliance_rag.api.banner import TEMPLATE_DIR, banner_text
 from compliance_rag.api.chats import read_chat
 from compliance_rag.api.deps import (
-    SYDNEY,
     UUID4_HEX,
     Caller,
     CurrentCaller,
@@ -64,6 +63,7 @@ from compliance_rag.api.deps import (
     current_member,
     is_admin,
     services_of,
+    sydney_label,
 )
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY
 from compliance_rag.api.source_panel import chat_panel
@@ -129,7 +129,7 @@ class PageHeaders:
 
 
 def _sydney(value: dt.datetime) -> str:
-    return value.astimezone(SYDNEY).strftime("%-d %b %Y, %H:%M")
+    return sydney_label(value)
 
 
 def _clause(clause_id: str) -> str:

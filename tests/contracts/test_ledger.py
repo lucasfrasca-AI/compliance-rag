@@ -30,12 +30,16 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatTurn,
     CheckCursor,
+    CheckDecision,
     CheckNotExtracted,
     CheckRecord,
     CheckRun,
     CheckStage,
     ClaimExtractionRecord,
     ClaimRecord,
+    DecisionKind,
+    DecisionRefusal,
+    DecisionRefused,
     ExtractionAlreadyReserved,
     FailureReason,
     FindingCitation,
@@ -2085,3 +2089,214 @@ async def test_the_fake_ledger_lists_a_reservation_past_its_time_out_as_not_runn
     )
     (row,) = await ledger.list_checks("acme", "uid-1", admin=False, limit=5)
     assert (row.stage, row.run) == (CheckStage.SUBMITTED, CheckRun(failed=RunStage.CLAIMS))
+
+
+# ---- claim confirmation, claim rejection and verdict acceptance (#301) ------------------
+
+
+def a_decision(kind: DecisionKind, **changes: Any) -> CheckDecision:  # Any: record fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "tenant_id": "acme",
+        "check_id": "c" * 32,
+        "kind": kind,
+        "user_id": "uid-1",
+        "email": "lead@acme.example",
+        "trace_id": "d" * 32,
+    }
+    if kind.of_claim:
+        fields["claim_index"] = 1
+    else:
+        fields["finding_id"] = "f1" + "0" * 30
+    fields.update(changes)
+    return CheckDecision(**fields)
+
+
+async def assert_decisions_contract(ledger: LedgerStore) -> None:
+    """What a member decided about a check's claims and findings (#301): append-only,
+    latest wins, each row with who, when and `trace_id`; a decision that adds nothing
+    appends nothing; only a verdict can be accepted; and no decision ever changes a claim
+    or a finding."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+    for instrument_id in ("acme/check-1", "acme/check-2"):
+        await ledger.record_version(
+            tenant_id="acme",
+            instrument_id=instrument_id,
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.SUBMITTED_DOCUMENT,
+            title="A document",
+        )
+    check_1, check_2 = "c" * 32, "e" * 32
+    confirm, reject = DecisionKind.CLAIM_CONFIRMED, DecisionKind.CLAIM_REJECTED
+    accept, withdraw = DecisionKind.VERDICT_ACCEPTED, DecisionKind.VERDICT_WITHDRAWN
+
+    # ---- nothing is decided about a check with no claims or findings
+    assert await ledger.check_decisions("acme", check_1) == ()
+    with pytest.raises(ValueError, match="extracted"):
+        await ledger.record_check_decision(a_decision(confirm))
+    await ledger.record_check(a_check())
+    await ledger.record_check(a_check(check_id=check_2, instrument_id="acme/check-2"))
+    for check in (check_1, check_2):
+        await ledger.reserve_extraction("acme", check, as_of=JUN, trace_id="a" * 32)
+        await ledger.record_claims(an_extraction(check_id=check))
+    with pytest.raises(ValueError, match="no finding"):  # claims, but no findings run yet
+        await ledger.record_check_decision(a_decision(accept))
+    await ledger.reserve_findings("acme", check_1, trace_id="a" * 32)
+    await ledger.record_findings(a_findings_run(check_1))
+    other_verdict = a_verdict(1, finding_id="g1" + "0" * 30, obligation_id="OB-PA-APP11-1")
+    await ledger.reserve_findings("acme", check_2, trace_id="b" * 32)
+    await ledger.record_findings(
+        a_findings_run(check_2, other_verdict, usage=(), trace_id="b" * 32)
+    )
+    claims_before = await ledger.get_claims("acme", check_1)
+    findings_before = await ledger.get_findings("acme", check_1)
+    assert claims_before is not None and findings_before is not None
+    assert await ledger.check_decisions("acme", check_1) == ()
+
+    # ---- a confirmation is a row: who, when, trace_id, and the order they were made in
+    assert await ledger.record_check_decision(a_decision(confirm)) is True
+    (first,) = await ledger.check_decisions("acme", check_1)
+    assert first.decision_id is not None and first.decided_at is not None
+    assert (first.kind, first.claim_index, first.finding_id) == (confirm, 1, None)
+    assert (first.user_id, first.email, first.trace_id) == (
+        "uid-1",
+        "lead@acme.example",
+        "d" * 32,
+    )
+
+    # ---- a decision that adds nothing appends nothing, so a double click is one row
+    assert await ledger.record_check_decision(a_decision(confirm, trace_id="e" * 32)) is False
+    assert len(await ledger.check_decisions("acme", check_1)) == 1
+
+    # ---- latest wins: a confirmation can be followed by a rejection, and the reverse; the
+    # history stays, in order
+    assert await ledger.record_check_decision(
+        a_decision(reject, user_id="uid-2", email="admin@acme.example", trace_id="f" * 32)
+    )
+    assert await ledger.record_check_decision(a_decision(confirm, trace_id="9" * 32))
+    history = await ledger.check_decisions("acme", check_1)
+    assert [(d.kind, d.user_id) for d in history] == [
+        (confirm, "uid-1"),
+        (reject, "uid-2"),
+        (confirm, "uid-1"),
+    ]
+    assert [d.trace_id for d in history] == ["d" * 32, "f" * 32, "9" * 32]
+    ids = [d.decision_id for d in history if d.decision_id is not None]
+    assert len(ids) == 3 and ids == sorted(ids) and len(set(ids)) == 3
+    stamps = [d.decided_at for d in history if d.decided_at is not None]
+    assert len(stamps) == 3 and stamps == sorted(stamps)
+
+    # ---- the claim is its own: claim 2's state is not claim 1's
+    assert await ledger.record_check_decision(a_decision(reject, claim_index=2))
+    assert await ledger.record_check_decision(a_decision(reject, claim_index=2)) is False
+    assert [d.claim_index for d in await ledger.check_decisions("acme", check_1)] == [1, 1, 1, 2]
+
+    # ---- a verdict is accepted, and the acceptance withdrawn, and accepted again
+    # withdrawing needs an acceptance that stands: the store refuses, whoever asks
+    for _ in range(2):
+        with pytest.raises(DecisionRefused, match="no acceptance") as nothing:
+            await ledger.record_check_decision(a_decision(withdraw))
+        assert nothing.value.reason is DecisionRefusal.NOT_ACCEPTED
+    assert await ledger.record_check_decision(a_decision(accept))
+    assert await ledger.record_check_decision(a_decision(accept)) is False
+    assert await ledger.record_check_decision(a_decision(withdraw, trace_id="8" * 32))
+    with pytest.raises(DecisionRefused, match="no acceptance"):  # already withdrawn
+        await ledger.record_check_decision(a_decision(withdraw))
+    assert await ledger.record_check_decision(a_decision(accept, trace_id="7" * 32))
+    verdicts = [d for d in await ledger.check_decisions("acme", check_1) if d.finding_id]
+    assert [d.kind for d in verdicts] == [accept, withdraw, accept]
+    assert {d.finding_id for d in verdicts} == {"f1" + "0" * 30}
+    assert {d.claim_index for d in verdicts} == {None}
+    # the ambiguous verdict is its own finding
+    ambiguous = "f1p" + "0" * 29
+    assert await ledger.record_check_decision(a_decision(accept, finding_id=ambiguous))
+
+    # ---- the verdict of a rejected claim cannot be accepted: the store refuses, under its
+    # own lock, so no route can break the rule. An acceptance already given may still be
+    # withdrawn, and confirming the claim again lets it be accepted.
+    assert await ledger.record_check_decision(a_decision(reject))  # claim 1 now stands rejected
+    for finding_id in ("f1" + "0" * 30, ambiguous):  # accepted before, or not: refused
+        with pytest.raises(DecisionRefused, match="claim is rejected") as rejected:
+            await ledger.record_check_decision(a_decision(accept, finding_id=finding_id))
+        assert rejected.value.reason is DecisionRefusal.CLAIM_REJECTED
+    assert await ledger.record_check_decision(a_decision(withdraw, finding_id=ambiguous))
+    with pytest.raises(DecisionRefused, match="claim is rejected"):
+        await ledger.record_check_decision(a_decision(accept, finding_id=ambiguous))
+    assert await ledger.record_check_decision(a_decision(confirm))  # confirmed again
+    assert await ledger.record_check_decision(a_decision(accept, finding_id=ambiguous))
+
+    # ---- only a verdict can be accepted: a conditional, withheld or failed finding is
+    # refused, as is one that is not the check's (another check's, or none at all)
+    held = len(await ledger.check_decisions("acme", check_1))
+    for finding_id in ("f1c" + "0" * 29, "f2w" + "0" * 29, "f2f" + "0" * 29):
+        for kind in (accept, withdraw):
+            with pytest.raises(DecisionRefused, match="only a verdict") as refused:
+                await ledger.record_check_decision(a_decision(kind, finding_id=finding_id))
+            assert refused.value.reason is DecisionRefusal.NOT_A_VERDICT
+    for finding_id in ("g1" + "0" * 30, "nope"):
+        with pytest.raises(ValueError, match="no finding"):
+            await ledger.record_check_decision(a_decision(accept, finding_id=finding_id))
+    assert len(await ledger.check_decisions("acme", check_1)) == held
+
+    # ---- a claim the extraction does not hold, a check that is not the tenant's
+    for claim_index in (3, 26):
+        with pytest.raises(ValueError, match=r"claim|numbered"):
+            await ledger.record_check_decision(a_decision(confirm, claim_index=claim_index))
+    with pytest.raises(ValueError, match="numbered"):
+        await ledger.record_check_decision(a_decision(confirm, claim_index=0))
+    with pytest.raises(ValueError, match="extracted"):
+        await ledger.record_check_decision(a_decision(confirm, tenant_id="other-corp"))
+    with pytest.raises(ValueError, match="extracted"):
+        await ledger.record_check_decision(a_decision(confirm, check_id="0" * 32))
+
+    # ---- what a decision carries, refused before anything is written
+    for changes, why in (
+        ({"trace_id": " "}, "trace_id"),
+        ({"user_id": ""}, "who"),
+        ({"email": " "}, "who"),
+        ({"check_id": " "}, "names its check"),
+        ({"finding_id": "f1" + "0" * 30}, "no finding"),  # a claim decision naming a finding
+    ):
+        with pytest.raises(ValueError, match=why):
+            await ledger.record_check_decision(a_decision(confirm, **changes))
+    for changes, why in (
+        ({"finding_id": None}, "names its finding"),
+        ({"claim_index": 1}, "not a claim"),
+    ):
+        with pytest.raises(ValueError, match=why):
+            await ledger.record_check_decision(a_decision(accept, **changes))
+    assert len(await ledger.check_decisions("acme", check_1)) == held
+
+    # ---- by tenant and by check
+    assert await ledger.check_decisions("other-corp", check_1) == ()
+    assert await ledger.check_decisions("acme", check_2) == ()
+    assert await ledger.record_check_decision(
+        a_decision(accept, check_id=check_2, finding_id="g1" + "0" * 30)
+    )
+    assert [d.check_id for d in await ledger.check_decisions("acme", check_2)] == [check_2]
+    assert len(await ledger.check_decisions("acme", check_1)) == held
+
+    # ---- of concurrent requests for one state, exactly one row
+    raced = await asyncio.gather(
+        *(
+            ledger.record_check_decision(
+                a_decision(DecisionKind.CLAIM_CONFIRMED, check_id=check_2, trace_id=f"{n}" * 32)
+            )
+            for n in range(1, 7)
+        )
+    )
+    assert raced.count(True) == 1 and raced.count(False) == 5
+
+    # ---- no decision changed a claim or a finding: both are what they were recorded as
+    assert await ledger.get_claims("acme", check_1) == claims_before
+    assert {c.provenance for c in claims_before.claims} == {EvidenceProvenance.INFERRED}
+    assert await ledger.get_findings("acme", check_1) == findings_before
+    assert {f.provenance for f in findings_before.findings} == {EvidenceProvenance.INFERRED}
+    # and none is evidence: nothing was recorded as a fact about the tenant
+    assert await ledger.evidence("acme") == ()
+
+
+async def test_the_fake_ledger_satisfies_the_decisions_contract() -> None:
+    await assert_decisions_contract(FakeLedgerStore())

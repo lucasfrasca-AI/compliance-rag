@@ -33,6 +33,7 @@ from compliance_rag.adapters.interfaces import (
     AssessmentRecord,
     ChatAnswer,
     ChatCitation,
+    DecisionKind,
     ExtractionAlreadyReserved,
     FindingsAlreadyReserved,
     PolicyVersion,
@@ -69,6 +70,7 @@ from tests.contracts.test_ledger import (
     assert_check_list_contract,
     assert_check_run_contract,
     assert_claims_contract,
+    assert_decisions_contract,
     assert_environment_titles_contract,
     assert_findings_contract,
     assert_ledger_contract,
@@ -85,7 +87,7 @@ pytestmark = pytest.mark.skipif(
 
 _LEDGER_TABLES = (
     "tenant_instrument, corpus_removal_audit, finding, evidence, assessment, usage, chat, "
-    "check_claim, check_extraction, submitted_check, "
+    "check_decision, check_claim, check_extraction, submitted_check, "
     "document_manifest, clause_version, clause, instrument_version, instrument, app_user, tenant"
 )
 
@@ -164,6 +166,10 @@ async def test_postgres_satisfies_the_check_run_contract(ledger: PostgresLedgerS
 
 async def test_postgres_satisfies_the_findings_contract(ledger: PostgresLedgerStore) -> None:
     await assert_findings_contract(ledger)
+
+
+async def test_postgres_satisfies_the_decisions_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_decisions_contract(ledger)
 
 
 async def test_postgres_satisfies_the_refusal_outcomes_contract(
@@ -758,3 +764,60 @@ async def test_postgres_takes_over_a_stale_findings_reservation(
         await ledger.reserve_findings("acme", check, trace_id="c" * 32)
     await ledger.record_findings(a_findings_run(check, trace_id="b" * 32))
     assert await ledger.get_findings("acme", check) is not None
+
+
+async def test_postgres_decisions_leave_the_claim_and_finding_rows_byte_for_byte_as_they_were(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """The ledger itself, not the store's reading of it (#301): every column of every
+    `check_claim` and `finding` row, with its `xmin` (the transaction that last wrote the
+    row: an UPDATE, even to the same value, changes it), is the same after a series of
+    decisions as before. Only `check_decision` has rows added."""
+    from tests.contracts.test_ledger import (
+        _a_checked_document,  # pyright: ignore[reportPrivateUsage]
+        a_decision,
+    )
+
+    await _a_checked_document(ledger)
+    check = "c" * 32
+    await ledger.reserve_extraction("acme", check, as_of=dt.date(2026, 6, 1), trace_id="a" * 32)
+    await ledger.record_claims(an_extraction())
+    await ledger.reserve_findings("acme", check, trace_id="a" * 32)
+    await ledger.record_findings(a_findings_run(check))
+
+    async def snapshot() -> tuple[list[tuple[object, ...]], list[tuple[object, ...]], int]:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            claims = await (
+                await conn.execute(
+                    "SELECT *, xmin::text, ctid::text FROM check_claim ORDER BY claim_index"
+                )
+            ).fetchall()
+            findings = await (
+                await conn.execute(
+                    "SELECT *, xmin::text, ctid::text FROM finding ORDER BY finding_id"
+                )
+            ).fetchall()
+            decided = await (await conn.execute("SELECT count(*) FROM check_decision")).fetchone()
+        assert decided is not None
+        return claims, findings, int(decided[0])
+
+    before_claims, before_findings, none = await snapshot()
+    assert before_claims and before_findings and none == 0
+    confirm, reject = DecisionKind.CLAIM_CONFIRMED, DecisionKind.CLAIM_REJECTED
+    accept, withdraw = DecisionKind.VERDICT_ACCEPTED, DecisionKind.VERDICT_WITHDRAWN
+    first = "f1" + "0" * 30
+    for decision in (
+        a_decision(confirm),
+        a_decision(accept, finding_id=first),
+        a_decision(withdraw, finding_id=first),
+        a_decision(reject),
+        a_decision(confirm, claim_index=2),
+        a_decision(reject, claim_index=2),
+        a_decision(confirm),
+        a_decision(accept, finding_id=first),
+    ):
+        assert await ledger.record_check_decision(decision)
+    after_claims, after_findings, written = await snapshot()
+    assert written == 8
+    assert after_claims == before_claims
+    assert after_findings == before_findings
