@@ -11,10 +11,10 @@ pages are (`pages.py`), under the same CSP and the same headers.
   ordered by verdict, the policies' banner, the coverage statement and the Sources panel
   (`_sources_panel.html`, shared with the chat page). `static/check_run.js` makes the two run
   requests and shows their stages as they stream, then reloads, so the report on screen is
-  always the ledger's, drawn by the server (it never builds HTML from the stream). The stored document is below,
-  each passage an element with its anchor (`clause-p1`, ...), the same ids the source route
-  serves (`/v1/sources/<the document>/v1#clause-p1`), a claim's words marked in it, so a
-  claim opens the document at its quote.
+  always the ledger's, drawn by the server (it never builds HTML from the stream). The stored
+  document is below, each passage an element with its anchor (`clause-p1`, ...), the same
+  ids the source route serves (`/v1/sources/<the document>/v1#clause-p1`), a claim's words
+  marked in it, so a claim opens the document at its quote, in the Sources panel.
 
 **Visibility** is `checks.read_check`'s, the one reader the JSON route uses: a
 check that is not the caller's (and the caller is not an admin) is the same 404
