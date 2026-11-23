@@ -170,6 +170,21 @@ class TenantTextGate:
                 "synthetic fixture, so it's real data (ADR-0026, ADR-0032)"
             )
 
+    def check_policy_document(self, raw: bytes) -> None:
+        """Offshore, a policy an admin uploads is synthetic only if its raw bytes
+        are a registered policy fixture's (#303, ADR-0026), as `check_document`
+        says for a submission; the chunks and clauses it yields are checked as
+        `CorpusLifecycle.publish_version` checks every publish. An excerpt, a
+        reordering or one byte changed is real data."""
+        if is_offshore(self.generation_region) and not self.registry.vouches_for_policy_document(
+            raw
+        ):
+            raise GenerationResidencyError(
+                f"generation runs in {self.generation_region}, outside Australia, during the "
+                "build phase, and this policy isn't, byte for byte, a registered synthetic "
+                "fixture, so it's real data (ADR-0026, ADR-0032)"
+            )
+
     def check(self, tenant_id: str, texts: Iterable[tuple[str, str]], *, what: str) -> None:
         """`texts`: `(clause id, text)` pairs owned by `tenant_id`, about to be
         sent to the model as `what`."""

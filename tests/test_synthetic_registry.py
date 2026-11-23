@@ -29,6 +29,7 @@ from compliance_rag.corpus.synthetic_registry import (
 )
 from compliance_rag.eval.golden_corpus import (
     golden_chunks,
+    policy_fixture_documents,
     submitted_fixture_clauses,
     submitted_fixture_documents,
     submitted_fixture_files,
@@ -173,6 +174,15 @@ def test_the_registry_matches_the_fixtures() -> None:
         == SyntheticRegistry.of((), documents=submitted_fixture_documents(), source="").documents
     )
     assert len(loaded.documents) == len(submitted_fixture_files())
+    # a policy an admin uploads (#303) is vouched whole by its own set, never by the submitted one
+    assert (
+        loaded.policy_documents
+        == SyntheticRegistry.of(
+            (), policy_documents=policy_fixture_documents(), source=""
+        ).policy_documents
+    )
+    assert len(loaded.policy_documents) == len(policy_fixture_documents()) == 6
+    assert not loaded.documents & loaded.policy_documents
 
 
 def test_a_submitted_fixture_is_registered_by_its_passages_and_has_no_chunk() -> None:
@@ -202,6 +212,13 @@ def test_the_registry_round_trips(tmp_path: Path) -> None:
     loaded = SyntheticRegistry.load(tmp_path / "d.json")
     assert loaded == with_documents and loaded.vouches_for_document(b"a document")
     assert not loaded.vouches_for_document(b"a document ")
+    assert not loaded.vouches_for_policy_document(b"a document")
+    with_policies = SyntheticRegistry.of((), source="s", policy_documents=(b"a policy",))
+    with_policies.save(tmp_path / "p.json")
+    loaded = SyntheticRegistry.load(tmp_path / "p.json")
+    assert loaded == with_policies and loaded.vouches_for_policy_document(b"a policy")
+    assert not loaded.vouches_for_policy_document(b"a policy ")
+    assert not loaded.vouches_for_document(b"a policy")  # a policy is not a submitted document
 
 
 async def test_registered_chunks_cannot_carry_real_clauses_through_replace_in_place() -> None:

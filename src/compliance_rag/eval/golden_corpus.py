@@ -127,6 +127,17 @@ def synthetic_fixture_clauses() -> tuple[ClauseRecord, ...]:
     return tuple(c for c in golden_clauses() if c.scope is Scope.TENANT)
 
 
+def policy_fixture_documents() -> tuple[bytes, ...]:
+    """The raw bytes of each synthetic policy fixture, front matter and all, as
+    a file is uploaded: what the operator registers, whole, beside its chunks
+    and clauses (#303). A policy an admin uploads is synthetic offshore only if
+    its bytes are one of these. In file-name order, so the registry is stable."""
+    return tuple(
+        (FIXTURES / "synthetic-policies" / filename).read_bytes()
+        for filename in sorted(POLICY_INSTRUMENT_IDS)
+    )
+
+
 def submitted_fixture_files() -> tuple[Path, ...]:
     """Every synthetic submitted document, by name (the folder's README is its
     provenance note, and a dotfile is the file system's, neither a document). A
