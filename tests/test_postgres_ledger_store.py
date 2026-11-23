@@ -76,10 +76,13 @@ from tests.contracts.test_ledger import (
     assert_check_run_contract,
     assert_claims_contract,
     assert_decisions_contract,
+    assert_derived_findings_contract,
     assert_environment_titles_contract,
     assert_findings_contract,
     assert_ledger_contract,
     assert_mapping_contract,
+    assert_mapping_decision_contract,
+    assert_mapping_decision_refusals_contract,
     assert_refusal_outcomes_contract,
 )
 
@@ -181,6 +184,24 @@ async def test_postgres_satisfies_the_decisions_contract(ledger: PostgresLedgerS
 
 async def test_postgres_satisfies_the_mapping_contract(ledger: PostgresLedgerStore) -> None:
     await assert_mapping_contract(ledger)
+
+
+async def test_postgres_decides_a_mapping_once_and_changes_nothing_else(
+    ledger: PostgresLedgerStore,
+) -> None:
+    await assert_mapping_decision_contract(ledger)
+
+
+async def test_postgres_refuses_what_a_decision_may_not_be_and_one_of_two_decides(
+    ledger: PostgresLedgerStore,
+) -> None:
+    await assert_mapping_decision_refusals_contract(ledger)
+
+
+async def test_postgres_derives_a_finding_only_through_an_approved_mapping(
+    ledger: PostgresLedgerStore,
+) -> None:
+    await assert_derived_findings_contract(ledger)
 
 
 async def test_postgres_takes_over_a_stale_mapping_run(ledger: PostgresLedgerStore) -> None:

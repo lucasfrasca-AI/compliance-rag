@@ -49,7 +49,10 @@ from compliance_rag.adapters.interfaces import (
     FindingsAlreadyReserved,
     FindingsRecord,
     LedgerStore,
+    MappingAlreadyDecided,
+    MappingDecision,
     MappingKind,
+    MappingNotFound,
     MappingProposal,
     MappingRunAlreadyReserved,
     MappingRunRecord,
@@ -2546,3 +2549,255 @@ async def test_the_fake_ledger_takes_over_a_mapping_run_held_past_the_time_out()
     assert (
         await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="b" * 32)) == 1
     )
+
+
+# ---- deciding a policy mapping, and what an approved one derives (#306) -----------------------
+
+
+def a_decision_of(mapping_id: int, status: MappingStatus, **changes: Any) -> MappingDecision:
+    fields: dict[str, Any] = {  # Any: record fields
+        "tenant_id": "acme",
+        "mapping_id": mapping_id,
+        "status": status,
+        "approver": "uid-lead",
+        "approver_email": "lead@acme.example",
+        "trace_id": "e" * 32,
+        **changes,
+    }
+    return MappingDecision(**fields)
+
+
+async def four_proposals(ledger: LedgerStore) -> tuple[Any, ...]:  # Any: PolicyMapping rows
+    """Acme's policy at v2 proposed four mappings, every one `proposed`: the first two to one
+    obligation (one implements, one partially implements), then two more."""
+    await a_policy_with_versions(ledger)
+    await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="a" * 32)
+    await ledger.record_mapping_proposals(
+        a_mapping_run(
+            a_proposal(f"{POLICY}:v2:3/1", "OB-PA-APP11-1"),
+            a_proposal(f"{POLICY}:v2:3/2", "OB-PA-APP11-1", kind=MappingKind.PARTIALLY_IMPLEMENTS),
+            a_proposal(f"{POLICY}:v2:3/3", "OB-PA-APP11-2"),
+            a_proposal(f"{POLICY}:v2:3/4", "OB-PA-APP11-3"),
+        )
+    )
+    rows = await ledger.policy_mappings("acme")
+    assert [m.status for m in rows] == [MappingStatus.PROPOSED] * 4
+    return rows
+
+
+def undecided(mapping: Any) -> Any:  # Any: a PolicyMapping
+    """The row as the model's run wrote it: what a decision is allowed to change, unset."""
+    return replace(
+        mapping,
+        status=MappingStatus.PROPOSED,
+        approver=None,
+        approver_email=None,
+        decided_at=None,
+        decision_trace_id=None,
+        rejection_reason=None,
+    )
+
+
+async def assert_mapping_decision_contract(ledger: LedgerStore) -> None:
+    """An admin approves or rejects a proposed mapping once (#306, ADR-0053 F6): the one update
+    a mapping row takes, of the status and the decision's own columns and nothing else, with
+    the approver and the deciding request's `trace_id` recorded on an approval and on a
+    rejection alike, and the proposing request's `trace_id` left as it was."""
+    first, second, third, fourth = await four_proposals(ledger)
+
+    # ---- an approval: who, when, which request; nothing else of the row changes
+    approved = await ledger.decide_mapping(a_decision_of(first.mapping_id, MappingStatus.APPROVED))
+    assert approved.status is MappingStatus.APPROVED and approved.derives
+    assert (approved.approver, approved.approver_email) == ("uid-lead", "lead@acme.example")
+    assert approved.decision_trace_id == "e" * 32 and approved.decided_at is not None
+    assert approved.rejection_reason is None
+    assert approved.trace_id == "a" * 32  # still the proposing request's: the row keeps both
+    assert undecided(approved) == first
+    assert (await ledger.policy_mappings("acme"))[0] == approved
+
+    # ---- a rejection, with its reason and its own request
+    rejected = await ledger.decide_mapping(
+        a_decision_of(
+            third.mapping_id,
+            MappingStatus.REJECTED,
+            reason="Our retention policy does not say this.",
+            trace_id="f" * 32,
+        )
+    )
+    assert rejected.status is MappingStatus.REJECTED and not rejected.derives
+    assert rejected.rejection_reason == "Our retention policy does not say this."
+    assert rejected.approver == "uid-lead" and rejected.decision_trace_id == "f" * 32
+    assert rejected.decided_at is not None and undecided(rejected) == third
+    # a rejection needs no reason
+    bare = await ledger.decide_mapping(
+        a_decision_of(fourth.mapping_id, MappingStatus.REJECTED, trace_id="d" * 32)
+    )
+    assert bare.rejection_reason is None and bare.decision_trace_id == "d" * 32
+
+    # ---- an approval of a partially_implements mapping is recorded and derives nothing
+    partial = await ledger.decide_mapping(
+        a_decision_of(second.mapping_id, MappingStatus.APPROVED, trace_id="c" * 32)
+    )
+    assert partial.status is MappingStatus.APPROVED and partial.decision_trace_id == "c" * 32
+    assert partial.kind is MappingKind.PARTIALLY_IMPLEMENTS and not partial.derives
+    after = await ledger.policy_mappings("acme")
+    assert [m.status.value for m in after] == ["approved", "approved", "rejected", "rejected"]
+
+    # ---- a decision is final: never decided again, even to the same status or another
+    for status in (MappingStatus.APPROVED, MappingStatus.REJECTED):
+        for held in (first, third):
+            with pytest.raises(MappingAlreadyDecided) as already:
+                await ledger.decide_mapping(a_decision_of(held.mapping_id, status))
+            assert already.value.status is next(
+                m.status for m in after if m.mapping_id == held.mapping_id
+            )
+    assert await ledger.policy_mappings("acme") == after  # not a column of it moved
+
+    # ---- a mapping the tenant does not hold is not found, whoever's it is
+    with pytest.raises(MappingNotFound):
+        await ledger.decide_mapping(a_decision_of(9_999, MappingStatus.APPROVED))
+    with pytest.raises(MappingNotFound):
+        await ledger.decide_mapping(
+            a_decision_of(first.mapping_id, MappingStatus.APPROVED, tenant_id="other-corp")
+        )
+
+
+async def assert_mapping_decision_refusals_contract(ledger: LedgerStore) -> None:
+    """What a decision may not be, refused before it writes: a status that is not a decision,
+    a blank trace or approver, a reason on an approval, or one that is not a short line. Each
+    leaves the mapping `proposed`. And of two admins deciding at once, one decides."""
+    first, second, *_ = await four_proposals(ledger)
+    approve, reject = MappingStatus.APPROVED, MappingStatus.REJECTED
+    for bad in (
+        a_decision_of(first.mapping_id, MappingStatus.PROPOSED),
+        a_decision_of(first.mapping_id, approve, trace_id=" "),
+        a_decision_of(first.mapping_id, approve, approver=" "),
+        a_decision_of(first.mapping_id, approve, approver_email=" "),
+        a_decision_of(first.mapping_id, approve, reason="Fine."),  # a reason is a rejection's
+        a_decision_of(first.mapping_id, reject, reason=" "),
+        a_decision_of(first.mapping_id, reject, reason="two\nlines"),
+        a_decision_of(first.mapping_id, reject, reason="x" * 301),
+    ):
+        with pytest.raises(ValueError):
+            await ledger.decide_mapping(bad)
+    await ledger.decide_mapping(a_decision_of(first.mapping_id, reject, reason="x" * 300))
+    (held, *_) = await ledger.policy_mappings("acme")
+    assert held.status is reject and held.rejection_reason == "x" * 300
+    assert all(
+        m.status is MappingStatus.PROPOSED for m in (await ledger.policy_mappings("acme"))[1:]
+    )
+
+    # ---- two at once: exactly one decides it, and what stands is the winner's
+    outcomes = await asyncio.gather(
+        ledger.decide_mapping(a_decision_of(second.mapping_id, approve, trace_id="1" * 32)),
+        ledger.decide_mapping(a_decision_of(second.mapping_id, reject, trace_id="2" * 32)),
+        return_exceptions=True,
+    )
+    won = [o for o in outcomes if not isinstance(o, BaseException)]
+    lost = [o for o in outcomes if isinstance(o, MappingAlreadyDecided)]
+    assert len(won) == 1 and len(lost) == 1
+    stands = (await ledger.policy_mappings("acme"))[1]
+    assert stands == won[0] and stands.decision_trace_id in {"1" * 32, "2" * 32}
+
+
+async def assert_derived_findings_contract(ledger: LedgerStore) -> None:
+    """A finding derived from an approved mapping (#306, ADR-0053 F6): recorded beside the
+    model's own finding for the same claim and obligation, pointing at its source finding and
+    its mapping, only ever through a mapping that derives; read back after the model's own;
+    and its verdict is never accepted separately."""
+    first, second, *_ = await four_proposals(ledger)  # first implements 3/1; second 3/2 partly
+    await ledger.record_check(a_check())
+    await ledger.reserve_extraction("acme", "c" * 32, as_of=JUN, trace_id="a" * 32)
+    await ledger.record_claims(an_extraction(check_id="c" * 32))
+    await ledger.decide_mapping(a_decision_of(first.mapping_id, MappingStatus.APPROVED))
+    await ledger.decide_mapping(a_decision_of(second.mapping_id, MappingStatus.APPROVED))
+
+    law = a_citation("privacy-act-1988:C2026C00227:sch1/app11/1")
+    clause_31, clause_32 = f"{POLICY}:v2:3/1", f"{POLICY}:v2:3/2"
+
+    def policy_finding(clause: str, finding_id: str) -> FindingRecord:
+        return a_verdict(
+            1,
+            finding_id=finding_id,
+            obligation_id=None,
+            policy_clause_id=clause,
+            verdict=Verdict.CONSISTENT,
+            citations=(a_citation(clause),),
+        )
+
+    source = policy_finding(clause_31, "p1" + "0" * 30)
+    direct = a_verdict(
+        1,
+        finding_id="d1" + "0" * 30,
+        obligation_id="OB-PA-APP11-1",
+        verdict=Verdict.AMBIGUOUS,
+        settle_by="Whether a segment profile is account information.",
+        citations=(law,),
+    )
+
+    def derived(**changes: Any) -> FindingRecord:  # Any: record fields
+        fields: dict[str, Any] = {  # Any: record fields
+            "finding_id": "v1" + "0" * 30,
+            "obligation_id": "OB-PA-APP11-1",
+            "verdict": Verdict.CONSISTENT,
+            "citations": (*source.citations, law),
+            "derived_from": source.finding_id,
+            "mapping_id": first.mapping_id,
+            **changes,
+        }
+        return a_verdict(1, **fields)
+
+    await ledger.reserve_findings("acme", "c" * 32, trace_id="a" * 32)
+    # ---- refused, and nothing written: not through a mapping that derives, not through one
+    # that is another clause's or obligation's, not another verdict, not from a finding that
+    # is not a policy finding of the run
+    other_source = policy_finding(clause_32, "p2" + "0" * 30)
+    for bad in (
+        (source, direct, derived(mapping_id=second.mapping_id)),  # approved, but partial
+        (source, direct, derived(mapping_id=9_999)),  # no such mapping
+        (source, direct, derived(mapping_id=None)),  # a derived finding names its mapping
+        (source, direct, derived(derived_from=None)),  # ... and its source
+        (source, other_source, direct, derived(derived_from=other_source.finding_id)),  # 3/2's
+        (source, direct, derived(verdict=Verdict.CONFLICTS)),  # not the source's verdict
+        (source, direct, derived(derived_from="nothing" + "0" * 25)),  # no such source
+        (source, direct, derived(derived_from=direct.finding_id)),  # not a policy finding
+        (source, direct, derived(), derived(finding_id="v2" + "0" * 30)),  # one per source
+        (source, direct, derived(settle_by="Whether.", verdict=Verdict.AMBIGUOUS)),
+    ):
+        with pytest.raises(ValueError):
+            await ledger.record_findings(a_findings_run("c" * 32, *bad, usage=()))
+        assert await ledger.get_findings("acme", "c" * 32) is None
+
+    # ---- recorded: the model's own finding stays, the derived one follows it
+    await ledger.record_findings(a_findings_run("c" * 32, source, derived(), direct, usage=()))
+    record = await ledger.get_findings("acme", "c" * 32)
+    assert record is not None
+    assert [(f.obligation_id or f.policy_clause_id, f.derived_from) for f in record.findings] == [
+        ("OB-PA-APP11-1", None),
+        ("OB-PA-APP11-1", source.finding_id),
+        (clause_31, None),
+    ]
+    stored = record.findings[1]
+    assert stored.mapping_id == first.mapping_id and stored.derived
+    assert stored.verdict is Verdict.CONSISTENT and stored.provenance is EvidenceProvenance.INFERRED
+    assert [c.clause_id for c in stored.citations] == [clause_31, law.clause_id]  # both
+
+    # ---- a derived finding's verdict is the policy finding's, so it is never accepted itself
+    for kind in (DecisionKind.VERDICT_ACCEPTED, DecisionKind.VERDICT_WITHDRAWN):
+        with pytest.raises(DecisionRefused) as refused:
+            await ledger.record_check_decision(a_decision(kind, finding_id=stored.finding_id))
+        assert refused.value.reason is DecisionRefusal.DERIVED
+    assert await ledger.check_decisions("acme", "c" * 32) == ()
+    # the policy finding's own verdict can be, and the model's direct one
+    assert await ledger.record_check_decision(
+        a_decision(DecisionKind.VERDICT_ACCEPTED, finding_id=source.finding_id)
+    )
+    assert await ledger.record_check_decision(
+        a_decision(DecisionKind.VERDICT_ACCEPTED, finding_id=direct.finding_id)
+    )
+
+
+async def test_the_fake_ledger_satisfies_the_mapping_decision_contracts() -> None:
+    await assert_mapping_decision_contract(FakeLedgerStore())
+    await assert_mapping_decision_refusals_contract(FakeLedgerStore())
+    await assert_derived_findings_contract(FakeLedgerStore())

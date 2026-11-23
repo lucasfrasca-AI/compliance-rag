@@ -1,10 +1,11 @@
-"""The mapping queue page (#305, ADR-0053 I5, ADR-0059 Q8): `/admin/mappings`.
+"""The mapping queue page (#305, #306, ADR-0053 I5, ADR-0059 Q8): `/admin/mappings`.
 
 An admin sees each policy version in force, a "Propose mappings for ..." button, and the
-mappings the ledger holds for it in every status, read-only: approving and rejecting are
-#306's. Driven end to end against `create_app` over fakes, with the admin signed in by the
-session cookie as a browser holds it, over Acme's six synthetic policies and a scripted model.
-Nothing is billable.
+mappings the ledger holds for it in every status. Each proposed mapping has Approve and Reject
+buttons (#306), and a decided one shows who decided it and when and has none; the mappings are
+filtered by status with plain links. Driven end to end against `create_app` over fakes, with the
+admin signed in by the session cookie as a browser holds it, over Acme's six synthetic policies
+and a scripted model. Nothing is billable.
 """
 
 from __future__ import annotations
@@ -137,11 +138,10 @@ async def test_the_page_lists_the_mappings_read_only_with_the_models_words_label
     assert text.count("No mappings have been proposed for this version.") == 5
 
 
-async def test_the_page_has_no_control_to_approve_or_reject_and_nothing_to_post_but_the_ask() -> (
-    None
-):
-    """#306 builds those. A proposal is shown as a proposal, and approving one is not possible
-    from here: the page's only form asks for proposals, and posts to no route of its own."""
+async def test_each_proposal_has_approve_and_reject_and_one_form_asks_for_proposals() -> None:
+    """#306: a proposed mapping carries two buttons and a reason box, wired by the page's script
+    (no inline handler); the page's only form still asks for proposals and posts to no route of
+    its own, and a decision cannot be made by posting at the page."""
     w = await world()
     await ask(w)
     async with browser(w) as client:
@@ -149,13 +149,115 @@ async def test_the_page_has_no_control_to_approve_or_reject_and_nothing_to_post_
     scan = parsed(page)
     assert {a.get("class") for a in scan.where("form")} == {"propose"}
     assert not [a for a in scan.where("form") if a.get("action") or a.get("hx-post")]
-    lowered = words(page).lower()
-    assert "approve" not in lowered.replace("is not approved", "")  # the note says it is not
-    assert "reject" not in lowered.replace("approving or rejecting", "")
-    # and a decision cannot be made by posting at the page
+    proposed = scan.where("li", **{"data-status": "proposed"})
+    assert len(proposed) == 2
+    assert sorted(a["data-decide"] for a in scan.where("button") if "data-decide" in a) == [
+        "approve",
+        "approve",
+        "reject",
+        "reject",
+    ]
+    (reason, _) = scan.where("input", **{"data-reason": ""})[:2]
+    assert reason["maxlength"] == "300" and reason["type"] == "text"
+    text = words(page)
+    assert "An approval never changes a report already issued" in text
+    assert "partially implements" in text and "changes nothing" in text
     async with browser(w) as client:
         for path in (PAGE, f"{PAGE}/1/approve", f"{PAGE}/1/reject"):
             assert (await client.post(path)).status_code in {404, 405}
+
+
+async def decide(w: World, mapping_id: int, decision: str, **body: str) -> None:
+    async with w.client(mint()) as client:
+        response = await client.post(
+            f"/v1/policy-mappings/{mapping_id}/decision", json={"decision": decision, **body}
+        )
+    assert response.status_code == 200, response.text
+
+
+async def test_a_decided_mapping_shows_who_and_when_and_has_no_buttons() -> None:
+    w = await world()
+    await ask(w)
+    one, two = await w.ledger.policy_mappings(TENANT)
+    await decide(w, one.mapping_id, "approve")
+    await decide(w, two.mapping_id, "reject", reason="Section 3.2 covers retention only.")
+    async with browser(w) as client:
+        page = (await client.get(PAGE)).text
+    scan = parsed(page)
+    assert not [a for a in scan.where("button") if "data-decide" in a]  # nothing left to decide
+    assert not scan.where("input", **{"data-reason": ""})
+    approved = scan.where("li", **{"data-status": "approved"})
+    rejected = scan.where("li", **{"data-status": "rejected"})
+    assert len(approved) == len(rejected) == 1
+    text = words(page)
+    assert f"approved by {MEMBER}" in text and f"rejected by {MEMBER}" in text
+    assert "The reason given, in the admin's words: Section 3.2 covers retention only." in text
+    assert "Changes the findings of checks made from now on." in text  # the approved implements
+    assert "await your decision" not in text  # both are decided
+    assert scan.where("time")  # when, as an element a reader can take the instant from
+
+
+async def test_an_approved_partial_mapping_says_it_changes_no_finding() -> None:
+    w = await world()
+    await ask(w)
+    _, partial = await w.ledger.policy_mappings(TENANT)
+    assert partial.kind.value == "partially_implements"
+    await decide(w, partial.mapping_id, "approve")
+    async with browser(w) as client:
+        text = words((await client.get(PAGE)).text)
+    assert "Partially implements: recorded, and changes no finding." in text
+
+
+async def test_the_mappings_filter_by_status_with_plain_links_and_a_count_each() -> None:
+    w = await world()
+    await ask(w)
+    one, _ = await w.ledger.policy_mappings(TENANT)
+    await decide(w, one.mapping_id, "approve")
+    async with browser(w) as client:
+        everything = (await client.get(PAGE)).text
+        approved = (await client.get(f"{PAGE}?status=approved")).text
+        proposed = (await client.get(f"{PAGE}?status=proposed")).text
+        rejected = (await client.get(f"{PAGE}?status=rejected")).text
+        unknown = (await client.get(f"{PAGE}?status=bogus")).text
+    links = {a["data-filter"]: a for a in parsed(everything).where("a") if "data-filter" in a}
+    assert set(links) == {"all", "proposed", "approved", "rejected"}
+    assert links["all"]["href"] == PAGE and links["approved"]["href"] == f"{PAGE}?status=approved"
+    assert "aria-current" in links["all"] and "aria-current" not in links["approved"]
+    assert "All (2)" in words(everything)
+    for label in ("Proposed (1)", "Approved (1)", "Rejected (0)"):
+        assert label in words(everything)
+    # each view shows its own status, and the filter is marked
+    assert [a["data-status"] for a in parsed(approved).where("li") if "data-status" in a] == [
+        "approved"
+    ]
+    assert [a["data-status"] for a in parsed(proposed).where("li") if "data-status" in a] == [
+        "proposed"
+    ]
+    assert not [a for a in parsed(rejected).where("li") if "data-status" in a]
+    assert "No rejected mappings for this version." in words(rejected)
+    assert (
+        "aria-current"
+        in {a["data-filter"]: a for a in parsed(approved).where("a") if "data-filter" in a}[
+            "approved"
+        ]
+    )
+    # an unknown status is every status: a filter is a view, never a refusal
+    assert len([a for a in parsed(unknown).where("li") if "data-status" in a]) == 2
+    # the buttons are there for the proposed one only, in any view
+    assert len([a for a in parsed(proposed).where("button") if "data-decide" in a]) == 2
+    assert not [a for a in parsed(approved).where("button") if "data-decide" in a]
+    assert "1 proposal awaits your decision." in words(everything)
+
+
+async def test_a_rejection_reason_with_markup_reaches_the_browser_as_text() -> None:
+    hostile = '<img src=x onerror=alert(1)> & "quoted"'
+    w = await world()
+    await ask(w)
+    one, _ = await w.ledger.policy_mappings(TENANT)
+    await decide(w, one.mapping_id, "reject", reason=hostile)
+    async with browser(w) as client:
+        page = (await client.get(PAGE)).text
+    assert "<img" not in page and "&lt;img src=x onerror=alert(1)&gt;" in page
 
 
 async def test_a_run_going_or_failed_is_said_and_a_version_out_of_force_has_no_button() -> None:
@@ -250,12 +352,14 @@ async def test_the_page_has_no_inline_script_handler_or_style_and_loads_only_our
     ]
 
 
-def test_the_pages_script_never_writes_html_and_asks_the_one_route() -> None:
+def test_the_pages_script_never_writes_html_and_asks_the_two_routes() -> None:
     script = (STATIC_DIR / "admin_mappings.js").read_text()
     assert_script_writes_no_html(script)
     assert "/v1/policy-mappings/proposals" in script and "textContent" in script
     assert "credentials" in script and "same-origin" in script
-    assert "approve" not in script.lower() and "reject" not in script.lower()
+    # #306: and the one decision route, with the reason typed as text
+    assert "/v1/policy-mappings/${id}/decision" in script
+    assert '"approve"' in script and '"reject"' in script and "body.reason" in script
 
 
 async def test_the_script_is_served_beside_the_page() -> None:
