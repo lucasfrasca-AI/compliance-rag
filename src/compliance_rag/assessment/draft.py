@@ -11,13 +11,10 @@ is that canonical text, read from `ClauseStore` — the model never authors it
 
 from __future__ import annotations
 
-import re
-
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from compliance_rag.assessment.prompt import strip_json_fence
 from compliance_rag.corpus.models import parse_stable_id
-
-_FENCED = re.compile(r"^```(?:json)?\s*\n(?P<body>.*)\n```$", re.DOTALL)
 
 
 class DraftCitation(BaseModel):
@@ -44,22 +41,11 @@ class MalformedGeneration(ValueError):
     """The model's reply isn't a valid `DraftAnswer`; nothing in it is used."""
 
 
-def unfenced(text: str) -> str:
-    """The JSON inside a reply: the reply itself, or the body of the single
-    ```json fence models commonly wrap it in. Nothing else is stripped."""
-    body = text.strip()
-    fenced = _FENCED.match(body)
-    return fenced.group("body").strip() if fenced else body
-
-
 def parse_draft(text: str) -> DraftAnswer:
     """Strict: one JSON object matching `DraftAnswer`, optionally inside a
     single ```json fence — the one wrapper models commonly add. Anything else
     is refused whole, never partially salvaged."""
-    body = text.strip()
-    fenced = _FENCED.match(body)
-    if fenced:
-        body = fenced.group("body").strip()
+    body = strip_json_fence(text)
     try:
         return DraftAnswer.model_validate_json(body)
     except ValidationError as exc:
@@ -68,10 +54,7 @@ def parse_draft(text: str) -> DraftAnswer:
 
 def parse_repair(text: str) -> DraftCitation:
     """A repair reply: exactly one `DraftCitation`, same strictness."""
-    body = text.strip()
-    fenced = _FENCED.match(body)
-    if fenced:
-        body = fenced.group("body").strip()
+    body = strip_json_fence(text)
     try:
         return DraftCitation.model_validate_json(body)
     except ValidationError as exc:

@@ -67,7 +67,6 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -96,7 +95,15 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.obligation_digest import OBLIGATION_ID_RE, ObligationDigest
 from compliance_rag.assessment.prefix_cap import check_prefix_cap
-from compliance_rag.assessment.prompt import SourceClause, cag_prefix, fence
+from compliance_rag.assessment.prompt import (
+    SourceClause,
+    boundaries_of,
+    cag_prefix,
+    fence,
+    forges_boundary,
+    is_one_line,
+    strip_json_fence,
+)
 from compliance_rag.assessment.usage import record_usage
 from compliance_rag.corpus.models import ClauseRecord, canonicalise, parse_stable_id
 from compliance_rag.telemetry import current_trace_id, span
@@ -217,10 +224,7 @@ class ExtractedClaim(BaseModel):
     def _one_line(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("a summary is not blank")
-        if any(
-            unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp")
-            for c in value
-        ):
+        if not is_one_line(value):
             raise ValueError("a summary is one line of text: no control, format or line characters")
         return value
 
@@ -241,18 +245,12 @@ class ClaimReply(BaseModel):
     claims: tuple[ExtractedClaim, ...] = Field(max_length=MAX_CLAIMS)
 
 
-_FENCED = re.compile(r"^```(?:json)?\s*\n(?P<body>.*)\n```$", re.DOTALL)
-
-
 def parse_claims(text: str) -> ClaimReply:
     """Strict: one JSON object matching `ClaimReply`, optionally inside a single
     ```json fence, the one wrapper models commonly add. Anything else (prose
     around it, an unknown key, a wrong type, a field out of bounds, more than
     `MAX_CLAIMS` claims) is refused whole, never partially salvaged."""
-    body = text.strip()
-    fenced = _FENCED.match(body)
-    if fenced:
-        body = fenced.group("body").strip()
+    body = strip_json_fence(text)
     try:
         return ClaimReply.model_validate_json(body)
     except ValidationError as exc:
@@ -444,9 +442,6 @@ class Extraction:
     trace_id: str
 
 
-_BOUNDARY = re.compile(r"boundary=([0-9a-f]{24})")
-
-
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -568,7 +563,7 @@ class ClaimExtractor:
                 passages=passages,
                 obligation_ids=digest.ids,
                 clause_ids=frozenset(p.clause_id for p in policies),
-                boundaries=frozenset(_BOUNDARY.findall(f"{prefix}\n{user}")),
+                boundaries=boundaries_of(prefix, user),
             )
             current.set_attribute("claims.accepted", len(accepted))
             current.set_attribute("claims.dropped", len(dropped))
@@ -662,7 +657,7 @@ def _check(
         return DropReason.OBLIGATION_NOT_IN_DIGEST, None
     if any(c not in clause_ids for c in claim.policy_clause_ids):
         return DropReason.CLAUSE_NOT_IN_PREFIX, None
-    if any(b in claim.summary for b in boundaries):
+    if forges_boundary(claim.summary, boundaries):
         return DropReason.SUMMARY_FORGES_FENCE, None
     start, end = span_in_passage
     offset = passage.char_start or 0
