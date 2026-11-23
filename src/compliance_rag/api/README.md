@@ -94,7 +94,9 @@ configuration, `API_ADMINS` beside `API_MEMBERS`, until a user table is worth ma
   `API_ADMINS` is read on every request, so removing an address takes effect on that user's next
   request, whichever credential they hold (the same property as removing a member, above).
 - **Admin-only today:** `PUT` and `DELETE /v1/subscriptions/{instrument_id}` and
-  `POST /v1/profile/evidence` (any member could call it before, #147). A signed-in member who is
+  `POST /v1/profile/evidence` (any member could call it before, #147), and `POST
+  /v1/policy-mappings/proposals` with `GET /v1/policy-mappings` and the page
+  `/admin/mappings` (#305). A signed-in member who is
   not an admin gets 403 `admin only`; no sign-in is still 401. Reads stay open to every member.
   ADR-0053 U6 plans the same role for policy versions, mapping approvals, withdraw and purge,
   and the questionnaire; a route that becomes admin-only takes `CurrentAdmin` in place of
@@ -335,3 +337,32 @@ fragment, CSP and `PageAdmin` rule as the subscriptions panel.
   corrected as a number); the recorded value's own type is the fallback when it isn't. A question
   stored before questions carried `answer_kind` takes it from the answers already recorded for the
   field, and is not drawn at all if they disagree or there are none.
+
+## Policy mapping proposals (`mapping_proposals.py`, `admin_mappings.py`, `templates/mappings.html`, `static/admin_mappings.js`)
+
+An admin asks, for **one policy version**, for the model to propose which of its clauses meet which
+obligations (#305, ADR-0059 Q8). A proposal is a **ledger row** (`policy_mapping`, migration 0031),
+never repo YAML and never a graph node (ADR-0059 C2, ADR-0018). Approving and rejecting are #306's.
+
+- **The run:** `POST /v1/policy-mappings/proposals` with `{"instrument_id", "version_id"}`, admin
+  only (`CurrentAdmin`), streamed as `check_runs.run_stream` streams a check's runs: `coverage`,
+  then `proposals` (or `error`, in our words: `residency`, `boundary_collision`,
+  `malformed_generation`, `generation_unavailable`, `policy_corpus_too_large`, `internal`).
+- **The gates, in order:** sign-in and role; the version must be an internal policy's in force today
+  (404 `not_a_policy_version`, nothing named back); the reservation, `reserve_mapping_run`, one run
+  per policy version at a time (409 `already_running`, no model call); then, inside the stream,
+  offshore only a registered build-phase tester may ask (`assert_mapping_run_allowed`), and the
+  proposer checks that every policy clause it will send is registered synthetic before it builds
+  a prompt.
+- **A run may be asked for again.** The ledger keeps each (clause, obligation, kind) once in any
+  status, so a repeat adds only what is new and a rejected mapping is never proposed again.
+- **What is shown:** each mapping with its clause as a reader cites it (linked to the source), its
+  obligation, kind, status, proposer and approver, and the model's rationale as
+  `{"text": ..., "source": "model"}`: its words, labelled, never evidence and never put in a prompt.
+  `GET /v1/policy-mappings` (admin only) reads the same back, for one version or all.
+- **The page:** `GET /admin/mappings` lists each policy version in force with a "Propose mappings
+  for ..." button and the mappings held for it, read-only. `static/admin_mappings.js` POSTs the run,
+  waits for the stream to end and reloads, so the list is always the ledger's. It writes no HTML.
+- **No way to write anything else.** The proposer is built from a generator, the ledger and the
+  residency gate (`ApiServices.mapping_proposer`); the proposing modules import no graph writer,
+  no YAML library and no store that writes, and a test holds them to it.

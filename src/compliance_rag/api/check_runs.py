@@ -1,6 +1,7 @@
-"""The skeleton a check's model runs share (#298 claims, #299 findings): a streamed
-response of server-sent events, a reservation held for the run and released by
-every path that ends without recording, and our words for what went wrong.
+"""The skeleton a check's model runs share (#298 claims, #299 findings), and a policy
+version's proposing run (#305): a streamed response of server-sent events, a reservation
+held for the run and released by every path that ends without recording, and our words
+for what went wrong.
 
 **One run per check, whoever's request it is.** The endpoint reserves its run
 (`LedgerStore.reserve_extraction`, `reserve_findings`) before the stream starts, so
@@ -17,7 +18,9 @@ that calls nothing. `run_stream` then owns the rest of the reservation's life:
 
 **Offshore, first.** While generation runs outside Australia only a registered
 build-phase tester may send a document to be checked (`assert_submission_allowed`,
-ADR-0032), before anything is read.
+ADR-0032), before anything is read. That is `submission_gate`, the default; a run that
+sends something else says its own (`gate`: a proposing run's is
+`assert_mapping_run_allowed`).
 
 **Our words, never the model's or the provider's.** `residency`,
 `generation_unavailable`, `policy_corpus_too_large` and `internal` are common to
