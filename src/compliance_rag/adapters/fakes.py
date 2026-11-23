@@ -18,6 +18,7 @@ from opentelemetry import trace
 from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
+    CHECK_PAGE_MAX,
     FINDINGS_RESERVATION_TTL,
     NO_PREFIX,
     RESERVATION_TTL,
@@ -29,6 +30,8 @@ from compliance_rag.adapters.interfaces import (
     ChatExchange,
     ChatSummary,
     ChatTurn,
+    CheckCursor,
+    CheckListing,
     CheckNotExtracted,
     CheckRecord,
     CheckRun,
@@ -63,6 +66,7 @@ from compliance_rag.adapters.interfaces import (
     check_claims_write,
     check_findings_write,
     check_run_of,
+    check_stage_of,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -590,6 +594,58 @@ class FakeLedgerStore(LedgerStore):
             ),
             None,
         )
+
+    async def list_checks(
+        self,
+        tenant_id: str,
+        uid: str,
+        *,
+        admin: bool,
+        limit: int,
+        before: CheckCursor | None = None,
+    ) -> tuple[CheckListing, ...]:
+        if not 1 <= limit <= CHECK_PAGE_MAX:
+            raise ValueError(f"limit is 1 to {CHECK_PAGE_MAX}, not {limit}")
+        now = dt.datetime.now(dt.UTC)
+
+        rows: list[CheckListing] = []
+        for (tenant, check_id), record in self._checks.items():
+            if tenant != tenant_id or not record.visible_to(uid, admin=admin):
+                continue
+            assert record.created_at is not None  # stamped by `record_check`
+            extraction = self._extractions.get((tenant, check_id))
+            findings = self._findings_runs.get((tenant, check_id))
+            reservations = (
+                None
+                if extraction is None
+                else Reservation(extraction.status, extraction.reserved_at < now - RESERVATION_TTL),
+                None
+                if findings is None
+                else Reservation(
+                    findings.status, findings.reserved_at < now - FINDINGS_RESERVATION_TTL
+                ),
+            )
+            stage = check_stage_of(*reservations)
+            run = check_run_of(*reservations)
+            rows.append(
+                CheckListing(
+                    check_id=check_id,
+                    user_id=record.user_id,
+                    filename=record.filename,
+                    title=self._titles.get(
+                        (tenant, record.instrument_id, record.version_id), record.filename
+                    ),
+                    created_at=record.created_at,
+                    stage=stage,
+                    run=run,
+                )
+            )
+        rows.sort(key=lambda r: (r.created_at, r.check_id), reverse=True)
+        if before is not None:
+            rows = [
+                r for r in rows if (r.created_at, r.check_id) < (before.created_at, before.check_id)
+            ]
+        return tuple(rows[:limit])
 
     async def reserve_extraction(
         self, tenant_id: str, check_id: str, *, as_of: dt.date, trace_id: str
