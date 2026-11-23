@@ -966,6 +966,18 @@ class Reservation:
     status: str  # "pending", "done" or "failed"
     lapsed: bool
 
+    @property
+    def running(self) -> bool:
+        """A run holds it right now: pending and within its time-out. One rule for every
+        reader of a reservation (a proposing run's page and API)."""
+        return self.status == "pending" and not self.lapsed
+
+    @property
+    def unfinished(self) -> bool:
+        """Its last run did not finish: it failed, or it is pending past its time-out (the
+        request that held it died), so it may be run again."""
+        return self.status == "failed" or (self.status == "pending" and self.lapsed)
+
 
 @dataclass(frozen=True, slots=True)
 class CheckRun:
@@ -1303,7 +1315,7 @@ def check_mapping_run_write(record: MappingRunRecord) -> None:
         raise ValueError("a proposing run names its policy version")
     if len(record.proposals) > MAX_MAPPING_PROPOSALS:
         raise ValueError(f"a run keeps at most {MAX_MAPPING_PROPOSALS} proposals")
-    seen: set[tuple[str, str, MappingKind]] = set()
+    seen: set[tuple[str, str]] = set()
     for p in record.proposals:
         try:
             instrument_id, version_id, _ = parse_stable_id(p.policy_clause_id)
@@ -1327,9 +1339,9 @@ def check_mapping_run_write(record: MappingRunRecord) -> None:
             )
         if "\x00" in p.rationale:
             raise ValueError("text may not contain NUL")
-        key = (p.policy_clause_id, p.obligation_id, p.kind)
+        key = (p.policy_clause_id, p.obligation_id)
         if key in seen:
-            raise ValueError("a run proposes the same mapping once")
+            raise ValueError("a run proposes a policy clause for an obligation once, as one kind")
         seen.add(key)
 
 
@@ -2237,14 +2249,14 @@ class LedgerStore(ABC):
         """Complete a reserved proposing run (#305): every proposal it holds that is new,
         as a `policy_mapping` row with status `proposed`, the model id as its proposer, no
         approver and the run's `trace_id`, and the reservation marked done, in one
-        transaction. Returns how many rows were appended. **Idempotent per mapping**: a
-        proposal whose (policy clause, obligation, kind) the tenant already has, in any
-        status, appends nothing (so a rejected mapping is never proposed again, and an
-        approved one never twice). **Writes nothing else**: no graph node, no file, and no
-        status but `proposed`. A `ValueError` and nothing written for anything
-        `check_mapping_run_write` refuses, a version this tenant does not hold, a run not
-        reserved (pending) or already done, and a reservation that is no longer this
-        run's (it commits only for the request that holds it)."""
+        transaction. Returns how many rows were appended. **One mapping per pair**: a
+        proposal for a (policy clause, obligation) the tenant already has, of either kind and
+        in any status, appends nothing (so a rejected mapping is never proposed again, and an
+        approved one is neither duplicated nor contradicted). **Writes nothing else**: no
+        graph node, no file, and no status but `proposed`. A `ValueError` and nothing written
+        for anything `check_mapping_run_write` refuses, a version this tenant does not hold,
+        a run not reserved (pending) or already done, and a reservation that is no longer
+        this run's (it commits only for the request that holds it)."""
 
     @abstractmethod
     async def policy_mappings(
@@ -2257,6 +2269,12 @@ class LedgerStore(ABC):
         """The tenant's policy mappings in the order they were proposed, in every status,
         for one policy version when `instrument_id` and `version_id` are given (both, or
         neither: a `ValueError` for one alone). Another tenant's are never returned."""
+
+    @abstractmethod
+    async def mapping_runs(self, tenant_id: str) -> dict[tuple[str, str], Reservation]:
+        """Where every policy version's proposing run stands, in one read whatever the number
+        of versions: `(instrument_id, version_id)` to its `Reservation`, for each version ever
+        proposed for. Reads only; reserves nothing."""
 
     @abstractmethod
     async def mapping_run(

@@ -79,8 +79,10 @@ class ApiServices:
 
     def mapping_proposer(self) -> MappingProposer:
         """Policy mapping proposals (#305) over the pipeline's own generator and residency
-        gate and the ledger: no graph writer, no clause store, no files (a test holds it to
-        that), so a proposal is a ledger row and nothing else."""
+        gate and the ledger, and handed no graph, no clause store and no file writer, so a
+        proposal is a ledger row and nothing else. Tests hold the proposing modules' imports
+        to that and spy on the graph at runtime (it may be read for Track A's coverage and
+        for nothing else); neither alone proves the absence of a write."""
         return MappingProposer(
             self.pipeline.generator,
             self.ledger,

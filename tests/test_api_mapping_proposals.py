@@ -19,7 +19,7 @@ import hashlib
 import json
 import pathlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -89,31 +89,38 @@ OFFSHORE: dict[str, Any] = {  # Any: settings field values
 }
 
 
-class SpyGraph(FakeGraphStore):
-    """Track A over the signed mappings, remembering every method a run called on it."""
+class GraphSpy:
+    """Track A's graph, as a proposing run may use it: it can read the coverage and nothing
+    else. Any other attribute, a read of the loads or a crosswalk as much as a write (`put_node`,
+    `put_edge`, anything a graph writer has), **raises at once** and is recorded in `refused`, so
+    a write fails the test where it happens rather than going unnoticed."""
+
+    ALLOWED = frozenset({"coverage"})
 
     def __init__(self, inner: FakeGraphStore) -> None:
-        vars(self).update(vars(inner))
+        self._inner = inner
         self.entered: list[str] = []
+        self.refused: list[str] = []
 
     async def coverage(self, *args: Any, **kwargs: Any) -> Coverage:  # Any: passed through
         self.entered.append("coverage")
-        return await super().coverage(*args, **kwargs)
+        return await self._inner.coverage(*args, **kwargs)
 
-    async def loaded_sources(self) -> Any:  # Any: LoadedSources
-        self.entered.append("loaded_sources")
-        return await super().loaded_sources()
-
-    async def crosswalks(self, *args: Any, **kwargs: Any) -> Any:  # Any: passed through
-        self.entered.append("crosswalks")
-        return await super().crosswalks(*args, **kwargs)
+    def __getattr__(self, name: str) -> Any:  # Any: whatever was asked for, which is refused
+        # Only reached for an attribute this class does not define: every other method.
+        if name.startswith("__"):
+            raise AttributeError(name)
+        self.refused.append(name)
+        raise AssertionError(
+            f"a proposing run touched the graph's {name!r}: it may only read coverage"
+        )
 
 
 @dataclass
 class World:
     ledger: FakeLedgerStore
     clauses: FakeClauseStore
-    graph: SpyGraph
+    graph: GraphSpy
     model: Any  # Any: a scripted generator, or a stand-in for one
     app: Any  # Any: the FastAPI app, only handed to a transport
 
@@ -134,14 +141,14 @@ async def world(
     store = FakeRetrievalStore(ledger=ledger)
     scripted = model or NamedModel()
     configured = _settings(**settings)
-    graph = SpyGraph(graph_over_mappings())
+    graph = GraphSpy(graph_over_mappings())
     app = create_app(
         fake_api_services(
             settings=configured,
             verifier=verifier_for(api_members=configured.api_members, **settings),
             ledger=ledger,
             clauses=clauses,
-            graph=graph,
+            graph=cast("Any", graph),  # a GraphStore as far as a run may use one
             pipeline=AssessmentPipeline(
                 RetrievalPipeline(store, FakeReranker()),
                 scripted,
@@ -233,6 +240,15 @@ async def test_what_was_recorded_is_read_back_by_an_admin_alone() -> None:
         ).json()
         half = await client.get(LIST, params={"instrument_id": SECURITY[0]})
     assert everything["counts"]["proposed"] == 2 and len(everything["mappings"]) == 2
+    # where the version's run stands, by the one rule the page uses
+    assert everything["runs"] == [
+        {
+            "instrument_id": SECURITY[0],
+            "version_id": SECURITY[1],
+            "running": False,
+            "unfinished": False,
+        }
+    ]
     assert one == everything and none["mappings"] == []
     assert half.status_code == 422 and half.json()["detail"]["error"] == "name_both"
     async with w.client(SUBMITTER_TOKEN) as client:  # a member who is not an admin
@@ -243,12 +259,41 @@ async def test_what_was_recorded_is_read_back_by_an_admin_alone() -> None:
         assert (await anonymous.get(LIST)).status_code == 401
 
 
+async def test_settings_model_id_reaches_the_stored_proposer_when_the_generator_is_silent() -> None:
+    """A generator that does not name the model that answered: the proposer is the one the
+    deployment is configured with (`GEMINI_MODEL`), in the stream and in the ledger."""
+    w = await world(
+        ScriptedGenerator(lambda _: reply(item(APP11_1, SEC_3_1))),
+        gemini_model="the-settings-model",
+    )
+    services: Any = w.app.state.services  # Any: ApiServices, read for its settings
+    assert services.settings.generation_model == "the-settings-model"
+    _, events = await propose(w)
+    assert events[-1][1]["proposer"] == "the-settings-model"
+    (row,) = await w.ledger.policy_mappings(TENANT)
+    assert row.proposer == "the-settings-model"
+    async with w.client(ADMIN_TOKEN) as client:
+        assert (await client.get(LIST)).json()["mappings"][0]["proposer"] == "the-settings-model"
+
+
+async def test_the_model_a_generator_names_is_the_proposer_whatever_settings_say() -> None:
+    w = await world(NamedModel(model="the-model-that-answered"), gemini_model="the-settings-model")
+    _, events = await propose(w)
+    assert events[-1][1]["proposer"] == "the-model-that-answered"
+    (row, *_) = await w.ledger.policy_mappings(TENANT)
+    assert row.proposer == "the-model-that-answered"
+
+
 async def test_a_second_run_proposes_nothing_twice() -> None:
     w = await world()
     await propose(w)
     _, events = await propose(w)
     again = events[-1][1]
-    assert events[-1][0] == "proposals" and again["accepted"] == 2 and again["appended"] == 0
+    assert events[-1][0] == "proposals" and again["accepted"] == 0 and again["appended"] == 0
+    assert again["dropped_reasons"] == [
+        {"position": 1, "reason": "already_proposed"},
+        {"position": 2, "reason": "already_proposed"},
+    ]
     assert again["counts"]["proposed"] == 2 and len(await w.ledger.policy_mappings(TENANT)) == 2
     assert len(w.model.calls) == 2  # an admin asked twice; a repeat appends nothing
 
@@ -353,14 +398,31 @@ async def test_nothing_is_written_to_the_graph_or_the_repo() -> None:
     w = await world()
     await propose(w)
     await propose(w)
-    # the graph was read for Track A's coverage and for nothing else: it has no writer here
-    assert set(w.graph.entered) == {"coverage"}
+    # the graph was read for Track A's coverage and for nothing else: the spy raises on any
+    # other method (a write above all), so this is a run-time fact, not a reading of imports
+    assert set(w.graph.entered) == {"coverage"} and w.graph.refused == []
     assert tree_hash("corpus", "db") == before  # no mapping YAML, no schema, no instrument
     # the proposals are in the ledger: the one place a tenant's mapping lives
     assert len(await w.ledger.policy_mappings(TENANT)) == 2
 
 
 # ---- the residency gates, as for Ask -----------------------------------------------------------
+
+
+async def test_the_graph_spy_raises_on_a_write_and_on_every_read_but_coverage() -> None:
+    """The spy itself: what it refuses is the claim the test above rests on."""
+    spy = GraphSpy(graph_over_mappings())
+    for name in ("put_node", "put_edge", "put_nodes", "put_edges", "loaded_sources", "crosswalks"):
+        with pytest.raises(AssertionError, match=name):
+            getattr(spy, name)
+    assert spy.refused == [
+        "put_node",
+        "put_edge",
+        "put_nodes",
+        "put_edges",
+        "loaded_sources",
+        "crosswalks",
+    ]
 
 
 async def test_offshore_only_a_registered_tester_may_ask() -> None:
@@ -371,8 +433,27 @@ async def test_offshore_only_a_registered_tester_may_ask() -> None:
     assert events[0][1]["instrument_id"] == SECURITY[0]
     assert w.model.calls == [] and await w.ledger.usage(TENANT) == ()
     assert await w.ledger.policy_mappings(TENANT) == ()
-    run = await w.ledger.mapping_run(TENANT, *SECURITY)
-    assert run is not None and run.status == "failed"  # released: it can be asked again
+    # refused before the version was read or reserved: no run row, and no graph read
+    assert await w.ledger.mapping_runs(TENANT) == {} and w.graph.entered == []
+
+
+async def test_offshore_a_refused_admin_learns_nothing_about_versions_and_creates_no_run() -> None:
+    """The offshore gate comes before the version read and the reservation, so what a
+    refused admin is told is the same for a version that exists, one that does not, and law."""
+    w = await world(**{**OFFSHORE, "offshore_generation_testers": SECOND})
+    told: list[tuple[int, object]] = []
+    for body in (
+        SECURITY_BODY,
+        {"instrument_id": "acme/ghost-policy", "version_id": "v1"},
+        {"instrument_id": SECURITY[0], "version_id": "v9"},
+        {"instrument_id": "privacy-act-1988", "version_id": "C2026C00227"},
+    ):
+        response, events = await propose(w, body=body)
+        assert [name for name, _ in events] == ["error"] and events[0][1]["error"] == "residency"
+        told.append((response.status_code, events[0][1]["message"]))
+    assert {t for t in told} == {(200, told[0][1])}  # one answer, whatever was asked about
+    assert await w.ledger.mapping_runs(TENANT) == {}  # no run row for any of them
+    assert w.model.calls == [] and w.graph.entered == []
 
 
 async def test_offshore_a_tester_admin_may_ask_for_registered_synthetic_policies() -> None:
@@ -396,8 +477,10 @@ async def test_offshore_a_policy_the_registry_does_not_vouch_for_never_reaches_t
     _, events = await propose(w)
     assert events[-1][1]["error"] == "residency" and "isn't registered synthetic" in str(events[-1])
     assert w.model.calls == [] and await w.ledger.policy_mappings(TENANT) == ()
-    run = await w.ledger.mapping_run(TENANT, *SECURITY)
-    assert run is not None and run.status == "failed"
+    assert await w.ledger.mapping_runs(TENANT) == {}  # refused before a run was reserved
+    # and it is the same refusal for a version that does not exist
+    _, ghost = await propose(w, body={"instrument_id": "acme/ghost-policy", "version_id": "v1"})
+    assert ghost[-1][1]["error"] == "residency"
 
 
 # ---- failures are shown plainly and record no mappings ------------------------------------------

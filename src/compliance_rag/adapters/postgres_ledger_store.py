@@ -1520,6 +1520,15 @@ class PostgresLedgerStore(LedgerStore):
             for r in rows
         )
 
+    async def mapping_runs(self, tenant_id: str) -> dict[tuple[str, str], Reservation]:
+        rows = await self._fetchall(
+            "SELECT policy_instrument_id, policy_version_id, status, "
+            "reserved_at < clock_timestamp() - %s FROM policy_mapping_run WHERE tenant_id = %s "
+            "ORDER BY policy_instrument_id, policy_version_id",
+            (MAPPING_RESERVATION_TTL, tenant_id),
+        )
+        return {(str(r[0]), str(r[1])): Reservation(str(r[2]), bool(r[3])) for r in rows}
+
     async def mapping_run(
         self, tenant_id: str, instrument_id: str, version_id: str
     ) -> Reservation | None:

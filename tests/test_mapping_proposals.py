@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import logging
 import pathlib
 from dataclasses import fields, replace
 from typing import cast
@@ -32,6 +33,7 @@ from compliance_rag.adapters.interfaces import (
     MAX_MAPPING_PROPOSALS,
     MappingKind,
     MappingProposal,
+    MappingRunRecord,
     MappingStatus,
     ReplyKind,
 )
@@ -44,8 +46,9 @@ from compliance_rag.assessment.mapping_proposals import (
     version_prefix,
 )
 from compliance_rag.assessment.prefix_cap import PolicyCorpusTooLarge
-from compliance_rag.assessment.prompt import DelimiterCollision
+from compliance_rag.assessment.prompt import DelimiterCollision, SourceClause
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION
+from compliance_rag.telemetry import current_trace_id, span
 from tests.claims_support import Prompt, ScriptedGenerator, fix_boundary
 from tests.findings_support import TENANT
 from tests.mapping_support import (
@@ -95,12 +98,37 @@ async def test_an_honest_reply_is_recorded_proposed_by_the_model_with_no_approve
     assert len(await w.ledger.usage(TENANT)) == 1
 
 
-async def test_a_generator_that_does_not_name_its_model_is_recorded_as_the_configured_one() -> None:
+async def test_a_generator_that_does_not_name_its_model_is_recorded_as_the_configured_one(
+    caplog: pytest.LogCaptureFixture, span_exporter: InMemorySpanExporter
+) -> None:
     w = await proposer_world(ScriptedGenerator(lambda _: reply(item(APP11_1, SEC_3_1))))
-    proposed = await w.propose()
+    span_exporter.clear()
+    with caplog.at_level(logging.WARNING, logger=mapping_proposals.__name__):
+        proposed = await w.propose()
     assert proposed.proposer == CONFIGURED_MODEL
     (row,) = await w.ledger.policy_mappings(TENANT)
     assert row.proposer == CONFIGURED_MODEL
+    # said once in the log, and on the span, so an operator can see it happened
+    warned = [r for r in caplog.records if "did not name its model" in r.getMessage()]
+    assert len(warned) == 1 and CONFIGURED_MODEL in warned[0].getMessage()
+    (run,) = [
+        s for s in span_exporter.get_finished_spans() if s.name == "mapping_proposals.propose"
+    ]
+    assert dict(run.attributes or {})["mappings.proposer_from_settings"] is True
+
+
+async def test_a_generator_that_names_its_model_logs_no_warning_and_says_so_on_the_span(
+    caplog: pytest.LogCaptureFixture, span_exporter: InMemorySpanExporter
+) -> None:
+    w = await proposer_world()
+    span_exporter.clear()
+    with caplog.at_level(logging.WARNING, logger=mapping_proposals.__name__):
+        await w.propose()
+    assert not [r for r in caplog.records if "did not name its model" in r.getMessage()]
+    (run,) = [
+        s for s in span_exporter.get_finished_spans() if s.name == "mapping_proposals.propose"
+    ]
+    assert dict(run.attributes or {})["mappings.proposer_from_settings"] is False
 
 
 def test_a_proposal_cannot_carry_a_status_a_proposer_or_an_approver() -> None:
@@ -146,6 +174,53 @@ async def test_ids_outside_the_digest_prefix_or_version_are_dropped_and_never_re
     rows = await w.ledger.policy_mappings(TENANT)
     assert [(m.policy_clause_id, m.obligation_id) for m in rows] == [(SEC_3_1, APP11_1)]
     assert proposed.appended == 1
+
+
+async def test_a_clause_id_that_only_shares_the_versions_prefix_is_refused() -> None:
+    """`acme/p:v1:` is a prefix of nothing but its own clauses: a clause of version `v10`, of
+    an instrument whose id begins with this one's, or of a version `v1x`, shares the characters
+    but is not the version's. All three are in the prefix the model reads, and none is
+    accepted for the version asked about."""
+    w = await proposer_world(
+        ScriptedGenerator(
+            lambda _: reply(
+                item(APP11_1, "acme/data-security-policy:v10:3/1"),
+                item(APP11_1, "acme/data-security-policy-x:v1:3/1"),
+                item(APP11_1, "acme/data-security-policy:v1x:3/1"),
+                item(APP11_1, SEC_3_1),
+            )
+        )
+    )
+    lookalikes = tuple(
+        SourceClause(cid, "A clause that only looks like the version's.")
+        for cid in (
+            "acme/data-security-policy:v10:3/1",
+            "acme/data-security-policy-x:v1:3/1",
+            "acme/data-security-policy:v1x:3/1",
+        )
+    )
+    proposed = await w.propose(policies=(*w.policies, *lookalikes))
+    assert [(d.position, d.reason) for d in proposed.dropped] == [
+        (1, DropReason.CLAUSE_NOT_IN_VERSION),
+        (2, DropReason.CLAUSE_NOT_IN_VERSION),
+        (3, DropReason.CLAUSE_NOT_IN_VERSION),
+    ]
+    assert [m.policy_clause_id for m in await w.ledger.policy_mappings(TENANT)] == [SEC_3_1]
+    # and were one handed to the ledger anyway, the store refuses it before writing
+    with span("test.request"):
+        await w.ledger.reserve_mapping_run(TENANT, *SECURITY, trace_id=current_trace_id())
+        for clause in ("acme/data-security-policy:v10:3/1", "acme/data-security-policy-x:v1:3/1"):
+            with pytest.raises(ValueError, match="not a clause of"):
+                await w.ledger.record_mapping_proposals(
+                    MappingRunRecord(
+                        tenant_id=TENANT,
+                        instrument_id=SECURITY[0],
+                        version_id=SECURITY[1],
+                        trace_id=current_trace_id(),
+                        proposer=MODEL,
+                        proposals=(MappingProposal(clause, APP8_1, MappingKind.IMPLEMENTS, "r"),),
+                    )
+                )
 
 
 async def test_a_proposal_for_a_clause_of_another_version_of_the_policy_is_not_this_versions() -> (
@@ -315,6 +390,9 @@ async def test_a_second_run_for_the_same_version_appends_only_what_is_new() -> N
     first = await w.propose()
     second = await w.propose()
     assert (first.appended, second.appended) == (1, 1)
+    # the repeat of a pair the ledger holds is dropped and traced, not proposed again
+    assert [(d.position, d.reason) for d in second.dropped] == [(1, DropReason.ALREADY_PROPOSED)]
+    assert [p.obligation_id for p in second.proposals] == [APP8_1]
     rows = await w.ledger.policy_mappings(TENANT)
     assert [(m.obligation_id, m.trace_id) for m in rows] == [
         (APP11_1, first.trace_id),
@@ -324,7 +402,17 @@ async def test_a_second_run_for_the_same_version_appends_only_what_is_new() -> N
 
 
 async def test_a_mapping_an_admin_rejected_is_not_proposed_again() -> None:
-    w = await proposer_world(ScriptedGenerator(lambda _: reply(item(APP11_1, SEC_3_1))))
+    answers = iter(
+        [
+            reply(item(APP11_1, SEC_3_1)),
+            # the same pair, as the same kind and as the other
+            reply(
+                item(APP11_1, SEC_3_1),
+                item(APP11_1, SEC_3_1, "partially_implements", "Maybe only partly."),
+            ),
+        ]
+    )
+    w = await proposer_world(ScriptedGenerator(lambda _: next(answers)))
     await w.propose()
     # #306 builds the decision; the ledger's own state stands in for one
     (row,) = await w.ledger.policy_mappings(TENANT)
@@ -332,7 +420,11 @@ async def test_a_mapping_an_admin_rejected_is_not_proposed_again() -> None:
         row, status=MappingStatus.REJECTED, approver="lead@acme.example"
     )
     again = await w.propose()
-    assert again.appended == 0 and len(again.proposals) == 1
+    assert again.appended == 0 and again.proposals == ()
+    assert [(d.position, d.reason) for d in again.dropped] == [
+        (1, DropReason.ALREADY_PROPOSED),
+        (2, DropReason.ALREADY_PROPOSED),  # either kind, in any status
+    ]
     (still,) = await w.ledger.policy_mappings(TENANT)
     assert still.status is MappingStatus.REJECTED and still.approver == "lead@acme.example"
 
@@ -578,11 +670,11 @@ def test_the_proposal_models_name_the_same_fields_as_the_ledger_and_the_prompt()
 
 def test_no_corpus_mapping_file_carries_a_tenant_mapping() -> None:
     """The repository is public, so `corpus/mappings/` holds public law only (ADR-0059 C2):
-    no file there may carry a `policy_mappings:` entry. The loader still parses the key, for
-    its fixtures; this is what keeps a real file from using it."""
+    no file there, at any depth, may carry a `policy_mappings:` entry. The loader still
+    parses the key, for its fixtures; this is what keeps a real file from using it."""
     import yaml
 
-    files = sorted((ROOT / "corpus" / "mappings").glob("*.yaml"))
+    files = sorted((ROOT / "corpus" / "mappings").rglob("*.y*ml"))
     assert files, "the signed mapping files are where the loader reads them"
     for path in files:
         document = cast("dict[str, object]", yaml.safe_load(path.read_text(encoding="utf-8")))

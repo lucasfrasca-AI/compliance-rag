@@ -375,14 +375,16 @@ never repo YAML and never a graph node (ADR-0059 C2, ADR-0018). Approving and re
   only (`CurrentAdmin`), streamed as `check_runs.run_stream` streams a check's runs: `coverage`,
   then `proposals` (or `error`, in our words: `residency`, `boundary_collision`,
   `malformed_generation`, `generation_unavailable`, `policy_corpus_too_large`, `internal`).
-- **The gates, in order:** sign-in and role; the version must be an internal policy's in force today
-  (404 `not_a_policy_version`, nothing named back); the reservation, `reserve_mapping_run`, one run
-  per policy version at a time (409 `already_running`, no model call); then, inside the stream,
-  offshore only a registered build-phase tester may ask (`assert_mapping_run_allowed`), and the
-  proposer checks that every policy clause it will send is registered synthetic before it builds
+- **The gates, in order:** sign-in and role; then offshore, **before the version is read or
+  anything is reserved**: only a registered build-phase tester may ask
+  (`assert_mapping_run_allowed`) and every policy clause of the prefix must be registered
+  synthetic, or the one `residency` event comes back whatever version was named, with no run row;
+  the version must be an internal policy's in force today (404 `not_a_policy_version`, nothing
+  named back); the reservation, `reserve_mapping_run`, one run per policy version at a time (409
+  `already_running`, no model call). The proposer checks the synthetic text again before it builds
   a prompt.
-- **A run may be asked for again.** The ledger keeps each (clause, obligation, kind) once in any
-  status, so a repeat adds only what is new and a rejected mapping is never proposed again.
+- **A run may be asked for again.** The ledger keeps each (clause, obligation) once, as either
+  kind and in any status, so a repeat adds only what is new and a rejected mapping is never proposed again.
 - **What is shown:** each mapping with its clause as a reader cites it (linked to the source), its
   obligation, kind, status, proposer and approver, and the model's rationale as
   `{"text": ..., "source": "model"}`: its words, labelled, never evidence and never put in a prompt.

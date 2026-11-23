@@ -10,7 +10,9 @@ version has new clause ids and needs its own approvals. Both routes are admin-on
 **A proposal is a ledger row and nothing else** (ADR-0018, ADR-0059 C2). The run reads the
 graph for the obligation digest (Track A's coverage, #295) and the policies for the prefix,
 and writes one place: `policy_mapping`, through `MappingProposer`, which is given no graph
-writer and no file writer (a test proves it from the module's imports). The mapping is
+writer and no file writer. Tests hold this module's imports to that and spy on the graph at
+runtime (it may be read for Track A's coverage and for nothing else); neither proves the
+absence of a write alone. The mapping is
 `proposed`, its proposer the model id, its approver empty; approving or rejecting it is
 #306's. The model's one-line rationale is shown only as `{"text": ..., "source": "model"}`:
 its words, labelled, never evidence.
@@ -23,14 +25,17 @@ The stream carries stages and a result, never anything unvalidated:
 - or `error`.
 
 **Gates, in order, each before the next costs anything.** The sign-in and the admin role;
-the policy version, which must be an internal policy's version in force today (404
-otherwise: nothing is named that is not one); the reservation
-(`LedgerStore.reserve_mapping_run`), atomically: of any number of concurrent requests for one
-policy version exactly one holds it, and the rest are a 409 before the stream starts that
-call nothing. The reservation is released as failed by every path that ends without recording,
-so the run can be made again. Inside the stream, first, offshore: only a registered
-build-phase tester may ask (`assert_mapping_run_allowed`, ADR-0032); the synthetic-text gate
-over the policy clauses is the proposer's, before it builds a prompt (ADR-0026).
+then **offshore, before the version is read or anything is reserved** (`_admitted`): only a
+registered build-phase tester may ask (`assert_mapping_run_allowed`, ADR-0032), and every
+policy clause of the prefix must be registered synthetic (ADR-0026). A refusal here is the one
+`residency` error event, whatever version was named, and creates no run row, so a refused
+admin learns nothing about which versions exist. Then the policy version, which must be an
+internal policy's version in force today (404 otherwise: nothing is named that is not one);
+then the reservation (`LedgerStore.reserve_mapping_run`), atomically: of any number of
+concurrent requests for one policy version exactly one holds it, and the rest are a 409 before
+the stream starts that call nothing. The reservation is released as failed by every path that
+ends without recording, so the run can be made again. The proposer checks the synthetic text
+again before it builds a prompt, so no way of calling it skips the gate.
 
 An error event names our word for what went wrong, never the model's or the provider's:
 `residency`, `boundary_collision`, `malformed_generation`, `generation_unavailable`,
@@ -40,6 +45,7 @@ An error event names our word for what went wrong, never the model's or the prov
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import Final
@@ -55,7 +61,7 @@ from compliance_rag.adapters.interfaces import (
     PolicyMapping,
     PolicyVersion,
 )
-from compliance_rag.api.check_runs import CheckRun, ErrorBody, event, run_stream
+from compliance_rag.api.check_runs import CheckRun, ErrorBody, error_event, event, run_stream
 from compliance_rag.api.deps import (
     ApiServices,
     Caller,
@@ -69,7 +75,7 @@ from compliance_rag.api.sources import source_href
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.obligation_digest import ObligationDigest
 from compliance_rag.assessment.policies import tenant_policies
-from compliance_rag.assessment.prompt import DelimiterCollision
+from compliance_rag.assessment.prompt import DelimiterCollision, SourceClause
 from compliance_rag.corpus.display_form import Titles, cite, cited_policy_versions
 from compliance_rag.telemetry import current_trace_id
 
@@ -118,6 +124,28 @@ def _gate(services: ApiServices, who: Caller) -> None:
     )
 
 
+async def _admitted(services: ApiServices, who: Caller, day: dt.date) -> tuple[SourceClause, ...]:
+    """The offshore gates, on what will be sent: the asker must be a registered tester, and
+    every policy clause of the prefix must be registered synthetic (ADR-0026, ADR-0032).
+    Returns the prefix's clauses, read once. Raises `GenerationResidencyError` for a refusal.
+    The proposer checks the text again before it builds a prompt: no way of calling it skips
+    the gate."""
+    _gate(services, who)
+    policies = await tenant_policies(
+        services.ledger, services.clauses, tenant_id=who.tenant_id, as_of=day
+    )
+    services.pipeline.tenant_text.check(
+        who.tenant_id, ((p.clause_id, p.text) for p in policies), what="clause(s) of the CAG prefix"
+    )
+    return policies
+
+
+async def _refusal(subject: dict[str, object], refused: Exception) -> AsyncIterator[str]:
+    """A run refused before it began: the one `error` event, as a refusal inside the stream
+    is told, so a client reads both the same way."""
+    yield error_event(subject, refused, _error, "proposing policy mappings")
+
+
 def mapping_json(mapping: PolicyMapping, titles: Titles) -> dict[str, object]:
     """One mapping as an admin is shown it. The rationale is the model's own words and says
     so; the clause is named as a reader cites it and linked to its source."""
@@ -158,8 +186,18 @@ def status_counts(mappings: Sequence[PolicyMapping]) -> dict[str, int]:
 async def propose(request: Request, who: CurrentAdmin, body: ProposeIn) -> StreamingResponse:
     services = services_of(request)
     day = today()
-    # Before anything is reserved, read or sent: only an internal policy's version in force
-    # today. Nothing else is named back.
+    subject: dict[str, object] = {
+        "instrument_id": body.instrument_id,
+        "version_id": body.version_id,
+    }
+    # First of all, before the version is read or anything is reserved: the offshore gates.
+    # A refused admin creates no run row, and what they are told does not depend on the
+    # version they named, so it teaches them nothing about which versions exist.
+    try:
+        policies = await _admitted(services, who, day)
+    except Exception as refused:
+        return StreamingResponse(_refusal(subject, refused), media_type="text/event-stream")
+    # Then only an internal policy's version in force today. Nothing else is named back.
     if PolicyVersion(
         body.instrument_id, body.version_id
     ) not in await services.ledger.policy_versions(who.tenant_id, as_of=day):
@@ -195,9 +233,6 @@ async def propose(request: Request, who: CurrentAdmin, body: ProposeIn) -> Strea
             },
         )
         digest = ObligationDigest.of(coverage)
-        policies = await tenant_policies(
-            services.ledger, services.clauses, tenant_id=who.tenant_id, as_of=day
-        )
         proposer = services.mapping_proposer()
         proposed = await run.spawn(
             lambda: proposer.propose(
@@ -236,7 +271,7 @@ async def propose(request: Request, who: CurrentAdmin, body: ProposeIn) -> Strea
         run_stream(
             services=services,
             who=who,
-            subject={"instrument_id": body.instrument_id, "version_id": body.version_id},
+            subject=subject,
             release=release,
             error_of=_error,
             failure="proposing policy mappings",
@@ -271,7 +306,19 @@ async def get_policy_mappings(
         mappings = await services.ledger.policy_mappings(
             who.tenant_id, instrument_id=instrument_id, version_id=version_id
         )
+    runs = await services.ledger.mapping_runs(who.tenant_id)
     return {
         "counts": status_counts(mappings),
         "mappings": await mappings_json(services, who.tenant_id, mappings),
+        # Where each version's proposing run stands, by the one rule the page uses too.
+        "runs": [
+            {
+                "instrument_id": instrument,
+                "version_id": version,
+                "running": run.running,
+                "unfinished": run.unfinished,
+            }
+            for (instrument, version), run in runs.items()
+            if instrument_id is None or (instrument, version) == (instrument_id, version_id)
+        ],
     }

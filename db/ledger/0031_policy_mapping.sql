@@ -18,10 +18,12 @@
 -- is the model's own words**: one line, at most 300 characters, shown only labelled as
 -- the model's and never evidence. It is never put in a prompt.
 --
--- **Idempotent proposing.** The same (policy clause, obligation, kind) proposed twice is
--- one row: the unique key below, which `INSERT ... ON CONFLICT DO NOTHING` keeps. A
--- rejected row is therefore never proposed again by a later run, and an approved one is
--- never duplicated. (The clause id carries the policy version, so the key is per version.)
+-- **One mapping per pair.** A policy clause is proposed for an obligation once: the unique
+-- key below is (tenant, policy clause, obligation), whatever the kind, and `INSERT ... ON
+-- CONFLICT DO NOTHING` keeps it. A later proposal for the pair, of either kind, adds no row
+-- (the proposer drops it as `already_proposed`). A rejected row is therefore never proposed
+-- again by a later run, and an approved one is never duplicated or contradicted. (The clause
+-- id carries the policy version, so the key is per version.)
 -- A new policy version has new clause ids, and so needs its own approvals (Q8).
 --
 -- `policy_mapping_run` is the reservation, as `check_extraction` is for a check: one row
@@ -70,7 +72,7 @@ CREATE TABLE IF NOT EXISTS policy_mapping (
     proposed_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     FOREIGN KEY (tenant_id, policy_instrument_id, policy_version_id)
         REFERENCES instrument_version (tenant_id, instrument_id, version_id),
-    CONSTRAINT policy_mapping_once UNIQUE (tenant_id, policy_clause_id, obligation_id, kind),
+    CONSTRAINT policy_mapping_once UNIQUE (tenant_id, policy_clause_id, obligation_id),
     CONSTRAINT policy_mapping_kind CHECK (kind IN ('implements', 'partially_implements')),
     CONSTRAINT policy_mapping_status CHECK (status IN ('proposed', 'approved', 'rejected')),
     -- the clause is one of the version's: its stable id begins with the version's own

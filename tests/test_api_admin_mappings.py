@@ -14,6 +14,7 @@ import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from html.parser import HTMLParser
+from typing import Any
 
 import httpx
 import pytest
@@ -263,3 +264,48 @@ async def test_the_script_is_served_beside_the_page() -> None:
         response = await client.get("/static/admin_mappings.js")
     assert response.status_code == 200
     assert response.text == (STATIC_DIR / "admin_mappings.js").read_text()
+
+
+async def test_the_page_reads_every_versions_run_and_title_in_one_query_each(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Six versions are in force: the page asks the ledger for their runs once, and for their
+    titles once, never once per version."""
+    w = await world()
+    await ask(w)
+    reads: list[str] = []
+    real_runs, real_titles = w.ledger.mapping_runs, w.ledger.version_titles
+
+    async def runs(*args: Any, **kwargs: Any) -> Any:  # Any: passed through
+        reads.append("mapping_runs")
+        return await real_runs(*args, **kwargs)
+
+    async def titles(*args: Any, **kwargs: Any) -> Any:  # Any: passed through
+        reads.append("version_titles")
+        return await real_titles(*args, **kwargs)
+
+    async def one_at_a_time(*_: Any, **__: Any) -> Any:  # Any: never called
+        raise AssertionError("the page read a version's run on its own")
+
+    monkeypatch.setattr(w.ledger, "mapping_runs", runs)
+    monkeypatch.setattr(w.ledger, "version_titles", titles)
+    monkeypatch.setattr(w.ledger, "mapping_run", one_at_a_time)
+    async with browser(w) as client:
+        response = await client.get(PAGE)
+    assert response.status_code == 200 and len(parsed(response.text).where("section")) == 6
+    assert reads.count("mapping_runs") == 1 and reads.count("version_titles") == 1
+
+
+def test_one_rule_says_what_is_running_and_what_did_not_finish() -> None:
+    """The page and the API both ask the reservation, so they cannot disagree."""
+    from compliance_rag.adapters.interfaces import Reservation
+
+    assert Reservation("pending", lapsed=False).running
+    assert not Reservation("pending", lapsed=True).running  # its holder died: not running
+    assert Reservation("pending", lapsed=True).unfinished
+    assert (
+        Reservation("failed", lapsed=False).unfinished and not Reservation("failed", False).running
+    )
+    assert not Reservation("done", lapsed=False).running
+    assert not Reservation("done", lapsed=True).unfinished
+    assert not Reservation("pending", lapsed=False).unfinished

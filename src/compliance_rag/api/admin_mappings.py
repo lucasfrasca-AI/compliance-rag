@@ -31,7 +31,7 @@ from compliance_rag.api.admin import PageAdmin
 from compliance_rag.api.deps import services_of, today
 from compliance_rag.api.pages import render
 from compliance_rag.api.sources import source_href
-from compliance_rag.corpus.display_form import cite, cited_policy_versions
+from compliance_rag.corpus.display_form import cite
 
 router = APIRouter(prefix="/admin")
 
@@ -77,25 +77,24 @@ async def mappings_page(request: Request, who: PageAdmin) -> HTMLResponse:
     shown = sorted(
         in_force | set(by_version), key=lambda v: (v.instrument_id.encode(), v.version_id.encode())
     )
+    # One read of the titles (every cited clause is of a version shown) and one of the runs,
+    # whatever the number of versions.
     titles = await ledger.version_titles(
-        who.tenant_id, cited_policy_versions(m.policy_clause_id for m in mappings)
-    )
-    version_titles = await ledger.version_titles(
         who.tenant_id, ((v.instrument_id, v.version_id) for v in shown)
     )
+    runs = await ledger.mapping_runs(who.tenant_id)
     blocks: list[VersionBlock] = []
     for version in shown:
-        run = await ledger.mapping_run(who.tenant_id, version.instrument_id, version.version_id)
+        run = runs.get((version.instrument_id, version.version_id))
         blocks.append(
             VersionBlock(
                 instrument_id=version.instrument_id,
                 version_id=version.version_id,
-                title=version_titles.get((version.instrument_id, version.version_id))
+                title=titles.get((version.instrument_id, version.version_id))
                 or version.instrument_id,
                 in_force=version in in_force,
-                running=run is not None and run.status == "pending" and not run.lapsed,
-                failed=run is not None
-                and (run.status == "failed" or (run.status == "pending" and run.lapsed)),
+                running=run is not None and run.running,
+                failed=run is not None and run.unfinished,
                 mappings=tuple(
                     MappingRow(
                         mapping_id=m.mapping_id,

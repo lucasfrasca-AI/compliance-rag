@@ -624,13 +624,13 @@ class FakeLedgerStore(LedgerStore):
                 "is no longer this run's"
             )
         had = {
-            (m.policy_clause_id, m.obligation_id, m.kind)
+            (m.policy_clause_id, m.obligation_id)
             for m in self._policy_mappings
             if m.tenant_id == record.tenant_id
         }
         appended = 0
         for proposal in record.proposals:
-            if (proposal.policy_clause_id, proposal.obligation_id, proposal.kind) in had:
+            if (proposal.policy_clause_id, proposal.obligation_id) in had:
                 continue
             self._policy_mappings.append(
                 PolicyMapping(
@@ -672,16 +672,18 @@ class FakeLedgerStore(LedgerStore):
             )
         )
 
+    async def mapping_runs(self, tenant_id: str) -> dict[tuple[str, str], Reservation]:
+        lapsed_before = dt.datetime.now(dt.UTC) - MAPPING_RESERVATION_TTL
+        return {
+            (instrument_id, version_id): Reservation(held.status, held.reserved_at < lapsed_before)
+            for (tenant, instrument_id, version_id), held in sorted(self._mapping_runs.items())
+            if tenant == tenant_id
+        }
+
     async def mapping_run(
         self, tenant_id: str, instrument_id: str, version_id: str
     ) -> Reservation | None:
-        held = self._mapping_runs.get((tenant_id, instrument_id, version_id))
-        if held is None:
-            return None
-        return Reservation(
-            held.status,
-            held.reserved_at < dt.datetime.now(dt.UTC) - MAPPING_RESERVATION_TTL,
-        )
+        return (await self.mapping_runs(tenant_id)).get((instrument_id, version_id))
 
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:
         """Checked before anything is stored, which is what Postgres' one

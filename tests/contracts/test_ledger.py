@@ -2422,6 +2422,14 @@ async def assert_mapping_contract(ledger: LedgerStore) -> None:
         ({"proposals": (a_proposal(rationale="two\nlines"),)}, "one non-blank line"),
         ({"proposals": (a_proposal(rationale="x" * 301),)}, "at most 300"),
         ({"proposals": (a_proposal(), a_proposal(rationale="again"))}, "once"),
+        # a pair is proposed once, as one kind
+        (
+            {"proposals": (a_proposal(), a_proposal(kind=MappingKind.PARTIALLY_IMPLEMENTS))},
+            "one kind",
+        ),
+        # a clause that only looks like the version's: the version's id is a prefix of its own
+        ({"proposals": (a_proposal(f"{POLICY}:v20:3/1"),)}, "not a clause of"),
+        ({"proposals": (a_proposal(f"{POLICY}-x:v2:3/1"),)}, "not a clause of"),
     ):
         with pytest.raises(ValueError, match=reason):
             fields: dict[str, Any] = {"trace_id": trace, **changes}  # Any: record fields
@@ -2440,7 +2448,7 @@ async def assert_mapping_contract(ledger: LedgerStore) -> None:
     appended = await ledger.record_mapping_proposals(
         a_mapping_run(
             a_proposal(),
-            a_proposal(kind=MappingKind.PARTIALLY_IMPLEMENTS),
+            a_proposal(obligation="OB-PA-APP11-3", kind=MappingKind.PARTIALLY_IMPLEMENTS),
             a_proposal(f"{POLICY}:v2:4/2", "OB-PA-APP11-2", rationale="Covers retention."),
             trace_id=trace,
         )
@@ -2449,7 +2457,7 @@ async def assert_mapping_contract(ledger: LedgerStore) -> None:
     rows = await ledger.policy_mappings("acme")
     assert [(m.policy_clause_id, m.obligation_id, m.kind) for m in rows] == [
         (f"{POLICY}:v2:3/1", "OB-PA-APP11-1", MappingKind.IMPLEMENTS),
-        (f"{POLICY}:v2:3/1", "OB-PA-APP11-1", MappingKind.PARTIALLY_IMPLEMENTS),
+        (f"{POLICY}:v2:3/1", "OB-PA-APP11-3", MappingKind.PARTIALLY_IMPLEMENTS),
         (f"{POLICY}:v2:4/2", "OB-PA-APP11-2", MappingKind.IMPLEMENTS),
     ]
     for m in rows:
@@ -2471,11 +2479,12 @@ async def assert_mapping_contract(ledger: LedgerStore) -> None:
     with pytest.raises(ValueError, match="or neither"):
         await ledger.policy_mappings("acme", instrument_id=POLICY)
 
-    # ---- proposing again is allowed, and proposes nothing twice, whatever the words
+    # ---- proposing again is allowed, and proposes a pair once, whatever its words or kind
     await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="b" * 32)
     appended = await ledger.record_mapping_proposals(
         a_mapping_run(
             a_proposal(rationale="Other words, same mapping."),
+            a_proposal(f"{POLICY}:v2:4/2", "OB-PA-APP11-2", kind=MappingKind.PARTIALLY_IMPLEMENTS),
             a_proposal(f"{POLICY}:v2:5/1", "OB-PA-APP11-1"),
             trace_id="b" * 32,
         )
@@ -2485,11 +2494,20 @@ async def assert_mapping_contract(ledger: LedgerStore) -> None:
     assert len(again) == 4 and again[:3] == rows
     assert again[3].policy_clause_id == f"{POLICY}:v2:5/1" and again[3].trace_id == "b" * 32
 
+    # ---- every version's run, in one read, by one rule of what is running
+    runs = await ledger.mapping_runs("acme")
+    assert set(runs) == {(POLICY, "v1"), (POLICY, "v2")}  # only the versions ever proposed for
+    assert runs[(POLICY, "v2")].status == "done" and not runs[(POLICY, "v2")].running
+    assert runs[(POLICY, "v1")].status == "failed" and runs[(POLICY, "v1")].unfinished
+    assert await ledger.mapping_runs("other-corp") == {}
+
     # ---- a failed run is released, and only by the request that holds it
     await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="c" * 32)
     await ledger.fail_mapping_run("acme", POLICY, "v2", trace_id="d" * 32)  # not the holder's
     still = await ledger.mapping_run("acme", POLICY, "v2")
-    assert still is not None and still.status == "pending"
+    assert (
+        still is not None and still.status == "pending" and still.running and not still.unfinished
+    )
     with pytest.raises(MappingRunAlreadyReserved):
         await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="e" * 32)
     await ledger.fail_mapping_run("acme", POLICY, "v2", trace_id="c" * 32)

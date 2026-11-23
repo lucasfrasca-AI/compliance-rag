@@ -96,7 +96,7 @@ def test_0031_is_idempotent_and_refuses_what_a_mapping_must_not_be() -> None:
 
         # a proposal starts `proposed`, with no approver: the column's default
         _mapping(scratch)
-        _mapping(scratch, kind="partially_implements")
+        _mapping(scratch, kind="partially_implements", obligation="OB-PA-APP11-3")
         _mapping(scratch, obligation="OB-PA-APP11-2")
         row = scratch.execute(
             "SELECT kind, status, approver, proposer, trace_id, proposed_at IS NOT NULL "
@@ -104,9 +104,11 @@ def test_0031_is_idempotent_and_refuses_what_a_mapping_must_not_be() -> None:
         ).fetchone()
         assert row == ("implements", "proposed", None, "gemini-3.5-flash", "a" * 32, True)
 
-        # the same mapping once: (clause, obligation, kind) is unique, whatever its words
+        # one mapping per pair: (clause, obligation) is unique, whatever its words or kind
         with pytest.raises(psycopg.errors.UniqueViolation, match="policy_mapping_once"):
             _mapping(scratch, rationale="Different words, same mapping.")
+        with pytest.raises(psycopg.errors.UniqueViolation, match="policy_mapping_once"):
+            _mapping(scratch, kind="partially_implements")  # the other kind, for the same pair
 
         # kind is one of two, status one of three
         with pytest.raises(psycopg.errors.CheckViolation, match="policy_mapping_kind"):
@@ -140,7 +142,14 @@ def test_0031_is_idempotent_and_refuses_what_a_mapping_must_not_be() -> None:
         # the obligation id is an id, and the clause one of the version's own
         with pytest.raises(psycopg.errors.CheckViolation, match="policy_mapping_obligation_id"):
             _mapping(scratch, obligation="OB bad")
-        for clause in (f"{POLICY}:v2:3/1", "acme/other:v1:3/1", f"{POLICY}:v1:"):
+        for clause in (
+            f"{POLICY}:v2:3/1",  # another version
+            "acme/other:v1:3/1",  # another instrument
+            f"{POLICY}:v1:",  # no clause path
+            f"{POLICY}:v10:3/1",  # a version that shares the version's prefix
+            f"{POLICY}-x:v1:3/1",  # an instrument that shares the instrument's prefix
+            f"{POLICY}:v1x:3/1",
+        ):
             with pytest.raises(psycopg.errors.CheckViolation, match="policy_mapping_clause_of"):
                 _mapping(scratch, clause=clause, obligation="OB-W")
         _mapping(scratch, version="v2", clause=f"{POLICY}:v2:3/1", obligation="OB-W")
@@ -184,3 +193,47 @@ def test_0031_is_idempotent_and_refuses_what_a_mapping_must_not_be() -> None:
         # as they were
         assert scratch.execute("SELECT count(*) FROM evidence").fetchone() == (0,)
         assert scratch.execute("SELECT count(*) FROM finding").fetchone() == (0,)
+
+
+TICKET_COLUMNS = {
+    "kind",
+    "status",
+    "proposer",
+    "approver",
+    "trace_id",
+    "policy_version_id",
+    "obligation_id",
+    "policy_clause_id",
+}
+"""What the ticket names: kind, status, proposer (model id), approver, `trace_id`, policy
+version, obligation id and policy clause id. The policy version is two columns, with its
+instrument, because a version is named by both."""
+ADDITIONS = {
+    "mapping_id",  # the order proposals were made in, and what #306 decides by
+    "tenant_id",  # every ledger row is a tenant's
+    "policy_instrument_id",  # the other half of the policy version's name
+    "rationale",  # the model's one line, labelled as the model's
+    "proposed_at",  # when
+}
+
+
+@needs_ledger_db
+def test_the_policy_mapping_table_has_the_ticket_columns_and_its_additions_and_no_others() -> None:
+    files = sorted(MIGRATIONS.glob("*.sql"))
+    with scratch_database() as dsn, psycopg.connect(dsn, autocommit=True) as scratch:
+        for migration in files:
+            scratch.execute(_sql(migration.read_text()))
+            if migration.name.startswith("0031"):
+                break
+        rows = scratch.execute(
+            "SELECT column_name, data_type, is_nullable, column_default FROM "
+            "information_schema.columns WHERE table_schema = 'public' "
+            "AND table_name = 'policy_mapping'"
+        ).fetchall()
+    columns = {str(r[0]): r for r in rows}
+    assert set(columns) >= TICKET_COLUMNS, TICKET_COLUMNS - set(columns)
+    assert set(columns) == TICKET_COLUMNS | ADDITIONS
+    # the approver is the one column that may be empty; a proposal's status defaults to proposed
+    assert {name for name, r in columns.items() if r[2] == "YES"} == {"approver"}
+    assert columns["status"][3] == "'proposed'::text"
+    assert columns["proposer"][1] == columns["kind"][1] == "text"

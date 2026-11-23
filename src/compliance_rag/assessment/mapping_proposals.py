@@ -6,10 +6,13 @@ and C2, ADR-0027 point 7).
 policy-to-law mapping is tenant content, so it is never repo YAML (the repository is
 public) and never a graph node (ADR-0018, D-09): the proposer holds a generator, the
 ledger and the residency gate, and **no graph store, no clause store and no file
-writer**, which a test proves from its imports. A proposal starts `proposed`, with the
-model id as its proposer and no approver; approving or rejecting one is #306's, and
-nothing here can choose another status (`LedgerStore.record_mapping_proposals`, which
-takes a `MappingProposal` that has none).
+writer**. That is held two ways: a test holds the proposing modules' imports to it, and
+a runtime spy in the endpoint's tests raises on any graph method but the read of Track A's
+coverage, so a write would fail the test. Neither proves the absence of a write by itself;
+together with the corpus and schema trees staying byte-identical they cover it. A
+proposal starts `proposed`, with the model id as its proposer and no approver; approving or
+rejecting one is #306's, and nothing here can choose another status
+(`LedgerStore.record_mapping_proposals`, which takes a `MappingProposal` that has none).
 
 **One policy version, when an admin asks** (Q8): a new policy version has new clause
 ids and so needs its own approvals. The model reads the cached prefix, as every call
@@ -34,26 +37,27 @@ that are sent.
   and traced, never repaired: its obligation id is in the digest; its clause id is in
   the prefix and is a clause of the policy version asked about (a planted id is
   refused, never fetched); its rationale is within its length and holds none of this
-  request's fence boundaries; it is not the same mapping as an earlier one; and the same
-  clause is not proposed for the same obligation as both kinds (the model contradicting
-  itself: neither is kept).
+  request's fence boundaries; the ledger does not already hold a mapping for that clause
+  and obligation, of either kind and in any status (`already_proposed`); it is not the
+  same mapping as an earlier one in the reply; and the same clause is not proposed for the
+  same obligation as both kinds (the model contradicting itself: neither is kept).
 
-**What is recorded** is `MappingRunRecord`: each accepted proposal, once. A mapping the
-tenant already has, in any status, is not proposed again (`policy_mapping_once`), so a
-second run for the same version adds only what is new and a rejected mapping stays
-rejected.
+**What is recorded** is `MappingRunRecord`: each accepted proposal, once. One mapping per
+(clause, obligation) pair (`policy_mapping_once`): a second run for the same version adds
+only what is new, and a rejected mapping stays rejected. The ledger's key is the backstop
+for two runs racing past the `already_proposed` read.
 
 **Spans.** `mapping_proposals.propose` records the version, the digest's obligations, the
 prefix size, tokens, cost, cached-prefix hit, schema validity, and the proposals returned,
-accepted, dropped (each as `<position>:<reason>`) and appended. It records no text of a
-policy and no rationale.
+accepted, dropped (each as `<position>:<reason>`) and appended, and whether the proposer
+had to be taken from settings because the generator did not name its model
+(`mappings.proposer_from_settings`). It records no text of a policy and no rationale.
 """
 
 from __future__ import annotations
 
 import json
-import re
-import unicodedata
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -83,10 +87,19 @@ from compliance_rag.adapters.interfaces import (
 from compliance_rag.assessment.draft import MalformedGeneration
 from compliance_rag.assessment.obligation_digest import OBLIGATION_ID_RE, ObligationDigest
 from compliance_rag.assessment.prefix_cap import check_prefix_cap
-from compliance_rag.assessment.prompt import SourceClause, cag_prefix
+from compliance_rag.assessment.prompt import (
+    SourceClause,
+    boundaries_of,
+    cag_prefix,
+    forges_boundary,
+    is_one_line,
+    strip_json_fence,
+)
 from compliance_rag.assessment.usage import record_usage
 from compliance_rag.corpus.models import parse_stable_id
 from compliance_rag.telemetry import current_trace_id, span
+
+log = logging.getLogger(__name__)
 
 MAX_TOKENS: Final = 8_192
 """What the model may write: up to `MAX_MAPPING_PROPOSALS` of two ids, a kind and a
@@ -143,9 +156,6 @@ MAPPINGS_REMINDER: Final = (
 )
 """Trusted text after the request, so the last words the model reads are ours."""
 
-_FENCED_REPLY = re.compile(r"^```(?:json)?\s*\n(?P<body>.*)\n```$", re.DOTALL)
-_BOUNDARY = re.compile(r"boundary=([0-9a-f]{24})")
-
 
 class ExtractedProposal(BaseModel):
     """What the model says one mapping is: validated, never trusted. Each field's shape is
@@ -179,10 +189,7 @@ class ExtractedProposal(BaseModel):
     def _one_line(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("a rationale is not blank")
-        if any(
-            unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp")
-            for c in value
-        ):
+        if not is_one_line(value):
             raise ValueError(
                 "a rationale is one line of text: no control, format or line characters"
             )
@@ -203,10 +210,7 @@ def parse_proposals(text: str) -> ProposalReply:
     fence, the one wrapper models commonly add. Anything else (prose around it, an unknown
     key, a wrong type, a kind that is not one of the two, more than `MAX_MAPPING_PROPOSALS`
     proposals) is refused whole, never partially salvaged."""
-    body = text.strip()
-    fenced = _FENCED_REPLY.match(body)
-    if fenced:
-        body = fenced.group("body").strip()
+    body = strip_json_fence(text)
     try:
         return ProposalReply.model_validate_json(body)
     except ValidationError as exc:
@@ -257,6 +261,9 @@ class DropReason(StrEnum):
     """The rationale is over `MAX_RATIONALE_CHARS`."""
     RATIONALE_FORGES_FENCE = "rationale_forges_fence"
     """Its rationale carries one of this request's fence boundaries."""
+    ALREADY_PROPOSED = "already_proposed"
+    """The ledger already holds a mapping for this clause and obligation, of either kind and
+    in any status: a pair is proposed once, so a rejected one stays rejected."""
     DUPLICATE = "duplicate"
     """The same clause, obligation and kind as an earlier proposal."""
     CONFLICTING_KIND = "conflicting_kind"
@@ -382,14 +389,30 @@ class MappingProposer:
                 obligation_ids=digest.ids,
                 clause_ids=frozenset(p.clause_id for p in policies),
                 version_clauses=version_clauses,
-                boundaries=frozenset(_BOUNDARY.findall(f"{prefix}\n{user}")),
+                boundaries=boundaries_of(prefix, user),
+                existing=frozenset(
+                    (m.policy_clause_id, m.obligation_id)
+                    for m in await self._ledger.policy_mappings(
+                        tenant_id, instrument_id=instrument_id, version_id=version_id
+                    )
+                ),
             )
             current.set_attribute("mappings.accepted", len(accepted))
             current.set_attribute("mappings.dropped", len(dropped))
             current.set_attribute(
                 "mappings.dropped_reasons", [f"{d.position}:{d.reason.value}" for d in dropped]
             )
-            proposer = generation.model.strip() or self._model
+            proposer = generation.model.strip()
+            current.set_attribute("mappings.proposer_from_settings", not proposer)
+            if not proposer:
+                # A real adapter always names the model that answered. One that did not is
+                # recorded as the configured model, which is what was called, and said so.
+                proposer = self._model
+                log.warning(
+                    "the generator did not name its model: the proposer is recorded as the "
+                    "configured model %s",
+                    proposer,
+                )
             trace_id = current_trace_id()
             appended = await self._ledger.record_mapping_proposals(
                 MappingRunRecord(
@@ -412,9 +435,11 @@ def _validated(
     clause_ids: frozenset[str],
     version_clauses: frozenset[str],
     boundaries: frozenset[str],
+    existing: frozenset[tuple[str, str]],
 ) -> tuple[tuple[MappingProposal, ...], tuple[DroppedProposal, ...]]:
     """Each proposal of a schema-valid reply, checked by code: the ones that pass, in the
-    model's order, and the ones that do not, with why."""
+    model's order, and the ones that do not, with why. `existing` is the (clause, obligation)
+    pairs the ledger already holds for the version, in any status and of either kind."""
     kept: list[tuple[int, MappingProposal]] = []  # (reply position, proposal)
     dropped: list[DroppedProposal] = []
     seen: set[tuple[str, str, MappingKind]] = set()
@@ -427,6 +452,8 @@ def _validated(
         )
         reason = _check(proposal, obligation_ids, clause_ids, version_clauses, boundaries)
         key = (proposal.policy_clause_id, proposal.obligation_id, proposal.kind)
+        if reason is None and key[:2] in existing:
+            reason = DropReason.ALREADY_PROPOSED
         if reason is None and key in seen:
             reason = DropReason.DUPLICATE
         if reason is not None:
@@ -464,6 +491,6 @@ def _check(
         return DropReason.CLAUSE_NOT_IN_VERSION
     if len(proposal.rationale) > MAX_RATIONALE_CHARS:
         return DropReason.RATIONALE_TOO_LONG
-    if any(b in proposal.rationale for b in boundaries):
+    if forges_boundary(proposal.rationale, boundaries):
         return DropReason.RATIONALE_FORGES_FENCE
     return None
