@@ -200,6 +200,13 @@ UUID4_HEX = r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$"
 assessment's, a chat's), so no other form names one."""
 
 SYDNEY = ZoneInfo("Australia/Sydney")
+
+
+def sydney_label(moment: dt.datetime) -> str:
+    """A moment as a page shows it: Sydney time, `3 Nov 2026, 14:05`."""
+    return moment.astimezone(SYDNEY).strftime("%-d %b %Y, %H:%M")
+
+
 EARLIEST, LATEST = dt.date(1901, 1, 1), dt.date(2199, 12, 31)
 """The dates a request may name: the calendar the library's law uses."""
 

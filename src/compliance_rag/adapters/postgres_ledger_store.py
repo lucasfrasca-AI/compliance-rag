@@ -41,6 +41,7 @@ from compliance_rag.adapters.interfaces import (
     ChatSummary,
     ChatTurn,
     CheckCursor,
+    CheckDecision,
     CheckListing,
     CheckNotExtracted,
     CheckRecord,
@@ -48,6 +49,7 @@ from compliance_rag.adapters.interfaces import (
     Citation,
     ClaimExtractionRecord,
     ClaimRecord,
+    DecisionKind,
     ExtractionAlreadyReserved,
     FailureReason,
     FindingCitation,
@@ -80,9 +82,11 @@ from compliance_rag.adapters.interfaces import (
     check_chat_exchange,
     check_check_write,
     check_claims_write,
+    check_decision_write,
     check_findings_write,
     check_run_of,
     check_stage_of,
+    decision_adds_a_row,
 )
 from compliance_rag.assessment.coverage import (
     CoverageRow,
@@ -1225,6 +1229,116 @@ class PostgresLedgerStore(LedgerStore):
                 )
                 for u in used
             ),
+        )
+
+    async def record_check_decision(self, decision: CheckDecision) -> bool:
+        check_decision_write(decision)
+        # Append-only: the only statement here that writes `check_decision` is the INSERT.
+        # Whether the decision adds anything, or is refused, is decided by the one rule
+        # (`decision_adds_a_row`) against the latest rows, read **under a lock on the check**,
+        # so two requests at once cannot both append the same state and a refusal is never
+        # decided on a stale read.
+        lock = f"{decision.tenant_id}/{decision.check_id}"
+        try:
+            async with self._connection() as conn, conn.transaction():
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock,))
+                has_verdict, claim_rejected = True, False
+                claim_index = decision.claim_index
+                if not decision.kind.of_claim:
+                    # a verdict decision is of one of this check's findings; a foreign key
+                    # names the finding, not its check, so it is read here
+                    held = await (
+                        await conn.execute(
+                            "SELECT claim_index, outcome FROM finding "
+                            "WHERE tenant_id = %s AND check_id = %s AND finding_id = %s",
+                            (decision.tenant_id, decision.check_id, decision.finding_id),
+                        )
+                    ).fetchone()
+                    if held is None:
+                        raise ValueError(
+                            f"check {decision.check_id} has no finding {decision.finding_id}"
+                        )
+                    claim_index = int(held[0])
+                    has_verdict = held[1] == FindingOutcome.VERDICT.value
+                    latest_claim = await self._latest_decision(conn, decision, claim_index, None)
+                    claim_rejected = latest_claim is DecisionKind.CLAIM_REJECTED
+                latest = await self._latest_decision(
+                    conn,
+                    decision,
+                    claim_index if decision.kind.of_claim else None,
+                    None if decision.kind.of_claim else decision.finding_id,
+                )
+                if not decision_adds_a_row(
+                    decision.kind,
+                    latest=latest,
+                    has_verdict=has_verdict,
+                    claim_rejected=claim_rejected,
+                ):
+                    return False
+                await conn.execute(
+                    "INSERT INTO check_decision (tenant_id, check_id, kind, claim_index, "
+                    "finding_id, user_id, email, trace_id, decided_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())",
+                    (
+                        decision.tenant_id,
+                        decision.check_id,
+                        decision.kind.value,
+                        decision.claim_index,
+                        decision.finding_id,
+                        decision.user_id,
+                        decision.email,
+                        decision.trace_id,
+                    ),
+                )
+                return True
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(
+                f"tenant {decision.tenant_id!r} holds no extracted check {decision.check_id} "
+                f"with a claim {decision.claim_index}"
+            ) from exc
+        except psycopg.errors.CheckViolation as exc:
+            raise ValueError(f"decision refused: {exc.diag.constraint_name}") from None
+
+    @staticmethod
+    async def _latest_decision(
+        conn: psycopg.AsyncConnection[TupleRow],
+        decision: CheckDecision,
+        claim_index: int | None,
+        finding_id: str | None,
+    ) -> DecisionKind | None:
+        """The kind of the latest decision about one claim (`claim_index`) or one finding
+        (`finding_id`) of the decision's check, or None for none."""
+        row = await (
+            await conn.execute(
+                "SELECT kind FROM check_decision WHERE tenant_id = %s AND check_id = %s "
+                "AND claim_index IS NOT DISTINCT FROM %s AND finding_id IS NOT DISTINCT FROM %s "
+                "ORDER BY decision_id DESC LIMIT 1",
+                (decision.tenant_id, decision.check_id, claim_index, finding_id),
+            )
+        ).fetchone()
+        return None if row is None else DecisionKind(str(row[0]))
+
+    async def check_decisions(self, tenant_id: str, check_id: str) -> tuple[CheckDecision, ...]:
+        rows = await self._fetchall(
+            "SELECT decision_id, kind, claim_index, finding_id, user_id, email, trace_id, "
+            "decided_at FROM check_decision WHERE tenant_id = %s AND check_id = %s "
+            "ORDER BY decision_id",
+            (tenant_id, check_id),
+        )
+        return tuple(
+            CheckDecision(
+                tenant_id=tenant_id,
+                check_id=check_id,
+                decision_id=int(r[0]),
+                kind=DecisionKind(str(r[1])),
+                claim_index=None if r[2] is None else int(r[2]),
+                finding_id=None if r[3] is None else str(r[3]),
+                user_id=str(r[4]),
+                email=str(r[5]),
+                trace_id=str(r[6]),
+                decided_at=r[7],
+            )
+            for r in rows
         )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:

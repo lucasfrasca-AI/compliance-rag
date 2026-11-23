@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Final
+from typing import Any, Final, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -85,6 +85,7 @@ from compliance_rag.api.source_panel import canonical_texts
 from compliance_rag.api.sources import source_href
 from compliance_rag.api.tenant import held_sources, version_json
 from compliance_rag.assessment.coverage import CoverageRow, question_json
+from compliance_rag.assessment.decisions import Decisions
 from compliance_rag.assessment.evidence import Facts, FactsSnapshot
 from compliance_rag.assessment.findings import policy_disagreements
 from compliance_rag.assessment.policies import tenant_policies
@@ -207,11 +208,29 @@ def facts_json(facts: FactsSnapshot | None) -> dict[str, object] | None:
 
 
 async def findings_json(
-    services: ApiServices, tenant_id: str, check_id: str, record: FindingsRecord
+    services: ApiServices,
+    tenant_id: str,
+    check_id: str,
+    record: FindingsRecord,
+    decisions: Decisions | None = None,
 ) -> dict[str, object]:
     """A recorded findings run as a member is shown it: one builder for the
-    stream's `findings` event and for `GET`, so the two cannot drift."""
-    return (await findings_with_titles(services, tenant_id, check_id, record))[0]
+    stream's `findings` event and for `GET`, so the two cannot drift.
+
+    This is the run **as recorded**: each finding's `provenance` is what the run stored
+    (`inferred`) and nothing here changes it. What members decided since is said beside it:
+    every finding, and every policy disagreement, says whether its claim now stands
+    rejected (`claim_rejected`, #301: always false in the stream's event, made before
+    anyone has decided, and read from the check's `decisions` in `GET`), so a finding the
+    report leaves out is marked here, not returned unmarked. The tier now is the report's
+    (`check_report`), computed when read."""
+    payload = (await findings_with_titles(services, tenant_id, check_id, record))[0]
+    standing = Decisions.of(()) if decisions is None else decisions
+    for item in cast("list[dict[str, Any]]", payload["findings"]):
+        item["claim_rejected"] = standing.rejected(int(item["claim_index"])) is not None
+    for item in cast("list[dict[str, Any]]", payload["policy_disagreements"]):
+        item["claim_rejected"] = standing.rejected(int(item["claim_index"])) is not None
+    return payload
 
 
 async def findings_with_titles(
@@ -388,4 +407,5 @@ async def get_findings(request: Request, who: CurrentCaller, check_id: str) -> d
     record = await services.ledger.get_findings(who.tenant_id, check_id)
     if record is None:
         raise HTTPException(404, NOT_RUN)
-    return await findings_json(services, who.tenant_id, check_id, record)
+    decisions = Decisions.of(await services.ledger.check_decisions(who.tenant_id, check_id))
+    return await findings_json(services, who.tenant_id, check_id, record, decisions)
