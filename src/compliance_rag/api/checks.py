@@ -59,15 +59,14 @@ to its owner alone (ADR-0036).
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 from compliance_rag import telemetry
 from compliance_rag.adapters.generation_residency import (
@@ -84,6 +83,27 @@ from compliance_rag.api.deps import (
     services_of,
     today,
 )
+from compliance_rag.api.uploads import (
+    MAX_DOCUMENT_BYTES as MAX_DOCUMENT_BYTES,
+)
+from compliance_rag.api.uploads import (
+    MAX_FILENAME_CHARS as MAX_FILENAME_CHARS,
+)
+from compliance_rag.api.uploads import (
+    MAX_REQUEST_BYTES as MAX_REQUEST_BYTES,
+)
+from compliance_rag.api.uploads import (
+    MAX_TITLE_CHARS as MAX_TITLE_CHARS,
+)
+from compliance_rag.api.uploads import (
+    UploadRefused,
+    check_document_size,
+    check_file_name,
+    check_text,
+    format_of,
+    parse_body,
+    read_body,
+)
 from compliance_rag.corpus.models import (
     ClauseRecord,
     clause_anchor_id,
@@ -94,23 +114,11 @@ from compliance_rag.corpus.submitted_parser import (
     EmptyDocument,
     SubmittedFormat,
     TooManyPassages,
-    format_of_filename,
     passage_number,
 )
 
 router = APIRouter(prefix="/v1")
 
-MAX_REQUEST_BYTES = 1_048_576
-"""The whole request body, 1 MiB: what is read from the wire at most. Over it,
-the request is refused as it streams in. JSON can spend up to six bytes on one
-character (`\\u0000`), so this is room for a document at its limit with the
-envelope, and a document of control characters over a sixth of its size is
-refused here instead."""
-MAX_DOCUMENT_BYTES = 204_800
-"""The document's UTF-8 bytes, 200 KiB: a long contract or policy (about 35,000
-words). Checked on the raw bytes, before anything is cut into passages."""
-MAX_FILENAME_CHARS = 255
-MAX_TITLE_CHARS = 200
 VERSION = "v1"
 """A check's document is its instrument's first and only version: a changed
 document is submitted again, as a new check."""
@@ -139,12 +147,7 @@ class CheckSubmission(BaseModel):
     @field_validator("filename")
     @classmethod
     def _a_file_name(cls, v: str) -> str:
-        """A name, not a path: its extension picks the format and it is shown,
-        so it is one line of text with no separator."""
-        if "/" in v or "\\" in v:
-            raise ValueError("a file name has no path separator")
-        validate_title(v)  # one line, no control or format characters
-        return v
+        return check_file_name(v)
 
     @field_validator("title")
     @classmethod
@@ -154,13 +157,7 @@ class CheckSubmission(BaseModel):
     @field_validator("content")
     @classmethod
     def _text(cls, v: str) -> str:
-        if "\x00" in v:
-            raise ValueError("text may not contain NUL")
-        try:
-            v.encode("utf-8")  # a lone surrogate (valid JSON) has no UTF-8 form
-        except UnicodeEncodeError:
-            raise ValueError("text must be valid Unicode") from None
-        return v
+        return check_text(v)
 
 
 def _refusal(status: int, error: str, message: str) -> HTTPException:
@@ -168,57 +165,30 @@ def _refusal(status: int, error: str, message: str) -> HTTPException:
 
 
 async def _body(request: Request) -> bytes:
-    """The request's bytes, never more than `MAX_REQUEST_BYTES` of them: a
-    declared length over the limit is refused before any is read, and an
-    undeclared or understated one is refused as it streams past the limit."""
-    declared = request.headers.get("content-length", "")
-    if declared.isascii() and declared.isdigit() and int(declared) > MAX_REQUEST_BYTES:
-        raise _too_big()
-    body = bytearray()
-    async for chunk in request.stream():
-        body += chunk
-        if len(body) > MAX_REQUEST_BYTES:
-            raise _too_big()
-    return bytes(body)
-
-
-def _too_big() -> HTTPException:
-    return _refusal(
-        413,
-        "too_large",
-        f"the request is over {MAX_REQUEST_BYTES:,} bytes; a document may be up to "
-        f"{MAX_DOCUMENT_BYTES:,} bytes",
-    )
-
-
-def _invalid(error: ValidationError | None) -> HTTPException:
-    """422 in the shape the app's validator handler gives (`app.py`): where and
-    what, never the input. `None` is a body that is not JSON at all."""
-    if error is None:
-        detail = [{"loc": ["body"], "msg": "the body is not valid JSON", "type": "json_invalid"}]
-    else:
-        detail = [
-            {"loc": ["body", *e["loc"]], "msg": str(e["msg"]), "type": e["type"]}
-            for e in error.errors()
-        ]
-    return HTTPException(422, detail)
+    """The request's bytes, at most `MAX_REQUEST_BYTES` (`uploads.read_body`, which the policy
+    routes share), a refusal as the 413 this route answers."""
+    try:
+        return await read_body(request, noun="document")
+    except UploadRefused as refused:
+        raise refused.http() from None
 
 
 def _submission(body: bytes) -> CheckSubmission:
     try:
-        raw: Any = json.loads(body)  # Any: untrusted JSON, validated next
-        return CheckSubmission.model_validate(raw)
-    except ValidationError as error:
-        raise _invalid(error) from None
-    except (ValueError, RecursionError):  # not JSON: bad syntax, bad UTF-8, too deep
-        raise _invalid(None) from None
+        return parse_body(CheckSubmission, body)
+    except UploadRefused as refused:
+        raise refused.http() from None
 
 
 def _format_of(filename: str) -> SubmittedFormat:
     try:
-        return format_of_filename(filename)
-    except ValueError:
-        raise _refusal(415, "unsupported_format", UNSUPPORTED_FORMAT) from None
+        return format_of(
+            filename,
+            accepted=(SubmittedFormat.MARKDOWN, SubmittedFormat.TEXT),
+            message=UNSUPPORTED_FORMAT,
+        )
+    except UploadRefused as refused:
+        raise refused.http() from None
 
 
 def source_path(instrument_id: str) -> str:
@@ -242,13 +212,11 @@ async def submit_check(request: Request, who: CurrentCaller) -> JSONResponse:
         submission = _submission(await _body(request))
         size = len(submission.content.encode("utf-8"))
         span.set_attribute("check.document_bytes", size)
-        if size > MAX_DOCUMENT_BYTES:
+        try:
+            check_document_size(size, noun="document")
+        except UploadRefused as refused:
             span.set_attribute("check.refused", "document_too_large")
-            raise _refusal(
-                413,
-                "too_large",
-                f"the document is {size:,} bytes; the limit is {MAX_DOCUMENT_BYTES:,}",
-            )
+            raise refused.http() from None
         fmt = _format_of(submission.filename)
         span.set_attribute("check.format", fmt.value)
         check_id = uuid.uuid4().hex

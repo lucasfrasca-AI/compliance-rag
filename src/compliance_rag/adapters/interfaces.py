@@ -359,7 +359,7 @@ class PolicyVersionRow:
     withdrawn: bool
     purged: bool
     backdate_reason: str | None
-    """Why it was given an effective date in the past (#303, ledger 0029);
+    """Why it was given an effective date in the past (#303, ledger 0030);
     None for a version published with today's date or a future one."""
 
 
@@ -367,7 +367,9 @@ class PolicyVersionRow:
 class RemovalAuditEntry:
     audit_id: str
     tenant_id: str
-    instrument_id: str
+    instrument_id: str | None
+    """What the request named. None for a refused upload of a new policy (#303): it names no
+    instrument, and none was made, so the row doesn't invent one."""
     version_id: str | None
     action: RemovalAction
     outcome: RemovalOutcome

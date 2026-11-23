@@ -52,15 +52,13 @@ from compliance_rag.adapters.interfaces import (
     RemovalAuditEntry,
     RemovalOutcome,
 )
-from compliance_rag.api.admin_policies import (
-    MAX_DOCUMENT_BYTES,
-    MAX_REQUEST_BYTES,
-    PolicyUpload,
-)
 from compliance_rag.api.app import create_app
 from compliance_rag.api.deps import today
+from compliance_rag.api.policy_upload import PolicyUpload, mint_policy_id
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY, STATIC_DIR
+from compliance_rag.api.uploads import MAX_DOCUMENT_BYTES, MAX_REQUEST_BYTES
 from compliance_rag.assessment.pipeline import AssessmentPipeline
+from compliance_rag.corpus.models import Scope, parse_stable_id, validate_instrument_id
 from compliance_rag.corpus.synthetic_registry import SyntheticRegistry
 from compliance_rag.eval.golden_corpus import (
     FIXTURES,
@@ -81,6 +79,7 @@ from tests.api_support import (
     mint,
     verifier_for,
 )
+from tests.conftest import ALL_LAW
 
 ORIGIN = "https://api"
 SECRET = "s3cr3t-" + "k" * 40
@@ -1392,3 +1391,197 @@ def test_the_script_writes_no_html_and_names_no_policy_by_title() -> None:
     assert "dataset.action" in script and "/v1/admin/policies" not in script
     assert "title" in script and "form.elements.title.value" in script
     assert "`/" not in script.replace("`/signin", "")  # no URL assembled from input
+
+
+# ---- review round: retrieval, honest audit rows, trimmed reasons, ASCII numerals ---------------
+
+NBSP = chr(0xA0)
+FULLWIDTH = {n: chr(0xFF10 + n) for n in range(10)}
+ARABIC_INDIC = {n: chr(0x660 + n) for n in range(10)}
+SUPERSCRIPT_TWO = chr(0xB2)
+
+
+async def visible_versions(w: World, as_of: dt.date) -> set[str]:
+    """The versions of every policy retrieval returns for a question on `as_of`: read off the
+    retrieval store's own search, not the ledger."""
+    result = await w.retrieval.search(
+        "payroll records people team retention",
+        law=ALL_LAW,
+        tenant_id=TENANT,
+        scopes=(Scope.TENANT,),
+        as_of=as_of,
+        limit=50,
+    )
+    return {parse_stable_id(c.clause_id)[1] for c in result.fused}
+
+
+async def test_a_future_dated_versions_chunks_are_in_retrieval_only_from_its_date(
+    sydney: World,
+) -> None:
+    """The ledger says a version is `future`; retrieval, which answers questions, agrees: the new
+    version's chunks are absent before its effective date and present on and after it, while the
+    version it replaces answers until then."""
+    first = await published(sydney, body(THE_TEXT, **past(10)))
+    newer = THE_TEXT.replace("seven years", "ten years")
+    second = await new_version(
+        sydney, first["policy"], body(newer, effective_from=NEXT_MONTH.isoformat())
+    )
+    assert second.status_code == 201 and second.json()["version_id"] == "v2"
+    before = NEXT_MONTH - dt.timedelta(days=1)
+    assert await visible_versions(sydney, TODAY) == {"v1"}
+    assert await visible_versions(sydney, before) == {"v1"}  # not v2, the day before
+    assert await visible_versions(sydney, NEXT_MONTH) == {"v2"}  # on its date, and v1 has ended
+    assert await visible_versions(sydney, LATER) == {"v2"}
+    assert await visible_versions(sydney, TODAY - dt.timedelta(days=20)) == set()  # before v1
+
+
+async def test_a_withdrawn_versions_chunks_are_not_in_retrieval_at_any_date(
+    sydney: World,
+) -> None:
+    made = await published(sydney, body(THE_TEXT, **past(10)))
+    days = (TODAY - dt.timedelta(days=5), TODAY, LATER)
+    assert [await visible_versions(sydney, d) for d in days] == [{"v1"}] * 3
+    assert (await withdraw(sydney, made["policy"], "v1")).status_code == 200
+    assert [await visible_versions(sydney, d) for d in days] == [set()] * 3
+    # the text is kept: only retrieval changed
+    assert await sydney.retrieval.version_chunk_ids(
+        instrument_id=made["instrument_id"], tenant_id=TENANT, version_id="v1"
+    )
+
+
+async def test_a_refused_new_policy_is_audited_with_no_instrument_and_its_title(
+    sydney: World,
+) -> None:
+    """No id is recorded for a policy that was never made, and none is invented."""
+    for upload in (
+        body("Just words.\n", title="Refused Policy"),
+        body(THE_TEXT, title="Refused Policy", effective_from=YESTERDAY.isoformat()),
+    ):
+        assert (await new_policy(sydney, upload)).status_code == 422
+    rows = sydney.audit()
+    assert [(e.action, e.outcome) for e in rows] == [
+        (RemovalAction.PUBLISH, RemovalOutcome.REFUSED)
+    ] * 2
+    for row in rows:
+        assert row.instrument_id is None and row.version_id is None
+        assert "'Refused Policy'" in row.detail
+    assert "policy-" not in " ".join(e.detail for e in rows)
+    sydney.assert_nothing_written()
+    # a body too broken to have a title says so, and still names no instrument
+    async with sydney.client(ADMIN_TOKEN) as client:
+        await client.post(API, content=b"not json")
+    last = sydney.audit()[-1]
+    assert last.instrument_id is None and "title" not in last.detail
+
+
+async def test_a_refused_new_version_is_audited_under_its_policy_with_no_version_id(
+    sydney: World,
+) -> None:
+    made = await published(sydney, body(THE_TEXT, **past(10)))
+    before = len(sydney.audit())
+    refused = await new_version(
+        sydney, made["policy"], body(THE_TEXT, effective_from=YESTERDAY.isoformat())
+    )
+    assert refused.status_code == 422
+    (row,) = sydney.audit()[before:]
+    assert (row.outcome, row.instrument_id, row.version_id) == (
+        RemovalOutcome.REFUSED,
+        made["instrument_id"],
+        None,  # v2 was never created
+    )
+    # a policy that does not exist: audited as named, with no version either
+    missing = await new_version(sydney, "no-such-policy", body(THE_TEXT))
+    assert missing.status_code == 404
+    last = sydney.audit()[-1]
+    assert (last.instrument_id, last.version_id) == (f"{TENANT}/no-such-policy", None)
+    # the rows of a version that is written name it
+    assert [e.version_id for e in sydney.audit() if e.outcome is RemovalOutcome.COMPLETED] == ["v1"]
+
+
+@pytest.mark.parametrize("path", ["json", "page"])
+async def test_a_reason_is_trimmed_and_a_blank_one_refused_the_same_in_both_layers(
+    sydney: World, path: str
+) -> None:
+    made = await published(sydney)
+    policy = made["policy"]
+    browser = await sydney.browser()
+
+    async def withdraw_with(reason: str, version: str = "v1") -> int:
+        if path == "json":
+            return (await withdraw(sydney, policy, version, reason)).status_code
+        response = await browser.post(
+            f"{PAGE}/{policy}/versions/{version}/withdraw", data={"reason": reason}
+        )
+        return 200 if response.status_code == 303 else response.status_code
+
+    for blank in ("", "   ", f"{NBSP} \t", "\n"):  # blank after trimming, whatever the space
+        assert await withdraw_with(blank) == 422, repr(blank)
+    assert outcomes(sydney, RemovalAction.WITHDRAW) == [RemovalOutcome.REFUSED] * 4
+    assert await withdraw_with("  retired \n") == 200
+    stored = {
+        e.reason
+        for e in sydney.audit()
+        if e.action is RemovalAction.WITHDRAW and e.outcome is RemovalOutcome.COMPLETED
+    }
+    assert stored == {"retired"}  # the same text, trimmed, whichever layer sent it
+
+
+async def test_a_backdate_reason_is_trimmed_and_a_blank_one_refused(sydney: World) -> None:
+    for blank in ("", "   ", NBSP):
+        response = await new_policy(
+            sydney,
+            body(THE_TEXT, effective_from=YESTERDAY.isoformat(), backdate_reason=blank),
+        )
+        assert response.status_code == 422, repr(blank)
+    made = await published(
+        sydney,
+        body(THE_TEXT, effective_from=YESTERDAY.isoformat(), backdate_reason="  filed late \n"),
+    )
+    assert made["backdate_reason"] == "filed late"
+    assert sydney.ledger.backdate_reasons[(TENANT, made["instrument_id"], "v1")] == "filed late"
+
+
+@pytest.mark.parametrize(
+    "day",
+    [
+        f"{FULLWIDTH[2]}026-12-01",
+        f"2026-{FULLWIDTH[1]}2-01",
+        "".join(ARABIC_INDIC[int(c)] if c.isdigit() else c for c in "2026-12-01"),
+        f"2026-12-0{ARABIC_INDIC[1]}",
+    ],
+    ids=["fullwidth", "one fullwidth", "arabic-indic", "one arabic-indic"],
+)
+async def test_a_date_of_non_ascii_numerals_is_refused(sydney: World, day: str) -> None:
+    """A regex `\\d` matches the numerals of other scripts, and `date.fromisoformat` would read
+    some of them: only ASCII numerals are a date."""
+    response = await new_policy(sydney, body(THE_TEXT, effective_from=day))
+    assert response.status_code == 422
+    assert "YYYY-MM-DD" in response.text
+    sydney.assert_nothing_written()
+
+
+async def test_a_typed_count_of_non_ascii_numerals_is_not_a_number(sydney: World) -> None:
+    made = await published(sydney)
+    browser = await sydney.browser()
+    path = f"{PAGE}/{made['policy']}/versions/v1/purge"
+    for typed in (
+        FULLWIDTH[0],
+        ARABIC_INDIC[0],
+        SUPERSCRIPT_TWO,
+    ):  # a zero in two scripts, a superscript two
+        response = await browser.post(path, data={"reason": "done", "typed_count": typed})
+        assert response.status_code == 422, typed
+        assert "as numerals" in words(response.text)
+    assert not await sydney.ledger.purge_marker(
+        tenant_id=TENANT, instrument_id=made["instrument_id"], version_id="v1"
+    )
+    assert outcomes(sydney, RemovalAction.PURGE) == [RemovalOutcome.REFUSED] * 3
+
+
+def test_a_new_policys_id_is_validated_where_it_is_minted() -> None:
+    minted = mint_policy_id(TENANT)
+    assert validate_instrument_id(minted) == minted
+    assert re.fullmatch(rf"{TENANT}/policy-[0-9a-f]{{12}}", minted)
+    assert mint_policy_id(TENANT) != minted
+    with pytest.raises(ValueError, match="reserved"):
+        mint_policy_id("_public")  # an id that isn't one is refused, not trusted

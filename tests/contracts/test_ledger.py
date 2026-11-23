@@ -617,12 +617,29 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
             trace_id="a" * 32,
         )
     )
+    # A refused upload of a new policy names no instrument, and the row says so.
+    await ledger.record_removal_audit(
+        RemovalAuditEntry(
+            audit_id="au-4",
+            tenant_id="acme",
+            instrument_id=None,
+            version_id=None,
+            action=RemovalAction.PUBLISH,
+            outcome=RemovalOutcome.REFUSED,
+            actor="u1",
+            reason="",
+            findings_citing=None,
+            detail="title 'A policy': no_clauses",
+        )
+    )
     trail = await ledger.removal_audit("acme")
     assert [(e.audit_id, e.outcome) for e in trail] == [
         ("au-1", RemovalOutcome.AUTHORIZED),
         ("au-2", RemovalOutcome.FAILED),
         ("au-3", RemovalOutcome.COMPLETED),
+        ("au-4", RemovalOutcome.REFUSED),
     ]
+    assert trail[3].instrument_id is None and trail[2].instrument_id == POLICY
     assert trail[0].findings_citing == 2 and trail[0].version_id is None
     assert trail[0].trace_id is None  # a row written outside any request has none
     assert (trail[2].action, trail[2].trace_id) == (RemovalAction.PUBLISH, "a" * 32)

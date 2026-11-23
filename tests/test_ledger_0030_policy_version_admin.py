@@ -1,4 +1,4 @@
-"""Ledger 0029 (#303, ADR-0053 U4, ADR-0021): `instrument_version.backdate_reason`, and the
+"""Ledger 0030 (#303, ADR-0053 U4, ADR-0021): `instrument_version.backdate_reason`, and the
 removal audit's `publish` action and `trace_id`. Needs a Postgres server (`DATABASE_URL`); CI sets
 it and `REQUIRE_LEDGER_DB`.
 
@@ -37,11 +37,11 @@ _AUDIT = (
 
 
 @needs_ledger_db
-def test_0029_adds_its_columns_idempotently_and_keeps_older_rows_as_they_were() -> None:
+def test_0030_adds_its_columns_idempotently_and_keeps_older_rows_as_they_were() -> None:
     files = sorted(MIGRATIONS.glob("*.sql"))
-    migration = next(f for f in files if f.name.startswith("0029"))
+    migration = next(f for f in files if f.name.startswith("0030"))
     before = [f for f in files if f.name < migration.name]
-    assert before[-1].name.startswith("0028")
+    assert before[-1].name.startswith("0029")
     with scratch_database() as dsn, psycopg.connect(dsn, autocommit=True) as scratch:
         for earlier in before:
             scratch.execute(_sql(earlier.read_text()))
@@ -88,3 +88,12 @@ def test_0029_adds_its_columns_idempotently_and_keeps_older_rows_as_they_were() 
             scratch.execute(_AUDIT, (f"kept-{action}", action, None))
         with pytest.raises(psycopg.errors.CheckViolation, match="corpus_removal_audit_action"):
             scratch.execute(_AUDIT, ("bad", "delete", None))
+        # a refused upload of a new policy names no instrument
+        scratch.execute(
+            "INSERT INTO corpus_removal_audit (audit_id, tenant_id, instrument_id, action, "
+            "outcome, actor, reason) VALUES ('none', 'acme', NULL, 'publish', 'refused', "
+            "'a@acme.example', '')"
+        )
+        assert scratch.execute(
+            "SELECT instrument_id FROM corpus_removal_audit WHERE audit_id = 'none'"
+        ).fetchone() == (None,)

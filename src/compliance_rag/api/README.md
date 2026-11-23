@@ -299,7 +299,7 @@ recorded title. The JSON is under `/v1/admin/policies` (`CurrentAdmin`; the page
   from the path (the instrument id without the tenant's prefix, which the page puts in each
   policy's own form), and the document's title is only that version's recorded title.
 - **Effective date.** Today by default, a future date as it is (the replaced version stays in
-  force until then), a past date only with `backdate_reason`, stored on the version (ledger 0029).
+  force until then), a past date only with `backdate_reason`, stored on the version (ledger 0030).
   A version cannot take effect on or before the one it replaces (ledger `valid_to > valid_from`):
   withdraw that one first, or choose a later date.
 - **Upload.** `{filename, content, title, effective_from?, backdate_reason?}`, no other key (a

@@ -241,7 +241,7 @@ class CorpusLifecycle:
         refused before anything is written.
 
         `backdate_reason` is why `effective_from` is in the past, recorded with
-        the version (ledger 0029, #303, ADR-0053 U4). Whether a date is past,
+        the version (ledger 0030, #303, ADR-0053 U4). Whether a date is past,
         and so whether a reason is owed, is the caller's to decide: the seed
         and the operator scripts publish old dates with none. The admin route
         refuses a past date without one before it calls this.

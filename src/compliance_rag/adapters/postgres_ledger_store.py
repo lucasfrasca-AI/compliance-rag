@@ -1637,7 +1637,7 @@ class PostgresLedgerStore(LedgerStore):
             RemovalAuditEntry(
                 audit_id=str(r[0]),
                 tenant_id=str(r[1]),
-                instrument_id=str(r[2]),
+                instrument_id=None if r[2] is None else str(r[2]),
                 version_id=r[3],
                 action=RemovalAction(r[4]),
                 outcome=RemovalOutcome(r[5]),
