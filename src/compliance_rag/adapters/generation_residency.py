@@ -139,6 +139,27 @@ def assert_submission_allowed(
         )
 
 
+def assert_policy_upload_allowed(
+    *, generation_region: str, uploader: str, testers: AbstractSet[str]
+) -> None:
+    """A policy an admin uploads is typed or pasted fresh, and once published it
+    is the cached prefix of every member's answer, so offshore it counts as real
+    unless the operator registered its uploader as a build-phase tester
+    (ADR-0032) and its bytes are a registered fixture's (`TenantTextGate.
+    check_policy_document`, ADR-0026, #303). A non-tester is refused before the
+    body is read, a fixture's own bytes included. `uploader` is the admin's
+    email, compared as `assert_question_allowed` compares it. Sydney checks
+    nothing."""
+    if not is_offshore(generation_region):
+        return
+    if not _is_tester(uploader, testers):
+        raise GenerationResidencyError(
+            f"generation runs in {generation_region}, outside Australia, during the build "
+            "phase, so only a registered build-phase tester may upload a policy: anyone "
+            "else's may hold real customer data (ADR-0023, ADR-0032)"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class TenantTextGate:
     """Offshore, tenant text that reaches the model by a path the store gate

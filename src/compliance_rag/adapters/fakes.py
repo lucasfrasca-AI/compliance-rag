@@ -943,9 +943,7 @@ class FakeLedgerStore(LedgerStore):
             if tenant == tenant_id
             and self._classes.get((tenant, instrument_id)) is DocumentClass.INTERNAL_POLICY
         ]
-        return tuple(
-            sorted(rows, key=lambda r: (r.instrument_id, r.valid_from, r.version_id))
-        )
+        return tuple(sorted(rows, key=lambda r: (r.instrument_id, r.valid_from, r.version_id)))
 
     async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
         return self._classes.get((tenant_id, instrument_id))

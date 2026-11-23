@@ -219,6 +219,7 @@ class CorpusLifecycle:
         document_class: DocumentClass,
         title: str,
         backdate_reason: str | None = None,
+        uploaded_bytes: bytes | None = None,
     ) -> None:
         """Publish a new version: its clauses' canonical text and its manifest
         to the clause store, the chunks derived from them (`count_tokens` is
@@ -245,6 +246,14 @@ class CorpusLifecycle:
         and the operator scripts publish old dates with none. The admin route
         refuses a past date without one before it calls this.
 
+        `uploaded_bytes` is the file an admin uploaded, when the clauses were
+        parsed from one (#303): while generation is offshore the upload is
+        refused unless those bytes are, whole, a registered synthetic policy
+        fixture (`TenantTextGate.check_policy_document`, ADR-0026), before
+        anything is written, on top of the chunk and clause check every publish
+        passes. A script publishing a fixture it holds as parsed clauses gives
+        none.
+
         Refused once retrieval holds any of the version: that is
         `complete_version`'s to finish, or a replace in place. Before then a
         re-run finishes one that stopped in the clause store (module
@@ -259,6 +268,7 @@ class CorpusLifecycle:
             version_id=version_id,
             document_class=document_class,
             title=title,
+            uploaded_bytes=uploaded_bytes,
         )
         if await self._retrieval.version_exists(
             instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
@@ -398,6 +408,7 @@ class CorpusLifecycle:
         version_id: str,
         document_class: DocumentClass,
         title: str,
+        uploaded_bytes: bytes | None = None,
     ) -> None:
         """Raise what `publish_version` would raise about these clauses, title
         and class before it wrote anything, and write nothing: the title, the
@@ -415,6 +426,7 @@ class CorpusLifecycle:
             version_id=version_id,
             document_class=document_class,
             title=title,
+            uploaded_bytes=uploaded_bytes,
         )
 
     async def _precheck(
@@ -427,9 +439,14 @@ class CorpusLifecycle:
         version_id: str,
         document_class: DocumentClass,
         title: str,
+        uploaded_bytes: bytes | None = None,
     ) -> tuple[Chunk, ...]:
         validate_title(title)
         await self._check_class(tenant_id, instrument_id, document_class)
+        if uploaded_bytes is not None:
+            TenantTextGate(self._generation_region, self._synthetic_registry).check_policy_document(
+                uploaded_bytes
+            )
         return self._admitted(
             clauses,
             count_tokens=count_tokens,

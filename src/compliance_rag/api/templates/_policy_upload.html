@@ -1,0 +1,20 @@
+{#- One upload form, for a new policy or a new version of one (#303). The script
+    (`/static/admin_policies.js`) reads the chosen file and posts the fields as JSON to
+    `action`; the policy is named by that route, never by the form's title. `method="dialog"`
+    outside a dialog submits nothing, so without script the file goes nowhere. -#}
+{% macro upload_form(key, action, label, title_value, today, max_bytes, max_kib) %}
+<form class="ask policy-upload" method="dialog" data-action="{{ action }}" data-max-bytes="{{ max_bytes }}" data-max-kib="{{ max_kib }}">
+<p class="card notice" role="alert" data-notice hidden></p>
+<label for="file-{{ key }}">Markdown policy (up to {{ max_kib }} KiB)</label>
+<input id="file-{{ key }}" name="file" type="file" accept=".md,.markdown,text/markdown" required>
+<label for="title-{{ key }}">Title, as it will be cited</label>
+<input id="title-{{ key }}" name="title" type="text" maxlength="200" value="{{ title_value }}" required>
+<label for="date-{{ key }}">Effective date</label>
+<input id="date-{{ key }}" name="effective_from" type="date" value="{{ today }}" required>
+<label for="reason-{{ key }}">Reason, only if the date is in the past</label>
+<input id="reason-{{ key }}" name="backdate_reason" type="text" maxlength="500">
+<div class="row">
+<button type="submit">{{ label }}</button>
+</div>
+</form>
+{% endmacro %}

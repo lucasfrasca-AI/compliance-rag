@@ -459,3 +459,27 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .report .run .row { margin: 0.5rem 0; }
 .report .document { margin-top: 2rem; }
 .report .passage mark.quoted { background: var(--warn-bg); color: inherit; border-radius: 3px; padding: 0 0.1rem; }
+
+/* The admin policies page (#303). */
+.policies section { margin-top: 1.25rem; }
+.policies details { margin-top: 0.75rem; }
+.policies summary { cursor: pointer; font-weight: 600; color: var(--gold); }
+.policy-upload input[type="date"] {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  padding: 0.4rem 0.5rem;
+  max-width: 100%;
+}
+.policy-version .ask input[type="text"] {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  padding: 0.4rem 0.5rem;
+}
+.sub-list li[data-status="in_force"] { border-left: 4px solid var(--ok); }
+.sub-list li[data-status="future"] { border-left: 4px solid var(--gold); }
+.sub-list li[data-status="withdrawn"],
+.sub-list li[data-status="purged"] { border-left: 4px solid var(--warn); color: var(--muted); }
