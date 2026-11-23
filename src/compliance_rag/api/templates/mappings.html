@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Mapping proposals{% endblock %}
+{% block body %}
+<main class="page">
+<h1>Mapping proposals</h1>
+<p class="note">A mapping says that one of your policy clauses meets an obligation of the law. When you ask, the model reads one policy version and proposes mappings to the obligations that apply to you, or might. A proposal is a suggestion and nothing more: it is not approved, it changes no finding, and the reasoning shown with it is the model's own words, not evidence. Approving or rejecting a proposal is a later step. A new policy version needs its own.</p>
+<noscript><p class="card notice">Asking for proposals needs JavaScript.</p></noscript>
+<p id="admin-notice" class="card notice" role="alert" hidden></p>
+{% if blocks %}
+{% for block in blocks %}
+<section class="mapping-version" data-instrument="{{ block.instrument_id }}" data-version="{{ block.version_id }}">
+<h2>{{ block.title }}</h2>
+<p class="meta"><code>{{ block.instrument_id }}</code> · version <code>{{ block.version_id }}</code>
+{% if not block.in_force %} · not in force today{% endif %}
+{% if block.running %} · <strong>proposing now</strong>{% endif %}
+{% if block.failed %} · the last run did not finish{% endif %}</p>
+{% if block.in_force %}
+<form class="propose" method="dialog" data-instrument="{{ block.instrument_id }}" data-version="{{ block.version_id }}">
+<button type="submit"{% if block.running %} disabled{% endif %}>Propose mappings for {{ block.title }} ({{ block.version_id }})</button>
+</form>
+{% endif %}
+{% if block.mappings %}
+<ul class="mapping-list">
+{% for m in block.mappings %}
+<li data-status="{{ m.status }}" data-kind="{{ m.kind }}">
+<p><a href="{{ m.href }}">{{ m.cite }}</a>
+{{ "implements" if m.kind == "implements" else "partially implements" }}
+<code>{{ m.obligation_id }}</code></p>
+<p class="meta"><strong class="status">{{ m.status | capitalize }}</strong>
+· proposed by <code>{{ m.proposer }}</code>{% if m.approver %} · decided by {{ m.approver }}{% endif %}</p>
+<p class="meta">The model's reasoning (not evidence): {{ m.rationale }}</p>
+</li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="empty">No mappings have been proposed for this version.</p>
+{% endif %}
+</section>
+{% endfor %}
+{% else %}
+<p class="empty">This workspace has no policies in force.</p>
+{% endif %}
+</main>
+<script type="module" src="/static/admin_mappings.js"></script>
+{% endblock %}

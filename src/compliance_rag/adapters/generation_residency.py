@@ -114,6 +114,25 @@ def assert_question_allowed(
         )
 
 
+def assert_mapping_run_allowed(
+    *, generation_region: str, requester: str, testers: AbstractSet[str]
+) -> None:
+    """An admin's request to propose policy mappings sends the tenant's policy text to the
+    model (#305). The registry vouches for the text (`TenantTextGate`); the admin's own
+    standing is the rule a question and a document have: offshore, only a build-phase
+    tester the operator registered may make the request (ADR-0032), compared as
+    `assert_question_allowed` compares it. Sydney checks nothing."""
+    if not is_offshore(generation_region):
+        return
+    if not _is_tester(requester, testers):
+        raise GenerationResidencyError(
+            f"generation runs in {generation_region}, outside Australia, during the build "
+            "phase, so only a registered build-phase tester may ask for policy mappings to be "
+            "proposed: anyone else's request may involve real customer data (ADR-0023, "
+            "ADR-0032)"
+        )
+
+
 def _is_tester(member: str, testers: AbstractSet[str]) -> bool:
     return member.strip().lower() in {t.strip().lower() for t in testers}
 

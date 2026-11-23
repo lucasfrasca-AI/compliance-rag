@@ -53,9 +53,6 @@ def _readme_document() -> dict[str, Any]:  # Any: YAML
         parsed = yaml.safe_load(block)
         if isinstance(parsed, dict):
             document |= parsed
-    # Remove once PR #364 lands: it deletes the README's policy_mappings
-    # example (#305, ADR-0059 C2).
-    document.pop("policy_mappings", None)
     return document
 
 
@@ -105,6 +102,9 @@ def test_the_readme_documented_shapes_validate(tmp_path: Path) -> None:
     mappings = load_mapping_set([write_yaml(tmp_path, document)])
     assert all(mappings.by_label.values()), mappings.by_label
     assert mappings.crosswalks
+    # No tenant's mapping is a documented YAML shape: it is a ledger row, never repo YAML
+    # (ADR-0059 C2, #305), and the loader refuses the key (#365).
+    assert "policy_mappings" not in document
     assert mappings.exceptions_by_obligation == {
         "OB-APP8-1": ("privacy-act-1988:C2026C00227:sch1/app8/2",)
     }

@@ -385,7 +385,7 @@ async def run_findings(request: Request, who: CurrentCaller, check_id: str) -> S
         run_stream(
             services=services,
             who=who,
-            check_id=check_id,
+            subject={"check_id": check_id},
             release=release,
             error_of=_error,
             failure="making a check's findings",

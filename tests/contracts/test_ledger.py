@@ -22,6 +22,7 @@ from compliance_rag.adapters.fakes import FakeGraphStore, FakeLedgerStore
 from compliance_rag.adapters.interfaces import (
     CHECK_PAGE_MAX,
     FINDINGS_RESERVATION_TTL,
+    MAPPING_RESERVATION_TTL,
     RESERVATION_TTL,
     AssessmentRecord,
     BlockedCitation,
@@ -48,6 +49,11 @@ from compliance_rag.adapters.interfaces import (
     FindingsAlreadyReserved,
     FindingsRecord,
     LedgerStore,
+    MappingKind,
+    MappingProposal,
+    MappingRunAlreadyReserved,
+    MappingRunRecord,
+    MappingStatus,
     PolicyChecked,
     PolicyVersion,
     PolicyVersionRow,
@@ -2300,3 +2306,243 @@ async def assert_decisions_contract(ledger: LedgerStore) -> None:
 
 async def test_the_fake_ledger_satisfies_the_decisions_contract() -> None:
     await assert_decisions_contract(FakeLedgerStore())
+
+
+# ---- policy mapping proposals (#305) ----------------------------------------------------
+
+MODEL = "gemini-3.5-flash"
+
+
+def a_proposal(
+    clause: str = f"{POLICY}:v2:3/1", obligation: str = "OB-PA-APP11-1", **changes: Any
+) -> MappingProposal:  # Any: record fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "policy_clause_id": clause,
+        "obligation_id": obligation,
+        "kind": MappingKind.IMPLEMENTS,
+        "rationale": "Section 3.1 requires encryption at rest.",
+        **changes,
+    }
+    return MappingProposal(**fields)
+
+
+def a_mapping_run(
+    *proposals: MappingProposal, version_id: str = "v2", **changes: Any
+) -> MappingRunRecord:  # Any: record fields
+    fields: dict[str, Any] = {  # Any: record fields
+        "tenant_id": "acme",
+        "instrument_id": POLICY,
+        "version_id": version_id,
+        "trace_id": "a" * 32,
+        "proposer": MODEL,
+        "proposals": proposals,
+        **changes,
+    }
+    return MappingRunRecord(**fields)
+
+
+async def a_policy_with_versions(ledger: LedgerStore) -> None:
+    """Acme, its policy at v1 and v2, a submitted document, and another tenant's policy."""
+    await ledger.put_profile(Profile("acme"))
+    await ledger.put_profile(Profile("other-corp"))
+    for tenant, instrument, version in (
+        ("acme", POLICY, "v1"),
+        ("acme", POLICY, "v2"),
+        ("other-corp", "other-corp/privacy-policy", "v1"),
+    ):
+        await ledger.record_version(
+            tenant_id=tenant,
+            instrument_id=instrument,
+            version_id=version,
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.INTERNAL_POLICY,
+            title="A policy",
+        )
+    await ledger.record_version(
+        tenant_id="acme",
+        instrument_id="acme/check-1",
+        version_id="v1",
+        valid_from=JAN,
+        supersedes=None,
+        document_class=DocumentClass.SUBMITTED_DOCUMENT,
+        title="A document",
+    )
+
+
+async def assert_mapping_contract(ledger: LedgerStore) -> None:
+    """A policy version's proposing run: reserved before the model is called, one at a time,
+    and its proposals recorded `proposed`, once each, in the ledger and nowhere else."""
+    await a_policy_with_versions(ledger)
+    assert await ledger.policy_mappings("acme") == ()
+    assert await ledger.mapping_run("acme", POLICY, "v2") is None
+
+    # ---- a version the tenant does not hold as an internal policy cannot be reserved
+    for held in (
+        ("acme", POLICY, "v9"),  # not recorded
+        ("acme", "acme/check-1", "v1"),  # a submitted document, not a policy
+        ("acme", "other-corp/privacy-policy", "v1"),  # another tenant's
+        ("nobody", POLICY, "v2"),
+    ):
+        with pytest.raises(ValueError, match="holds no policy version"):
+            await ledger.reserve_mapping_run(*held, trace_id="a" * 32)
+    with pytest.raises(ValueError, match="trace_id"):
+        await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id=" ")
+    assert await ledger.mapping_run("acme", POLICY, "v2") is None  # none of it held anything
+
+    # ---- of concurrent requests exactly one holds the run
+    raced = await asyncio.gather(
+        *(
+            ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id=f"{n}" * 32)
+            for n in range(1, 7)
+        ),
+        return_exceptions=True,
+    )
+    assert [r for r in raced if r is None] == [None]
+    assert all(isinstance(r, MappingRunAlreadyReserved) for r in raced if r is not None)
+    held_by = next(n for n, r in enumerate(raced, start=1) if r is None)
+    trace = f"{held_by}" * 32
+    status = await ledger.mapping_run("acme", POLICY, "v2")
+    assert status is not None and status.status == "pending" and not status.lapsed
+    # another policy version is its own run
+    await ledger.reserve_mapping_run("acme", POLICY, "v1", trace_id="9" * 32)
+    await ledger.fail_mapping_run("acme", POLICY, "v1", trace_id="9" * 32)
+
+    # ---- what a run records is refused before anything is written, and the reservation is
+    # not spent by a refusal
+    for changes, reason in (
+        ({"trace_id": " "}, "trace_id"),
+        ({"proposer": " "}, "model that proposed"),
+        ({"proposals": tuple(a_proposal(obligation=f"OB-{n}") for n in range(41))}, "at most 40"),
+        ({"proposals": (a_proposal(f"{POLICY}:v1:3/1"),)}, "not a clause of"),
+        ({"proposals": (a_proposal("acme/other:v2:3/1"),)}, "not a clause of"),
+        ({"proposals": (a_proposal("3/1"),)}, "not a clause id"),
+        ({"proposals": (a_proposal(f"{POLICY}:v2:3/1", "OB bad"),)}, "not an obligation id"),
+        ({"proposals": (a_proposal(rationale=" "),)}, "one non-blank line"),
+        ({"proposals": (a_proposal(rationale="two\nlines"),)}, "one non-blank line"),
+        ({"proposals": (a_proposal(rationale="x" * 301),)}, "at most 300"),
+        ({"proposals": (a_proposal(), a_proposal(rationale="again"))}, "once"),
+        # a pair is proposed once, as one kind
+        (
+            {"proposals": (a_proposal(), a_proposal(kind=MappingKind.PARTIALLY_IMPLEMENTS))},
+            "one kind",
+        ),
+        # a clause that only looks like the version's: the version's id is a prefix of its own
+        ({"proposals": (a_proposal(f"{POLICY}:v20:3/1"),)}, "not a clause of"),
+        ({"proposals": (a_proposal(f"{POLICY}-x:v2:3/1"),)}, "not a clause of"),
+    ):
+        with pytest.raises(ValueError, match=reason):
+            fields: dict[str, Any] = {"trace_id": trace, **changes}  # Any: record fields
+            await ledger.record_mapping_proposals(a_mapping_run(**fields))
+    assert await ledger.policy_mappings("acme") == ()
+    with pytest.raises(ValueError, match="no longer"):  # the reservation is another request's
+        await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="0" * 32))
+    with pytest.raises(ValueError, match="no proposing run"):  # v1's run was released as failed
+        await ledger.record_mapping_proposals(
+            a_mapping_run(a_proposal(f"{POLICY}:v1:3/1"), version_id="v1")
+        )
+    assert await ledger.policy_mappings("acme") == ()
+
+    # ---- a run records each proposal `proposed`, by the model, with no approver, under the
+    # request's trace, and marks the reservation done in the same transaction
+    appended = await ledger.record_mapping_proposals(
+        a_mapping_run(
+            a_proposal(),
+            a_proposal(obligation="OB-PA-APP11-3", kind=MappingKind.PARTIALLY_IMPLEMENTS),
+            a_proposal(f"{POLICY}:v2:4/2", "OB-PA-APP11-2", rationale="Covers retention."),
+            trace_id=trace,
+        )
+    )
+    assert appended == 3
+    rows = await ledger.policy_mappings("acme")
+    assert [(m.policy_clause_id, m.obligation_id, m.kind) for m in rows] == [
+        (f"{POLICY}:v2:3/1", "OB-PA-APP11-1", MappingKind.IMPLEMENTS),
+        (f"{POLICY}:v2:3/1", "OB-PA-APP11-3", MappingKind.PARTIALLY_IMPLEMENTS),
+        (f"{POLICY}:v2:4/2", "OB-PA-APP11-2", MappingKind.IMPLEMENTS),
+    ]
+    for m in rows:
+        assert m.status is MappingStatus.PROPOSED and m.approver is None
+        assert m.proposer == MODEL and m.trace_id == trace and m.tenant_id == "acme"
+        assert (m.instrument_id, m.version_id) == (POLICY, "v2")
+        assert m.proposed_at is not None
+    assert len({m.mapping_id for m in rows}) == 3
+    assert rows[2].rationale == "Covers retention."
+    done = await ledger.mapping_run("acme", POLICY, "v2")
+    assert done is not None and done.status == "done"
+    with pytest.raises(ValueError, match="no proposing run"):  # the reservation is spent
+        await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id=trace))
+
+    # ---- a version's mappings, and only that version's; one name alone is refused
+    assert await ledger.policy_mappings("acme", instrument_id=POLICY, version_id="v2") == rows
+    assert await ledger.policy_mappings("acme", instrument_id=POLICY, version_id="v1") == ()
+    assert await ledger.policy_mappings("other-corp") == ()  # never another tenant's
+    with pytest.raises(ValueError, match="or neither"):
+        await ledger.policy_mappings("acme", instrument_id=POLICY)
+
+    # ---- proposing again is allowed, and proposes a pair once, whatever its words or kind
+    await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="b" * 32)
+    appended = await ledger.record_mapping_proposals(
+        a_mapping_run(
+            a_proposal(rationale="Other words, same mapping."),
+            a_proposal(f"{POLICY}:v2:4/2", "OB-PA-APP11-2", kind=MappingKind.PARTIALLY_IMPLEMENTS),
+            a_proposal(f"{POLICY}:v2:5/1", "OB-PA-APP11-1"),
+            trace_id="b" * 32,
+        )
+    )
+    assert appended == 1
+    again = await ledger.policy_mappings("acme")
+    assert len(again) == 4 and again[:3] == rows
+    assert again[3].policy_clause_id == f"{POLICY}:v2:5/1" and again[3].trace_id == "b" * 32
+
+    # ---- every version's run, in one read, by one rule of what is running
+    runs = await ledger.mapping_runs("acme")
+    assert set(runs) == {(POLICY, "v1"), (POLICY, "v2")}  # only the versions ever proposed for
+    assert runs[(POLICY, "v2")].status == "done" and not runs[(POLICY, "v2")].running
+    assert runs[(POLICY, "v1")].status == "failed" and runs[(POLICY, "v1")].unfinished
+    assert await ledger.mapping_runs("other-corp") == {}
+
+    # ---- a failed run is released, and only by the request that holds it
+    await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="c" * 32)
+    await ledger.fail_mapping_run("acme", POLICY, "v2", trace_id="d" * 32)  # not the holder's
+    still = await ledger.mapping_run("acme", POLICY, "v2")
+    assert (
+        still is not None and still.status == "pending" and still.running and not still.unfinished
+    )
+    with pytest.raises(MappingRunAlreadyReserved):
+        await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="e" * 32)
+    await ledger.fail_mapping_run("acme", POLICY, "v2", trace_id="c" * 32)
+    failed = await ledger.mapping_run("acme", POLICY, "v2")
+    assert failed is not None and failed.status == "failed"
+    await ledger.fail_mapping_run("acme", POLICY, "v2", trace_id="c" * 32)  # safe again
+    with pytest.raises(ValueError, match="no proposing run"):  # a failed run records nothing
+        await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="c" * 32))
+    # and may be tried again; a run that proposes nothing is done too
+    await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="f" * 32)
+    assert await ledger.record_mapping_proposals(a_mapping_run(trace_id="f" * 32)) == 0
+    assert len(await ledger.policy_mappings("acme")) == 4
+
+
+async def test_the_fake_ledger_satisfies_the_mapping_contract() -> None:
+    await assert_mapping_contract(FakeLedgerStore())
+
+
+async def test_the_fake_ledger_takes_over_a_mapping_run_held_past_the_time_out() -> None:
+    ledger = FakeLedgerStore()
+    await a_policy_with_versions(ledger)
+    await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="a" * 32)
+    key = ("acme", POLICY, "v2")
+    held = ledger._mapping_runs[key]  # pyright: ignore[reportPrivateUsage]
+    ledger._mapping_runs[key] = replace(  # pyright: ignore[reportPrivateUsage]
+        held, reserved_at=held.reserved_at - MAPPING_RESERVATION_TTL - dt.timedelta(seconds=1)
+    )
+    lapsed = await ledger.mapping_run("acme", POLICY, "v2")
+    assert lapsed is not None and lapsed.status == "pending" and lapsed.lapsed
+    await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="b" * 32)  # taken over
+    with pytest.raises(ValueError, match="no longer"):  # the first run, finishing late
+        await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="a" * 32))
+    await ledger.fail_mapping_run("acme", POLICY, "v2", trace_id="a" * 32)  # nor release theirs
+    with pytest.raises(MappingRunAlreadyReserved):
+        await ledger.reserve_mapping_run("acme", POLICY, "v2", trace_id="c" * 32)
+    assert (
+        await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="b" * 32)) == 1
+    )

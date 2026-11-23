@@ -1,6 +1,7 @@
 # ADR-0002 — Both graphs are deterministic
 
 - Status: accepted
+- Superseded in part by ADR-0059 C2 (2026-11-15): a tenant's policy-to-law mapping is a ledger row, never repo YAML
 - Date: 2026-09-20
 - Decision ID: `D-01` (`DECISIONS.md`)
 
