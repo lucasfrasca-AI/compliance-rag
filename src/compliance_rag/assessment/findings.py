@@ -59,6 +59,17 @@ answered is a new assessment with a firm finding; the first is left as it was
 **Provenance** (F5, ADR-0059 C1) is the weakest input. A claim is `inferred`
 until confirmed (#301), so every finding is.
 
+**Derived findings** (#306, ADR-0053 F6, `mapping_derivation.py`): the tenant's approved
+`implements` mappings, read by the caller, change a finding by derivation and not by prompt.
+After the model's findings are settled, a claim's finding against a policy clause C that
+has a verdict carries over to each obligation O an approved mapping says C implements, when
+Track A decides O applies: the same verdict, cited to C's clauses (verified when that finding
+was made) and to O's own clause (verified here, by the verifier, against the clause delivered
+by id), pointing at its source finding and at the mapping. No model is asked. The model's own
+finding for the same claim and O stays beside it; neither is dropped (ADR-0059 Q7). A
+derivation whose obligation's clause cannot be delivered or verified is skipped and traced,
+never given a guessed citation.
+
 **The cache is warmed by one call before the rest start** (ADR-0054): the first
 claim's findings call runs alone, then every other claim's runs in parallel
 (bounded by `MAX_PARALLEL`). Every call sends the same system prompt and the same
@@ -120,10 +131,12 @@ from compliance_rag.adapters.interfaces import (
     LawScope,
     PolicyChecked,
     PolicyCorpus,
+    PolicyMapping,
     ReplyKind,
     SourceVersion,
     Verdict,
     WithheldReason,
+    finding_order_key,
 )
 from compliance_rag.assessment.claims import (
     MAX_PICKS,
@@ -139,6 +152,10 @@ from compliance_rag.assessment.coverage import (
 )
 from compliance_rag.assessment.draft import DraftCitation, MalformedGeneration
 from compliance_rag.assessment.evidence import Evidence, FactsSnapshot
+from compliance_rag.assessment.mapping_derivation import (
+    applicable_obligations,
+    plan_derivations,
+)
 from compliance_rag.assessment.obligation_digest import ObligationDigest
 from compliance_rag.assessment.pipeline import AssessmentPipeline, OwedClauseUndelivered
 from compliance_rag.assessment.prefix_cap import check_prefix_cap
@@ -163,6 +180,9 @@ log = logging.getLogger(__name__)
 MAX_TOKENS: Final = 2_048
 """What the model may write for one claim: up to twenty findings, each a verdict,
 a line of settle-by text and a few quoted spans."""
+MAX_DERIVED_QUOTE_WORDS: Final = 12
+"""The opening words of an obligation's own clause that a derived finding quotes it by (#306):
+a verbatim start of the clause's canonical text, which the verifier then checks."""
 MAX_PARALLEL: Final = 8
 """The most findings calls in flight at once once the cache is warm: every call
 is the same prefix and a short claim, and the model's quota is shared."""
@@ -555,6 +575,9 @@ class FindingsRun:
     """Picks that were not asked about, `<claim>:<id>`: an obligation Track A no
     longer lists on this run's facts, or a policy clause no longer in force."""
     trace_id: str
+    derivation_skipped: tuple[str, ...] = ()
+    """Derivations an approved mapping planned that were not made, `<claim>:<obligation>:
+    <mapping id>`: the obligation's own clause could not be delivered or verified (#306)."""
 
     @property
     def cost_usd(self) -> float:
@@ -633,6 +656,7 @@ class FindingsAssessor:
         corpus: SourceVersion,
         mapping: SourceVersion,
         evidence: Sequence[Evidence],
+        policy_mappings: Sequence[PolicyMapping] = (),
     ) -> FindingsRun:
         """The findings of one check's claims, recorded. `extraction` is the
         check's claims and the date their picks were made on, `coverage` Track A
@@ -640,7 +664,9 @@ class FindingsAssessor:
         the coverage was computed (recorded with the assessment, ADR-0034: it records
         what was read, and does not reconstruct facts as of a past date, #123),
         `policies` the tenant's in force then; `corpus` and `mapping` are what the graph
-        holds, resolved by the caller (ADR-0034). `asker` is who the assessment names
+        holds, resolved by the caller (ADR-0034). `policy_mappings` are the tenant's policy
+        mappings in every status: the approved `implements` ones derive findings (#306), the
+        rest are ignored here. `asker` is who the assessment names
         (their email, as a coverage assessment does), `member_uid` whose private
         clauses the verifier may read (ADR-0036).
 
@@ -668,6 +694,7 @@ class FindingsAssessor:
             corpus=corpus,
             mapping=mapping,
             facts=FactsSnapshot.of(evidence),
+            policy_mappings=tuple(policy_mappings),
         ).go()
 
 
@@ -690,8 +717,12 @@ class _Run:
         corpus: SourceVersion,
         mapping: SourceVersion,
         facts: FactsSnapshot,
+        policy_mappings: tuple[PolicyMapping, ...] = (),
     ) -> None:
         self._facts = facts
+        self._policy_mappings = policy_mappings
+        self._own_clause: dict[str, FindingCitation | None] = {}
+        self._derivation_skipped: list[str] = []
         self._pipeline = pipeline
         self._tenant_id = tenant_id
         self._check_id = check_id
@@ -786,6 +817,7 @@ class _Run:
             findings += [f for p in prepared for f in p.failed]
             try:
                 findings += await self._ask_all(asking)
+                findings += await self._derive(findings)
             except BaseException:
                 await self._record_spent()
                 raise
@@ -808,16 +840,7 @@ class _Run:
                         key=lambda r: r.obligation_id,
                     )
                 ),
-                findings=tuple(
-                    sorted(
-                        findings,
-                        key=lambda f: (
-                            f.claim_index,
-                            f.obligation_id is None,
-                            f.obligation_id or f.policy_clause_id or "",
-                        ),
-                    )
-                ),
+                findings=tuple(sorted(findings, key=finding_order_key)),
                 usage=tuple(usage_of(self._tenant_id, g) for g in self._generations),
             )
             try:
@@ -840,6 +863,7 @@ class _Run:
                 generations=tuple(self._generations),
                 skipped=tuple(skipped),
                 trace_id=record.assessment.trace_id,
+                derivation_skipped=tuple(self._derivation_skipped),
             )
 
     @staticmethod
@@ -854,6 +878,88 @@ class _Run:
                 await record_usage(self._pipeline.ledger, self._tenant_id, generation)
             except Exception:
                 log.exception("the usage of a findings call could not be recorded")
+
+    # -- derivation (#306) -----------------------------------------------------------
+
+    async def _derive(self, findings: Sequence[FindingRecord]) -> list[FindingRecord]:
+        """The findings the tenant's approved `implements` mappings derive from the claims'
+        findings against policy clauses (`mapping_derivation.plan_derivations`, the one
+        rule). No model is asked: the verdict is the source finding's, the citations are its
+        own and the obligation's clause, verified here."""
+        plan = plan_derivations(
+            findings, self._policy_mappings, applicable_obligations(self._coverage.obligations)
+        )
+        with span(
+            "findings.derive",
+            **{
+                "findings.mappings_approved": [
+                    m.mapping_id for m in self._policy_mappings if m.derives
+                ],
+                "findings.derivations_planned": len(plan),
+            },
+        ) as current:
+            made: list[FindingRecord] = []
+            for d in plan:
+                own = await self._obligations_own_clause(self._rows[d.obligation_id])
+                if own is None:
+                    self._derivation_skipped.append(
+                        f"{d.claim_index}:{d.obligation_id}:{d.mapping.mapping_id}"
+                    )
+                    continue
+                assert d.source.verdict is not None  # a plan holds verdicts alone
+                made.append(
+                    FindingRecord(
+                        finding_id=_new_id(),
+                        claim_index=d.claim_index,
+                        outcome=FindingOutcome.VERDICT,
+                        obligation_id=d.obligation_id,
+                        verdict=d.source.verdict,
+                        settle_by=d.source.settle_by,
+                        citations=(*d.source.citations, own),
+                        derived_from=d.source.finding_id,
+                        mapping_id=d.mapping.mapping_id,
+                    )
+                )
+            current.set_attribute(
+                "findings.derived",
+                [f"{f.claim_index}:{f.obligation_id}:{f.mapping_id}" for f in made],
+            )
+            current.set_attribute("findings.derivation_skipped", self._derivation_skipped)
+            return made
+
+    async def _obligations_own_clause(self, row: ObligationCoverage) -> FindingCitation | None:
+        """The citation of an obligation's own clause, once per run: its clause delivered by id
+        (with what it owes, as a findings call's is) and its opening words, which the verifier
+        reads back against the stored text as every citation is (ADR-0003). None when it
+        cannot be delivered or does not verify."""
+        if row.obligation_id in self._own_clause:
+            return self._own_clause[row.obligation_id]
+        self._own_clause[row.obligation_id] = None
+        delivered = await self._delivered(row)
+        own_id = row.clause_ids[0] if row.clause_ids else None
+        clause = next((c for c in delivered or () if c.clause_id == own_id), None)
+        if own_id is None or clause is None:
+            return None
+        quote = " ".join(clause.text.split()[:MAX_DERIVED_QUOTE_WORDS])
+        if not quote:
+            return None
+        (check,) = await self._pipeline.verifier.check_all(
+            [DraftCitation(clause_id=own_id, quote=quote)],
+            context=frozenset({own_id}),
+            as_of=self._as_of,
+            user_id=self._member_uid,
+        )
+        if not check.verified or check.clause is None:
+            return None
+        found = FindingCitation(
+            clause_id=check.clause.clause_id,
+            version_id=check.clause.version_id,
+            quoted_text=check.citation.quote,
+            canonicalisation_version=check.clause.canonicalisation_version,
+            incomplete=check.clause.incomplete,
+        )
+        self._own_clause[row.obligation_id] = found
+        return found
 
     # -- planning --------------------------------------------------------------------
 

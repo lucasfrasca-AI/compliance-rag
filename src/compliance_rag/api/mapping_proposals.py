@@ -14,8 +14,8 @@ writer and no file writer. Tests hold this module's imports to that and spy on t
 runtime (it may be read for Track A's coverage and for nothing else); neither proves the
 absence of a write alone. The mapping is
 `proposed`, its proposer the model id, its approver empty; approving or rejecting it is
-#306's. The model's one-line rationale is shown only as `{"text": ..., "source": "model"}`:
-its words, labelled, never evidence.
+`mapping_decisions.py`'s (#306). The model's one-line rationale is shown only as
+`{"text": ..., "source": "model"}`: its words, labelled, never evidence.
 
 The stream carries stages and a result, never anything unvalidated:
 - `coverage` once Track A has answered (the obligation digest is built from it);
@@ -161,9 +161,18 @@ def mapping_json(mapping: PolicyMapping, titles: Titles) -> dict[str, object]:
         "status": mapping.status.value,
         "rationale": {"text": mapping.rationale, "source": "model"},
         "proposer": mapping.proposer,
-        "approver": mapping.approver,
+        # who decided it, as the address shown beside the decision (the ledger keeps the uid)
+        "approver": mapping.approver_email,
         "trace_id": mapping.trace_id,
         "proposed_at": None if mapping.proposed_at is None else mapping.proposed_at.isoformat(),
+        # #306: when, and in which request, an admin approved or rejected it; a rejection's
+        # reason is the admin's own words, labelled as theirs
+        "decided_at": None if mapping.decided_at is None else mapping.decided_at.isoformat(),
+        "decision_trace_id": mapping.decision_trace_id,
+        "rejection_reason": None
+        if mapping.rejection_reason is None
+        else {"text": mapping.rejection_reason, "source": "admin"},
+        "derives": mapping.derives,
     }
 
 

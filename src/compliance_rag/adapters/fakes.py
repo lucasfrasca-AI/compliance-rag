@@ -52,6 +52,9 @@ from compliance_rag.adapters.interfaces import (
     LedgerStore,
     LoadedSources,
     ManifestMetadata,
+    MappingAlreadyDecided,
+    MappingDecision,
+    MappingNotFound,
     MappingRunAlreadyReserved,
     MappingRunRecord,
     MappingStatus,
@@ -74,11 +77,14 @@ from compliance_rag.adapters.interfaces import (
     check_check_write,
     check_claims_write,
     check_decision_write,
+    check_derived_through_mappings,
     check_findings_write,
+    check_mapping_decision_write,
     check_mapping_run_write,
     check_run_of,
     check_stage_of,
     decision_adds_a_row,
+    finding_order_key,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -653,6 +659,38 @@ class FakeLedgerStore(LedgerStore):
         self._mapping_runs[key] = replace(held, status="done")
         return appended
 
+    async def decide_mapping(self, decision: MappingDecision) -> PolicyMapping:
+        """No `await` between the read of the status and the write, so of concurrent requests
+        one decides it, as the database's `WHERE status = 'proposed'` makes it. Only the
+        decision's own fields are replaced."""
+        check_mapping_decision_write(decision)
+        at = next(
+            (
+                i
+                for i, m in enumerate(self._policy_mappings)
+                if m.tenant_id == decision.tenant_id and m.mapping_id == decision.mapping_id
+            ),
+            None,
+        )
+        if at is None:
+            raise MappingNotFound(f"tenant {decision.tenant_id!r} holds no mapping")
+        held = self._policy_mappings[at]
+        if held.status is not MappingStatus.PROPOSED:
+            raise MappingAlreadyDecided(
+                f"mapping {decision.mapping_id} is already {held.status.value}", held.status
+            )
+        decided = replace(
+            held,
+            status=decision.status,
+            approver=decision.approver,
+            approver_email=decision.approver_email,
+            decided_at=self._now(),
+            decision_trace_id=decision.trace_id,
+            rejection_reason=decision.reason,
+        )
+        self._policy_mappings[at] = decided
+        return decided
+
     async def policy_mappings(
         self,
         tenant_id: str,
@@ -887,6 +925,10 @@ class FakeLedgerStore(LedgerStore):
         assessment_key = (assessment.tenant_id, assessment.assessment_id)
         if assessment_key in self._assessments:
             raise ValueError(f"assessment {assessment.assessment_id} is already recorded")
+        check_derived_through_mappings(
+            record.findings,
+            {m.mapping_id: m for m in self._policy_mappings if m.tenant_id == assessment.tenant_id},
+        )
         self._assessments[assessment_key] = assessment
         self._coverage[assessment_key] = {row.obligation_id: row for row in record.coverage}
         for finding in record.findings:
@@ -901,14 +943,7 @@ class FakeLedgerStore(LedgerStore):
         if held is None or held.status != "done" or held.record is None:
             return None
         record = held.record
-        ordered = sorted(
-            record.findings,
-            key=lambda f: (
-                f.claim_index,
-                f.obligation_id is None,
-                f.obligation_id or f.policy_clause_id or "",
-            ),
-        )
+        ordered = sorted(record.findings, key=finding_order_key)
         coverage = tuple(sorted(record.coverage, key=lambda row: row.obligation_id))
         return replace(record, findings=tuple(ordered), coverage=coverage)
 
@@ -940,7 +975,7 @@ class FakeLedgerStore(LedgerStore):
                 f"tenant {decision.tenant_id!r} holds no extracted check {decision.check_id}"
             )
         mine = [d for d in self._decisions if (d.tenant_id, d.check_id) == key]
-        has_verdict, claim_rejected = True, False
+        has_verdict, claim_rejected, derived = True, False, False
         claim_index = decision.claim_index
         if decision.kind.of_claim:
             if claim_index not in {c.claim_index for c in extraction.record.claims}:
@@ -960,6 +995,7 @@ class FakeLedgerStore(LedgerStore):
             if finding is None:
                 raise ValueError(f"check {decision.check_id} has no finding {decision.finding_id}")
             has_verdict = finding.outcome is FindingOutcome.VERDICT
+            derived = finding.derived
             of_claim = [d for d in mine if d.claim_index == finding.claim_index]
             claim_rejected = bool(of_claim) and of_claim[-1].kind is DecisionKind.CLAIM_REJECTED
             same = [d for d in mine if d.finding_id == decision.finding_id]
@@ -968,6 +1004,7 @@ class FakeLedgerStore(LedgerStore):
             latest=same[-1].kind if same else None,
             has_verdict=has_verdict,
             claim_rejected=claim_rejected,
+            derived=derived,
         ):
             return False
         self._decisions.append(

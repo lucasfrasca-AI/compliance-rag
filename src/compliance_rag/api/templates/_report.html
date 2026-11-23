@@ -1,7 +1,8 @@
 {#- The findings report (#300), drawn from `check_report.report_json`: the ledger's
     findings and nothing the browser says. Order (ADR-0053 F8): the four verdicts, then
-    the findings that have none, each under its own heading. No score anywhere. Every
-    value is autoescaped; nothing is marked safe. -#}
+    the findings that have none, each under its own heading. No score anywhere. A finding an approved
+    mapping derived (#306) says so, with the model's own reading beneath it. Every value is
+    autoescaped; nothing is marked safe. -#}
 {% from "_claim.html" import claim_ref with context %}
 
 {% macro citations(f) %}
@@ -19,7 +20,9 @@
     AND its verdict accepted by a person. -#}
 {% macro tier(f) %}
 <p class="tier" data-tier="{{ f.tier }}"><span class="flag flag-tier-{{ f.tier }}">{{ f.tier | capitalize }}</span>
-{% if not f.can_accept %}no verdict to accept
+{% if f.derived %}{% if f.tier == "asserted" %}its claim is confirmed, the policy finding's verdict accepted and the mapping approved
+{% else %}the mapping is approved, but it is as sure as its claim and the policy finding's verdict: inferred until its claim is confirmed and that verdict accepted{% endif %}
+{% elif not f.can_accept %}no verdict to accept
 {% elif f.tier == "asserted" %}its claim is confirmed and its verdict accepted
 {% else %}until its claim is confirmed and its verdict accepted{% endif %}</p>
 {% endmacro %}
@@ -45,9 +48,45 @@
 {% if f.kind == "law" %} <span class="meta">obligation <code>{{ f.obligation_id }}</code></span>{% endif %}</p>
 {% endmacro %}
 
+{#- Where a derived finding comes from (#306): the policy clause, the claim's finding against it
+    and the approved mapping. Its verdict is the policy finding's, so that is what a person
+    accepts. -#}
+{% macro derivation(f) %}
+<div class="derivation" data-derived-from="{{ f.derived.from_finding_id }}">
+<p><strong>Derived from your policy, not read by the model.</strong> You have approved that <a class="cite" href="{{ f.derived.policy.href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ f.derived.policy.cite }}</a> implements this obligation, so the claim's finding against it carries over.
+{% if f.derived.mapping and f.derived.mapping.approved_by %}The mapping was approved by {{ f.derived.mapping.approved_by }}{% if f.derived.mapping.approved_at %} on <time datetime="{{ f.derived.mapping.approved_at }}">{{ f.derived.mapping.approved_at_label }}</time>{% endif %}.{% endif %}</p>
+<p class="note">Its verdict is the policy finding's, so that is the verdict to accept: <a href="#finding-{{ f.derived.from_finding_id }}">the finding against {{ f.derived.policy.cite }}</a>.{% if f.derived.source_accepted %} It was accepted by {{ f.derived.source_accepted.by }}.{% endif %}</p>
+</div>
+{% endmacro %}
+
+{#- The model's own finding for the same claim and obligation, beneath the derived one (ADR-0059
+    Q7): shown whether it agrees or not, never dropped. -#}
+{% macro direct_reading(f) %}
+{% set d = f.direct %}
+<div class="direct-reading" data-direct="{{ d.finding_id }}"{% if f.direct_disagrees is not none %} data-disagrees="{{ 'true' if f.direct_disagrees else 'false' }}"{% endif %}>
+<h4>The model's direct reading {% if f.direct_disagrees is none %}has no verdict{% elif f.direct_disagrees %}disagrees{% else %}agrees{% endif %}</h4>
+{% if d.verdict %}
+<p><span class="verdict">{{ d.verdict | replace("_", " ") | capitalize }}</span> against the same obligation, read by the model from the law itself.</p>
+{% if d.settle_by %}
+<p class="settle"><strong>What would settle it</strong>, in the model's words: {{ d.settle_by.text }}</p>
+{% endif %}
+{{ citations(d) }}
+{% elif d.outcome == "withheld" %}
+<p>{{ d.withheld[0] | upper }}{{ d.withheld[1:] }}</p>
+{% elif d.outcome == "failed" %}
+<p>{{ d.failed[0] | upper }}{{ d.failed[1:] }}</p>
+{% elif d.outcome == "conditional" %}
+<p>{{ d.conditional.reason }}</p>
+{% endif %}
+{{ tier(d) }}
+{{ verdict_decision(d) }}
+</div>
+{% endmacro %}
+
 <div class="decisions" id="decisions" data-check-id="{{ check.check_id }}">
 <p class="meta">As of <time datetime="{{ report.as_of }}">{{ report.as_of }}</time> · trace <code>{{ report.trace_id }}</code> · a finding is inferred from the document's claim until the claim is confirmed and its verdict accepted{% if report.claims %} · <a href="#claims-review">Review the claims</a>{% endif %}</p>
 <div id="decision-notice" class="card outcome notice" role="alert" hidden></div>
+<div id="recheck-notice" class="card outcome notice" role="alert" hidden></div>
 
 {% if report.disagreements %}
 <section class="card disagreement" role="note" aria-label="Your policies disagree" data-disagreements>
@@ -71,21 +110,47 @@
 </section>
 {% endif %}
 
+{% if report.would_change %}
+<section class="card notice would-change" role="note" aria-labelledby="h-would-change" data-would-change>
+<h2 id="h-would-change">A mapping approved since would change this</h2>
+<p>This report is as it was issued, and it never changes. Since it was made, you approved {{ "a mapping" if report.would_change | length == 1 else "mappings" }} that {{ "applies" if report.would_change | length == 1 else "apply" }} to it. A new check of this document would carry the finding{{ "" if report.would_change | length == 1 else "s" }} below over to the law.</p>
+<ul>
+{% for m in report.would_change %}
+<li data-mapping="{{ m.mapping_id }}"><a class="cite" href="{{ m.policy.href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ m.policy.cite }}</a> implements {% if m.obligation.href %}<a class="cite" href="{{ m.obligation.href }}" data-source-link target="_blank" rel="noopener noreferrer">{{ m.obligation.label }}</a>{% else %}<span class="cite">{{ m.obligation.label }}</span>{% endif %} <span class="meta">obligation <code>{{ m.obligation_id }}</code>, approved by {{ m.approved_by }}{% if m.approved_at %} on <time datetime="{{ m.approved_at }}">{{ m.approved_at_label }}</time>{% endif %}</span>
+<ul>
+{% for c in m.claims %}
+<li data-claim="{{ c.index }}">{{ claim_ref(c) }}</li>
+{% endfor %}
+</ul>
+</li>
+{% endfor %}
+</ul>
+<p class="actions"><button type="button" data-recheck="{{ report.recheck.check_id }}">Check the document again</button></p>
+<noscript><p class="note">Checking again needs JavaScript.</p></noscript>
+</section>
+{% endif %}
+
 {% for g in report.groups %}
 {% if g.findings %}
 <section class="verdict-group" data-verdict="{{ g.verdict }}" aria-labelledby="h-{{ g.verdict }}">
 <h2 id="h-{{ g.verdict }}">{{ g.heading }} <span class="count">{{ g.findings | length }}</span></h2>
 {% for f in g.findings %}
-<article class="card finding" data-finding="{{ f.finding_id }}" data-outcome="verdict" data-verdict="{{ g.verdict }}">
-<h3><span class="verdict">{{ g.heading }}</span></h3>
+<article class="card finding{% if f.derived %} derived{% endif %}" data-finding="{{ f.finding_id }}" data-outcome="verdict" data-verdict="{{ g.verdict }}"{% if f.derived %} data-derived{% endif %} id="finding-{{ f.finding_id }}">
+<h3><span class="verdict">{{ g.heading }}</span>{% if f.derived %} <span class="flag flag-derived">Derived from your policy</span>{% endif %}</h3>
 {{ target(f) }}
 {{ claim_ref(f.claim) }}
+{% if f.derived %}
+{{ derivation(f) }}
+{% endif %}
 {% if f.settle_by %}
 <p class="settle"><strong>What would settle it</strong>, in the model's words: {{ f.settle_by.text }}</p>
 {% endif %}
 {{ citations(f) }}
 {{ tier(f) }}
 {{ verdict_decision(f) }}
+{% if f.direct %}
+{{ direct_reading(f) }}
+{% endif %}
 </article>
 {% endfor %}
 </section>
@@ -119,9 +184,10 @@
 {% else %}
 <span class="note">A workspace admin can answer these in the questionnaire.</span>
 {% endif %}
-<a class="button secondary" href="{{ report.recheck_href }}">Check the document again</a>
+<button type="button" class="secondary" data-recheck="{{ report.recheck.check_id }}">Check the document again</button>
+<a class="button secondary" href="{{ report.recheck_href }}">Submit a changed document</a>
 </p>
-<p class="note">A report never changes. After the questions are answered, submit the document again: that is a new check with a new report.</p>
+<p class="note">A report never changes. After the questions are answered, check the document again: that is a new check with a new report.</p>
 </section>
 {% endif %}
 
@@ -251,6 +317,15 @@
 <li>As of <time datetime="{{ cs.as_of }}">{{ cs.as_of }}</time></li>
 <li>Corpus <code>{{ cs.corpus_version.tag or "untagged" }}</code>, commit <code>{{ cs.corpus_version.sha }}</code></li>
 <li>Mappings <code>{{ cs.mapping_version.tag or "untagged" }}</code>, commit <code>{{ cs.mapping_version.sha }}</code></li>
+{% if cs.policy_mappings_applied %}
+<li data-mappings-applied>Your approved policy mappings applied:
+<ul>
+{% for m in cs.policy_mappings_applied %}
+<li data-mapping="{{ m.mapping_id }}">{{ m.policy.cite }} implements <code>{{ m.obligation_id }}</code>{% if m.approved_by %}, approved by {{ m.approved_by }}{% endif %}</li>
+{% endfor %}
+</ul>
+</li>
+{% endif %}
 {% if cs.facts %}
 <li>Facts about your workspace read: {{ cs.facts.evidence | length }}, hash <code>{{ cs.facts.sha256 }}</code></li>
 {% endif %}
@@ -262,3 +337,4 @@
 {% endwith %}
 </div>
 <script type="module" src="/static/check_decisions.js"></script>
+<script type="module" src="/static/check_recheck.js"></script>

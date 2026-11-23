@@ -28,7 +28,9 @@ the findings are recorded (409 `not_reported`).
 `LedgerStore` under its own lock): only a finding that has a verdict can be accepted (409
 `not_a_verdict`: a withheld, failed or conditional finding has none to accept), not one of a
 claim that stands rejected (409 `claim_rejected`), and nothing is withdrawn that is not accepted
-(409 `not_accepted`). The store raises `DecisionRefused`; this route only maps it to our words.
+(409 `not_accepted`), and no verdict decision at all about a finding **derived from an approved
+mapping** (409 `derived`, #306: its verdict is the policy finding's, so that is the verdict a
+person accepts). The store raises `DecisionRefused`; this route only maps it to our words.
 
 **Who may act** is who may see the check (`checks.visible_check`, ADR-0059 Q5): its submitter and
 the tenant's admins. Anyone else gets the same 404 as for a check that does not exist, before
@@ -71,6 +73,10 @@ REFUSALS: Final = {
     ),
     DecisionRefusal.NOT_ACCEPTED: (
         "this verdict was not accepted, so there is no acceptance to withdraw"
+    ),
+    DecisionRefusal.DERIVED: (
+        "this finding is derived from an approved mapping, so its verdict is the policy "
+        "finding's: accept that one"
     ),
 }
 """Our words for each reason the store refuses a decision (`DecisionRefused`): the rules are

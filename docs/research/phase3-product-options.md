@@ -239,7 +239,7 @@ A mapping says, for example, that Acme's D2 3/1 is how Acme meets OB-PA-APP11-2.
 - **Example:**
   - Before: the claim "account records are kept 7 years after closure, then destroyed" is `ambiguous` against APP 11.2, because it turns on (d), whether a law requires the retention.
   - The admin approves "D2 3/1 implements OB-PA-APP11-2".
-  - After: the claim is `consistent` with D2 3/1, so it is `consistent` with APP 11.2 through Acme's own approved policy. It is cited to D2 3/1 and APP 11.2(d), and it is `asserted` (the admin approved it), not `inferred`.
+  - After: the claim is `consistent` with D2 3/1, so it is `consistent` with APP 11.2 through Acme's own approved policy. It is cited to D2 3/1 and APP 11.2(d), and it is `asserted` (the admin approved it), not `inferred`. _(Superseded by ADR-0059 C1: the approval makes only the mapping link `asserted`; the derived finding is as sure as its weakest input, the claim, the policy verdict and the mapping, so it is `inferred` until its claim is confirmed and its policy verdict accepted.)_
 - **Recommendation: (b).**
   - Two mapping kinds, `implements` and `partially_implements`. Only `implements` derives a finding.
   - Each approval is recorded with its approver and `trace_id`.

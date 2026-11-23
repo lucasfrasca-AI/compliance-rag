@@ -59,7 +59,10 @@ from compliance_rag.adapters.interfaces import (
     FindingsAlreadyReserved,
     FindingsRecord,
     LedgerStore,
+    MappingAlreadyDecided,
+    MappingDecision,
     MappingKind,
+    MappingNotFound,
     MappingRunAlreadyReserved,
     MappingRunRecord,
     MappingStatus,
@@ -90,7 +93,9 @@ from compliance_rag.adapters.interfaces import (
     check_check_write,
     check_claims_write,
     check_decision_write,
+    check_derived_through_mappings,
     check_findings_write,
+    check_mapping_decision_write,
     check_mapping_run_write,
     check_run_of,
     check_stage_of,
@@ -334,11 +339,36 @@ def _flag_unreadable_absent(
             )
 
 
-_MAPPING_SELECT: LiteralString = (
-    "SELECT mapping_id, policy_instrument_id, policy_version_id, policy_clause_id, "
-    "obligation_id, kind, status, rationale, proposer, approver, trace_id, proposed_at "
-    "FROM policy_mapping WHERE tenant_id = %s"
+_MAPPING_COLUMNS: LiteralString = (
+    "mapping_id, policy_instrument_id, policy_version_id, policy_clause_id, "
+    "obligation_id, kind, status, rationale, proposer, approver, trace_id, proposed_at, "
+    "approver_email, decided_at, decision_trace_id, rejection_reason"
 )
+_MAPPING_SELECT: LiteralString = (
+    "SELECT " + _MAPPING_COLUMNS + " FROM policy_mapping WHERE tenant_id = %s"
+)
+
+
+def _mapping_of_row(tenant_id: str, r: TupleRow) -> PolicyMapping:
+    return PolicyMapping(
+        mapping_id=int(r[0]),
+        tenant_id=tenant_id,
+        instrument_id=str(r[1]),
+        version_id=str(r[2]),
+        policy_clause_id=str(r[3]),
+        obligation_id=str(r[4]),
+        kind=MappingKind(str(r[5])),
+        status=MappingStatus(str(r[6])),
+        rationale=str(r[7]),
+        proposer=str(r[8]),
+        approver=None if r[9] is None else str(r[9]),
+        trace_id=str(r[10]),
+        proposed_at=r[11],
+        approver_email=None if r[12] is None else str(r[12]),
+        decided_at=r[13],
+        decision_trace_id=None if r[14] is None else str(r[14]),
+        rejection_reason=None if r[15] is None else str(r[15]),
+    )
 
 
 _CHECK_SELECT: LiteralString = (
@@ -463,9 +493,12 @@ def _finding_citation_of_row(raw: object) -> FindingCitation:
 _FINDING_SELECT: LiteralString = (
     "SELECT finding_id, claim_index, outcome, obligation_id, policy_clause_id, verdict, "
     "settle_by, citations, blocked, outcome_detail, unassessable_reason, provenance_tier, "
-    "derived_from FROM finding WHERE tenant_id = %s AND assessment_id = %s "
+    "derived_from, mapping_id FROM finding WHERE tenant_id = %s AND assessment_id = %s "
+    # `finding_order_key`: claim, obligations before policy clauses, each by id, then the
+    # model's own finding before those derived, in the order their mappings were proposed
     "ORDER BY claim_index, (obligation_id IS NULL), "
-    'COALESCE(obligation_id, policy_clause_id) COLLATE "C"'
+    'COALESCE(obligation_id, policy_clause_id) COLLATE "C", '
+    "(derived_from IS NOT NULL), mapping_id"
 )
 
 
@@ -493,6 +526,7 @@ def _finding_of_row(row: TupleRow) -> FindingRecord:
         unassessable_reason=None if row[10] is None else str(row[10]),
         provenance=EvidenceProvenance(str(row[11])),
         derived_from=None if row[12] is None else str(row[12]),
+        mapping_id=None if row[13] is None else int(row[13]),
     )
 
 
@@ -1114,14 +1148,30 @@ class PostgresLedgerStore(LedgerStore):
                         raise ValueError(
                             f"claim {finding.claim_index} is not one of the check's claims"
                         )
+                derived_through = {f.mapping_id for f in record.findings if f.derived}
+                if derived_through:
+                    held_mappings = await (
+                        await conn.execute(
+                            _MAPPING_SELECT + " AND mapping_id = ANY(%s)",
+                            (assessment.tenant_id, list(derived_through)),
+                        )
+                    ).fetchall()
+                    check_derived_through_mappings(
+                        record.findings,
+                        {
+                            int(r[0]): _mapping_of_row(assessment.tenant_id, r)
+                            for r in held_mappings
+                        },
+                    )
                 await _write_assessment(conn, assessment, record.coverage)
                 async with conn.cursor() as cursor:
                     await cursor.executemany(
                         "INSERT INTO finding (tenant_id, finding_id, assessment_id, check_id, "
                         "claim_index, obligation_id, policy_clause_id, verdict, provenance_tier, "
                         "assessable, unassessable_reason, citations, settle_by, outcome, "
-                        "outcome_detail, blocked, derived_from, trace_id) VALUES "
-                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        "outcome_detail, blocked, derived_from, mapping_id, trace_id) VALUES "
+                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                        "%s, %s)",
                         [
                             (
                                 assessment.tenant_id,
@@ -1146,9 +1196,12 @@ class PostgresLedgerStore(LedgerStore):
                                     ]
                                 ),
                                 f.derived_from,
+                                f.mapping_id,
                                 assessment.trace_id,
                             )
-                            for f in record.findings
+                            # the finding a derived one points at first: its source is a
+                            # foreign key, and a derived finding sorts before its source
+                            for f in sorted(record.findings, key=lambda f: f.derived)
                         ],
                     )
                     await cursor.executemany(
@@ -1257,14 +1310,14 @@ class PostgresLedgerStore(LedgerStore):
         try:
             async with self._connection() as conn, conn.transaction():
                 await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock,))
-                has_verdict, claim_rejected = True, False
+                has_verdict, claim_rejected, derived = True, False, False
                 claim_index = decision.claim_index
                 if not decision.kind.of_claim:
                     # a verdict decision is of one of this check's findings; a foreign key
                     # names the finding, not its check, so it is read here
                     held = await (
                         await conn.execute(
-                            "SELECT claim_index, outcome FROM finding "
+                            "SELECT claim_index, outcome, derived_from IS NOT NULL FROM finding "
                             "WHERE tenant_id = %s AND check_id = %s AND finding_id = %s",
                             (decision.tenant_id, decision.check_id, decision.finding_id),
                         )
@@ -1275,6 +1328,7 @@ class PostgresLedgerStore(LedgerStore):
                         )
                     claim_index = int(held[0])
                     has_verdict = held[1] == FindingOutcome.VERDICT.value
+                    derived = bool(held[2])
                     latest_claim = await self._latest_decision(conn, decision, claim_index, None)
                     claim_rejected = latest_claim is DecisionKind.CLAIM_REJECTED
                 latest = await self._latest_decision(
@@ -1288,6 +1342,7 @@ class PostgresLedgerStore(LedgerStore):
                     latest=latest,
                     has_verdict=has_verdict,
                     claim_rejected=claim_rejected,
+                    derived=derived,
                 ):
                     return False
                 await conn.execute(
@@ -1501,23 +1556,49 @@ class PostgresLedgerStore(LedgerStore):
                 "ORDER BY mapping_id",
                 (tenant_id, instrument_id, version_id),
             )
-        return tuple(
-            PolicyMapping(
-                mapping_id=int(r[0]),
-                tenant_id=tenant_id,
-                instrument_id=str(r[1]),
-                version_id=str(r[2]),
-                policy_clause_id=str(r[3]),
-                obligation_id=str(r[4]),
-                kind=MappingKind(str(r[5])),
-                status=MappingStatus(str(r[6])),
-                rationale=str(r[7]),
-                proposer=str(r[8]),
-                approver=None if r[9] is None else str(r[9]),
-                trace_id=str(r[10]),
-                proposed_at=r[11],
-            )
-            for r in rows
+        return tuple(_mapping_of_row(tenant_id, r) for r in rows)
+
+    async def decide_mapping(self, decision: MappingDecision) -> PolicyMapping:
+        check_mapping_decision_write(decision)
+        # The one statement that ever updates a `policy_mapping` row, and its guard is its
+        # own WHERE: of two admins deciding at once the database lets one through, and the
+        # other updates nothing. The row's trigger (ledger 0032) refuses any other change.
+        try:
+            async with self._connection() as conn, conn.transaction():
+                row = await (
+                    await conn.execute(
+                        "UPDATE policy_mapping SET status = %s, approver = %s, "
+                        "approver_email = %s, decided_at = clock_timestamp(), "
+                        "decision_trace_id = %s, rejection_reason = %s "
+                        "WHERE tenant_id = %s AND mapping_id = %s AND status = 'proposed' "
+                        "RETURNING " + _MAPPING_COLUMNS,
+                        (
+                            decision.status.value,
+                            decision.approver,
+                            decision.approver_email,
+                            decision.trace_id,
+                            decision.reason,
+                            decision.tenant_id,
+                            decision.mapping_id,
+                        ),
+                    )
+                ).fetchone()
+                if row is not None:
+                    return _mapping_of_row(decision.tenant_id, row)
+                held = await (
+                    await conn.execute(
+                        "SELECT status FROM policy_mapping "
+                        "WHERE tenant_id = %s AND mapping_id = %s",
+                        (decision.tenant_id, decision.mapping_id),
+                    )
+                ).fetchone()
+        except psycopg.errors.CheckViolation as exc:
+            raise ValueError(f"mapping decision refused: {exc.diag.constraint_name}") from None
+        if held is None:
+            raise MappingNotFound(f"tenant {decision.tenant_id!r} holds no mapping")
+        status = MappingStatus(str(held[0]))
+        raise MappingAlreadyDecided(
+            f"mapping {decision.mapping_id} is already {status.value}", status
         )
 
     async def mapping_runs(self, tenant_id: str) -> dict[tuple[str, str], Reservation]:

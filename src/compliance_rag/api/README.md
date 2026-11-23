@@ -369,7 +369,8 @@ fragment, CSP and `PageAdmin` rule as the subscriptions panel.
 
 An admin asks, for **one policy version**, for the model to propose which of its clauses meet which
 obligations (#305, ADR-0059 Q8). A proposal is a **ledger row** (`policy_mapping`, migration 0031),
-never repo YAML and never a graph node (ADR-0059 C2, ADR-0018). Approving and rejecting are #306's.
+never repo YAML and never a graph node (ADR-0059 C2, ADR-0018). Approving and rejecting are
+#306's, below.
 
 - **The run:** `POST /v1/policy-mappings/proposals` with `{"instrument_id", "version_id"}`, admin
   only (`CurrentAdmin`), streamed as `check_runs.run_stream` streams a check's runs: `coverage`,
@@ -390,8 +391,36 @@ never repo YAML and never a graph node (ADR-0059 C2, ADR-0018). Approving and re
   `{"text": ..., "source": "model"}`: its words, labelled, never evidence and never put in a prompt.
   `GET /v1/policy-mappings` (admin only) reads the same back, for one version or all.
 - **The page:** `GET /admin/mappings` lists each policy version in force with a "Propose mappings
-  for ..." button and the mappings held for it, read-only. `static/admin_mappings.js` POSTs the run,
+  for ..." button and the mappings held for it, each proposed one with Approve and Reject (#306,
+  below). `static/admin_mappings.js` POSTs the run,
   waits for the stream to end and reloads, so the list is always the ledger's. It writes no HTML.
 - **No way to write anything else.** The proposer is built from a generator, the ledger and the
   residency gate (`ApiServices.mapping_proposer`); the proposing modules import no graph writer,
   no YAML library and no store that writes, and a test holds them to it.
+
+## Approving a mapping, derived findings and the re-check (`mapping_decisions.py`, `check_recheck.py`, #306)
+
+Phase 3 exit criterion 3: an approved mapping changes a finding (ADR-0053 F5, F6, ADR-0059 Q7, C1).
+
+- **Deciding:** `POST /v1/policy-mappings/{id}/decision` with `{"decision": "approve" | "reject",
+  "reason"?}`, admin only, one shape and no other key (422; a reason with an approval is refused).
+  The row's `status` moves `proposed` to `approved` or `rejected` **once** (`LedgerStore.decide_mapping`,
+  one guarded UPDATE, ledger 0032), with the approver (uid and address), the time and **this
+  request's `trace_id`**, on an approval and a rejection alike; a decided mapping is a 409
+  `already_decided`, an unknown one a 404. The queue page has Approve and Reject per proposed
+  mapping, an optional reason, and status filters by plain links (`?status=`).
+- **Deriving:** `check_findings.py` hands the tenant's mappings to the findings run, which derives
+  (`assessment/mapping_derivation.py`, the one rule) a finding for each approved `implements`
+  mapping whose policy clause the claim has a verdict against, when Track A says the obligation
+  applies: the same verdict, cited to the policy clause and the obligation's own clause (verified),
+  `derived_from` the policy finding and `mapping_id` the mapping. No model call. `partially_implements`
+  derives nothing.
+- **The report** (`check_report.py`): a derived finding is shown among the verdicts, marked, with
+  the model's own finding for the same claim and obligation beneath it ("the model's direct reading
+  disagrees" or "agrees", never dropped). Its tier is computed when read: the weakest of the claim,
+  the policy verdict and the mapping (`Decisions.finding_tier`), so an approval raises nothing above
+  the claim's tier. A report made before an approval says "a mapping approved since would change
+  this" and offers the re-check; it is still the same recorded findings, byte for byte.
+- **The re-check:** `POST /v1/checks/{id}/recheck` makes a new check of the same stored document
+  (`checks.create_check`, the one place a check is made), owned by the first check's submitter,
+  and `static/check_run.js` runs it from `#run-now`. Only a check with a report can be checked again.

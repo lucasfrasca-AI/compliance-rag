@@ -859,12 +859,35 @@ class FindingRecord:
     """One tier, the weakest of the inputs (F5, ADR-0059 C1): the claim is
     `inferred` until confirmed (#301), so every finding is."""
     derived_from: str | None = None
-    """The finding this one was derived from through an approved policy mapping
-    (F6, #306). Unused until then."""
+    """The finding this one was derived from through an approved policy mapping (F6, #306):
+    the claim's **policy** finding, whose verdict this one carries over to the obligation."""
+    mapping_id: int | None = None
+    """The approved `implements` mapping the derivation went through (`PolicyMapping`),
+    set with `derived_from` and never without it."""
 
     @property
     def conditional(self) -> bool:
         return self.outcome is FindingOutcome.CONDITIONAL
+
+    @property
+    def derived(self) -> bool:
+        """Made by code from an approved mapping, not by the model."""
+        return self.derived_from is not None
+
+
+def finding_order_key(finding: FindingRecord) -> tuple[int, bool, str, bool, int]:
+    """The one order a check's findings are kept and read in, for every `LedgerStore` (the
+    SQL one mirrors it): claim order, then obligations before policy clauses, each by id
+    (bytewise: the caller sorts as `str`, which is code point order, the same for ASCII
+    ids), and for one target the model's own finding before the findings derived from a
+    mapping, those in the order their mappings were proposed."""
+    return (
+        finding.claim_index,
+        finding.obligation_id is None,
+        finding.obligation_id or finding.policy_clause_id or "",
+        finding.derived_from is not None,
+        finding.mapping_id or 0,
+    )
 
 
 def check_finding_write(finding: FindingRecord) -> None:
@@ -917,6 +940,12 @@ def check_finding_write(finding: FindingRecord) -> None:
         raise ValueError("a conditional finding carries Track A's reason, and no other does")
     if finding.conditional and finding.obligation_id is None:
         raise ValueError("only an obligation is unassessable: a policy clause is never conditional")
+    if (finding.derived_from is None) != (finding.mapping_id is None):
+        raise ValueError("a derived finding names its source finding and its mapping, together")
+    if finding.derived_from is not None and (
+        finding.outcome is not FindingOutcome.VERDICT or finding.obligation_id is None
+    ):
+        raise ValueError("a derived finding is a verdict against an obligation")
     if finding.unassessable_reason is not None and not finding.unassessable_reason.strip():
         raise ValueError("a conditional finding's reason is not blank")
 
@@ -1037,14 +1066,34 @@ def check_findings_write(record: FindingsRecord, claim_count: int | None = None)
         for x in record.assessment.policies
     ):
         raise ValueError("a policy version a findings run sent has its id, version and title")
-    seen: set[tuple[int, str | None, str | None]] = set()
+    seen: set[tuple[int, str | None, str | None, str | None]] = set()
     covered = {row.obligation_id: row for row in record.coverage}
+    by_id = {f.finding_id: f for f in record.findings}
     for finding in record.findings:
         check_finding_write(finding)
-        key = (finding.claim_index, finding.obligation_id, finding.policy_clause_id)
+        # one of the model's own per claim and target, and one derived per source finding
+        key = (
+            finding.claim_index,
+            finding.obligation_id,
+            finding.policy_clause_id,
+            finding.derived_from,
+        )
         if key in seen:
             raise ValueError("a claim has one finding against each obligation and policy clause")
         seen.add(key)
+        if finding.derived_from is not None:
+            source = by_id.get(finding.derived_from)
+            if (
+                source is None
+                or source.policy_clause_id is None
+                or source.outcome is not FindingOutcome.VERDICT
+                or source.derived
+                or source.claim_index != finding.claim_index
+                or source.verdict is not finding.verdict
+            ):
+                raise ValueError(
+                    "a derived finding carries over the verdict of a policy finding of its claim"
+                )
         if claim_count is not None and finding.claim_index > claim_count:
             raise ValueError(f"claim {finding.claim_index} is not one of the check's claims")
         if finding.obligation_id is not None:
@@ -1065,6 +1114,37 @@ def check_findings_write(record: FindingsRecord, claim_count: int | None = None)
     for usage in record.usage:
         if usage.tenant_id != record.assessment.tenant_id:
             raise ValueError("usage rows are the run's tenant's")
+
+
+def check_derived_through_mappings(
+    findings: Sequence[FindingRecord], mappings: Mapping[int, PolicyMapping]
+) -> None:
+    """What every `LedgerStore` refuses about the mappings a run's derived findings went
+    through (#306), given the tenant's `mappings` by id as the store holds them (the store
+    reads them, in the same transaction that writes the findings): each goes through a mapping
+    the tenant holds that **derives** (approved, `implements`), the mapping's obligation is the
+    finding's, and the finding it carries over is against the mapping's policy clause. So a
+    derived finding can never rest on a proposed, rejected or partial mapping, or on another
+    clause's."""
+    by_id = {f.finding_id: f for f in findings}
+    for finding in findings:
+        if finding.derived_from is None:
+            continue
+        mapping = mappings.get(finding.mapping_id or 0)
+        if mapping is None or not mapping.derives:
+            raise ValueError(
+                "a derived finding goes through an approved implements mapping of the tenant's"
+            )
+        source = by_id.get(finding.derived_from)
+        if (
+            mapping.obligation_id != finding.obligation_id
+            or source is None
+            or source.policy_clause_id != mapping.policy_clause_id
+        ):
+            raise ValueError(
+                "a derived finding carries a finding against the mapping's policy clause over "
+                "to the mapping's obligation"
+            )
 
 
 # --------------------------------------------------------------------------
@@ -1105,6 +1185,9 @@ class DecisionRefusal(StrEnum):
     """Accepting the verdict of a finding whose claim now stands rejected."""
     NOT_ACCEPTED = "not_accepted"
     """Withdrawing an acceptance that does not stand."""
+    DERIVED = "derived"
+    """A verdict decision about a finding derived from an approved mapping (#306): its verdict
+    is the policy finding's, so it is that finding's verdict that a person accepts."""
 
 
 class DecisionRefused(ValueError):
@@ -1122,6 +1205,7 @@ def decision_adds_a_row(
     latest: DecisionKind | None,
     has_verdict: bool = True,
     claim_rejected: bool = False,
+    derived: bool = False,
 ) -> bool:
     """The one rule, for every `LedgerStore` (the stores apply it under their own lock, so
     it is decided against the latest row and not a stale read): whether a decision appends a
@@ -1130,12 +1214,18 @@ def decision_adds_a_row(
 
     `latest` is the latest earlier decision about the same claim or finding (None for
     none); `has_verdict` is `finding.outcome is FindingOutcome.VERDICT` for a verdict
-    decision; `claim_rejected` is whether the finding's claim now stands rejected.
+    decision; `claim_rejected` is whether the finding's claim now stands rejected;
+    `derived` is whether the finding is derived from an approved mapping (#306).
 
     Latest wins: a confirmation may be followed by a rejection and the reverse, and an
     acceptance by its withdrawal and the reverse. Refused: a verdict decision about a
     finding with no verdict, accepting the verdict of a rejected claim, withdrawing an
     acceptance that does not stand."""
+    if not kind.of_claim and derived:
+        raise DecisionRefused(
+            DecisionRefusal.DERIVED,
+            "this finding is derived from a mapping: accept the policy finding's verdict instead",
+        )
     if not kind.of_claim and not has_verdict:
         raise DecisionRefused(
             DecisionRefusal.NOT_A_VERDICT,
@@ -1220,7 +1310,7 @@ class MappingKind(StrEnum):
 class MappingStatus(StrEnum):
     """Where a policy mapping stands. A model's proposal is `PROPOSED` and the store
     writes no other value on a proposal; `APPROVED` and `REJECTED` are an admin's
-    (#306)."""
+    (`LedgerStore.decide_mapping`, #306), each reached once from `PROPOSED` and never left."""
 
     PROPOSED = "proposed"
     APPROVED = "approved"
@@ -1295,11 +1385,94 @@ class PolicyMapping:
     proposer: str
     """The model id."""
     approver: str | None
-    """Who decided it (#306): None while it is `proposed`."""
+    """Who decided it (#306), by the stable sign-in uid (ADR-0036): None while it is
+    `proposed`."""
     trace_id: str
     """The request that proposed it."""
     proposed_at: dt.datetime | None = None
     """Stamped by the ledger on write."""
+    approver_email: str | None = None
+    """The address shown beside the decision ("approved by ..."), as it was when it was made.
+    Set with `approver`: both are None while `proposed`, neither is once decided."""
+    decided_at: dt.datetime | None = None
+    """When it was approved or rejected, stamped by the ledger (#306)."""
+    decision_trace_id: str | None = None
+    """The request that approved or rejected it (#306): `trace_id` stays the proposing
+    request's, so a mapping keeps both."""
+    rejection_reason: str | None = None
+    """An admin's optional one line for a rejection: their own words, shown as theirs and
+    never evidence. Only a rejected mapping has one."""
+
+    @property
+    def derives(self) -> bool:
+        """Whether this mapping changes a finding: an approved `implements` and nothing else
+        (ADR-0053 F6). A proposed or rejected mapping, and a `partially_implements` one,
+        derive nothing."""
+        return self.status is MappingStatus.APPROVED and self.kind is MappingKind.IMPLEMENTS
+
+
+MAX_REJECTION_REASON_CHARS = 300
+"""The longest reason an admin may give for a rejection (ledger `policy_mapping_reason`)."""
+
+
+class MappingNotFound(ValueError):
+    """The tenant holds no policy mapping with this id."""
+
+
+class MappingAlreadyDecided(ValueError):
+    """The mapping is no longer `proposed`: a status moves from `proposed` to `approved` or
+    `rejected` exactly once and is never changed again. `status` is where it stands."""
+
+    def __init__(self, message: str, status: MappingStatus) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+@dataclass(frozen=True, slots=True)
+class MappingDecision:
+    """An admin's approval or rejection of one proposed mapping (#306, ADR-0053 F6): who,
+    which request, and for a rejection an optional reason. Written by
+    `LedgerStore.decide_mapping`, which stamps the time."""
+
+    tenant_id: str
+    mapping_id: int
+    status: MappingStatus
+    """`APPROVED` or `REJECTED`: a decision never sets `PROPOSED`."""
+    approver: str
+    """The admin, by the stable sign-in uid (ADR-0036)."""
+    approver_email: str
+    """The address shown beside the decision."""
+    trace_id: str
+    """The request that made the decision, recorded on an approval and on a rejection alike."""
+    reason: str | None = None
+    """For a rejection only: one non-blank line of at most `MAX_REJECTION_REASON_CHARS`."""
+
+
+def check_mapping_decision_write(decision: MappingDecision) -> None:
+    """What every `LedgerStore` refuses before deciding a mapping; the database's own
+    constraints refuse each again (ledger 0032). What only a store can refuse (a mapping it
+    does not hold, one already decided) comes after, in both."""
+    if decision.status not in (MappingStatus.APPROVED, MappingStatus.REJECTED):
+        raise ValueError("a mapping is decided as approved or rejected")
+    if not decision.trace_id.strip():
+        raise ValueError("a mapping decision carries the trace_id of its request")
+    if not decision.approver.strip() or not decision.approver_email.strip():
+        raise ValueError("a mapping decision names who made it")
+    if decision.reason is not None:
+        if decision.status is not MappingStatus.REJECTED:
+            raise ValueError("only a rejection carries a reason")
+        if (
+            not decision.reason.strip()
+            or len(decision.reason.splitlines()) != 1
+            or "\r" in decision.reason
+            or len(decision.reason) > MAX_REJECTION_REASON_CHARS
+        ):
+            raise ValueError(
+                "a rejection's reason is one non-blank line of at most "
+                f"{MAX_REJECTION_REASON_CHARS} characters"
+            )
+        if "\x00" in decision.reason:
+            raise ValueError("text may not contain NUL")
 
 
 def check_mapping_run_write(record: MappingRunRecord) -> None:
@@ -2257,6 +2430,20 @@ class LedgerStore(ABC):
         for anything `check_mapping_run_write` refuses, a version this tenant does not hold,
         a run not reserved (pending) or already done, and a reservation that is no longer
         this run's (it commits only for the request that holds it)."""
+
+    @abstractmethod
+    async def decide_mapping(self, decision: MappingDecision) -> PolicyMapping:
+        """Approve or reject one proposed policy mapping (#306, ADR-0053 F6), returning the
+        row as it now stands. **The only update a `policy_mapping` row ever takes**: its
+        `status` moves from `proposed` to `approved` or `rejected`, and `approver`,
+        `approver_email`, `decided_at`, `decision_trace_id` and (a rejection's) reason are set
+        with it. Nothing else of the row changes (the clause, the obligation, the kind, the
+        rationale, the proposer, the proposing `trace_id`), and the guard is the statement's
+        own (`WHERE status = 'proposed'`), so of two admins deciding at once exactly one
+        decides it and the other is `MappingAlreadyDecided`; a decided mapping is never
+        decided again, even to the same status. A `ValueError` and nothing written for
+        anything `check_mapping_decision_write` refuses; `MappingNotFound` for a mapping this
+        tenant does not hold (another tenant's is not found, not refused)."""
 
     @abstractmethod
     async def policy_mappings(

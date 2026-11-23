@@ -3,9 +3,20 @@
 {% block body %}
 <main class="page">
 <h1>Mapping proposals</h1>
-<p class="note">A mapping says that one of your policy clauses meets an obligation of the law. When you ask, the model reads one policy version and proposes mappings to the obligations that apply to you, or might. A proposal is a suggestion and nothing more: it is not approved, it changes no finding, and the reasoning shown with it is the model's own words, not evidence. Approving or rejecting a proposal is a later step. A new policy version needs its own.</p>
-<noscript><p class="card notice">Asking for proposals needs JavaScript.</p></noscript>
+<p class="note">A mapping says that one of your policy clauses meets an obligation of the law. When you ask, the model reads one policy version and proposes mappings to the obligations that apply to you, or might. A proposal is a suggestion and nothing more until you decide it, and the reasoning shown with it is the model's own words, not evidence. A new policy version needs its own.</p>
+<p class="note" data-approval-note>Approve a mapping and, in every check made after that, a claim's finding against the policy clause carries over to the obligation, cited to both. That is only for a mapping that <em>implements</em> the obligation: one that <em>partially implements</em> it is recorded and changes nothing. An approval never changes a report already issued; an older report says so and offers a new check. Your decision is final and records who made it.</p>
+<noscript><p class="card notice">Asking for proposals, approving and rejecting need JavaScript.</p></noscript>
 <p id="admin-notice" class="card notice" role="alert" hidden></p>
+<nav aria-label="Filter by status">
+<ul class="mapping-filters">
+{% for f in filters %}
+<li><a href="{{ f.href }}" data-filter="{{ f.label | lower }}"{% if f.current %} aria-current="page"{% endif %}>{{ f.label }} ({{ f.count }})</a></li>
+{% endfor %}
+</ul>
+</nav>
+{% if awaiting %}
+<p class="meta" data-awaiting="{{ awaiting }}">{{ awaiting }} {{ "proposal awaits" if awaiting == 1 else "proposals await" }} your decision.</p>
+{% endif %}
 {% if blocks %}
 {% for block in blocks %}
 <section class="mapping-version" data-instrument="{{ block.instrument_id }}" data-version="{{ block.version_id }}">
@@ -22,23 +33,38 @@
 {% if block.mappings %}
 <ul class="mapping-list">
 {% for m in block.mappings %}
-<li data-status="{{ m.status }}" data-kind="{{ m.kind }}">
+<li data-mapping="{{ m.mapping_id }}" data-status="{{ m.status }}" data-kind="{{ m.kind }}">
 <p><a href="{{ m.href }}">{{ m.cite }}</a>
 {{ "implements" if m.kind == "implements" else "partially implements" }}
 <code>{{ m.obligation_id }}</code></p>
 <p class="meta"><strong class="status">{{ m.status | capitalize }}</strong>
-· proposed by <code>{{ m.proposer }}</code>{% if m.approver %} · decided by {{ m.approver }}{% endif %}</p>
+· proposed by <code>{{ m.proposer }}</code>{% if m.approver %} · {{ "approved" if m.status == "approved" else "rejected" }} by {{ m.approver }}{% if m.decided_at %} on <time datetime="{{ m.decided_at_iso }}">{{ m.decided_at }}</time>{% endif %}{% endif %}</p>
 <p class="meta">The model's reasoning (not evidence): {{ m.rationale }}</p>
+{% if m.status == "rejected" and m.rejection_reason %}
+<p class="meta" data-rejection-reason>The reason given, in the admin's words: {{ m.rejection_reason }}</p>
+{% endif %}
+{% if m.status == "approved" %}
+<p class="meta" data-effect>{{ "Changes the findings of checks made from now on." if m.derives else "Partially implements: recorded, and changes no finding." }}</p>
+{% endif %}
+{% if m.decidable %}
+<div class="mapping-decide" role="group" aria-label="Decide on this mapping">
+<button type="button" data-decide="approve">Approve</button>
+<label class="note">Reason, if you reject it <input type="text" data-reason maxlength="300" autocomplete="off"></label>
+<button type="button" class="secondary" data-decide="reject">Reject</button>
+</div>
+{% endif %}
 </li>
 {% endfor %}
 </ul>
+{% elif chosen %}
+<p class="empty">No {{ chosen }} mappings for this version.</p>
 {% else %}
 <p class="empty">No mappings have been proposed for this version.</p>
 {% endif %}
 </section>
 {% endfor %}
 {% else %}
-<p class="empty">This workspace has no policies in force.</p>
+<p class="empty">{{ "No " ~ chosen ~ " mappings." if chosen else "This workspace has no policies in force." }}</p>
 {% endif %}
 </main>
 <script type="module" src="/static/admin_mappings.js"></script>

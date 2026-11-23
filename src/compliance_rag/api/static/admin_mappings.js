@@ -1,8 +1,12 @@
-// The mapping queue page's script (#305). Same origin, served beside the page; the CSP
+// The mapping queue page's script (#305, #306). Same origin, served beside the page; the CSP
 // allows no inline script. A "Propose mappings" button asks the server for one policy
 // version's proposals (POST /v1/policy-mappings/proposals, with the session cookie), waits
 // for the server-sent stream to end, and reloads the page: the page is drawn by the server
 // from the ledger, never built here, so it is the same after a reload as on screen.
+//
+// Approve and Reject (#306) send one decision for one proposed mapping
+// (POST /v1/policy-mappings/{id}/decision, as JSON, with the session cookie) and reload the
+// page the same way. A rejection carries the optional reason the admin typed, as text.
 //
 // Nothing from the server is ever written as HTML: text goes in with textContent. The server
 // decides everything that matters (who may ask, what is refused, what a proposal is). This
@@ -83,6 +87,73 @@ async function propose(form) {
   }
   // Recorded before it was shown: the server draws the list from the ledger.
   if (reload) window.location.assign(window.location.pathname);
+}
+
+// Mirrors the server's mapping id: only to refuse a button that is not one before sending.
+const MAPPING_ID = /^[1-9][0-9]{0,17}$/;
+
+/** What the server said of a refusal, in its own words: `detail.message`, or the first
+ * validation message of a 422. */
+async function decisionRefusalIn(response) {
+  try {
+    const detail = (await response.json())?.detail;
+    if (typeof detail?.message === "string") return detail.message;
+    if (Array.isArray(detail) && typeof detail[0]?.msg === "string") {
+      return `The decision was refused: ${detail[0].msg}.`;
+    }
+  } catch {
+    // not JSON: the generic words below
+  }
+  return `The decision was refused (${response.status}).`;
+}
+
+async function decide(item, decision) {
+  const id = item.dataset.mapping;
+  if (!MAPPING_ID.test(String(id))) {
+    say("This mapping could not be read.");
+    return;
+  }
+  const buttons = item.querySelectorAll("button");
+  for (const each of buttons) each.disabled = true;
+  say(null);
+  const body = { decision };
+  if (decision === "reject") {
+    const reason = item.querySelector("[data-reason]")?.value.trim();
+    if (reason) body.reason = reason;
+  }
+  let reload = false;
+  try {
+    const response = await fetch(`/v1/policy-mappings/${id}/decision`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 401) {
+      window.location.assign("/signin");
+      return;
+    }
+    if (response.ok || response.status === 409) {
+      // decided, or already decided by someone else: either way the ledger is what the page
+      // shows, and the reload shows who decided it
+      reload = true;
+    } else {
+      say(await decisionRefusalIn(response));
+    }
+  } catch {
+    say("The connection ended before the decision was recorded. Reload this page to see what was.");
+  } finally {
+    for (const each of buttons) each.disabled = false;
+  }
+  if (reload) window.location.assign(window.location.pathname + window.location.search);
+}
+
+for (const button of document.querySelectorAll("[data-decide]")) {
+  button.addEventListener("click", () => {
+    const item = button.closest("[data-mapping]");
+    const decision = button.dataset.decide;
+    if (item && (decision === "approve" || decision === "reject")) decide(item, decision);
+  });
 }
 
 for (const form of document.querySelectorAll("form.propose")) {
