@@ -30,6 +30,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from compliance_rag.api import check_claims, questionnaire
 from compliance_rag.api.check_report import Segment, segments_of
+from compliance_rag.api.sources import source_href
 from compliance_rag.corpus.models import (
     CANONICALISATION_VERSION,
     PUBLIC_TENANT_ID,
@@ -209,7 +210,9 @@ async def test_a_check_with_no_claims_offers_the_run_and_shows_the_stored_docume
     scripts = [a["src"] for a in parsed.where("script")]
     assert "/static/check_run.js" in scripts
     assert parsed.where("li", **{"class": "passage"})  # the document, as stored
-    assert not parsed.where("section", **{"class": "cited"})
+    # every check page has the shared panel (#354); until there are findings it holds no card
+    assert parsed.where("section", id="sources-panel")
+    assert not parsed.where("article", **{"class": "card source"})
     assert (await check_json(w, check_id))["state"] == "new"
     assert (await check_json(w, check_id))["report"] is None
 
@@ -237,7 +240,8 @@ async def test_a_check_with_claims_and_no_findings_offers_the_rest_and_marks_the
     for claim in claims:
         assert claim["quote"] in " ".join(unescape(html).split())
         assert f"#{claim['anchor']}" in html
-    assert not parsed.where("section", **{"class": "cited"})
+    assert parsed.where("section", id="sources-panel")  # a claim opens the document in it
+    assert not parsed.where("article", **{"class": "card source"})
 
 
 async def test_a_check_with_findings_is_the_report_and_offers_no_run() -> None:
@@ -248,8 +252,10 @@ async def test_a_check_with_findings_is_the_report_and_offers_no_run() -> None:
     assert main["data-state"] == "reported"
     assert not parsed.where("button", id="run-check") and not parsed.where("section", id="run")
     assert "/static/check_run.js" not in [a["src"] for a in parsed.where("script")]
-    assert parsed.where("section", **{"class": "cited"}) and parsed.where("section", id="coverage")
+    assert parsed.where("article", **{"class": "card source"})
+    assert parsed.where("section", id="coverage")
     assert parsed.where("aside", id="sources")  # the shell's slot, which the cards fill
+    assert parsed.where("section", id="sources-panel")  # the one panel the chat page shares
     assert (await check_json(w, check_id))["state"] == "reported"
 
 
@@ -359,7 +365,7 @@ async def test_findings_are_ordered_conflicts_not_addressed_ambiguous_consistent
     )
     assert cards == [v for v, _, _ in order_of(report)]
     # and every finding card names its claim, in the same order
-    claim_links = re.findall(r'<a class="claim-link" href="[^"]+">Claim (\d+)</a>', html)
+    claim_links = re.findall(r'<a class="claim-link" href="[^"]+"[^>]*>Claim (\d+)</a>', html)
     assert [int(n) for n in claim_links][: len(cards)] != []
     assert len(claim_links) >= len(cards)
 
@@ -482,7 +488,56 @@ async def test_a_citation_card_is_the_clauses_own_text_and_opens_it_in_a_new_tab
         and a.get("target") == "_blank"
         and "noopener" in (a["rel"] or "")
     ]
-    assert opens  # opens at the clause, in a new tab, never taking the report away
+    assert opens  # the plain link is a new tab; with script it opens in the panel (#354)
+
+
+async def test_a_law_card_and_a_policy_card_each_open_at_the_clause_in_the_panel() -> None:
+    """#354: the cards are the shared panel's. A law clause is titled by its instrument and
+    clause, a policy clause by its document's title and number; each card's link opens its
+    source (200) at an anchor the page it returns holds, and is marked for the panel."""
+    w, check_id = await reported()
+    parsed = scan(await page(w, check_id))
+    shown = (await check_json(w, check_id))["report"]
+    cited = [s["clause_id"] for s in shown["sources"]]
+    law = [c for c in cited if c.startswith("privacy-act-1988:")]
+    policy = [c for c in cited if c.startswith("acme/")]
+    assert APP8_1 in law and policy
+    titles = {
+        a["href"]: a["data-title"] or ""
+        for a in parsed.where("a")
+        if "data-source-link" in a and a.get("class") == "button secondary"
+    }
+    law_title = titles[source_href(APP8_1)]
+    assert law_title.startswith("Privacy Act")  # the instrument, then the clause
+    assert law_title.endswith("APP 8.1")
+    policy_title = titles[source_href(policy[0])]
+    assert policy_title.startswith("Acme")  # the document's own title, then its number
+    assert len(parsed.where("article", **{"class": "card source"})) == len(cited)
+    async with browser(w) as client:
+        for clause_id in (law[0], policy[0]):
+            path, _, fragment = source_href(clause_id).partition("#")
+            response = await client.get(path)
+            assert response.status_code == 200, clause_id
+            assert f'id="{unquote(fragment)}"' in response.text, clause_id
+
+
+async def test_a_claim_opens_the_submitted_document_at_its_passage_in_the_panel() -> None:
+    w, check_id = await reported()
+    html = await page(w, check_id)
+    parsed = scan(html)
+    claims = [a for a in parsed.where("a", **{"class": "claim-link"})]
+    assert claims
+    async with browser(w) as client:
+        for link in claims:
+            assert "data-source-link" in link
+            opens = link["data-source-href"] or ""
+            assert opens.startswith("/v1/sources/")
+            path, _, fragment = opens.partition("#")
+            response = await client.get(path)  # the document, as the panel's frame loads it
+            assert response.status_code == 200, opens
+            assert f'id="{unquote(fragment)}"' in response.text, opens
+            assert (link["data-title"] or "").startswith("Claim ")
+            assert (link["href"] or "").startswith(f"/checks/{check_id}#")  # the no-script jump
 
 
 # ---- the banner (Q6) ----------------------------------------------------------------------
@@ -814,6 +869,7 @@ async def test_markup_in_a_claim_and_in_a_settle_by_reaches_the_browser_as_text(
     assert not parsed.where("img")
     assert sorted(a["src"] or "" for a in parsed.where("script")) == [
         "/static/ask.js",
+        "/static/sources.js",
         "/static/vendor/htmx/htmx.min.js",
     ]
 

@@ -30,15 +30,9 @@
 </div>
 </main>
 {% endblock %}
-{#- The citation area keeps its behaviour (`ask.js` opens it); it sits in the
-    shell's right-hand slot, where the shared Sources panel (#354) replaces it. -#}
+{#- The shared Sources panel (#354): a citation opens its clause here. -#}
 {% block sources %}
-<section id="panel" class="panel" aria-label="Source" hidden>
-<div class="panel-head">
-<h2 id="panel-title">Source</h2>
-<button type="button" id="panel-close">Close</button>
-</div>
-{#- Nothing in it can run: sandbox="" here, and the source route's own CSP. -#}
-<iframe id="panel-frame" title="The cited clause in its source" sandbox="" referrerpolicy="no-referrer"></iframe>
-</section>
+{% with empty = "Citations in a verified answer appear here." %}
+{% include "_sources_panel.html" %}
+{% endwith %}
 {% endblock %}

@@ -43,7 +43,8 @@ SHAs, the facts the assessment read (their hash), what was not checked and that 
 the model did not pick are not reported. An assessment recorded before the policy versions
 were kept shows the policies its findings name and says so.
 
-**Citations** open in the sources panel (`_sources.html`): one card per cited clause with
+**Citations** open in the Sources panel (`_sources_panel.html`, shared with the chat page,
+`source_panel`): one card per cited clause with
 its canonical text (D-02), never the model's quote alone, and a link that opens the
 clause in its source. A claim opens the document at its passage (`#clause-pN`, the
 anchors `checks.passage_json` and the source route share) where its quote is marked.

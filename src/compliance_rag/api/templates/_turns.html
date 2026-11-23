@@ -75,7 +75,7 @@
 <li class="citation" data-citation="{{ c.clause_id }}">
 <span class="cite-n">[{{ n }}]</span>
 {% if c.href.startswith("/v1/sources/") %}
-<a class="cite" href="{{ c.href }}" data-source-link>{{ c.cite }}</a>
+<a class="cite" href="{{ c.href }}" data-source-link data-title="{{ source_titles.get(c.clause_id, c.cite) }}">{{ c.cite }}</a>
 {% else %}
 <span class="cite">{{ c.cite }}</span>
 {% endif %}

@@ -55,7 +55,6 @@ provider's: `residency`, `generation_unavailable`, `policy_corpus_too_large`,
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from typing import Final
@@ -82,6 +81,7 @@ from compliance_rag.api.deps import (
     outcome_counts,
     services_of,
 )
+from compliance_rag.api.source_panel import canonical_texts
 from compliance_rag.api.sources import source_href
 from compliance_rag.api.tenant import held_sources, version_json
 from compliance_rag.assessment.coverage import CoverageRow, question_json
@@ -89,7 +89,6 @@ from compliance_rag.assessment.evidence import Facts, FactsSnapshot
 from compliance_rag.assessment.findings import policy_disagreements
 from compliance_rag.assessment.policies import tenant_policies
 from compliance_rag.corpus.display_form import Titles, cite, cited_policy_versions
-from compliance_rag.corpus.models import instrument_owner, parse_stable_id
 from compliance_rag.telemetry import current_trace_id
 
 router = APIRouter(prefix="/v1")
@@ -134,19 +133,6 @@ def _error(failed: Exception) -> ErrorBody | None:
     if isinstance(failed, GraphChanged):
         return {"error": "graph_changed", "message": str(failed)}, False
     return None
-
-
-async def _canonical_texts(services: ApiServices, clause_ids: set[str]) -> dict[str, str]:
-    """The stored canonical text of each cited clause, read once each: what a reader
-    is shown for a citation (D-02), never the model's quote. A clause the store no
-    longer holds (purged) is left out."""
-
-    async def read(clause_id: str) -> tuple[str, str | None]:
-        owner = instrument_owner(parse_stable_id(clause_id)[0])
-        clause = await services.clauses.get_clause(clause_id, tenant_id=owner)
-        return clause_id, None if clause is None else clause.canonical_text
-
-    return {c: t for c, t in await asyncio.gather(*(read(i) for i in sorted(clause_ids))) if t}
 
 
 def _target_json(finding: FindingRecord, titles: Titles) -> dict[str, object]:
@@ -242,7 +228,7 @@ async def findings_with_titles(
         *(b.clause_id for f in record.findings for b in f.blocked),
     }
     titles = await services.ledger.version_titles(tenant_id, cited_policy_versions(named))
-    texts = await _canonical_texts(services, cited)
+    texts = await canonical_texts(services, cited)
     tally = {o.value: sum(f.outcome is o for f in record.findings) for o in FindingOutcome}
     payload: dict[str, object] = {
         "check_id": check_id,
