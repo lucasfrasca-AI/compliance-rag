@@ -11,8 +11,7 @@ request's `trace_id`. The current state of a claim or a verdict is its **latest*
   member who rejects a claim by mistake confirms it, and its findings return to the report);
 - an acceptance may be withdrawn, and accepted again;
 - a request for the state a claim or verdict is already in appends nothing and says so
-  (`recorded: false`), so a double click is one row; and nothing is withdrawn that was not
-  accepted (409 `not_accepted`).
+  (`recorded: false`), so a double click is one row.
 
 **What it never does.** It never updates a claim or a finding (a claim is never promoted or
 mutated, ADR-0034), writes no evidence row (a claim of a proposal states an intention, not a
@@ -23,9 +22,13 @@ the claim is confirmed and the verdict accepted, `assessment/decisions.py`), and
 the report shows (a rejected claim's leave it).
 
 **After the findings run** (Q3): there is nothing to confirm a claim against, or to accept, until
-the findings are recorded (409 `not_reported`). Only a finding that has a verdict can be accepted
-(409 `not_a_verdict`: a withheld, failed or conditional finding has none to accept), and not one
-of a claim that stands rejected (409 `claim_rejected`).
+the findings are recorded (409 `not_reported`).
+
+**The rules are the ledger's, not this route's** (`decision_adds_a_row`, applied by every
+`LedgerStore` under its own lock): only a finding that has a verdict can be accepted (409
+`not_a_verdict`: a withheld, failed or conditional finding has none to accept), not one of a
+claim that stands rejected (409 `claim_rejected`), and nothing is withdrawn that is not accepted
+(409 `not_accepted`). The store raises `DecisionRefused`; this route only maps it to our words.
 
 **Who may act** is who may see the check (`checks.visible_check`, ADR-0059 Q5): its submitter and
 the tenant's admins. Anyone else gets the same 404 as for a check that does not exist, before
@@ -46,9 +49,11 @@ from compliance_rag.adapters.interfaces import (
     MAX_CLAIMS,
     CheckDecision,
     DecisionKind,
-    FindingOutcome,
+    DecisionRefusal,
+    DecisionRefused,
 )
 from compliance_rag.api.checks import NOT_FOUND, visible_check
+from compliance_rag.api.decision_view import standing_json
 from compliance_rag.api.deps import CurrentCaller, services_of
 from compliance_rag.assessment.decisions import Decisions
 
@@ -57,11 +62,20 @@ router = APIRouter(prefix="/v1")
 NOT_REPORTED: Final = "this check has no findings yet, so there is nothing to confirm or accept"
 NO_SUCH_CLAIM: Final = "no such claim in this check"
 NO_SUCH_FINDING: Final = "no such finding in this check"
-NOT_A_VERDICT: Final = (
-    "this finding has no verdict to accept: only a finding with a verdict can be accepted"
-)
-CLAIM_REJECTED: Final = "this finding's claim is rejected: confirm the claim before accepting"
-NOT_ACCEPTED: Final = "this verdict was not accepted, so there is no acceptance to withdraw"
+REFUSALS: Final = {
+    DecisionRefusal.NOT_A_VERDICT: (
+        "this finding has no verdict to accept: only a finding with a verdict can be accepted"
+    ),
+    DecisionRefusal.CLAIM_REJECTED: (
+        "this finding's claim is rejected: confirm the claim before accepting"
+    ),
+    DecisionRefusal.NOT_ACCEPTED: (
+        "this verdict was not accepted, so there is no acceptance to withdraw"
+    ),
+}
+"""Our words for each reason the store refuses a decision (`DecisionRefused`): the rules are
+the store's (`decision_adds_a_row`), so no request, from this route or another, can break
+them. This only maps each to the 409 a member is told."""
 
 
 class DecisionRequest(BaseModel):
@@ -83,18 +97,6 @@ class DecisionRequest(BaseModel):
         elif self.finding_id is None or self.claim_index is not None:
             raise ValueError("a verdict decision names its finding and no claim")
         return self
-
-
-def standing_json(decision: CheckDecision | None) -> dict[str, object] | None:
-    """A decision as a member is shown it: what, by whom, when."""
-    if decision is None:
-        return None
-    return {
-        "kind": decision.kind.value,
-        "by": decision.email,
-        "at": decision.decided_at.isoformat() if decision.decided_at else None,
-        "trace_id": decision.trace_id,
-    }
 
 
 def _refusal(status: int, error: str, message: str) -> HTTPException:
@@ -119,35 +121,27 @@ async def decide(
         extraction = await services.ledger.get_claims(who.tenant_id, check_id)
         if findings is None or extraction is None:
             raise _refusal(409, "not_reported", NOT_REPORTED)
-        current = Decisions.of(await services.ledger.check_decisions(who.tenant_id, check_id))
         if body.kind.of_claim:
             if body.claim_index not in {c.claim_index for c in extraction.claims}:
                 raise HTTPException(404, NO_SUCH_CLAIM)
-        else:
-            finding = next((f for f in findings.findings if f.finding_id == body.finding_id), None)
-            if finding is None:
-                raise HTTPException(404, NO_SUCH_FINDING)
-            if finding.outcome is not FindingOutcome.VERDICT:
-                raise _refusal(409, "not_a_verdict", NOT_A_VERDICT)
-            if body.kind is DecisionKind.VERDICT_ACCEPTED and current.rejected(finding.claim_index):
-                raise _refusal(409, "claim_rejected", CLAIM_REJECTED)
-            if (
-                body.kind is DecisionKind.VERDICT_WITHDRAWN
-                and current.accepted(finding.finding_id) is None
-            ):
-                raise _refusal(409, "not_accepted", NOT_ACCEPTED)
-        recorded = await services.ledger.record_check_decision(
-            CheckDecision(
-                tenant_id=who.tenant_id,
-                check_id=check_id,
-                kind=body.kind,
-                claim_index=body.claim_index,
-                finding_id=body.finding_id,
-                user_id=who.member.uid,
-                email=who.member.email,
-                trace_id=telemetry.current_trace_id(),
+        elif not any(f.finding_id == body.finding_id for f in findings.findings):
+            raise HTTPException(404, NO_SUCH_FINDING)
+        try:
+            recorded = await services.ledger.record_check_decision(
+                CheckDecision(
+                    tenant_id=who.tenant_id,
+                    check_id=check_id,
+                    kind=body.kind,
+                    claim_index=body.claim_index,
+                    finding_id=body.finding_id,
+                    user_id=who.member.uid,
+                    email=who.member.email,
+                    trace_id=telemetry.current_trace_id(),
+                )
             )
-        )
+        except DecisionRefused as refused:
+            span.set_attribute("check.decision.refused", refused.reason.value)
+            raise _refusal(409, refused.reason.value, REFUSALS[refused.reason]) from None
         span.set_attribute("check.decision.recorded", recorded)
         latest = Decisions.of(await services.ledger.check_decisions(who.tenant_id, check_id))
         stands = (

@@ -38,6 +38,8 @@ from compliance_rag.adapters.interfaces import (
     ClaimExtractionRecord,
     ClaimRecord,
     DecisionKind,
+    DecisionRefusal,
+    DecisionRefused,
     ExtractionAlreadyReserved,
     FailureReason,
     FindingCitation,
@@ -2102,26 +2104,47 @@ async def assert_decisions_contract(ledger: LedgerStore) -> None:
     assert [d.claim_index for d in await ledger.check_decisions("acme", check_1)] == [1, 1, 1, 2]
 
     # ---- a verdict is accepted, and the acceptance withdrawn, and accepted again
-    assert await ledger.record_check_decision(a_decision(withdraw)) is False  # nothing to withdraw
+    # withdrawing needs an acceptance that stands: the store refuses, whoever asks
+    for _ in range(2):
+        with pytest.raises(DecisionRefused, match="no acceptance") as nothing:
+            await ledger.record_check_decision(a_decision(withdraw))
+        assert nothing.value.reason is DecisionRefusal.NOT_ACCEPTED
     assert await ledger.record_check_decision(a_decision(accept))
     assert await ledger.record_check_decision(a_decision(accept)) is False
     assert await ledger.record_check_decision(a_decision(withdraw, trace_id="8" * 32))
-    assert await ledger.record_check_decision(a_decision(withdraw)) is False
+    with pytest.raises(DecisionRefused, match="no acceptance"):  # already withdrawn
+        await ledger.record_check_decision(a_decision(withdraw))
     assert await ledger.record_check_decision(a_decision(accept, trace_id="7" * 32))
     verdicts = [d for d in await ledger.check_decisions("acme", check_1) if d.finding_id]
     assert [d.kind for d in verdicts] == [accept, withdraw, accept]
     assert {d.finding_id for d in verdicts} == {"f1" + "0" * 30}
     assert {d.claim_index for d in verdicts} == {None}
     # the ambiguous verdict is its own finding
-    assert await ledger.record_check_decision(a_decision(accept, finding_id="f1p" + "0" * 29))
+    ambiguous = "f1p" + "0" * 29
+    assert await ledger.record_check_decision(a_decision(accept, finding_id=ambiguous))
+
+    # ---- the verdict of a rejected claim cannot be accepted: the store refuses, under its
+    # own lock, so no route can break the rule. An acceptance already given may still be
+    # withdrawn, and confirming the claim again lets it be accepted.
+    assert await ledger.record_check_decision(a_decision(reject))  # claim 1 now stands rejected
+    for finding_id in ("f1" + "0" * 30, ambiguous):  # accepted before, or not: refused
+        with pytest.raises(DecisionRefused, match="claim is rejected") as rejected:
+            await ledger.record_check_decision(a_decision(accept, finding_id=finding_id))
+        assert rejected.value.reason is DecisionRefusal.CLAIM_REJECTED
+    assert await ledger.record_check_decision(a_decision(withdraw, finding_id=ambiguous))
+    with pytest.raises(DecisionRefused, match="claim is rejected"):
+        await ledger.record_check_decision(a_decision(accept, finding_id=ambiguous))
+    assert await ledger.record_check_decision(a_decision(confirm))  # confirmed again
+    assert await ledger.record_check_decision(a_decision(accept, finding_id=ambiguous))
 
     # ---- only a verdict can be accepted: a conditional, withheld or failed finding is
     # refused, as is one that is not the check's (another check's, or none at all)
     held = len(await ledger.check_decisions("acme", check_1))
     for finding_id in ("f1c" + "0" * 29, "f2w" + "0" * 29, "f2f" + "0" * 29):
         for kind in (accept, withdraw):
-            with pytest.raises(ValueError, match="only a verdict"):
+            with pytest.raises(DecisionRefused, match="only a verdict") as refused:
                 await ledger.record_check_decision(a_decision(kind, finding_id=finding_id))
+            assert refused.value.reason is DecisionRefusal.NOT_A_VERDICT
     for finding_id in ("g1" + "0" * 30, "nope"):
         with pytest.raises(ValueError, match="no finding"):
             await ledger.record_check_decision(a_decision(accept, finding_id=finding_id))

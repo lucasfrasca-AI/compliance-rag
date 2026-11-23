@@ -1055,25 +1055,63 @@ class DecisionKind(StrEnum):
         return self in (DecisionKind.CLAIM_CONFIRMED, DecisionKind.CLAIM_REJECTED)
 
 
-NO_EARLIER_DECISION = ""
-"""Stands for "no earlier decision" in `DECISION_IS_REDUNDANT_AFTER`, and in the SQL that
-applies it."""
+class DecisionRefusal(StrEnum):
+    """Why a store refuses a decision that is well formed (`DecisionRefused`)."""
 
-DECISION_IS_REDUNDANT_AFTER: Mapping[DecisionKind, tuple[str, ...]] = {
-    DecisionKind.CLAIM_CONFIRMED: (DecisionKind.CLAIM_CONFIRMED.value,),
-    DecisionKind.CLAIM_REJECTED: (DecisionKind.CLAIM_REJECTED.value,),
-    DecisionKind.VERDICT_ACCEPTED: (DecisionKind.VERDICT_ACCEPTED.value,),
-    DecisionKind.VERDICT_WITHDRAWN: (
-        NO_EARLIER_DECISION,
-        DecisionKind.VERDICT_WITHDRAWN.value,
-    ),
-}
-"""The one rule, for every `LedgerStore`, for when a decision adds nothing: a request for
-the state a claim or a verdict is already in appends no row (so a double click is one
-row), and nothing is withdrawn that was not accepted. Keyed by the kind asked for, valued
-by the latest earlier decision on the same claim or finding after which it is redundant
-(`NO_EARLIER_DECISION` for none). Latest wins: a confirmation may be followed by a
-rejection and the reverse, and an acceptance by its withdrawal and the reverse."""
+    NOT_A_VERDICT = "not_a_verdict"
+    """A verdict decision about a finding that has no verdict (`FindingOutcome.VERDICT`):
+    a withheld, failed or conditional finding has none to accept."""
+    CLAIM_REJECTED = "claim_rejected"
+    """Accepting the verdict of a finding whose claim now stands rejected."""
+    NOT_ACCEPTED = "not_accepted"
+    """Withdrawing an acceptance that does not stand."""
+
+
+class DecisionRefused(ValueError):
+    """A decision a `LedgerStore` refuses because of where the claim or verdict stands, not
+    because it is malformed. The API maps `reason` to its 409s."""
+
+    def __init__(self, reason: DecisionRefusal, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def decision_adds_a_row(
+    kind: DecisionKind,
+    *,
+    latest: DecisionKind | None,
+    has_verdict: bool = True,
+    claim_rejected: bool = False,
+) -> bool:
+    """The one rule, for every `LedgerStore` (the stores apply it under their own lock, so
+    it is decided against the latest row and not a stale read): whether a decision appends a
+    row (True), is redundant and appends none (False: a request for the state the claim or
+    verdict is already in, so a double click is one row), or is refused (`DecisionRefused`).
+
+    `latest` is the latest earlier decision about the same claim or finding (None for
+    none); `has_verdict` is `finding.outcome is FindingOutcome.VERDICT` for a verdict
+    decision; `claim_rejected` is whether the finding's claim now stands rejected.
+
+    Latest wins: a confirmation may be followed by a rejection and the reverse, and an
+    acceptance by its withdrawal and the reverse. Refused: a verdict decision about a
+    finding with no verdict, accepting the verdict of a rejected claim, withdrawing an
+    acceptance that does not stand."""
+    if not kind.of_claim and not has_verdict:
+        raise DecisionRefused(
+            DecisionRefusal.NOT_A_VERDICT,
+            "this finding has no verdict: only a verdict can be accepted",
+        )
+    if kind is DecisionKind.VERDICT_ACCEPTED and claim_rejected:
+        raise DecisionRefused(
+            DecisionRefusal.CLAIM_REJECTED,
+            "this finding's claim is rejected: its verdict cannot be accepted",
+        )
+    if kind is DecisionKind.VERDICT_WITHDRAWN and latest is not DecisionKind.VERDICT_ACCEPTED:
+        raise DecisionRefused(
+            DecisionRefusal.NOT_ACCEPTED,
+            "this verdict is not accepted, so there is no acceptance to withdraw",
+        )
+    return latest is not kind or kind is DecisionKind.VERDICT_WITHDRAWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -1982,12 +2020,15 @@ class LedgerStore(ABC):
         (stamped here) and the request's `trace_id`. **Append-only**: nothing is updated
         or deleted, and the claim and finding it points at are never changed. Returns
         True when a row was appended and False when none was because the decision adds
-        nothing (`DECISION_IS_REDUNDANT_AFTER`: the claim or verdict is already in that
-        state), decided against the latest row in the same statement, so a double click
-        is one row. A `ValueError` and nothing written for anything `check_decision_write`
+        nothing (`decision_adds_a_row`: the claim or verdict is already in that state),
+        decided against the latest row under a lock on the check, so a double click is
+        one row. A `ValueError` and nothing written for anything `check_decision_write`
         refuses; a tenant that holds no such check; a claim the check's extraction does
-        not hold; a finding that is not one of the check's findings, or that has no
-        verdict (only a verdict can be accepted)."""
+        not hold; a finding that is not one of the check's findings. A `DecisionRefused`
+        and nothing written, **enforced here and not only by the API**, for a finding
+        that has no verdict (only a verdict can be accepted), for accepting the verdict
+        of a claim that stands rejected, and for withdrawing an acceptance that does
+        not stand."""
 
     @abstractmethod
     async def check_decisions(self, tenant_id: str, check_id: str) -> tuple[CheckDecision, ...]:

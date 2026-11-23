@@ -87,7 +87,6 @@ from compliance_rag.adapters.interfaces import (
     Verdict,
 )
 from compliance_rag.api.check_claims import claims_json
-from compliance_rag.api.check_decisions import standing_json
 from compliance_rag.api.check_findings import facts_json, findings_with_titles
 from compliance_rag.api.checks import (
     NOT_FOUND,
@@ -97,11 +96,13 @@ from compliance_rag.api.checks import (
     source_path,
     visible_check,
 )
+from compliance_rag.api.decision_view import standing_json
 from compliance_rag.api.deps import ApiServices, Caller, CurrentCaller, services_of
 from compliance_rag.api.sources import source_href, source_page_href
 from compliance_rag.api.tenant import version_json
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
 from compliance_rag.assessment.decisions import Decisions
+from compliance_rag.assessment.evidence import EvidenceProvenance
 from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -268,7 +269,7 @@ def claim_view(claim: Json, check_id: str, decisions: Decisions) -> dict[str, ob
     """A claim as the report names it: its number, the model's label, the document's own
     words and where they are (the passage's anchor on the check's page), its tier and what a
     member decided about it (#301). The claim itself is as it was extracted: its decision is
-    read from the rows beside it, so `provenance` here is the tier **now** (`asserted` once
+    read from the rows beside it, so `tier` here is the tier **now** (`asserted` once
     confirmed), computed when read, while the stored claim stays `inferred`."""
     index = int(claim["index"])
     standing = decisions.claims.get(index)
@@ -279,7 +280,7 @@ def claim_view(claim: Json, check_id: str, decisions: Decisions) -> dict[str, ob
         "passage": claim["passage"],
         "anchor": claim["anchor"],
         "href": f"/checks/{check_id}#{claim['anchor']}",
-        "provenance": decisions.claim_tier(index).value,
+        "tier": decisions.claim_tier(index).value,
         "decision": standing_json(standing),
         "confirmed": decisions.confirmed(index) is not None,
         "rejected": decisions.rejected(index) is not None,
@@ -348,10 +349,11 @@ def _finding_view(
     else:
         target = {"label": shown["cite"], "href": shown["href"]}
     return {
-        **shown,
-        # the tier **now**, computed when read (F5): the weakest of the claim's and the
-        # verdict's, not the `inferred` the run recorded
-        "provenance": decisions.finding_tier(finding).value,
+        # the run's recorded `provenance` is left out: the tier **now** is computed when
+        # read (F5), the weakest of the claim's and the verdict's, and the two must not
+        # both be said
+        **{k: v for k, v in shown.items() if k != "provenance"},
+        "tier": decisions.finding_tier(finding).value,
         "can_accept": finding.outcome is FindingOutcome.VERDICT,
         "accepted": standing_json(decisions.accepted(finding.finding_id)),
         "claim": claims[finding.claim_index],
@@ -494,7 +496,10 @@ async def report_json(services: ApiServices, state: CheckState) -> dict[str, obj
         "assessment_id": payload["assessment_id"],
         "as_of": payload["as_of"],
         "trace_id": payload["trace_id"],
-        "provenance": payload["provenance"],
+        "tiers": {
+            tier: sum(v["tier"] == tier for _, v in views)
+            for tier in (EvidenceProvenance.ASSERTED.value, EvidenceProvenance.INFERRED.value)
+        },
         "claims": [claims[i] for i in sorted(claims)],
         "rejected_claims": [
             {"claim": everything[i], "findings_set_aside": set_aside[i]} for i in rejected
@@ -563,7 +568,7 @@ async def get_check(request: Request, who: CurrentCaller, check_id: str) -> dict
         "failed": state.run.failed.value if state.run.failed else None,
         "claims": None
         if state.extraction is None
-        else claims_json(state.extraction, state.view.passages),
+        else claims_json(state.extraction, state.view.passages, state.decisions),
         "report": report,
     }
 

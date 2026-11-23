@@ -28,7 +28,12 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from compliance_rag.adapters.interfaces import CheckDecision, DecisionKind, FindingRecord
+from compliance_rag.adapters.interfaces import (
+    CheckDecision,
+    DecisionKind,
+    FindingOutcome,
+    FindingRecord,
+)
 from compliance_rag.assessment.evidence import EvidenceProvenance
 
 
@@ -80,7 +85,7 @@ class Decisions:
         """`asserted` only for a finding that has a verdict and whose verdict a person has
         accepted (and not withdrawn since). A withheld, failed or conditional finding has no
         verdict to accept, so it is always `inferred`."""
-        has_verdict = finding.verdict is not None
+        has_verdict = finding.outcome is FindingOutcome.VERDICT  # the one predicate
         accepted = has_verdict and self.accepted(finding.finding_id) is not None
         return EvidenceProvenance.ASSERTED if accepted else EvidenceProvenance.INFERRED
 

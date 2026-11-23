@@ -18,8 +18,10 @@
     when the report is read (`assessment/decisions.py`). Inferred until its claim is confirmed
     AND its verdict accepted by a person. -#}
 {% macro tier(f) %}
-<p class="tier" data-tier="{{ f.provenance }}"><span class="flag flag-tier-{{ f.provenance }}">{{ f.provenance | capitalize }}</span>
-{% if f.provenance == "asserted" %}its claim is confirmed and its verdict accepted{% else %}until its claim is confirmed and its verdict accepted{% endif %}</p>
+<p class="tier" data-tier="{{ f.tier }}"><span class="flag flag-tier-{{ f.tier }}">{{ f.tier | capitalize }}</span>
+{% if not f.can_accept %}no verdict to accept
+{% elif f.tier == "asserted" %}its claim is confirmed and its verdict accepted
+{% else %}until its claim is confirmed and its verdict accepted{% endif %}</p>
 {% endmacro %}
 
 {#- Accepting a verdict, and taking the acceptance back (#301). Only a finding with a verdict can
@@ -28,7 +30,7 @@
 {% if f.can_accept %}
 <div class="row decide" role="group" aria-label="Decide on this verdict">
 {% if f.accepted %}
-<span class="meta" data-accepted>Verdict accepted by {{ f.accepted.by }}{% if f.accepted.at %} on <time datetime="{{ f.accepted.at }}">{{ f.accepted.at | sydney }}</time>{% endif %}</span>
+<span class="meta" data-accepted>Verdict accepted by {{ f.accepted.by }}{% if f.accepted.at %} on <time datetime="{{ f.accepted.at }}">{{ f.accepted.at_label }}</time>{% endif %}</span>
 <button type="button" class="secondary" data-decide="verdict_withdrawn" data-finding="{{ f.finding_id }}">Withdraw acceptance</button>
 {% else %}
 <button type="button" data-decide="verdict_accepted" data-finding="{{ f.finding_id }}">Accept this verdict</button>
@@ -183,10 +185,10 @@
 <h2 id="h-claims-review">Claims <span class="count">{{ report.claims | length }}</span></h2>
 <p class="note">Confirm a claim when it says what the document means. Reject one that does not, and its findings leave this report. A confirmation is not evidence about your workspace and changes no coverage; it lifts the claim, and a finding is asserted only when its verdict is accepted too.</p>
 {% for c in report.claims %}
-<article class="card claim-review" data-claim="{{ c.index }}" data-state="{{ 'confirmed' if c.confirmed else 'unconfirmed' }}" data-tier="{{ c.provenance }}">
+<article class="card claim-review" data-claim="{{ c.index }}" data-state="{{ 'confirmed' if c.confirmed else 'unconfirmed' }}" data-tier="{{ c.tier }}">
 {{ claim_ref(c) }}
 {% if c.confirmed %}
-<p class="standing" data-standing="confirmed"><span class="flag flag-tier-asserted">Confirmed</span> by {{ c.decision.by }}{% if c.decision.at %} on <time datetime="{{ c.decision.at }}">{{ c.decision.at | sydney }}</time>{% endif %}</p>
+<p class="standing" data-standing="confirmed"><span class="flag flag-tier-asserted">Confirmed</span> by {{ c.decision.by }}{% if c.decision.at %} on <time datetime="{{ c.decision.at }}">{{ c.decision.at_label }}</time>{% endif %}</p>
 {% else %}
 <p class="standing" data-standing="unconfirmed"><span class="flag flag-tier-inferred">Inferred</span> not confirmed yet</p>
 {% endif %}
@@ -208,7 +210,7 @@
 {% for r in report.rejected_claims %}
 <article class="card notice" data-claim="{{ r.claim.index }}" data-state="rejected">
 {{ claim_ref(r.claim) }}
-<p class="standing" data-standing="rejected"><span class="flag flag-tier-rejected">Rejected</span> by {{ r.claim.decision.by }}{% if r.claim.decision.at %} on <time datetime="{{ r.claim.decision.at }}">{{ r.claim.decision.at | sydney }}</time>{% endif %}</p>
+<p class="standing" data-standing="rejected"><span class="flag flag-tier-rejected">Rejected</span> by {{ r.claim.decision.by }}{% if r.claim.decision.at %} on <time datetime="{{ r.claim.decision.at }}">{{ r.claim.decision.at_label }}</time>{% endif %}</p>
 <p class="note">{{ r.findings_set_aside }} {{ "finding" if r.findings_set_aside == 1 else "findings" }} left out of this report.</p>
 <div class="row decide" role="group" aria-label="Decide on claim {{ r.claim.index }}">
 <button type="button" class="secondary" data-decide="claim_confirmed" data-claim="{{ r.claim.index }}">Confirm instead</button>

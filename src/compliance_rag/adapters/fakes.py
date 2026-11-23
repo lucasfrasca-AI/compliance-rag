@@ -19,9 +19,7 @@ from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
     CHECK_PAGE_MAX,
-    DECISION_IS_REDUNDANT_AFTER,
     FINDINGS_RESERVATION_TTL,
-    NO_EARLIER_DECISION,
     NO_PREFIX,
     RESERVATION_TTL,
     AccountDirectory,
@@ -40,6 +38,7 @@ from compliance_rag.adapters.interfaces import (
     CheckRun,
     ClaimExtractionRecord,
     ClauseStore,
+    DecisionKind,
     Embedder,
     ExtractionAlreadyReserved,
     FindingOutcome,
@@ -72,6 +71,7 @@ from compliance_rag.adapters.interfaces import (
     check_findings_write,
     check_run_of,
     check_stage_of,
+    decision_adds_a_row,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -794,9 +794,9 @@ class FakeLedgerStore(LedgerStore):
         )
 
     async def record_check_decision(self, decision: CheckDecision) -> bool:
-        """Checked before anything is stored, in Postgres' order. No `await` between the
-        read of the latest decision and the append, so of concurrent requests one wins, as
-        the database's lock makes it."""
+        """Checked before anything is stored, in Postgres' order, by the same rule
+        (`decision_adds_a_row`). No `await` between the read of the latest decision and the
+        append, so of concurrent requests one wins, as the database's lock makes it."""
         check_decision_write(decision)
         key = (decision.tenant_id, decision.check_id)
         extraction = self._extractions.get(key)
@@ -804,17 +804,16 @@ class FakeLedgerStore(LedgerStore):
             raise ValueError(
                 f"tenant {decision.tenant_id!r} holds no extracted check {decision.check_id}"
             )
+        mine = [d for d in self._decisions if (d.tenant_id, d.check_id) == key]
+        has_verdict, claim_rejected = True, False
+        claim_index = decision.claim_index
         if decision.kind.of_claim:
-            if decision.claim_index not in {c.claim_index for c in extraction.record.claims}:
+            if claim_index not in {c.claim_index for c in extraction.record.claims}:
                 raise ValueError(
                     f"tenant {decision.tenant_id!r} holds no extracted check "
-                    f"{decision.check_id} with a claim {decision.claim_index}"
+                    f"{decision.check_id} with a claim {claim_index}"
                 )
-            same = [
-                d
-                for d in self._decisions
-                if (d.tenant_id, d.check_id) == key and d.claim_index == decision.claim_index
-            ]
+            same = [d for d in mine if d.claim_index == claim_index]
         else:
             run = self._findings_runs.get(key)
             held = (
@@ -822,21 +821,19 @@ class FakeLedgerStore(LedgerStore):
                 if run is None or run.status != "done" or run.record is None
                 else run.record.findings
             )
-            if not any(
-                f.finding_id == decision.finding_id and f.outcome is FindingOutcome.VERDICT
-                for f in held
-            ):
-                raise ValueError(
-                    f"check {decision.check_id} has no finding {decision.finding_id} "
-                    "with a verdict: only a verdict can be accepted"
-                )
-            same = [
-                d
-                for d in self._decisions
-                if (d.tenant_id, d.check_id) == key and d.finding_id == decision.finding_id
-            ]
-        latest = same[-1].kind.value if same else NO_EARLIER_DECISION
-        if latest in DECISION_IS_REDUNDANT_AFTER[decision.kind]:
+            finding = next((f for f in held if f.finding_id == decision.finding_id), None)
+            if finding is None:
+                raise ValueError(f"check {decision.check_id} has no finding {decision.finding_id}")
+            has_verdict = finding.outcome is FindingOutcome.VERDICT
+            of_claim = [d for d in mine if d.claim_index == finding.claim_index]
+            claim_rejected = bool(of_claim) and of_claim[-1].kind is DecisionKind.CLAIM_REJECTED
+            same = [d for d in mine if d.finding_id == decision.finding_id]
+        if not decision_adds_a_row(
+            decision.kind,
+            latest=same[-1].kind if same else None,
+            has_verdict=has_verdict,
+            claim_rejected=claim_rejected,
+        ):
             return False
         self._decisions.append(
             replace(decision, decision_id=len(self._decisions) + 1, decided_at=self._now())

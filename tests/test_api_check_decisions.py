@@ -161,14 +161,14 @@ async def test_confirming_a_claim_writes_no_evidence_row_and_does_not_change_cov
 
 async def test_a_finding_stays_inferred_after_claim_confirmation_alone() -> None:
     w, check_id = await reported()
-    assert {f["provenance"] for f in every_finding(await report_of(w, check_id))} == {"inferred"}
+    assert {f["tier"] for f in every_finding(await report_of(w, check_id))} == {"inferred"}
 
     await claim(w, check_id, CONFIRM, 1)
     report = await report_of(w, check_id)
     claim_1 = [f for f in every_finding(report) if f["claim"]["index"] == 1]
-    assert claim_1 and {f["provenance"] for f in claim_1} == {"inferred"}
-    assert {f["claim"]["provenance"] for f in claim_1} == {"asserted"}  # the claim is lifted
-    assert {f["provenance"] for f in every_finding(report)} == {"inferred"}  # no finding is
+    assert claim_1 and {f["tier"] for f in claim_1} == {"inferred"}
+    assert {f["claim"]["tier"] for f in claim_1} == {"asserted"}  # the claim is lifted
+    assert {f["tier"] for f in every_finding(report)} == {"inferred"}  # no finding is
 
 
 async def test_a_finding_becomes_asserted_only_once_its_verdict_is_also_accepted() -> None:
@@ -179,27 +179,25 @@ async def test_a_finding_becomes_asserted_only_once_its_verdict_is_also_accepted
     # the verdict alone, on a claim not confirmed: still inferred
     await verdict(w, check_id, ACCEPT, first["finding_id"])
     shown = await report_of(w, check_id)
-    assert finding_in(shown, 1, D1_3_2)["provenance"] == "inferred"
+    assert finding_in(shown, 1, D1_3_2)["tier"] == "inferred"
     assert finding_in(shown, 1, D1_3_2)["accepted"]["by"] == SECOND
 
     # both: asserted, and only that finding (the claim's other finding's verdict is not accepted)
     await claim(w, check_id, CONFIRM, 1)
     shown = await report_of(w, check_id)
-    assert finding_in(shown, 1, D1_3_2)["provenance"] == "asserted"
-    assert finding_in(shown, 1, D5_1_1)["provenance"] == "inferred"
+    assert finding_in(shown, 1, D1_3_2)["tier"] == "asserted"
+    assert finding_in(shown, 1, D5_1_1)["tier"] == "inferred"
     assert other["finding_id"] != first["finding_id"]
-    assert {f["provenance"] for f in every_finding(shown) if f["claim"]["index"] != 1} == {
-        "inferred"
-    }
+    assert {f["tier"] for f in every_finding(shown) if f["claim"]["index"] != 1} == {"inferred"}
 
     # an acceptance withdrawn is inferred again, and so is a confirmation rejected
     await verdict(w, check_id, WITHDRAW, first["finding_id"])
-    assert finding_in(await report_of(w, check_id), 1, D1_3_2)["provenance"] == "inferred"
+    assert finding_in(await report_of(w, check_id), 1, D1_3_2)["tier"] == "inferred"
     await verdict(w, check_id, ACCEPT, first["finding_id"])
-    assert finding_in(await report_of(w, check_id), 1, D1_3_2)["provenance"] == "asserted"
+    assert finding_in(await report_of(w, check_id), 1, D1_3_2)["tier"] == "asserted"
     await claim(w, check_id, REJECT, 1)
     await claim(w, check_id, CONFIRM, 1)  # latest wins: confirmed again
-    assert finding_in(await report_of(w, check_id), 1, D1_3_2)["provenance"] == "asserted"
+    assert finding_in(await report_of(w, check_id), 1, D1_3_2)["tier"] == "asserted"
 
 
 async def test_the_page_shows_each_findings_tier_and_the_stored_finding_stays_inferred() -> None:
@@ -218,6 +216,7 @@ async def test_the_page_shows_each_findings_tier_and_the_stored_finding_stays_in
     async with w.client(SUBMITTER_TOKEN) as client:
         recorded = (await client.get(f"/v1/checks/{check_id}/findings")).json()
     assert {f["provenance"] for f in recorded["findings"]} == {"inferred"}
+    assert {f["claim_rejected"] for f in recorded["findings"]} == {False}
 
 
 # ---- claim rows are never updated -------------------------------------------------------------
@@ -242,9 +241,14 @@ async def test_claim_and_finding_rows_are_never_updated() -> None:
     assert await w.ledger.get_findings(TENANT, check_id) == findings
     # six decisions, six rows, each beside the claim or finding and none in place of one
     assert len(await w.ledger.check_decisions(TENANT, check_id)) == 6
-    # the claims the document's extraction JSON shows are the recorded ones, `inferred`
-    extracted = (await check_json(w, check_id))["claims"]["claims"]
-    assert {c["provenance"] for c in extracted} == {"inferred"}
+    # the claims JSON shows where each stands now, not the `inferred` it was extracted as
+    extracted = {c["index"]: c for c in (await check_json(w, check_id))["claims"]["claims"]}
+    assert {i: c["tier"] for i, c in extracted.items()} == {
+        1: "asserted",
+        2: "asserted",
+        3: "inferred",
+        4: "inferred",
+    }
 
 
 def test_nothing_in_the_code_updates_or_deletes_a_decision() -> None:
@@ -298,7 +302,7 @@ async def test_a_rejected_claims_findings_leave_the_report_and_the_rejection_is_
     assert "Claim 1</a> in the document" in html  # and the rejected claim itself is named
     # the stored claim is the one extracted
     claims = (await check_json(w, check_id))["claims"]["claims"]
-    assert {c["provenance"] for c in claims} == {"inferred"} and len(claims) == 4
+    assert {c["tier"] for c in claims} == {"inferred"} and len(claims) == 4
 
     # latest wins: confirming it again brings its findings back, and the rejection is history
     await claim(w, check_id, CONFIRM, 1)
@@ -794,3 +798,144 @@ def test_the_tier_rule_is_the_weakest_of_the_claim_and_the_verdict() -> None:
         ]
     )
     assert both.finding_tier(withheld) is EvidenceProvenance.INFERRED
+
+
+# ---- the JSON says what the page says -----------------------------------------------------------
+
+
+async def test_the_check_json_says_where_each_claim_stands_and_no_constant_contradicts_it() -> None:
+    """`GET /v1/checks/{id}` carries each claim's current `decision` (kind, who, when) and its
+    `tier`, not only the `inferred` it was extracted as; and the report's findings and claims
+    say one tier, with no recorded `provenance` beside it to disagree."""
+    w, check_id = await reported()
+    before = (await check_json(w, check_id))["claims"]["claims"]
+    assert {c["tier"] for c in before} == {"inferred"} and {c["decision"] for c in before} == {None}
+    assert all("provenance" not in c for c in before)
+
+    await claim(w, check_id, CONFIRM, 1)
+    await claim(w, check_id, REJECT, 2, token=ADMIN_TOKEN)
+    shown = await check_json(w, check_id)
+    claims = {c["index"]: c for c in shown["claims"]["claims"]}
+    assert (claims[1]["tier"], claims[1]["decision"]["kind"]) == ("asserted", CONFIRM)
+    assert claims[1]["decision"]["by"] == SECOND and claims[1]["decision"]["at"]
+    assert (claims[2]["tier"], claims[2]["decision"]["kind"]) == ("inferred", REJECT)
+    assert claims[2]["decision"]["by"] == ADMIN_EMAIL
+    assert claims[3]["decision"] is None and claims[3]["tier"] == "inferred"
+    # the same values as the report's own claims, which the page is drawn from
+    for view in shown["report"]["claims"]:
+        assert claims[view["index"]]["tier"] == view["tier"]
+        assert claims[view["index"]]["decision"] == view["decision"]
+    report = shown["report"]
+    assert "provenance" not in report
+    assert all("provenance" not in f for f in every_finding(report))
+    assert all("provenance" not in c for c in report["claims"])
+    # an honest summary of what is shown, by tier: it adds up to the findings listed
+    assert report["tiers"] == {"asserted": 0, "inferred": len(every_finding(report))}
+    first = finding_in(report, 1, D1_3_2)
+    await verdict(w, check_id, ACCEPT, first["finding_id"])
+    report = await report_of(w, check_id)
+    assert report["tiers"] == {"asserted": 1, "inferred": len(every_finding(report)) - 1}
+
+
+async def test_the_findings_route_marks_the_findings_of_a_rejected_claim() -> None:
+    w, check_id = await reported()
+    async with w.client(SUBMITTER_TOKEN) as client:
+        before = (await client.get(f"/v1/checks/{check_id}/findings")).json()
+    assert {f["claim_rejected"] for f in before["findings"]} == {False}
+    assert before["policy_disagreements"]  # claim 1's
+    await claim(w, check_id, REJECT, 1)
+    async with w.client(SUBMITTER_TOKEN) as client:
+        after = (await client.get(f"/v1/checks/{check_id}/findings")).json()
+    # the run as recorded: every finding is still there, marked, and says what it said
+    assert [f["finding_id"] for f in after["findings"]] == [
+        f["finding_id"] for f in before["findings"]
+    ]
+    assert {f["claim_index"] for f in after["findings"] if f["claim_rejected"]} == {1}
+    assert {f["claim_rejected"] for f in after["findings"] if f["claim_index"] != 1} == {False}
+    assert {f["provenance"] for f in after["findings"]} == {"inferred"}
+    assert all(d["claim_rejected"] for d in after["policy_disagreements"])
+    # confirming it again lifts the mark
+    await claim(w, check_id, CONFIRM, 1)
+    async with w.client(SUBMITTER_TOKEN) as client:
+        again = (await client.get(f"/v1/checks/{check_id}/findings")).json()
+    assert {f["claim_rejected"] for f in again["findings"]} == {False}
+
+
+async def test_a_finding_with_no_verdict_promises_no_acceptance() -> None:
+    """A conditional, withheld or failed finding has no verdict to accept, so the page says
+    so plainly and never "inferred until its verdict is accepted"."""
+    cited_outside = f"{APP8_1.rsplit(':', 1)[0]}:s6c/2"
+
+    def script(seen: Any) -> str:  # Any: a findings prompt
+        asked = read_findings_prompt(seen)
+        if CLAIM_3 in asked.quote:
+            return "not a set of findings: " + SECRET
+        return honest(
+            {
+                CLAIM_2: {
+                    D4_2_1: Say(
+                        "conflicts", cites=((D4_2_1, opening(D4_2_1)), (cited_outside, SECRET))
+                    )
+                }
+            }
+        )(seen)
+
+    w, check_id = await reported(CheckModel(findings=script), evidence=UNKNOWN_FY2023)
+    report = await report_of(w, check_id)
+    html = await page(w, check_id)
+    parsed = scan(html)
+    for outcome in ("conditional", "withheld", "failed"):
+        assert report[outcome]
+        (card,) = [
+            a
+            for a in parsed.where("article", **{"data-outcome": outcome})
+            if a["data-finding"] == report[outcome][0]["finding_id"]
+        ]
+        assert card is not None
+        section = html.split(f'data-finding="{report[outcome][0]["finding_id"]}"', 1)[1]
+        tier = section.split("</article>", 1)[0]
+        assert 'data-tier="inferred"' in tier and "no verdict to accept" in tier
+        assert "until its claim is confirmed" not in tier and "verdict accepted" not in tier
+    # a finding with a verdict still says what lifts it
+    assert "until its claim is confirmed and its verdict accepted" in html
+    for finding in every_finding(report):
+        assert finding["tier"] == "inferred"
+
+
+async def test_withdrawing_an_acceptance_records_who_when_and_trace_id(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    w, check_id = await reported()
+    finding_id = finding_in(await report_of(w, check_id), 1, D1_3_2)["finding_id"]
+    await verdict(w, check_id, ACCEPT, finding_id)
+    span_exporter.clear()
+    response = await verdict(w, check_id, WITHDRAW, finding_id)
+    assert response.status_code == 201
+    row = (await w.ledger.check_decisions(TENANT, check_id))[-1]
+    assert row.kind is DecisionKind.VERDICT_WITHDRAWN and row.finding_id == finding_id
+    assert (row.user_id, row.email) == ("uid-second", SECOND)
+    assert row.decided_at is not None
+    assert re.fullmatch(r"[0-9a-f]{32}", row.trace_id)
+    (span,) = [s for s in span_exporter.get_finished_spans() if s.name == "api.check.decision"]
+    assert span.context is not None and row.trace_id == format(span.context.trace_id, "032x")
+    standing = response.json()["standing"]
+    assert standing["kind"] == WITHDRAW and standing["trace_id"] == row.trace_id
+    assert standing["at"] == row.decided_at.isoformat() and standing["by"] == SECOND
+    assert standing["at_label"] and re.fullmatch(
+        r"\d{1,2} \w{3} \d{4}, \d\d:\d\d", standing["at_label"]
+    )
+
+
+async def test_the_stores_refusals_reach_the_member_as_the_same_409s() -> None:
+    """The rules are the ledger's (`decision_adds_a_row`), so a request that reaches the store
+    and is refused there is the member's 409 with our words and no row."""
+    w, check_id = await reported()
+    first = finding_in(await report_of(w, check_id), 1, D1_3_2)
+    await claim(w, check_id, REJECT, 1)
+    refused = await decide(w, check_id, {"kind": ACCEPT, "finding_id": first["finding_id"]})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "claim_rejected"
+    assert "confirm the claim" in refused.json()["detail"]["message"]
+    refused = await decide(w, check_id, {"kind": WITHDRAW, "finding_id": first["finding_id"]})
+    assert refused.status_code == 409 and refused.json()["detail"]["error"] == "not_accepted"
+    assert [d.kind.value for d in await w.ledger.check_decisions(TENANT, check_id)] == [REJECT]
