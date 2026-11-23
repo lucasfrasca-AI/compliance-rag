@@ -287,7 +287,7 @@ carries it (`pages.PageHeaders`).
 - `admin.js` is not exercised by CI (no browser there), like `ask.js`; the tests make the
   requests it causes.
 
-## The admin policy versions (`admin_policies.py`, `templates/policies.html`, `templates/policy_version.html`)
+## The admin policy versions (`admin_policies.py`, `admin_policy_pages.py`, `policy_ops.py`, `policy_upload.py`, `policy_audit.py`, `uploads.py`)
 
 `/admin/policies` (#303, ADR-0053 U4 and I5, ADR-0021) lists the workspace's policies with every
 version's id, effective date, status (in force, future, superseded, withdrawn, purged) and
