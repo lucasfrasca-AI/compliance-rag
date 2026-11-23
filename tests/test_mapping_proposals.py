@@ -670,8 +670,8 @@ def test_the_proposal_models_name_the_same_fields_as_the_ledger_and_the_prompt()
 
 def test_no_corpus_mapping_file_carries_a_tenant_mapping() -> None:
     """The repository is public, so `corpus/mappings/` holds public law only (ADR-0059 C2):
-    no file there, at any depth, may carry a `policy_mappings:` entry. The loader still
-    parses the key, for its fixtures; this is what keeps a real file from using it."""
+    no file there, at any depth, may carry a `policy_mappings:` entry. The loader refuses
+    the key (#365); this checks every file at any depth, not only those the loader reads."""
     import yaml
 
     files = sorted((ROOT / "corpus" / "mappings").rglob("*.y*ml"))

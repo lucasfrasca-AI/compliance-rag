@@ -102,9 +102,9 @@ def test_the_readme_documented_shapes_validate(tmp_path: Path) -> None:
     mappings = load_mapping_set([write_yaml(tmp_path, document)])
     assert all(mappings.by_label.values()), mappings.by_label
     assert mappings.crosswalks
-    # No tenant's mapping is a documented YAML shape any more: it is a ledger row, never
-    # repo YAML (ADR-0059 C2, #305). The loader still parses the key, for its own fixtures.
-    assert not mappings.policy_mappings
+    # No tenant's mapping is a documented YAML shape: it is a ledger row, never repo YAML
+    # (ADR-0059 C2, #305), and the loader refuses the key (#365).
+    assert "policy_mappings" not in document
     assert mappings.exceptions_by_obligation == {
         "OB-APP8-1": ("privacy-act-1988:C2026C00227:sch1/app8/2",)
     }
@@ -126,8 +126,6 @@ def test_missing_front_matter_is_refused(tmp_path: Path, field: str) -> None:
     [
         ("obligations", 0, "end_reason", "revoked"),
         ("crosswalks", 0, "kind", "maybe"),
-        ("policy_mappings", 0, "status", "pending"),
-        ("policy_mappings", 0, "proposed_by", "agent"),
         ("obligations", 0, "colour", "blue"),  # unknown field
     ],
 )
@@ -165,8 +163,6 @@ def test_an_obligation_outside_its_sources_is_refused(tmp_path: Path) -> None:
     [
         ("obligations", 1, "supersedes", "OB-NOPE", "unknown obligation"),
         ("obligations", 0, "valid_to", "2026-05-01", "no gap or overlap"),
-        ("policy_mappings", 0, "obligation_id", "OB-NOPE", "unknown obligation"),
-        ("policy_mappings", 0, "status", "approved", "approved_by"),
         ("obligations", 2, "requires", {"conditions": ["COND-NOPE"]}, "unknown condition"),
         ("obligations", 2, "applies_to", {"actors": ["test-act/actor/nope"]}, "unknown actor"),
         ("actors", 0, "qualified_by", "COND-NOPE", "unknown condition"),
@@ -187,7 +183,7 @@ def test_ids_are_unique_across_files(tmp_path: Path) -> None:
     first = write_yaml(tmp_path, fixture_document(), "a.yaml")
     second = fixture_document()
     second["obligations"] = [second["obligations"][2]]
-    second["crosswalks"], second["policy_mappings"] = [], []
+    second["crosswalks"] = []
     with pytest.raises(MappingError, match="defined twice"):
         load_mapping_set([first, write_yaml(tmp_path, second, "b.yaml")])
 
@@ -307,22 +303,6 @@ async def test_a_superseded_obligation_is_retired_not_deleted(graph: Neo4jGraph)
 
 
 @needs_neo4j
-async def test_a_proposed_policy_mapping_never_reaches_the_graph(graph: Neo4jGraph) -> None:
-    """Tenant content stays out of Aura (D-09), so a policy mapping — proposed
-    or approved — is validated and reported, never written: it can't be
-    traversed because it isn't there."""
-    await load_test_corpus(graph)
-    report = await load_mappings(graph, load_mapping_set([FIXTURE]), today=SEP)
-    assert report.not_loaded == ("MAP-TEST-1",)
-    rows = await cypher(
-        graph,
-        "MATCH (n) WHERE n.stable_id CONTAINS 'MAP-' OR n.stable_id STARTS WITH 'acme' "
-        "RETURN count(n) AS c",
-    )
-    assert rows[0]["c"] == 0
-
-
-@needs_neo4j
 async def test_an_obligation_about_a_missing_clause_is_refused_before_any_write(
     graph: Neo4jGraph,
     tmp_path: Path,
@@ -348,23 +328,30 @@ def test_one_obligation_has_one_successor(tmp_path: Path) -> None:
         load_mapping_set([write_yaml(tmp_path, document)])
 
 
-@pytest.mark.parametrize(
-    ("key", "value", "message"),
-    [
-        ("policy_clause_id", "acme-policy-without-segments", "policy_clause_id"),
-        ("approved_by", "model: a model", "never a model"),
-    ],
-)
-def test_policy_mapping_fields_are_checked(
-    tmp_path: Path, key: str, value: str, message: str
-) -> None:
-    document = fixture_document()
-    mapping = document["policy_mappings"][0]
-    mapping[key] = value
-    if key == "approved_by":
-        mapping |= {"status": "approved", "approved_date": "2026-10-10"}
-    with pytest.raises(MappingError, match=message):
-        load_mapping_file(write_yaml(tmp_path, document))
+POLICY_MAPPING = {
+    "id": "MAP-TEST-1",
+    "policy_clause_id": "acme/test-policy:v1:1/1",
+    "obligation_id": "OB-TEST-2",
+    "kind": "partial",
+    "status": "proposed",
+    "proposed_by": "llm",
+}
+
+
+@pytest.mark.parametrize("value", [[POLICY_MAPPING], [], None])
+def test_a_policy_mappings_key_is_refused(tmp_path: Path, value: object) -> None:
+    """ADR-0059 C2 (#365): a tenant's policy-to-law mapping is a ledger row,
+    never repo YAML. The key is refused whatever it holds, even empty."""
+    document = fixture_document() | {"policy_mappings": value}
+    path = write_yaml(tmp_path, document)
+    with pytest.raises(MappingError, match=r"policy_mappings.*ADR-0059 C2"):
+        load_mapping_file(path)
+    with pytest.raises(MappingError, match=r"ADR-0059 C2"):
+        load_mapping_set([path])
+
+
+def test_the_fixture_carries_no_policy_mappings_key() -> None:
+    assert "policy_mappings" not in fixture_document()
 
 
 def test_an_in_condition_may_list_numbers(tmp_path: Path) -> None:

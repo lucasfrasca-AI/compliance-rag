@@ -386,9 +386,8 @@ policy version needs its own approvals.
 What stays here is public law: obligations, actors, conditions, controls,
 crosswalks, exceptions and qualifiers. A file in this directory that carries a
 tenant's mapping is refused by CI (`test_no_corpus_mapping_file_carries_a_tenant_mapping`).
-The loader still reads a `policy_mappings:` key and validates it, for the
-fixtures that test it, and writes nothing of it to the graph; no real file uses
-it, and none may.
+The loader refuses a file that carries a `policy_mappings:` key, whatever its
+value, with a message pointing at ADR-0059 C2 (#365).
 
 ## Stable IDs and corrections
 
