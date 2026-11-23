@@ -503,7 +503,7 @@ async def test_a_law_card_and_a_policy_card_each_open_at_the_clause_in_the_panel
     policy = [c for c in cited if c.startswith("acme/")]
     assert APP8_1 in law and policy
     titles = {
-        a["href"]: a["data-source-title"] or ""
+        a["href"]: a["data-title"] or ""
         for a in parsed.where("a")
         if "data-source-link" in a and a.get("class") == "button secondary"
     }
@@ -536,7 +536,7 @@ async def test_a_claim_opens_the_submitted_document_at_its_passage_in_the_panel(
             response = await client.get(path)  # the document, as the panel's frame loads it
             assert response.status_code == 200, opens
             assert f'id="{unquote(fragment)}"' in response.text, opens
-            assert (link["data-source-title"] or "").startswith("Claim ")
+            assert (link["data-title"] or "").startswith("Claim ")
             assert (link["href"] or "").startswith(f"/checks/{check_id}#")  # the no-script jump
 
 

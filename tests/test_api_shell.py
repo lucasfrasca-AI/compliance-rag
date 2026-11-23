@@ -488,69 +488,7 @@ async def test_the_real_chat_answer_keeps_its_text_whole_and_is_marked_where_it_
     assert "".join(str(p["text"]) for p in parts if "text" in p) == answer["text"]
 
 
-SOURCE_HREF = STATIC_DIR / "source_href.js"
-
-
-def run_source_url(data_href: str | None, href: str | None) -> str | None:
-    """`source_href.js`'s one pure function, run under Node."""
-    assert NODE is not None
-    script = (
-        f"import {{ sourceUrl }} from {json.dumps(SOURCE_HREF.as_uri())};"
-        f"console.log(JSON.stringify(sourceUrl({json.dumps(data_href)}, {json.dumps(href)})));"
-    )
-    done = subprocess.run(
-        [NODE, "--input-type=module", "-e", script], capture_output=True, text=True, check=True
-    )
-    return json.loads(done.stdout)
-
-
-@NEEDS_NODE
-@pytest.mark.parametrize(
-    ("data_href", "href", "framed"),
-    [
-        # a citation or a card: its own href, the source route and the clause's anchor
-        (
-            None,
-            "/v1/sources/privacy-act-1988/C2026C00227#clause-s6d",
-            "/v1/sources/privacy-act-1988/C2026C00227#clause-s6d",
-        ),
-        # a policy's: its instrument id holds a slash
-        (
-            None,
-            "/v1/sources/acme/privacy-policy/v1#clause-3-1",
-            "/v1/sources/acme/privacy-policy/v1#clause-3-1",
-        ),
-        # a claim: the document at its passage, whatever its own href (the page's) says
-        (
-            "/v1/sources/acme/doc/v1#clause-p3",
-            "/checks/abc#clause-p3",
-            "/v1/sources/acme/doc/v1#clause-p3",
-        ),
-        ("", "/v1/sources/x/v1", "/v1/sources/x/v1"),
-        # anything but this service's source route is left to the browser
-        (None, "/checks/abc#clause-p3", None),
-        (None, "https://evil.example/v1/sources/x/v1", None),
-        (None, "//evil.example/v1/sources/x/v1", None),
-        (None, "javascript:alert(1)", None),
-        (None, "/v1/sources/", None),
-        (None, "/v1/sources/x\\..\\y", None),
-        (None, "/v1/sources/x\n/v1", None),
-        ("/v1/answers", "/v1/sources/x/v1", None),  # data-source-href wins, and it is refused
-        (None, None, None),
-    ],
-)
-def test_the_sources_panel_frames_only_the_source_route(
-    data_href: str | None, href: str | None, framed: str | None
-) -> None:
-    assert run_source_url(data_href, href) == framed
-
-
-def test_sources_js_is_the_one_panel_script_and_writes_no_html() -> None:
-    script = (STATIC_DIR / "sources.js").read_text()
-    pure = SOURCE_HREF.read_text()
-    assert 'from "./source_href.js"' in script
-    for forbidden in ("innerHTML", "insertAdjacentHTML", "outerHTML", "eval(", "document.write"):
-        assert forbidden not in script and forbidden not in pure
+def test_ask_js_has_no_panel_of_its_own() -> None:
     # the chat's script no longer has a panel of its own: one implementation (#354)
     ask = (STATIC_DIR / "ask.js").read_text()
     assert "panel-frame" not in ask and "data-source-link" not in ask and "SOURCE_PREFIX" not in ask

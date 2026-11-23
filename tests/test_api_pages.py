@@ -23,10 +23,11 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from starlette.requests import Request
 
 from compliance_rag.adapters.fakes import (
@@ -51,6 +52,7 @@ from compliance_rag.adapters.interfaces import (
     UnreadableReason,
 )
 from compliance_rag.api.app import create_app
+from compliance_rag.api.deps import ApiServices
 from compliance_rag.api.pages import ENV, TEMPLATE_DIR, PageError, is_chat_id, page_error
 from compliance_rag.api.session import COOKIE_NAME, SessionCodec
 from compliance_rag.api.sign_in import (
@@ -61,9 +63,22 @@ from compliance_rag.api.sign_in import (
 from compliance_rag.assessment.environment import NotInEnvironment
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.assessment.prefix_cap import PREFIX_CAP_TOKENS
-from compliance_rag.corpus.models import CANONICALISATION_VERSION, PUBLIC_TENANT_ID
+from compliance_rag.corpus.models import (
+    CANONICALISATION_VERSION,
+    PUBLIC_TENANT_ID,
+    ClauseRecord,
+    Scope,
+)
 from compliance_rag.eval.applicability import load_applicability_set
-from compliance_rag.eval.golden_corpus import golden_chunks, golden_clauses
+from compliance_rag.eval.golden_corpus import (
+    POLICY_INSTRUMENT_IDS,
+    POLICY_TENANT_ID,
+    POLICY_VERSION_ID,
+    golden_chunks,
+    golden_clauses,
+    policy_source,
+    policy_titles,
+)
 from compliance_rag.eval.harness import golden_clause_store, law_source_html
 from compliance_rag.graph.mappings import load_mapping_set
 from compliance_rag.retrieval.pipeline import RetrievalPipeline
@@ -72,6 +87,7 @@ from compliance_rag.verifier.citations import CanonicalCitationVerifier, Verifie
 from tests.api_support import (
     MEMBER,
     PROJECT,
+    SECOND,
     TENANT,
     api_settings,
     assert_script_writes_no_html,
@@ -174,6 +190,8 @@ async def client_for(
     ledger: FakeLedgerStore | None = None,
     settings: Settings | None = None,
     policy_text: str | None = None,
+    extra_clauses: tuple[ClauseRecord, ...] = (),
+    policy_sources: bool = False,
 ) -> httpx.AsyncClient:
     """The app as a browser on `https://api` meets it: the golden corpus and
     the Privacy Act's stored source, Acme subscribed to it. `Origin` is what a
@@ -188,6 +206,17 @@ async def client_for(
         canonicalisation_version=CANONICALISATION_VERSION,
         source_html=law_source_html(),
     )
+    if extra_clauses:
+        await clauses.put_clauses(extra_clauses)
+    if policy_sources:  # each policy's Markdown, as the source route serves it
+        for filename, instrument_id in POLICY_INSTRUMENT_IDS.items():
+            await clauses.put_manifest(
+                instrument_id,
+                POLICY_VERSION_ID,
+                tenant_id=POLICY_TENANT_ID,
+                canonicalisation_version=CANONICALISATION_VERSION,
+                source_html=policy_source(filename),
+            )
     if policy_text is not None:
         edited = next(c for c in golden_clauses() if c.instrument_id == "acme/privacy-policy")
         await clauses.put_clause(edited.model_copy(update={"canonical_text": policy_text}))
@@ -399,8 +428,8 @@ async def test_sign_in_new_chat_ask_open_a_citation_follow_up_and_history(quote:
         assert "sandbox" in source.headers["content-security-policy"]
         # the same response carries the Sources panel's cards (#354), out of band: the
         # citation is a card with the instrument and clause as its title, and the same link
-        (swap,) = parsed.where("div", id="sp-list")
-        assert swap["hx-swap-oob"] == "true"
+        (swap,) = [a for a in parsed.where("div") if "hx-swap-oob" in a]
+        assert swap["hx-swap-oob"] == "beforeend:#sp-list"  # appended: the page keeps its cards
         (card,) = parsed.where("article", **{"class": "card source"})
         assert card["data-source"] == "privacy-act-1988:C2026C00227:sch1/app11/1"
         (open_link,) = [
@@ -409,7 +438,8 @@ async def test_sign_in_new_chat_ask_open_a_citation_follow_up_and_history(quote:
             if a["class"] == "button secondary"
         ]
         assert open_link["href"] == link["href"]
-        assert open_link["data-source-title"] == "Privacy Act 1988 — APP 11.1"
+        assert open_link["data-title"] == "Privacy Act 1988 — APP 11.1"
+        assert link["data-title"] == open_link["data-title"]  # the citation names its source
         assert (await client.get(open_link["href"].split("#")[0])).status_code == 200
 
         # 4. a follow-up in the same chat: the model is given the first exchange
@@ -1109,3 +1139,131 @@ async def test_the_pages_are_made_for_a_phone(member: httpx.AsyncClient) -> None
     # the shell is a top bar and the citation slot stacks under the page until
     # there's room (#353): the one width query is the sidebar's column
     assert "@media (min-width: 60rem)" in css and "grid-template-columns: var(--sidebar-w)" in css
+
+
+# ---- the Sources panel's cards in a chat (#354) --------------------------------------------------
+
+PRIVACY_POLICY_3_2 = "acme/privacy-policy:v1:3/2"
+
+
+def _exchange(
+    chat_id: str, clause_id: str, version: str, *, user_id: str = UID, n: int = 0
+) -> ChatExchange:
+    return replace(
+        _stored(chat_id, (ChatCitation(clause_id, version),)),
+        user_id=user_id,
+        question=f"{QUESTION} ({n})",
+        trace_id=f"{n + 1:x}".rjust(32, "7"),
+    )
+
+
+def _services_of(client: httpx.AsyncClient) -> ApiServices:
+    transport = cast("httpx.ASGITransport", client._transport)  # pyright: ignore[reportPrivateUsage]
+    app = cast("FastAPI", transport.app)
+    return cast("ApiServices", app.state.services)  # pyright: ignore[reportUnknownMemberType]
+
+
+async def test_a_policy_citation_is_a_card_titled_by_its_document_and_number_and_opens() -> None:
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    await ledger.record_chat_exchange(_exchange(chat_id, PRIVACY_POLICY_3_2, "v1"))
+    async with await client_for(FakeGenerator(), ledger=ledger, policy_sources=True) as client:
+        await sign_in(client)
+        page = scan((await client.get(f"/chats/{chat_id}")).text)
+        (card,) = page.where("article", **{"class": "card source"})
+        assert card["data-source"] == PRIVACY_POLICY_3_2
+        (open_link,) = [
+            a
+            for a in page.where("a", **{"data-source-link": ""})
+            if a["class"] == "button secondary"
+        ]
+        # exactly the document's recorded title and the clause's number (ADR-0049)
+        expected = f"{policy_titles()['acme/privacy-policy']}, 3.2"
+        assert open_link["data-title"] == expected
+        (cite,) = [a for a in page.where("a", **{"data-source-link": ""}) if a["class"] == "cite"]
+        assert cite["data-title"] == expected  # the citation names its source the same
+        # the link opens the policy rendered from its Markdown, at the clause's anchor
+        path, _, anchor = open_link["href"].partition("#")
+        assert path == "/v1/sources/acme/privacy-policy/v1" and anchor
+        opened = await client.get(path)
+        assert opened.status_code == 200
+        assert f'id="{anchor}"' in opened.text
+        assert "sandbox" in opened.headers["content-security-policy"]
+
+
+async def test_another_members_private_clause_is_no_card_and_no_text_in_a_chat() -> None:
+    """Same tenant, a user-scoped clause of member A cited in a chat: A's page has its card
+    and its text; member B, who cites it in a chat of their own, is given neither."""
+    private = ClauseRecord.build(
+        instrument_id="acme/my-notes",
+        version_id="v1",
+        clause_path="1/1",
+        text="My private note about retention periods.",
+        scope=Scope.USER,
+        tenant_id=TENANT,
+        user_id=UID,
+    )
+    ledger = await acme_ledger()
+    mine, theirs = uuid.uuid4().hex, uuid.uuid4().hex
+    await ledger.record_chat_exchange(_exchange(mine, private.clause_id, "v1"))
+    await ledger.record_chat_exchange(_exchange(theirs, private.clause_id, "v1", user_id="uid-2"))
+    async with await client_for(FakeGenerator(), ledger=ledger, extra_clauses=(private,)) as client:
+        await sign_in(client)  # member A
+        a_page = (await client.get(f"/chats/{mine}")).text
+        assert len(scan(a_page).where("article", **{"class": "card source"})) == 1
+        assert "My private note about retention periods." in a_page
+    async with await client_for(FakeGenerator(), ledger=ledger, extra_clauses=(private,)) as other:
+        await sign_in(other, sub="uid-2", email=SECOND)  # member B, same tenant
+        response = await other.get(f"/chats/{theirs}")
+        assert response.status_code == 200
+        assert not scan(response.text).where("article", **{"class": "card source"})
+        assert "My private note" not in response.text and "retention periods" not in response.text
+        fragment = (await other.get(f"/chats/{theirs}/turns")).text
+        assert "My private note" not in fragment and "card source" not in fragment
+
+
+async def test_a_chat_of_twelve_answers_has_cards_for_the_last_ten_and_every_link_opens() -> None:
+    law = [c for c in golden_clauses() if c.instrument_id == LAW][:12]
+    assert len({c.clause_id for c in law}) == 12
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    for n, clause in enumerate(law):
+        await ledger.record_chat_exchange(_exchange(chat_id, clause.clause_id, LAW_VERSION, n=n))
+    async with await client_for(FakeGenerator(), ledger=ledger) as client:
+        await sign_in(client)
+        page = scan((await client.get(f"/chats/{chat_id}")).text)
+    cards = [a["data-source"] for a in page.where("article", **{"class": "card source"})]
+    assert cards == [c.clause_id for c in law[2:]]  # the last ten, in order
+    # all twelve citations keep their link, and each names its source: the older two open
+    # in the panel without a card
+    cites = [a for a in page.where("a", **{"data-source-link": ""}) if a["class"] == "cite"]
+    assert len(cites) == 12 and all(a["data-title"] for a in cites)
+
+
+async def test_the_fragment_after_an_answer_adds_the_new_answers_cards_and_reads_no_other() -> None:
+    law = [c for c in golden_clauses() if c.instrument_id == LAW][:12]
+    ledger = await acme_ledger()
+    chat_id = uuid.uuid4().hex
+    for n, clause in enumerate(law):
+        await ledger.record_chat_exchange(_exchange(chat_id, clause.clause_id, LAW_VERSION, n=n))
+    async with await client_for(FakeGenerator(), ledger=ledger) as client:
+        await sign_in(client)
+        clauses = _services_of(client).clauses
+        read: list[str] = []
+        real = clauses.get_clause
+
+        async def counted(clause_id: str, **kwargs: Any) -> Any:  # Any: a ClauseRecord
+            read.append(clause_id)
+            return await real(clause_id, **kwargs)
+
+        clauses.get_clause = counted
+        response = await client.get(f"/chats/{chat_id}/turns")
+    fragment = scan(response.text)
+    # the turns are all there, but the cards are the last answer's alone, appended
+    assert len(fragment.where("article", **{"class": "turn turn-answer"})) == 12
+    (append,) = [a for a in fragment.where("div") if "hx-swap-oob" in a]
+    assert append["hx-swap-oob"] == "beforeend:#sp-list"
+    cards = fragment.where("article", **{"class": "card source"})
+    assert [a["data-source"] for a in cards] == [law[-1].clause_id]
+    assert read == [law[-1].clause_id]  # no other clause's text was read
+    assert [a["id"] for a in cards] == ["src-12"]  # numbered as the page numbers it: no clash

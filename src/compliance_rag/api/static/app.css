@@ -336,6 +336,9 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .sp-head h2 { margin: 0; color: var(--gold); }
 .sp-toggle { padding: 0.3rem 0.7rem; }
 .sp-body { display: flex; flex-direction: column; gap: 0.75rem; flex: 1; min-height: 0; }
+.sp-list { display: flex; flex-direction: column; gap: 0.75rem; }
+.sp-list:has(.source) .sp-empty,
+.sp-list:not(:has(.source)) .sp-intro { display: none; }
 .sources-panel[data-view="source"] .sp-list,
 .sources-panel[data-view="list"] .sp-viewer { display: none; }
 .sp-viewer { display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-height: 0; }

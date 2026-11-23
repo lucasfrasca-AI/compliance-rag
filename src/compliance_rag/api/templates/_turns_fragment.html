@@ -1,5 +1,10 @@
-{#- The turns, and with them the Sources panel's cards (#354): `ask.js` has htmx swap this in
-    after an answer. The cards are an out-of-band swap, so one request refreshes both. -#}
-{% from "_source_cards.html" import source_list %}
+{#- The turns, and with them the Sources panel's cards for the new answer (#354): `ask.js` has
+    htmx swap this in after an answer. The cards are an out-of-band append to the panel's list
+    (`hx-swap-oob`), so one request refreshes both; none is sent when the answer adds none. -#}
+{% from "_source_cards.html" import source_cards %}
 {% include "_turns.html" %}
-{{ source_list(sources, "Citations in a verified answer appear here.", oob=True) }}
+{% if sources %}
+<div hx-swap-oob="beforeend:#sp-list">
+{{ source_cards(sources) }}
+</div>
+{% endif %}

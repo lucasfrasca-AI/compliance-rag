@@ -6,6 +6,6 @@
     is marked safe. Imported `with context`: `source_href` is the page's own document, as the
     source route serves it. -#}
 {% macro claim_ref(c) %}
-<p class="claim"><a class="claim-link" href="{{ c.href }}" data-source-link data-source-href="{{ source_href }}#{{ c.anchor | urlencode }}" data-source-title="Claim {{ c.index }}, in the document">Claim {{ c.index }}</a> in the document: <q class="claim-quote">{{ c.quote }}</q></p>
+<p class="claim"><a class="claim-link" href="{{ c.href }}" data-source-link data-source-href="{{ source_href }}#{{ c.anchor | urlencode }}" data-title="Claim {{ c.index }}, in the document">Claim {{ c.index }}</a> in the document: <q class="claim-quote">{{ c.quote }}</q></p>
 <p class="note">The model's label for it, not checked: {{ c.summary }}</p>
 {% endmacro %}

@@ -1,13 +1,11 @@
-{#- The Sources panel's cards (#354): `source_list` draws the cards of the panel
-    (`_sources_panel.html`), and the same macro draws them again, out of band, after an answer
-    (`_turns_fragment.html`), so a card is one thing wherever it is drawn. A card is one
-    cited clause: its title, its version, the clause's own stored text and the link that
-    opens it. Every value is autoescaped; nothing is marked safe. -#}
-{% macro source_list(sources, empty, oob=False) %}
-{#- The cards, in a wrapper of their own: after an answer, the fragment replaces it (`hx-swap-oob`). -#}
-<div id="sp-list" class="sp-list" data-sp-list{% if oob %} hx-swap-oob="true"{% endif %}>
-{% if sources %}
-<p class="note">Each is the clause's own text, checked against the stored source. Open one at the clause to read it here.</p>
+{#- The Sources panel's cards (#354). `source_list` is the panel's list (`_sources_panel.html`):
+    the cards, with the words for none and the words that introduce them (the stylesheet shows
+    whichever applies, so cards appended after an answer need no rewrite of either).
+    `source_cards` draws the cards alone, and the same macro draws the ones a new answer adds
+    (`_turns_fragment.html`), so a card is one thing wherever it is drawn. A card is one cited
+    clause: its title, its version, the clause's own stored text and the link that opens it.
+    Every value is autoescaped; nothing is marked safe. -#}
+{% macro source_cards(sources) %}
 {% for s in sources %}
 <article class="card source" id="{{ s.id }}" data-source="{{ s.clause_id }}">
 <h3>{{ s.title }}</h3>
@@ -27,11 +25,14 @@
 {% endfor %}
 {% endif %}
 {#- The fallback is the link itself: with script it opens in the panel; without, in a new tab. -#}
-<p><a class="button secondary" href="{{ s.href }}" data-source-link data-source-title="{{ s.title }}" target="_blank" rel="noopener noreferrer">Open at the clause</a></p>
+<p><a class="button secondary" href="{{ s.href }}" data-source-link data-title="{{ s.title }}" target="_blank" rel="noopener noreferrer">Open at the clause</a></p>
 </article>
 {% endfor %}
-{% else %}
-<p class="note">{{ empty }}</p>
-{% endif %}
+{% endmacro %}
+{% macro source_list(sources, empty) %}
+<div id="sp-list" class="sp-list" data-sp-list>
+<p class="note sp-intro">Each is the clause's own text, checked against the stored source. Open one at the clause to read it here.</p>
+<p class="note sp-empty">{{ empty }}</p>
+{{ source_cards(sources) }}
 </div>
 {% endmacro %}

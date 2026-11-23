@@ -66,7 +66,7 @@ from compliance_rag.api.deps import (
     services_of,
 )
 from compliance_rag.api.sign_in import CONTENT_SECURITY_POLICY
-from compliance_rag.api.source_panel import chat_cards
+from compliance_rag.api.source_panel import chat_panel
 from compliance_rag.assessment.questionnaire import answer_kind_of
 from compliance_rag.corpus.display_form import NO_TITLES, cite
 
@@ -409,7 +409,15 @@ async def chats_page(request: Request, who: PageCaller) -> HTMLResponse:
 
 @router.get("/chats/new", response_class=HTMLResponse)
 async def new_chat_page(request: Request, _: PageCaller) -> HTMLResponse:
-    return render(request, "chat.html", chat_id=None, heading="New chat", turns=[], sources=[])
+    return render(
+        request,
+        "chat.html",
+        chat_id=None,
+        heading="New chat",
+        turns=[],
+        sources=[],
+        source_titles={},
+    )
 
 
 @router.get("/chats/{chat_id}", response_class=HTMLResponse)
@@ -421,14 +429,15 @@ async def chat_page(request: Request, who: PageCaller, chat_id: str) -> HTMLResp
     )
     if turns is None:
         raise _no_such_chat()
-    sources = await chat_cards(services_of(request), user_id=who.member.uid, turns=turns)
+    panel = await chat_panel(services_of(request), user_id=who.member.uid, turns=turns)
     return render(
         request,
         "chat.html",
         chat_id=chat_id,
         heading=_heading(turns),
         turns=turns,
-        sources=sources,
+        sources=panel.cards,
+        source_titles=panel.titles,
     )
 
 
@@ -445,7 +454,16 @@ async def turns_fragment(
     )
     if turns is None:
         raise HTTPException(404, "no such chat")
-    # The Sources panel's cards ride along (an out-of-band swap, `_turns_fragment.html`), so a
-    # new answer's citations are cards as soon as it is shown.
-    sources = await chat_cards(services_of(request), user_id=who.member.uid, turns=turns)
-    return render(request, "_turns_fragment.html", turns=turns, sources=sources)
+    # The Sources panel's cards for the new answer ride along (an out-of-band append,
+    # `_turns_fragment.html`), so its citations are cards as soon as it is shown. Only the
+    # new answer's: the page already holds the others, and none of their text is read again.
+    panel = await chat_panel(
+        services_of(request), user_id=who.member.uid, turns=turns, only_last=True
+    )
+    return render(
+        request,
+        "_turns_fragment.html",
+        turns=turns,
+        sources=panel.cards,
+        source_titles=panel.titles,
+    )

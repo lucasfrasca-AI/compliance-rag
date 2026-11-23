@@ -11,9 +11,12 @@
 //  2. "Back to sources" (or Escape) returns from the source to the cards;
 //  3. the panel collapses to a rail and back.
 //
-// Nothing from the server is ever written as HTML here: text goes in with textContent and
-// the frame's `src` is set from a link that has passed `sourceUrl`.
+// What state follows what event is `panel_state.js`'s, pure and tested under Node; this file
+// carries the state to the page and the events from it. Nothing from the server is ever
+// written as HTML here: text goes in with textContent, and the frame's `src` is set from a
+// link that has passed `sourceUrl`.
 
+import { INITIAL, next } from "./panel_state.js";
 import { sourceUrl } from "./source_href.js";
 
 const panel = document.getElementById("sources-panel");
@@ -26,57 +29,47 @@ if (panel) {
   const back = part("data-sp-close");
   const toggle = part("data-sp-toggle");
   const body = document.getElementById("sp-body");
+  let state = INITIAL;
   let opener = null;
 
-  function setCollapsed(value) {
-    body.hidden = value;
-    document.body.classList.toggle("sources-collapsed", value);
-    toggle.setAttribute("aria-expanded", String(!value));
-    toggle.textContent = value ? "Show sources" : "Collapse";
+  /** Carries `state` to the page. */
+  function show() {
+    panel.dataset.view = state.view;
+    if (state.view === "list") frame.removeAttribute("src");
+    body.hidden = state.collapsed;
+    document.body.classList.toggle("sources-collapsed", state.collapsed);
+    toggle.setAttribute("aria-expanded", String(!state.collapsed));
+    toggle.textContent = state.collapsed ? "Show sources" : "Collapse";
   }
 
-  function showList() {
-    frame.removeAttribute("src");
-    panel.dataset.view = "list";
+  /** Moves to the state `event` leads to, and carries it to the page. */
+  function go(event) {
+    const before = state;
+    state = next(state, event);
+    show();
+    return before;
   }
 
-  function showSource(url, name) {
-    title.textContent = name;
-    fallback.setAttribute("href", url);
-    // The anchor in the url scrolls the source to the clause.
-    frame.setAttribute("src", url);
-    panel.dataset.view = "source";
-    setCollapsed(false);
-    // Stacked under the page on a phone: bring it into view.
-    panel.scrollIntoView({ block: "nearest" });
-    back.focus({ preventScroll: true });
-  }
-
-  /** What the source is called: the link's own title, else the title of the card of the
-   * clause it cites (an inline citation names only the clause, a card the instrument too),
+  /** The source's name: the link's own title (a citation, a card and a claim carry one),
    * else the link's text. */
-  function titleOf(link) {
-    if (link.dataset.sourceTitle) return link.dataset.sourceTitle;
-    const clause = link.closest("[data-citation]")?.dataset.citation;
-    if (clause) {
-      for (const card of panel.querySelectorAll("article.source")) {
-        const title = card.querySelector("a[data-source-title]")?.dataset.sourceTitle;
-        if (card.dataset.source === clause && title) return title;
-      }
-    }
-    return (link.textContent || "").trim();
-  }
+  const titleOf = (link) => (link.dataset.title || link.textContent || "").trim();
 
-  function closeSource() {
-    if (panel.dataset.view !== "source") return;
-    showList();
+  function leaveSource(event) {
+    const before = go(event);
+    if (before.view !== "source" || state.view !== "list") return false;
     if (opener?.isConnected) opener.focus({ preventScroll: true });
     else toggle.focus({ preventScroll: true });
     opener = null;
+    return true;
   }
 
   document.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
+    // A citation in a finding jumps to its card (`#src-N`): make sure the card is on show.
+    if (target?.closest("a[data-source-card]")) {
+      go("card");
+      return;
+    }
     const link = target?.closest("a[data-source-link]");
     if (!link || event.defaultPrevented) return;
     // A modified click is the reader asking for a tab: leave it to the browser.
@@ -87,20 +80,19 @@ if (panel) {
     if (url === null) return;
     event.preventDefault();
     opener = link;
-    showSource(url, titleOf(link));
+    title.textContent = titleOf(link);
+    fallback.setAttribute("href", url);
+    // The anchor in the url scrolls the source to the clause.
+    frame.setAttribute("src", url);
+    go("open");
+    // Stacked under the page on a phone: bring it into view.
+    panel.scrollIntoView({ block: "nearest" });
+    back.focus({ preventScroll: true });
   });
 
-  // A citation in a finding jumps to its card (`#src-N`): make sure the card is on show.
-  document.addEventListener("click", (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (!target?.closest("a[data-source-card]")) return;
-    showList();
-    setCollapsed(false);
-  });
-
-  back.addEventListener("click", closeSource);
-  toggle.addEventListener("click", () => setCollapsed(body.hidden === false));
+  back.addEventListener("click", () => leaveSource("back"));
+  toggle.addEventListener("click", () => go("toggle"));
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeSource();
+    if (event.key === "Escape") leaveSource("escape");
   });
 }
