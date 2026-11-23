@@ -25,9 +25,9 @@ so what travels with an obligation is a set of exact ids. Checked against the
 graph first: every clause an item derives from, and every exception and
 qualifier, present and in force within the obligation's interval, and every
 item already loaded unchanged — properties and structural edges alike (an
-obligation's exceptions and qualifiers may grow, never shrink). Tenant policy mappings are never
-loaded into the graph (D-09, D-14: tenant content has no persisted node), so a
-`status: proposed` mapping can't be traversed by construction.
+obligation's exceptions and qualifiers may grow, never shrink). A tenant's policy mappings are
+ledger rows, never mapping YAML and never graph nodes (D-09, D-14, ADR-0059 C2): a mapping file
+carrying a `policy_mappings:` key is refused before it reaches the loader.
 
 Correcting a loaded item in place changes a node, which D-05 forbids: such a
 load is refused before any write, naming the item. A change of meaning is a
@@ -740,8 +740,9 @@ async def load_mappings(
 ) -> LoadReport:
     """Every node and edge the mapping set describes, after checking the
     graph (`check_mappings`). Then nodes (every kind, batched), then edges.
-    Tenant policy mappings are validated and reported, never written (D-09,
-    D-14). A caller that records the load runs the checks and the writes apart
+    A tenant's policy mappings are ledger rows, never written here: a
+    `policy_mappings:` key is refused when the file is read (ADR-0059 C2). A
+    caller that records the load runs the checks and the writes apart
     (`check_mappings`, `write_mappings`)."""
     found = await check_mappings(
         graph, mappings, today=today, corrections=corrections, errata=errata

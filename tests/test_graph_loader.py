@@ -53,8 +53,8 @@ def _readme_document() -> dict[str, Any]:  # Any: YAML
         parsed = yaml.safe_load(block)
         if isinstance(parsed, dict):
             document |= parsed
-    # The README's tenant-proposals example predates ADR-0059 C2 (#365): the
-    # loader refuses the key now, so it is not one of the shapes that validate.
+    # Remove once PR #364 lands: it deletes the README's policy_mappings
+    # example (#305, ADR-0059 C2).
     document.pop("policy_mappings", None)
     return document
 

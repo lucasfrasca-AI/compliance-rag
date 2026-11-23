@@ -48,7 +48,7 @@ import re
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar, Self
+from typing import ClassVar, Self, cast
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -432,10 +432,6 @@ POLICY_MAPPINGS_REFUSAL = (
 )
 
 
-def _has_policy_mappings(raw: object) -> bool:
-    return isinstance(raw, Mapping) and POLICY_MAPPINGS_KEY in raw
-
-
 class MappingFile(_Strict):
     author: str
     reviewed_by: str
@@ -454,9 +450,9 @@ class MappingFile(_Strict):
     @model_validator(mode="before")
     @classmethod
     def _no_tenant_mappings(cls, data: object) -> object:
-        if _has_policy_mappings(data):
+        if isinstance(data, Mapping) and POLICY_MAPPINGS_KEY in data:
             raise ValueError(POLICY_MAPPINGS_REFUSAL)
-        return data
+        return cast("object", data)  # the narrowing above leaves Mapping[Unknown, Unknown]
 
     @property
     def grounded(self) -> tuple[Grounded, ...]:
