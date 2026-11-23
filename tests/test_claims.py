@@ -25,6 +25,8 @@ from compliance_rag.assessment.claims import (
     CLAIMS_SYSTEM_PROMPT,
     MAX_QUOTE_CHARS,
     DropReason,
+    _Miss,  # pyright: ignore[reportPrivateUsage]
+    _Searchable,  # pyright: ignore[reportPrivateUsage]
     claim_quote,
     locate_quote,
     parse_claims,
@@ -280,14 +282,24 @@ def test_the_same_holds_for_text_that_has_no_canonical_map() -> None:
 def test_a_document_built_to_make_a_search_slow_costs_no_more_than_any_other() -> None:
     """A long run of one letter and a quote that nearly matches it: linear, not
     quadratic. Twenty-five such claims against a document at its size limit are
-    still only twenty-five searches of one map."""
+    still only twenty-five searches of one map.
+
+    The map is built once, as extraction builds it once per passage, and only the
+    searches are timed (#358): building it is linear work this test doesn't
+    guard, and timing it (5 million `canonicalise` calls) made the bound measure
+    the machine. Measured on 2026-11-23: these 25 searches take about 3 ms; the
+    same 25 done quadratically, even at C speed (a slice compared at every
+    position), take about 1.0 s, and a pure-Python quadratic loop far longer. The
+    0.25 s bound sits between: about 80x headroom for a loaded machine, and a
+    quadratic search still fails it by 4x."""
     import time
 
     text = "a" * 200_000 + " end"
+    index = _Searchable(text)
     started = time.perf_counter()
     for _ in range(25):
-        assert locate_quote(text, "a" * 999 + "b") is None
-    assert time.perf_counter() - started < 5.0
+        assert index.find("a" * 999 + "b") is _Miss.ABSENT
+    assert time.perf_counter() - started < 0.25
 
 
 # ---- a claim is a quote anchored to its passage, recorded as inferred --------------------
