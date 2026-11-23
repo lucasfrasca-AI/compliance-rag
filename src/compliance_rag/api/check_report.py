@@ -48,6 +48,18 @@ its canonical text (D-02), never the model's quote alone, and a link that opens 
 clause in its source. A claim opens the document at its passage (`#clause-pN`, the
 anchors `checks.passage_json` and the source route share) where its quote is marked.
 
+**What members decided (#301, ADR-0059 Q3 and C1).** The report is still a pure read: it also
+reads the check's decisions (`LedgerStore.check_decisions`, **one query**, not one per claim)
+and applies them (`assessment/decisions.py`). Each claim carries its state (`confirmed`,
+`rejected`, who and when) and its tier now; each finding its tier, **computed when read** as
+the weakest of its claim's (`asserted` once confirmed) and its verdict's (`asserted` only when
+a person accepted it): the stored claim and finding stay `inferred`. A **rejected claim's
+findings leave the report**: out of the verdict groups, the conditional, withheld and failed
+lists, the banner and the sources panel, and the claim is listed under `rejected_claims` with
+who rejected it and how many findings were left out. Latest wins, so confirming it again
+brings them back. The decisions are made by `POST /v1/checks/{id}/decisions`
+(`check_decisions.py`); the page's buttons send them (`static/check_decisions.js`).
+
 **Everything is data.** A claim's quote and summary, and an ambiguous finding's
 `settle_by`, are text of the document or of a model: they reach the page autoescaped,
 never as markup, and `settle_by` is labelled as the model's.

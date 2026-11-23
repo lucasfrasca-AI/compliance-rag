@@ -16,6 +16,11 @@ pages are (`pages.py`), under the same CSP and the same headers.
   serves (`/v1/sources/<the document>/v1#clause-p1`), a claim's words marked in it, so a
   claim opens the document at its quote.
 
+The report's claims and verdict findings carry buttons (confirm or reject a claim, accept a
+verdict or withdraw the acceptance, #301): `static/check_decisions.js` POSTs the decision to
+`/v1/checks/{id}/decisions` as JSON and reloads, so the page is still drawn by the server from
+the ledger. A rejected claim's findings are not drawn; it is listed under "Rejected claims".
+
 **Visibility** is `checks.read_check`'s, the one reader the JSON route uses: a
 check that is not the caller's (and the caller is not an admin) is the same 404
 page as one that does not exist, and nothing is drawn for it. Every response
