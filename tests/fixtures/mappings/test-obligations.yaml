@@ -71,13 +71,3 @@ crosswalks:
     to: OB-TEST-2
     kind: related
     note: Invented relation for the loader test.
-
-policy_mappings:
-  - id: MAP-TEST-1
-    policy_clause_id: acme/test-policy:v1:1/1
-    obligation_id: OB-TEST-2
-    kind: partial
-    status: proposed
-    proposed_by: llm
-    approved_by: null
-    approved_date: null

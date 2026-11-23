@@ -54,7 +54,6 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from compliance_rag.corpus.models import (
-    MODEL_AUTHOR_PREFIX,
     NO_END_DATE,
     EndReason,
     check_end,
@@ -123,17 +122,6 @@ class CrosswalkKind(StrEnum):
     EQUIVALENT = "equivalent"
     PARTIAL = "partial"
     RELATED = "related"
-
-
-class PolicyMappingStatus(StrEnum):
-    PROPOSED = "proposed"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-
-
-class ProposedBy(StrEnum):
-    LLM = "llm"
-    HUMAN = "human"
 
 
 LeafValue = str | int | float | bool | dt.date | tuple[str, ...] | tuple[int | float, ...]
@@ -435,32 +423,17 @@ class Crosswalk(_Strict):
     note: str
 
 
-class PolicyMapping(_Strict):
-    id: str
-    policy_clause_id: str
-    obligation_id: str
-    kind: CrosswalkKind
-    status: PolicyMappingStatus
-    proposed_by: ProposedBy
-    approved_by: str | None = None
-    approved_date: dt.date | None = None
+POLICY_MAPPINGS_KEY = "policy_mappings"
+POLICY_MAPPINGS_REFUSAL = (
+    f"a `{POLICY_MAPPINGS_KEY}:` key is refused: a tenant's policy-to-law mapping is a ledger "
+    "row (`policy_mapping`), never repo YAML, because the repository is public "
+    "(ADR-0059 C2). corpus/mappings/ holds public-law obligations, conditions and "
+    "crosswalks only"
+)
 
-    @field_validator("policy_clause_id")
-    @classmethod
-    def _policy_stable_id(cls, v: str) -> str:
-        parse_stable_id(v)
-        return v
 
-    @model_validator(mode="after")
-    def _approval(self) -> Self:
-        if self.approved_by and self.approved_by.startswith(MODEL_AUTHOR_PREFIX):
-            raise ValueError(f"{self.id}: approved_by must be a person, never a model (D-01)")
-        approved = self.status is PolicyMappingStatus.APPROVED
-        if approved and not (self.approved_by and self.approved_date):
-            raise ValueError(f"{self.id}: approved needs approved_by and approved_date")
-        if not approved and (self.approved_by or self.approved_date):
-            raise ValueError(f"{self.id}: only an approved mapping names an approver")
-        return self
+def _has_policy_mappings(raw: object) -> bool:
+    return isinstance(raw, Mapping) and POLICY_MAPPINGS_KEY in raw
 
 
 class MappingFile(_Strict):
@@ -477,7 +450,13 @@ class MappingFile(_Strict):
     exceptions: tuple[ObligationExceptions, ...] = ()
     qualifiers: tuple[ObligationQualifiers, ...] = ()
     crosswalks: tuple[Crosswalk, ...] = ()
-    policy_mappings: tuple[PolicyMapping, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_tenant_mappings(cls, data: object) -> object:
+        if _has_policy_mappings(data):
+            raise ValueError(POLICY_MAPPINGS_REFUSAL)
+        return data
 
     @property
     def grounded(self) -> tuple[Grounded, ...]:
@@ -600,10 +579,6 @@ class MappingSet(_Strict):
         return tuple(x for f in self.files for x in f.crosswalks)
 
     @property
-    def policy_mappings(self) -> tuple[PolicyMapping, ...]:
-        return tuple(x for f in self.files for x in f.policy_mappings)
-
-    @property
     def by_label(self) -> dict[str, tuple[Dated, ...]]:
         """Every dated item, by graph label."""
         return {
@@ -634,7 +609,6 @@ class MappingSet(_Strict):
     def _references(self) -> Self:
         everything = [item for items in self.by_label.values() for item in items]
         _unique("mapping", [item.id for item in everything])
-        _unique("policy mapping", [m.id for m in self.policy_mappings])
         by_kind = {label: {i.id: i for i in items} for label, items in self.by_label.items()}
 
         def resolve(
@@ -689,9 +663,6 @@ class MappingSet(_Strict):
                 )
         for label, items in by_kind.items():
             _check_supersession(label, items)
-        for mapping in self.policy_mappings:
-            if mapping.obligation_id not in by_kind["Obligation"]:
-                raise ValueError(f"{mapping.id}: unknown obligation {mapping.obligation_id}")
         self._check_travelling()
         self._check_exceptions_are_not_qualifiers()
         return self

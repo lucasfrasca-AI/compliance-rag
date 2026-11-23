@@ -107,8 +107,6 @@ class LoadReport:
     edges_created: int
     counts: GraphCounts
     """Whole-graph totals after the load — the Aura <10% exit criterion."""
-    not_loaded: tuple[str, ...] = ()
-    """Ids validated but deliberately kept out of the graph (policy mappings)."""
 
 
 def version_ref(instrument_id: str, version_id: str) -> NodeRef:
@@ -787,12 +785,7 @@ async def write_mappings(
             ]
         )
         created_edges = await graph.put_edges(_edges(mappings, found.inside))
-        report = LoadReport(
-            created_nodes,
-            created_edges,
-            await graph.counts(),
-            not_loaded=tuple(m.id for m in mappings.policy_mappings),
-        )
+        report = LoadReport(created_nodes, created_edges, await graph.counts())
         _record(span, report)
         return report
 
@@ -802,7 +795,6 @@ def _record(span: Span, report: LoadReport) -> None:
     span.set_attribute("graph.edges_created", report.edges_created)
     span.set_attribute("graph.nodes", report.counts.nodes)
     span.set_attribute("graph.edges", report.counts.edges)
-    span.set_attribute("graph.not_loaded", list(report.not_loaded))
 
 
 @asynccontextmanager
