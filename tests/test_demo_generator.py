@@ -524,3 +524,14 @@ async def test_the_demo_generator_and_the_startup_wrapper_meet_the_generator_con
     # the shape reaches the generator it wraps
     inner = wrapper._generator  # pyright: ignore[reportPrivateUsage]
     assert isinstance(inner, FakeGenerator) and inner.calls[-1]["reply"] is ReplyKind.CLAIMS
+
+
+async def test_the_demo_generator_proposes_no_mapping_and_says_so_in_a_valid_reply() -> None:
+    """#305: a stand-in that judges no policy invents no mapping, and its reply is a valid
+    empty set of proposals, so a demo run is recorded as one that proposed nothing."""
+    from compliance_rag.assessment.mapping_proposals import parse_proposals
+
+    made = await FakeDemoGenerator().generate(
+        system="s", cached_prefix="p", user="u", max_tokens=64, reply=ReplyKind.MAPPINGS
+    )
+    assert parse_proposals(made.text).proposals == ()

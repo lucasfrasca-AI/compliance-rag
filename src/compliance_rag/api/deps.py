@@ -33,6 +33,7 @@ from compliance_rag.assessment.claims import ClaimExtractor
 from compliance_rag.assessment.coverage import Coverage, Outcome
 from compliance_rag.assessment.evidence import Facts
 from compliance_rag.assessment.findings import FindingsAssessor
+from compliance_rag.assessment.mapping_proposals import MappingProposer
 from compliance_rag.assessment.pipeline import AssessmentPipeline
 from compliance_rag.settings import Settings
 
@@ -75,6 +76,19 @@ class ApiServices:
         generator, verifier and repair, its residency gate and, for `fetch` by id
         alone, its retrieval pipeline."""
         return FindingsAssessor(self.pipeline)
+
+    def mapping_proposer(self) -> MappingProposer:
+        """Policy mapping proposals (#305) over the pipeline's own generator and residency
+        gate and the ledger, and handed no graph, no clause store and no file writer, so a
+        proposal is a ledger row and nothing else. Tests hold the proposing modules' imports
+        to that and spy on the graph at runtime (it may be read for Track A's coverage and
+        for nothing else); neither alone proves the absence of a write."""
+        return MappingProposer(
+            self.pipeline.generator,
+            self.ledger,
+            tenant_text=self.pipeline.tenant_text,
+            model=self.settings.generation_model,
+        )
 
     async def start(self) -> None:
         for check in self.readiness:

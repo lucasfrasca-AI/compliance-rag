@@ -101,7 +101,10 @@ def test_the_readme_documented_shapes_validate(tmp_path: Path) -> None:
     document = _readme_document()
     mappings = load_mapping_set([write_yaml(tmp_path, document)])
     assert all(mappings.by_label.values()), mappings.by_label
-    assert mappings.crosswalks and mappings.policy_mappings
+    assert mappings.crosswalks
+    # No tenant's mapping is a documented YAML shape any more: it is a ledger row, never
+    # repo YAML (ADR-0059 C2, #305). The loader still parses the key, for its own fixtures.
+    assert not mappings.policy_mappings
     assert mappings.exceptions_by_obligation == {
         "OB-APP8-1": ("privacy-act-1988:C2026C00227:sch1/app8/2",)
     }

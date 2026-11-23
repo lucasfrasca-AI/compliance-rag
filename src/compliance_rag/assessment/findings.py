@@ -86,8 +86,6 @@ import asyncio
 import datetime as dt
 import hashlib
 import logging
-import re
-import unicodedata
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -139,7 +137,7 @@ from compliance_rag.assessment.coverage import (
     ObligationCoverage,
     Outcome,
 )
-from compliance_rag.assessment.draft import DraftCitation, MalformedGeneration, unfenced
+from compliance_rag.assessment.draft import DraftCitation, MalformedGeneration
 from compliance_rag.assessment.evidence import Evidence, FactsSnapshot
 from compliance_rag.assessment.obligation_digest import ObligationDigest
 from compliance_rag.assessment.pipeline import AssessmentPipeline, OwedClauseUndelivered
@@ -147,8 +145,12 @@ from compliance_rag.assessment.prefix_cap import check_prefix_cap
 from compliance_rag.assessment.prompt import (
     DelimiterCollision,
     SourceClause,
+    boundaries_of,
     cag_prefix,
     fence,
+    forges_boundary,
+    is_one_line,
+    strip_json_fence,
 )
 from compliance_rag.assessment.usage import record_usage, usage_of
 from compliance_rag.corpus.display_form import Titles, cite, cited_policy_versions
@@ -336,7 +338,7 @@ def parse_findings(text: str) -> tuple[ParsedItem, ...]:
     that is not of the shape is a `ParsedItem` with no finding, refused by
     `FindingsAssessor` and traced, and does not refuse its neighbours."""
     try:
-        envelope = FindingsEnvelope.model_validate_json(unfenced(text))
+        envelope = FindingsEnvelope.model_validate_json(strip_json_fence(text))
     except ValidationError as exc:
         # Not `from exc`: pydantic's message carries the input, which is the
         # model's words about a document.
@@ -398,20 +400,10 @@ class RefusedFinding:
     reason: Refusal
 
 
-_BOUNDARY = re.compile(r"boundary=([0-9a-f]{24})")
-
-
 def _settle_by_problem(text: str, boundaries: frozenset[str]) -> Refusal | None:
-    if (
-        not text.strip()
-        or len(text) > MAX_SETTLE_BY_CHARS
-        or any(
-            unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp")
-            for c in text
-        )
-    ):
+    if not text.strip() or len(text) > MAX_SETTLE_BY_CHARS or not is_one_line(text):
         return Refusal.SETTLE_BY_INVALID
-    if any(b in text for b in boundaries):
+    if forges_boundary(text, boundaries):
         return Refusal.SETTLE_BY_FORGES_FENCE
     return None
 
@@ -1086,7 +1078,7 @@ class _Run:
             return [_failed(claim, t, FailureReason.MALFORMED_GENERATION) for t in targets]
         current.set_attribute("generation.schema_valid", True)
 
-        boundaries = frozenset(_BOUNDARY.findall(f"{self._prefix}\n{prepared.user}"))
+        boundaries = boundaries_of(self._prefix, prepared.user)
         asked_targets = frozenset(targets)
         answered: set[Target] = set()
         accepted: dict[Target, ExtractedFinding] = {}

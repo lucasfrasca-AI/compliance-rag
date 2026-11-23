@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -200,6 +202,46 @@ def fence(
         blocks.append(f"[{boundary} {clause.marker}]\n{clause.text}\n[{boundary} end]")
     opening, closing = f"<{label} boundary={boundary}>", f"</{label} boundary={boundary}>"
     return f"{opening}\n" + "\n".join(blocks) + f"\n{closing}"
+
+
+BOUNDARY_RE = re.compile(r"boundary=([0-9a-f]{24})")
+"""A fence's boundary as it appears in a section's opening or closing tag."""
+
+
+def boundaries_of(*prompts: str | None) -> frozenset[str]:
+    """Every fence boundary in the prompts a call sends (its cached prefix and its user
+    message): what no model-written text may carry, since a boundary in a summary, a
+    settle-by or a rationale would be a forged fence. `None` is a prompt that isn't there."""
+    return frozenset(
+        boundary for prompt in prompts if prompt for boundary in BOUNDARY_RE.findall(prompt)
+    )
+
+
+def forges_boundary(text: str, boundaries: frozenset[str]) -> bool:
+    """Whether `text` carries any of `boundaries`: the one check that model-written text
+    shown beside fenced data does not hold a fence's closing marker."""
+    return any(boundary in text for boundary in boundaries)
+
+
+def is_one_line(text: str) -> bool:
+    """Whether `text` is one line of plain text: no control, format or line-separator
+    character (a newline, U+0085, U+2028 and U+2029 included). Says nothing of blankness
+    or length, which each caller bounds for itself."""
+    return not any(
+        unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp") for c in text
+    )
+
+
+JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(?P<body>.*)\n```$", re.DOTALL)
+
+
+def strip_json_fence(text: str) -> str:
+    """The JSON inside a model's reply: the reply itself, or the body of the single
+    ```json fence models commonly wrap it in. Nothing else is stripped, so prose around
+    the object stays and fails validation."""
+    body = text.strip()
+    fenced = JSON_FENCE_RE.match(body)
+    return fenced.group("body").strip() if fenced else body
 
 
 def policy_prefix(policies: Sequence[SourceClause]) -> str | None:

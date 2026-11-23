@@ -223,6 +223,7 @@ _NAV: tuple[tuple[str, tuple[tuple[str, str, str], ...], bool], ...] = (
             ("/admin/subscriptions", "Subscriptions", "/admin/subscriptions"),
             ("/admin/policies", "Policies", "/admin/policies"),
             ("/admin/questionnaire", "Questionnaire", "/admin/questionnaire"),
+            ("/admin/mappings", "Mapping proposals", "/admin/mappings"),
         ),
         True,
     ),

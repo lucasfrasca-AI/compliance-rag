@@ -87,6 +87,10 @@ class FakeDemoGenerator(Generator):
             # check records each target as failed ("no_finding_returned") and says
             # so, rather than invent a verdict (#299).
             reply_json = {"findings": []}
+        elif reply is ReplyKind.MAPPINGS:
+            # No mapping for any clause: the stand-in judges no policy, so a demo run
+            # proposes nothing and says so, rather than invent a mapping (#305).
+            reply_json = {"proposals": []}
         elif system == REPAIR_SYSTEM_PROMPT:
             clause_id = next(iter(_fenced(user)), ("", ""))[0]
             reply_json = {"clause_id": clause_id, "quote": _MISQUOTE}

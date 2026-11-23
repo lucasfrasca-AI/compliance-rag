@@ -20,6 +20,7 @@ from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
     CHECK_PAGE_MAX,
     FINDINGS_RESERVATION_TTL,
+    MAPPING_RESERVATION_TTL,
     NO_PREFIX,
     RESERVATION_TTL,
     AccountDirectory,
@@ -51,7 +52,11 @@ from compliance_rag.adapters.interfaces import (
     LedgerStore,
     LoadedSources,
     ManifestMetadata,
+    MappingRunAlreadyReserved,
+    MappingRunRecord,
+    MappingStatus,
     PolicyCorpus,
+    PolicyMapping,
     PolicyVersion,
     PolicyVersionRow,
     Profile,
@@ -70,6 +75,7 @@ from compliance_rag.adapters.interfaces import (
     check_claims_write,
     check_decision_write,
     check_findings_write,
+    check_mapping_run_write,
     check_run_of,
     check_stage_of,
     decision_adds_a_row,
@@ -453,6 +459,16 @@ class _Extraction:
 
 
 @dataclass(frozen=True, slots=True)
+class _MappingRun:
+    """A policy version's proposing run as the fake holds it: reserved, then done or failed."""
+
+    status: str  # "pending", "done" or "failed"
+    reserved_at: dt.datetime
+    trace_id: str
+    """The request that holds the reservation: only it may complete or release it."""
+
+
+@dataclass(frozen=True, slots=True)
 class _FindingsRun:
     """A check's findings run as the fake holds it: reserved, then done or failed."""
 
@@ -491,6 +507,8 @@ class FakeLedgerStore(LedgerStore):
         self._extractions: dict[tuple[str, str], _Extraction] = {}  # the same key
         self._findings_runs: dict[tuple[str, str], _FindingsRun] = {}  # the same key
         self._decisions: list[CheckDecision] = []  # oldest first, append-only
+        self._mapping_runs: dict[tuple[str, str, str], _MappingRun] = {}  # (tenant, inst, version)
+        self._policy_mappings: list[PolicyMapping] = []  # in the order proposed, append-only
         self._recorded_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
@@ -551,6 +569,121 @@ class FakeLedgerStore(LedgerStore):
             dt.datetime.now(dt.UTC), self._recorded_at + dt.timedelta(microseconds=1)
         )
         return self._recorded_at
+
+    async def reserve_mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str, *, trace_id: str
+    ) -> None:
+        """No `await` between the read and the write, so of concurrent requests one wins,
+        as the database's single statement makes it."""
+        if not trace_id.strip():
+            raise ValueError("a proposing run carries the trace_id of its request")
+        key = (tenant_id, instrument_id, version_id)
+        if (
+            key not in self._versions
+            or self._classes.get((tenant_id, instrument_id)) is not DocumentClass.INTERNAL_POLICY
+        ):
+            raise ValueError(
+                f"tenant {tenant_id!r} holds no policy version {instrument_id}:{version_id}"
+            )
+        held = self._mapping_runs.get(key)
+        now = dt.datetime.now(dt.UTC)
+        if (
+            held is not None
+            and held.status == "pending"
+            and held.reserved_at >= now - MAPPING_RESERVATION_TTL
+        ):
+            raise MappingRunAlreadyReserved(f"{instrument_id}:{version_id} is being proposed for")
+        self._mapping_runs[key] = _MappingRun("pending", now, trace_id)
+
+    async def fail_mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str, *, trace_id: str
+    ) -> None:
+        key = (tenant_id, instrument_id, version_id)
+        held = self._mapping_runs.get(key)
+        if held is not None and held.status == "pending" and held.trace_id == trace_id:
+            self._mapping_runs[key] = replace(held, status="failed")
+
+    async def record_mapping_proposals(self, record: MappingRunRecord) -> int:
+        """Checked before anything is stored, in Postgres' order: the one transaction
+        Postgres gives is all of it or none."""
+        check_mapping_run_write(record)
+        key = (record.tenant_id, record.instrument_id, record.version_id)
+        if key not in self._versions:
+            raise ValueError(
+                f"tenant {record.tenant_id!r} holds no policy version "
+                f"{record.instrument_id}:{record.version_id}"
+            )
+        held = self._mapping_runs.get(key)
+        if held is None or held.status != "pending":
+            raise ValueError(
+                f"{record.instrument_id}:{record.version_id} has no proposing run reserved"
+            )
+        if held.trace_id != record.trace_id:
+            raise ValueError(
+                f"{record.instrument_id}:{record.version_id}: the proposing run's reservation "
+                "is no longer this run's"
+            )
+        had = {
+            (m.policy_clause_id, m.obligation_id)
+            for m in self._policy_mappings
+            if m.tenant_id == record.tenant_id
+        }
+        appended = 0
+        for proposal in record.proposals:
+            if (proposal.policy_clause_id, proposal.obligation_id) in had:
+                continue
+            self._policy_mappings.append(
+                PolicyMapping(
+                    mapping_id=len(self._policy_mappings) + 1,
+                    tenant_id=record.tenant_id,
+                    instrument_id=record.instrument_id,
+                    version_id=record.version_id,
+                    policy_clause_id=proposal.policy_clause_id,
+                    obligation_id=proposal.obligation_id,
+                    kind=proposal.kind,
+                    status=MappingStatus.PROPOSED,
+                    rationale=proposal.rationale,
+                    proposer=record.proposer,
+                    approver=None,
+                    trace_id=record.trace_id,
+                    proposed_at=self._now(),
+                )
+            )
+            appended += 1
+        self._mapping_runs[key] = replace(held, status="done")
+        return appended
+
+    async def policy_mappings(
+        self,
+        tenant_id: str,
+        *,
+        instrument_id: str | None = None,
+        version_id: str | None = None,
+    ) -> tuple[PolicyMapping, ...]:
+        if (instrument_id is None) != (version_id is None):
+            raise ValueError("name a policy version by its instrument and its version, or neither")
+        return tuple(
+            m
+            for m in self._policy_mappings
+            if m.tenant_id == tenant_id
+            and (
+                instrument_id is None
+                or (m.instrument_id, m.version_id) == (instrument_id, version_id)
+            )
+        )
+
+    async def mapping_runs(self, tenant_id: str) -> dict[tuple[str, str], Reservation]:
+        lapsed_before = dt.datetime.now(dt.UTC) - MAPPING_RESERVATION_TTL
+        return {
+            (instrument_id, version_id): Reservation(held.status, held.reserved_at < lapsed_before)
+            for (tenant, instrument_id, version_id), held in sorted(self._mapping_runs.items())
+            if tenant == tenant_id
+        }
+
+    async def mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str
+    ) -> Reservation | None:
+        return (await self.mapping_runs(tenant_id)).get((instrument_id, version_id))
 
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:
         """Checked before anything is stored, which is what Postgres' one

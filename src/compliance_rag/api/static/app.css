@@ -170,6 +170,21 @@ body.shell-page { display: flex; flex-direction: column; min-height: 100vh; }
 .sub-name { min-width: 0; }
 .sub-list form { margin: 0; }
 
+/* The mapping proposals page (#305). */
+.mapping-version { margin: 1.5rem 0 0; }
+.mapping-version h2 { margin-bottom: 0; }
+.mapping-version form { margin: 0.5rem 0; }
+.mapping-list { list-style: none; margin: 0.75rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+.mapping-list li {
+  padding: 0.75rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.mapping-list li[data-status="proposed"] { border-left: 4px solid var(--warn); }
+.mapping-list li[data-status="approved"] { border-left: 4px solid var(--ok); }
+.mapping-list li p { margin: 0.25rem 0; }
+
 /* The questionnaire (#304). */
 .questionnaire .route { margin: 1.25rem 0 0; }
 .questionnaire .q-item h3 { text-transform: none; }

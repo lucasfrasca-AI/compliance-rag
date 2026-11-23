@@ -42,7 +42,9 @@ with a response schema chosen by the call's `ReplyKind`: `REPLY_SCHEMA` for an
 answer, either one (`answer`, `citations`) or a repair (`clause_id`, `quote`),
 the two shapes `assessment/draft.py` parses; `CLAIMS_SCHEMA` for the claims of a
 submitted document (`assessment/claims.py`, #298); `FINDINGS_SCHEMA` for one claim's
-findings (`assessment/findings.py`, #299). The schema helps the model and is never trusted:
+findings (`assessment/findings.py`, #299); `MAPPINGS_SCHEMA` for the policy-to-law
+mappings proposed for one policy version (`assessment/mapping_proposals.py`, #305). The
+schema helps the model and is never trusted:
 `parse_draft` and `parse_repair` still validate strictly afterwards, and
 `tests/test_gemini_generator.py` holds the schema to those models.
 
@@ -94,6 +96,7 @@ from compliance_rag.adapters.interfaces import (
     MAX_CITATIONS_PER_FINDING,
     MAX_CLAIMS,
     MAX_FINDINGS_PER_CLAIM,
+    MAX_MAPPING_PROPOSALS,
     Generation,
     GenerationUnavailable,
     Generator,
@@ -300,10 +303,40 @@ per target of a claim. Held to `FindingsEnvelope` and `ExtractedFinding` by
 `tests/test_gemini_generator.py`. Like the others it helps the model and is never
 trusted: `parse_findings` validates the reply whatever the model was asked for."""
 
+MAPPINGS_SCHEMA = _object(
+    {
+        "proposals": types.Schema(
+            type=types.Type.ARRAY,
+            max_items=MAX_MAPPING_PROPOSALS,
+            items=_object(
+                {
+                    "obligation_id": types.Schema(type=types.Type.STRING),
+                    "policy_clause_id": types.Schema(type=types.Type.STRING),
+                    "kind": types.Schema(
+                        type=types.Type.STRING, enum=["implements", "partially_implements"]
+                    ),
+                    "rationale": types.Schema(type=types.Type.STRING, min_length=1),
+                },
+                "obligation_id",
+                "policy_clause_id",
+                "kind",
+                "rationale",
+            ),
+        )
+    },
+    "proposals",
+)
+"""The reply of `ReplyKind.MAPPINGS` (`assessment/mapping_proposals.py`, #305): the
+policy-to-law mappings proposed for one policy version. Held to `ProposalReply` and
+`ExtractedProposal` by `tests/test_gemini_generator.py`. Like the others it helps the model
+and is never trusted: `parse_proposals` validates the reply whatever the model was asked
+for."""
+
 _REPLY_SCHEMAS = {
     ReplyKind.ANSWER: REPLY_SCHEMA,
     ReplyKind.CLAIMS: CLAIMS_SCHEMA,
     ReplyKind.FINDINGS: FINDINGS_SCHEMA,
+    ReplyKind.MAPPINGS: MAPPINGS_SCHEMA,
 }
 
 

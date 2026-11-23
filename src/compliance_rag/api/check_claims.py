@@ -225,7 +225,7 @@ async def extract_claims(request: Request, who: CurrentCaller, check_id: str) ->
         run_stream(
             services=services,
             who=who,
-            check_id=check_id,
+            subject={"check_id": check_id},
             release=release,
             error_of=_error,
             failure="extracting a check's claims",

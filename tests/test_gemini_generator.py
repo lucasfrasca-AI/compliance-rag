@@ -19,6 +19,7 @@ from compliance_rag.adapters.fakes import FakeLedgerStore, FakeRetrievalStore
 from compliance_rag.adapters.gemini_generator import (
     CLAIMS_SCHEMA,
     IMPLICIT_CACHE_MIN_TOKENS,
+    MAPPINGS_SCHEMA,
     PRICE_TABLE,
     REPLY_SCHEMA,
     RETRY_ATTEMPTS,
@@ -35,8 +36,10 @@ from compliance_rag.adapters.gemini_generator import (
 from compliance_rag.adapters.generation_residency import GenerationResidencyError
 from compliance_rag.adapters.interfaces import (
     MAX_CLAIMS,
+    MAX_MAPPING_PROPOSALS,
     Generation,
     GenerationUnavailable,
+    MappingKind,
     ReplyKind,
     Unavailability,
 )
@@ -48,6 +51,7 @@ from compliance_rag.assessment.draft import (
     parse_draft,
     parse_repair,
 )
+from compliance_rag.assessment.mapping_proposals import ExtractedProposal, ProposalReply
 from compliance_rag.assessment.pipeline import LIBRARY_QUESTION
 from compliance_rag.corpus.models import Chunk, Scope
 from compliance_rag.settings import BUILD_PHASE_OFFSHORE_REGION, REGION, Settings
@@ -829,3 +833,34 @@ async def test_a_findings_call_asks_for_the_findings_shape() -> None:
         "ambiguous",
     ]
     assert item["properties"]["settleBy"]["nullable"] is True
+
+
+# ---- the mappings schema is the proposal models' (#305) --------------------------------------
+
+
+def test_the_mappings_schema_names_exactly_the_fields_the_proposal_models_require() -> None:
+    """As the claims schema is held to the claim models: if a proposal model gains a field,
+    this fails until the schema does."""
+    assert set(MAPPINGS_SCHEMA.properties or {}) == set(ProposalReply.model_fields)
+    assert set(MAPPINGS_SCHEMA.required or []) == set(ProposalReply.model_fields)
+    proposals = (MAPPINGS_SCHEMA.properties or {})["proposals"]
+    assert proposals.max_items == MAX_MAPPING_PROPOSALS
+    entry = proposals.items
+    assert entry is not None
+    assert set(entry.properties or {}) == set(ExtractedProposal.model_fields)
+    assert set(entry.required or []) == set(ExtractedProposal.model_fields)
+    kind = (entry.properties or {})["kind"]
+    assert kind.enum == [k.value for k in MappingKind]
+
+
+async def test_a_mappings_call_asks_for_the_mappings_shape() -> None:
+    request: list[httpx.Request] = []
+    generator = gemini_generator(lambda _: answered(), _ok_corpus(), request)
+    await generator.generate(
+        system="s", cached_prefix=None, user="u", max_tokens=64, reply=ReplyKind.MAPPINGS
+    )
+    schema = body_of(request[0])["generationConfig"]["responseSchema"]
+    assert schema["required"] == ["proposals"] and "anyOf" not in schema
+    item = schema["properties"]["proposals"]["items"]
+    assert item["required"] == ["obligation_id", "policy_clause_id", "kind", "rationale"]
+    assert item["properties"]["kind"]["enum"] == ["implements", "partially_implements"]

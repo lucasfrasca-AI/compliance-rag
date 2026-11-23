@@ -30,12 +30,14 @@ from compliance_rag.adapters import postgres_ledger_store
 from compliance_rag.adapters.fakes import FakeClauseStore, FakeRetrievalStore
 from compliance_rag.adapters.interfaces import (
     FINDINGS_RESERVATION_TTL,
+    MAPPING_RESERVATION_TTL,
     AssessmentRecord,
     ChatAnswer,
     ChatCitation,
     DecisionKind,
     ExtractionAlreadyReserved,
     FindingsAlreadyReserved,
+    MappingRunAlreadyReserved,
     PolicyVersion,
     Profile,
     SourceKind,
@@ -63,6 +65,9 @@ from tests.contracts.test_ledger import (
     S6DA_2,
     a_check,
     a_findings_run,
+    a_mapping_run,
+    a_policy_with_versions,
+    a_proposal,
     an_exchange,
     an_extraction,
     assert_chat_contract,
@@ -74,6 +79,7 @@ from tests.contracts.test_ledger import (
     assert_environment_titles_contract,
     assert_findings_contract,
     assert_ledger_contract,
+    assert_mapping_contract,
     assert_refusal_outcomes_contract,
 )
 
@@ -87,6 +93,7 @@ pytestmark = pytest.mark.skipif(
 
 _LEDGER_TABLES = (
     "tenant_instrument, corpus_removal_audit, finding, evidence, assessment, usage, chat, "
+    "policy_mapping, policy_mapping_run, "
     "check_decision, check_claim, check_extraction, submitted_check, "
     "document_manifest, clause_version, clause, instrument_version, instrument, app_user, tenant"
 )
@@ -170,6 +177,58 @@ async def test_postgres_satisfies_the_findings_contract(ledger: PostgresLedgerSt
 
 async def test_postgres_satisfies_the_decisions_contract(ledger: PostgresLedgerStore) -> None:
     await assert_decisions_contract(ledger)
+
+
+async def test_postgres_satisfies_the_mapping_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_mapping_contract(ledger)
+
+
+async def test_postgres_takes_over_a_stale_mapping_run(ledger: PostgresLedgerStore) -> None:
+    """A proposing run that died holding its reservation is taken over after
+    `MAPPING_RESERVATION_TTL`, and the first run, finishing late, is refused: it commits
+    only if the reservation is still its own (#305)."""
+    await a_policy_with_versions(ledger)
+    policy = "acme/privacy-policy"
+    await ledger.reserve_mapping_run("acme", policy, "v2", trace_id="a" * 32)
+    with pytest.raises(MappingRunAlreadyReserved):
+        await ledger.reserve_mapping_run("acme", policy, "v2", trace_id="b" * 32)  # still fresh
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        await conn.execute(
+            "UPDATE policy_mapping_run SET reserved_at = clock_timestamp() - %s "
+            "WHERE tenant_id = 'acme' AND policy_version_id = 'v2'",
+            (MAPPING_RESERVATION_TTL + dt.timedelta(seconds=1),),
+        )
+    lapsed = await ledger.mapping_run("acme", policy, "v2")
+    assert lapsed is not None and lapsed.status == "pending" and lapsed.lapsed
+    await ledger.reserve_mapping_run("acme", policy, "v2", trace_id="b" * 32)  # taken over
+    with pytest.raises(ValueError, match="no longer"):
+        await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="a" * 32))
+    await ledger.fail_mapping_run("acme", policy, "v2", trace_id="a" * 32)  # nor release theirs
+    with pytest.raises(MappingRunAlreadyReserved):
+        await ledger.reserve_mapping_run("acme", policy, "v2", trace_id="c" * 32)
+    assert (
+        await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="b" * 32)) == 1
+    )
+
+
+async def test_postgres_proposes_one_mapping_once_under_a_race(
+    ledger: PostgresLedgerStore,
+) -> None:
+    """Two runs that both proposed the same mapping (the second took the reservation over
+    after the first lapsed, and both finish) leave one row: the unique key, not the
+    store's reading, keeps it (#305)."""
+    await a_policy_with_versions(ledger)
+    policy = "acme/privacy-policy"
+    await ledger.reserve_mapping_run("acme", policy, "v2", trace_id="a" * 32)
+    await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="a" * 32))
+    await ledger.reserve_mapping_run("acme", policy, "v2", trace_id="b" * 32)
+    appended = await ledger.record_mapping_proposals(
+        a_mapping_run(a_proposal(rationale="Other words."), trace_id="b" * 32)
+    )
+    assert appended == 0
+    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+        cursor = await conn.execute("SELECT count(*) FROM policy_mapping")
+        assert await cursor.fetchone() == (1,)
 
 
 async def test_postgres_satisfies_the_refusal_outcomes_contract(

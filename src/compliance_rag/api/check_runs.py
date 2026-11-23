@@ -1,6 +1,7 @@
-"""The skeleton a check's model runs share (#298 claims, #299 findings): a streamed
-response of server-sent events, a reservation held for the run and released by
-every path that ends without recording, and our words for what went wrong.
+"""The skeleton a check's model runs share (#298 claims, #299 findings), and a policy
+version's proposing run (#305): a streamed response of server-sent events, a reservation
+held for the run and released by every path that ends without recording, and our words
+for what went wrong.
 
 **One run per check, whoever's request it is.** The endpoint reserves its run
 (`LedgerStore.reserve_extraction`, `reserve_findings`) before the stream starts, so
@@ -17,7 +18,9 @@ that calls nothing. `run_stream` then owns the rest of the reservation's life:
 
 **Offshore, first.** While generation runs outside Australia only a registered
 build-phase tester may send a document to be checked (`assert_submission_allowed`,
-ADR-0032), before anything is read.
+ADR-0032), before anything is read. That is `submission_gate`, the default; a run that
+sends something else says its own (`gate`: a proposing run's is
+`assert_mapping_run_allowed`).
 
 **Our words, never the model's or the provider's.** `residency`,
 `generation_unavailable`, `policy_corpus_too_large` and `internal` are common to
@@ -123,44 +126,63 @@ class CheckRun:
         return await asyncio.shield(task)
 
 
+def error_event(
+    subject: dict[str, object],
+    failed: Exception,
+    error_of: Callable[[Exception], ErrorBody | None],
+    failure: str,
+) -> str:
+    """The one `error` event for `failed`, in our words (`error_of`'s, then `common_error`'s,
+    else `internal`), naming the run's `subject`, and logged as an unexpected failure only if
+    it is one. What `run_stream` yields, and what a run refused before it starts says."""
+    named = error_of(failed) or common_error(failed)
+    message, unexpected = named or (
+        {"error": "internal", "message": f"{failure} couldn't be completed"},
+        True,
+    )
+    if unexpected:
+        log.exception("%s failed", failure)
+    else:
+        log.warning("%s was not completed: %s", failure, message["error"])
+    return event("error", {**subject, **message})
+
+
+def submission_gate(services: ApiServices, who: Caller) -> None:
+    """The offshore gate of a run over a submitted document: only a registered tester's
+    document leaves Australia (ADR-0032), as for a question."""
+    assert_submission_allowed(
+        generation_region=services.settings.generation_region,
+        submitter=who.member.email,
+        testers=services.settings.offshore_testers,
+    )
+
+
 async def run_stream(
     *,
     services: ApiServices,
     who: Caller,
-    check_id: str,
+    subject: dict[str, object],
     release: Callable[[], Awaitable[None]],
     error_of: Callable[[Exception], ErrorBody | None],
     failure: str,
     body: Callable[[CheckRun], AsyncIterator[str]],
+    gate: Callable[[ApiServices, Caller], None] = submission_gate,
 ) -> AsyncIterator[str]:
     """The events of one run: the offshore gate, then `body`'s, then, for anything
-    that goes wrong, one `error` event in our words. `error_of` is the endpoint's own
-    words for its own failures (None for any it has none for); `failure` is what a
-    failure it cannot name is logged and told as."""
+    that goes wrong, one `error` event in our words, naming the run's `subject` (what it
+    was for: `{"check_id": ...}`). `error_of` is the endpoint's own words for its own
+    failures (None for any it has none for); `failure` is what a failure it cannot name
+    is logged and told as. `gate` is the run's offshore gate, run first, before anything
+    is read or sent: a document check's by default (`submission_gate`)."""
     run = CheckRun(release)
     try:
-        # First: offshore, only a registered tester's document leaves Australia
-        # (ADR-0032), as for a question.
-        assert_submission_allowed(
-            generation_region=services.settings.generation_region,
-            submitter=who.member.email,
-            testers=services.settings.offshore_testers,
-        )
+        gate(services, who)
         async for chunk in body(run):
             yield chunk
     except Exception as failed:
         if not run.handed_off:  # nothing was handed the reservation: release it here
             await release_quietly(release)
-        named = error_of(failed) or common_error(failed)
-        message, unexpected = named or (
-            {"error": "internal", "message": f"{failure} couldn't be completed"},
-            True,
-        )
-        if unexpected:
-            log.exception("%s failed", failure)
-        else:
-            log.warning("%s was not completed: %s", failure, message["error"])
-        yield event("error", {"check_id": check_id, **message})
+        yield error_event(subject, failed, error_of, failure)
     except BaseException:  # the client left before the work was started
         if not run.handed_off:
             await release_quietly(release)
