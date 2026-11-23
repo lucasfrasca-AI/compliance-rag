@@ -560,6 +560,48 @@ def check_check_write(record: CheckRecord) -> None:
         )
 
 
+class CheckStage(StrEnum):
+    """How far a check has got, from what the ledger holds (#355), by the one rule
+    `check_stage_of`: the document is stored (`SUBMITTED`), its claims are extracted
+    (`CLAIMS`), its findings are made (`FINDINGS`)."""
+
+    SUBMITTED = "submitted"
+    CLAIMS = "claims"
+    FINDINGS = "findings"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckListing:
+    """One row of a list of checks (#355): metadata only. It carries no document
+    text and no claim text, so a list is never a disclosure of what a check says."""
+
+    check_id: str
+    user_id: str
+    """The submitter's uid (ADR-0036)."""
+    filename: str
+    title: str
+    """The document's title (its `instrument_version`), which is the filename
+    unless the member gave one."""
+    created_at: dt.datetime
+    stage: CheckStage
+    run: CheckRun
+    """Whether a run is under way or its last attempt failed (`check_run_of`, the one
+    rule `LedgerStore.check_run` uses too): empty for a check at rest."""
+
+
+@dataclass(frozen=True, slots=True)
+class CheckCursor:
+    """Where a page of checks ends: the last row's `created_at` and `check_id`.
+    The next page is the rows strictly older, in the list's order."""
+
+    created_at: dt.datetime
+    check_id: str
+
+
+CHECK_PAGE_MAX = 100
+"""The most checks one `list_checks` call returns."""
+
+
 MAX_CLAIMS = 25
 """The most claims one check keeps (#298, ADR-0053): a reply with more is
 refused whole, never cut to size."""
@@ -922,6 +964,17 @@ def check_run_of(extraction: Reservation | None, findings: Reservation | None) -
     if findings.status == "pending" and not findings.lapsed:
         return CheckRun(running=RunStage.FINDINGS)
     return CheckRun(failed=RunStage.FINDINGS)
+
+
+def check_stage_of(extraction: Reservation | None, findings: Reservation | None) -> CheckStage:
+    """The one rule, for every `LedgerStore`: findings done is `FINDINGS`; otherwise an
+    extraction done (however few claims it found) is `CLAIMS`; otherwise `SUBMITTED`,
+    whether or not a run is under way (that is `check_run_of`'s)."""
+    if findings is not None and findings.status == "done":
+        return CheckStage.FINDINGS
+    if extraction is not None and extraction.status == "done":
+        return CheckStage.CLAIMS
+    return CheckStage.SUBMITTED
 
 
 def check_findings_write(record: FindingsRecord, claim_count: int | None = None) -> None:
@@ -1714,6 +1767,24 @@ class LedgerStore(ABC):
         """The check, or None if this tenant has none by that id. Not owner-keyed:
         who may see it is `CheckRecord.visible_to`, which every route applies,
         so a read here is never itself a disclosure."""
+
+    @abstractmethod
+    async def list_checks(
+        self,
+        tenant_id: str,
+        uid: str,
+        *,
+        admin: bool,
+        limit: int,
+        before: CheckCursor | None = None,
+    ) -> tuple[CheckListing, ...]:
+        """The checks `uid` may see (#355), newest first, ties by id descending
+        (bytewise): the rule is `CheckRecord.visible_to`, so an admin has the
+        tenant's and anyone else their own. `before` continues after the last row
+        of a page: only rows strictly older in that order. At most `limit`
+        (1 to `CHECK_PAGE_MAX`; `ValueError` otherwise). **One read, whatever the
+        number of rows**: each row's stage, run state and title come with it.
+        Metadata only, never a document's or a claim's words."""
 
     @abstractmethod
     async def check_of_version(

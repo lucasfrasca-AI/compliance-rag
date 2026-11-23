@@ -59,7 +59,7 @@ from tests.test_api_pages import (
 from tests.test_api_pages import ask as ask_in_chat
 
 ADMIN_LINKS = ("/admin/subscriptions", "/admin/questionnaire")
-MEMBER_LINKS = ("/chats/new", "/chats", "/checks/new")
+MEMBER_LINKS = ("/chats/new", "/chats", "/checks/new", "/checks")
 SUBMITTED = (
     "# Customer list proposal\n\nAcme will keep customer addresses for five years.\n\n"
     "Acme will review the retention period each year.\n"
@@ -132,7 +132,6 @@ async def test_a_member_sees_the_shell_on_every_page_and_no_admin_link(quote: st
             assert href in links_of(bar), (name, href)
         assert not [h for h in links_of(page) if h.startswith("/admin")], name
         assert "Admin" not in text_of(bar), name
-        assert "/checks" not in links_of(bar), name  # no checks list yet: no placeholder
         assert text_of(bar).count("Sign out") == 1, name
         assert scan(bar).where("button", **{"data-sign-out": ""}), name
         assert SECOND in text_of(bar), name  # the member's own email, bottom of the bar
@@ -151,8 +150,8 @@ async def test_the_sidebar_has_ask_and_check_sections_with_real_links_only(quote
     assert headings == ["Ask", "Check"]
     # every item is a real link to a page that exists (and none is a placeholder)
     items = re.findall(r"<li>(.*?)</li>", bar, re.S)
-    assert len(items) == 3 and all("<a " in i for i in items)
-    assert [text_of(i) for i in items] == ["New chat", "Chats", "Check a document"]
+    assert len(items) == 4 and all("<a " in i for i in items)
+    assert [text_of(i) for i in items] == ["New chat", "Chats", "Check a document", "Checks"]
 
 
 async def test_the_current_page_is_marked_in_the_sidebar(quote: str) -> None:

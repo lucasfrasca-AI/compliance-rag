@@ -26,7 +26,15 @@
 <p class="nav-heading">{{ section.heading }}</p>
 <ul>
 {% for item in section.items %}
-<li><a href="{{ item.href }}"{% if item.active %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+<li><a href="{{ item.href }}"{% if item.active %} aria-current="page"{% endif %}>{{ item.label }}</a>
+{% if item.children %}
+<ul class="nav-recent" aria-label="Recent checks">
+{% for child in item.children %}
+<li><a href="{{ child.href }}"{% if child.active %} aria-current="page"{% endif %}>{{ child.label }}</a></li>
+{% endfor %}
+</ul>
+{% endif %}
+</li>
 {% endfor %}
 </ul>
 </div>

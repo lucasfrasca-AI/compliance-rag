@@ -66,6 +66,7 @@ from tests.contracts.test_ledger import (
     an_extraction,
     assert_chat_contract,
     assert_check_contract,
+    assert_check_list_contract,
     assert_check_run_contract,
     assert_claims_contract,
     assert_environment_titles_contract,
@@ -147,6 +148,10 @@ async def test_postgres_satisfies_the_chat_contract(ledger: PostgresLedgerStore)
 
 async def test_postgres_satisfies_the_check_contract(ledger: PostgresLedgerStore) -> None:
     await assert_check_contract(ledger)
+
+
+async def test_postgres_satisfies_the_check_list_contract(ledger: PostgresLedgerStore) -> None:
+    await assert_check_list_contract(ledger)
 
 
 async def test_postgres_satisfies_the_claims_contract(ledger: PostgresLedgerStore) -> None:
