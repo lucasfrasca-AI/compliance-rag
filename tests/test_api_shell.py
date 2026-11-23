@@ -58,7 +58,7 @@ from tests.test_api_pages import (
 )
 from tests.test_api_pages import ask as ask_in_chat
 
-ADMIN_LINKS = ("/admin/subscriptions", "/admin/questionnaire")
+ADMIN_LINKS = ("/admin/subscriptions", "/admin/policies", "/admin/questionnaire")
 MEMBER_LINKS = ("/chats/new", "/chats", "/checks/new", "/checks")
 SUBMITTED = (
     "# Customer list proposal\n\nAcme will keep customer addresses for five years.\n\n"
@@ -121,10 +121,12 @@ async def test_a_member_sees_the_shell_on_every_page_and_no_admin_link(quote: st
         await signed_in(client, SECOND)
         pages = await every_page(client)
         pages["/admin/subscriptions"] = await client.get("/admin/subscriptions")
+        pages["/admin/policies"] = await client.get("/admin/policies")
         pages["/admin/questionnaire"] = await client.get("/admin/questionnaire")
     # an admin page is refused to a member, as before (403), and says so in the shell
     assert pages["/admin/subscriptions"].status_code == 403
     assert pages["/admin/questionnaire"].status_code == 403
+    assert pages["/admin/policies"].status_code == 403
     for name, response in pages.items():
         page = response.text
         bar = sidebar_of(page)
@@ -179,9 +181,11 @@ async def test_an_admin_sees_the_admin_section_on_every_page(quote: str) -> None
         await signed_in(client, MEMBER)
         pages = await every_page(client)
         pages["/admin/subscriptions"] = await client.get("/admin/subscriptions")
+        pages["/admin/policies"] = await client.get("/admin/policies")
         pages["/admin/questionnaire"] = await client.get("/admin/questionnaire")
     assert pages["/admin/subscriptions"].status_code == 200
     assert pages["/admin/questionnaire"].status_code == 200
+    assert pages["/admin/policies"].status_code == 200
     for name, response in pages.items():
         bar = sidebar_of(response.text)
         for href in (*MEMBER_LINKS, *ADMIN_LINKS):
@@ -302,6 +306,7 @@ async def test_the_shell_has_no_inline_script_style_or_handler_and_the_htmx_conf
         await signed_in(client, MEMBER)
         pages = await every_page(client)
         pages["/admin/subscriptions"] = await client.get("/admin/subscriptions")
+        pages["/admin/policies"] = await client.get("/admin/policies")
         pages["/admin/questionnaire"] = await client.get("/admin/questionnaire")
     for name, response in pages.items():
         assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY, name
@@ -594,6 +599,8 @@ async def test_the_pill_counts_only_readable_citations_as_checked() -> None:
         (f"/chats/{'a' * 32}", False, ["/chats"]),
         ("/checks/new", False, ["/checks/new"]),
         ("/admin/subscriptions", True, ["/admin/subscriptions"]),
+        ("/admin/policies", True, ["/admin/policies"]),
+        ("/admin/policies/privacy-policy/versions/v1", True, ["/admin/policies"]),
         ("/admin/questionnaire", True, ["/admin/questionnaire"]),
         ("/admin/subscriptions", False, []),  # a member has no such link to mark
         ("/chatsfoo", False, []),  # a parent is a whole path segment, not a string prefix
