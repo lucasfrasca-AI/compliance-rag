@@ -32,6 +32,7 @@ from psycopg.types.json import Jsonb
 from compliance_rag.adapters.interfaces import (
     CHECK_PAGE_MAX,
     FINDINGS_RESERVATION_TTL,
+    MAPPING_RESERVATION_TTL,
     RESERVATION_TTL,
     AssessmentRecord,
     BlockedCitation,
@@ -58,7 +59,12 @@ from compliance_rag.adapters.interfaces import (
     FindingsAlreadyReserved,
     FindingsRecord,
     LedgerStore,
+    MappingKind,
+    MappingRunAlreadyReserved,
+    MappingRunRecord,
+    MappingStatus,
     PolicyChecked,
+    PolicyMapping,
     PolicyVersion,
     PrefixMeasure,
     Profile,
@@ -84,6 +90,7 @@ from compliance_rag.adapters.interfaces import (
     check_claims_write,
     check_decision_write,
     check_findings_write,
+    check_mapping_run_write,
     check_run_of,
     check_stage_of,
     decision_adds_a_row,
@@ -324,6 +331,13 @@ def _flag_unreadable_absent(
                 turn_index,
                 position,
             )
+
+
+_MAPPING_SELECT: LiteralString = (
+    "SELECT mapping_id, policy_instrument_id, policy_version_id, policy_clause_id, "
+    "obligation_id, kind, status, rationale, proposer, approver, trace_id, proposed_at "
+    "FROM policy_mapping WHERE tenant_id = %s"
+)
 
 
 _CHECK_SELECT: LiteralString = (
@@ -1340,6 +1354,180 @@ class PostgresLedgerStore(LedgerStore):
             )
             for r in rows
         )
+
+    async def reserve_mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str, *, trace_id: str
+    ) -> None:
+        if not trace_id.strip():
+            raise ValueError("a proposing run carries the trace_id of its request")
+        async with self._connection() as conn:
+            # One statement, so of concurrent requests exactly one inserts, or takes over a
+            # finished, failed or abandoned reservation; the rest get no row. Only an
+            # internal policy's version has mappings to propose.
+            row = await (
+                await conn.execute(
+                    "INSERT INTO policy_mapping_run (tenant_id, policy_instrument_id, "
+                    "policy_version_id, trace_id, status, reserved_at) "
+                    "SELECT %s, %s, %s, %s, 'pending', clock_timestamp() WHERE EXISTS ("
+                    "SELECT 1 FROM instrument_version v JOIN instrument i "
+                    "ON i.tenant_id = v.tenant_id AND i.instrument_id = v.instrument_id "
+                    "WHERE v.tenant_id = %s AND v.instrument_id = %s AND v.version_id = %s "
+                    "AND i.document_class = 'internal_policy') "
+                    "ON CONFLICT (tenant_id, policy_instrument_id, policy_version_id) "
+                    "DO UPDATE SET trace_id = EXCLUDED.trace_id, status = 'pending', "
+                    "reserved_at = EXCLUDED.reserved_at, completed_at = NULL "
+                    "WHERE policy_mapping_run.status <> 'pending' OR "
+                    "policy_mapping_run.reserved_at < clock_timestamp() - %s RETURNING 1",
+                    (
+                        tenant_id,
+                        instrument_id,
+                        version_id,
+                        trace_id,
+                        tenant_id,
+                        instrument_id,
+                        version_id,
+                        MAPPING_RESERVATION_TTL,
+                    ),
+                )
+            ).fetchone()
+            if row is not None:
+                return
+            held = await (
+                await conn.execute(
+                    "SELECT 1 FROM instrument_version v JOIN instrument i "
+                    "ON i.tenant_id = v.tenant_id AND i.instrument_id = v.instrument_id "
+                    "WHERE v.tenant_id = %s AND v.instrument_id = %s AND v.version_id = %s "
+                    "AND i.document_class = 'internal_policy'",
+                    (tenant_id, instrument_id, version_id),
+                )
+            ).fetchone()
+        if held is None:
+            raise ValueError(
+                f"tenant {tenant_id!r} holds no policy version {instrument_id}:{version_id}"
+            )
+        raise MappingRunAlreadyReserved(f"{instrument_id}:{version_id} is being proposed for")
+
+    async def fail_mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str, *, trace_id: str
+    ) -> None:
+        await self._execute(
+            "UPDATE policy_mapping_run SET status = 'failed' "
+            "WHERE tenant_id = %s AND policy_instrument_id = %s AND policy_version_id = %s "
+            "AND status = 'pending' AND trace_id = %s",
+            (tenant_id, instrument_id, version_id, trace_id),
+        )
+
+    async def record_mapping_proposals(self, record: MappingRunRecord) -> int:
+        check_mapping_run_write(record)
+        try:
+            async with self._connection() as conn, conn.transaction():
+                done = await (
+                    await conn.execute(
+                        "UPDATE policy_mapping_run SET status = 'done', "
+                        "completed_at = clock_timestamp() WHERE tenant_id = %s "
+                        "AND policy_instrument_id = %s AND policy_version_id = %s "
+                        "AND status = 'pending' AND trace_id = %s RETURNING 1",
+                        (
+                            record.tenant_id,
+                            record.instrument_id,
+                            record.version_id,
+                            record.trace_id,
+                        ),
+                    )
+                ).fetchone()
+                if done is None:
+                    held = await (
+                        await conn.execute(
+                            "SELECT status, trace_id FROM policy_mapping_run WHERE tenant_id = %s "
+                            "AND policy_instrument_id = %s AND policy_version_id = %s",
+                            (record.tenant_id, record.instrument_id, record.version_id),
+                        )
+                    ).fetchone()
+                    named = f"{record.instrument_id}:{record.version_id}"
+                    if held is None:
+                        raise ValueError(
+                            f"tenant {record.tenant_id!r} holds no policy version {named}, "
+                            "or has not reserved a proposing run for it"
+                        )
+                    if held[0] == "pending":
+                        raise ValueError(
+                            f"{named}: the proposing run's reservation is no longer this run's"
+                        )
+                    raise ValueError(f"{named} has no proposing run reserved")
+                appended = 0
+                for p in record.proposals:
+                    # Always `proposed`, with no approver: the column default, not a value
+                    # this code could choose. A mapping the tenant already has, in any
+                    # status, is not proposed again.
+                    inserted = await (
+                        await conn.execute(
+                            "INSERT INTO policy_mapping (tenant_id, policy_instrument_id, "
+                            "policy_version_id, policy_clause_id, obligation_id, kind, rationale, "
+                            "proposer, trace_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                            "ON CONFLICT ON CONSTRAINT policy_mapping_once DO NOTHING RETURNING 1",
+                            (
+                                record.tenant_id,
+                                record.instrument_id,
+                                record.version_id,
+                                p.policy_clause_id,
+                                p.obligation_id,
+                                p.kind.value,
+                                p.rationale,
+                                record.proposer,
+                                record.trace_id,
+                            ),
+                        )
+                    ).fetchone()
+                    appended += inserted is not None
+        except psycopg.errors.CheckViolation as exc:
+            raise ValueError(f"proposals refused: {exc.diag.constraint_name}") from None
+        return appended
+
+    async def policy_mappings(
+        self,
+        tenant_id: str,
+        *,
+        instrument_id: str | None = None,
+        version_id: str | None = None,
+    ) -> tuple[PolicyMapping, ...]:
+        if (instrument_id is None) != (version_id is None):
+            raise ValueError("name a policy version by its instrument and its version, or neither")
+        if instrument_id is None:
+            rows = await self._fetchall(_MAPPING_SELECT + " ORDER BY mapping_id", (tenant_id,))
+        else:
+            rows = await self._fetchall(
+                _MAPPING_SELECT + " AND policy_instrument_id = %s AND policy_version_id = %s "
+                "ORDER BY mapping_id",
+                (tenant_id, instrument_id, version_id),
+            )
+        return tuple(
+            PolicyMapping(
+                mapping_id=int(r[0]),
+                tenant_id=tenant_id,
+                instrument_id=str(r[1]),
+                version_id=str(r[2]),
+                policy_clause_id=str(r[3]),
+                obligation_id=str(r[4]),
+                kind=MappingKind(str(r[5])),
+                status=MappingStatus(str(r[6])),
+                rationale=str(r[7]),
+                proposer=str(r[8]),
+                approver=None if r[9] is None else str(r[9]),
+                trace_id=str(r[10]),
+                proposed_at=r[11],
+            )
+            for r in rows
+        )
+
+    async def mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str
+    ) -> Reservation | None:
+        row = await self._fetchone(
+            "SELECT status, reserved_at < clock_timestamp() - %s FROM policy_mapping_run "
+            "WHERE tenant_id = %s AND policy_instrument_id = %s AND policy_version_id = %s",
+            (MAPPING_RESERVATION_TTL, tenant_id, instrument_id, version_id),
+        )
+        return None if row is None else Reservation(str(row[0]), bool(row[1]))
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
         rows = await self._fetchall(

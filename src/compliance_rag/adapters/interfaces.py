@@ -1164,6 +1164,148 @@ def check_decision_write(decision: CheckDecision) -> None:
 
 
 # --------------------------------------------------------------------------
+# Policy mappings (#305, ADR-0053 F6, ADR-0059 Q8 and C2; CONTEXT.md: Policy mapping)
+# --------------------------------------------------------------------------
+
+
+class MappingKind(StrEnum):
+    """How a policy clause meets an obligation (ADR-0053 F6). Only `implements`
+    derives a finding (#306); `partially_implements` is recorded and shown, and
+    changes nothing."""
+
+    IMPLEMENTS = "implements"
+    PARTIALLY_IMPLEMENTS = "partially_implements"
+
+
+class MappingStatus(StrEnum):
+    """Where a policy mapping stands. A model's proposal is `PROPOSED` and the store
+    writes no other value on a proposal; `APPROVED` and `REJECTED` are an admin's
+    (#306)."""
+
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+MAX_MAPPING_PROPOSALS = 40
+"""The most proposals one run keeps: a reply with more is refused whole, never cut to
+size."""
+MAX_RATIONALE_CHARS = 300
+"""The longest rationale a proposal carries (ledger `policy_mapping_rationale`)."""
+
+MAPPING_RESERVATION_TTL = dt.timedelta(minutes=10)
+"""How long a reserved proposing run may stay pending before another request may take
+it over, as `RESERVATION_TTL` is for an extraction: a request that died holding one must
+not block its policy version for good."""
+
+
+class MappingRunAlreadyReserved(ValueError):
+    """Another request holds this policy version's proposing run right now."""
+
+
+@dataclass(frozen=True, slots=True)
+class MappingProposal:
+    """One proposed mapping: what the model said and code accepted. The proposer, status
+    and approver are not here: the run's proposer is the model's, and a proposal is
+    `proposed` with no approver whatever it says (`LedgerStore.record_mapping_proposals`
+    is the only writer, and writes no other status)."""
+
+    policy_clause_id: str
+    """A clause of the proposed-for policy version, from the tenant prefix."""
+    obligation_id: str
+    """From the obligation digest, and only from it."""
+    kind: MappingKind
+    rationale: str
+    """The model's words: one line, at most `MAX_RATIONALE_CHARS`. Shown only labelled as
+    the model's; never evidence, never put in a prompt."""
+
+
+@dataclass(frozen=True, slots=True)
+class MappingRunRecord:
+    """What one proposing run writes, in one transaction: the reservation marked done and
+    every proposal that is new. The run is reserved before the model is called
+    (`LedgerStore.reserve_mapping_run`); this completes it."""
+
+    tenant_id: str
+    instrument_id: str
+    version_id: str
+    """The policy version the run proposed for."""
+    trace_id: str
+    """The request that ran it; every row it appends carries it, and it must be the
+    request that holds the reservation."""
+    proposer: str
+    """The model id (`Generation.model`): who proposed, never a person."""
+    proposals: tuple[MappingProposal, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyMapping:
+    """One row of ledger `policy_mapping`, as read."""
+
+    mapping_id: int
+    tenant_id: str
+    instrument_id: str
+    version_id: str
+    policy_clause_id: str
+    obligation_id: str
+    kind: MappingKind
+    status: MappingStatus
+    rationale: str
+    """The model's words, never evidence."""
+    proposer: str
+    """The model id."""
+    approver: str | None
+    """Who decided it (#306): None while it is `proposed`."""
+    trace_id: str
+    """The request that proposed it."""
+    proposed_at: dt.datetime | None = None
+    """Stamped by the ledger on write."""
+
+
+def check_mapping_run_write(record: MappingRunRecord) -> None:
+    """What every `LedgerStore` refuses before writing a proposing run, in this order;
+    the database's own constraints refuse each again (ledger 0031). What only a store can
+    refuse (a version it does not hold, a run not reserved or no longer this one's) comes
+    after, in both."""
+    if not record.trace_id.strip():
+        raise ValueError("a proposing run carries the trace_id of its request")
+    if not record.proposer.strip():
+        raise ValueError("a proposal names the model that proposed it")
+    if not record.instrument_id.strip() or not record.version_id.strip():
+        raise ValueError("a proposing run names its policy version")
+    if len(record.proposals) > MAX_MAPPING_PROPOSALS:
+        raise ValueError(f"a run keeps at most {MAX_MAPPING_PROPOSALS} proposals")
+    seen: set[tuple[str, str, MappingKind]] = set()
+    for p in record.proposals:
+        try:
+            instrument_id, version_id, _ = parse_stable_id(p.policy_clause_id)
+        except ValueError:
+            raise ValueError(f"{p.policy_clause_id!r} is not a clause id") from None
+        if (instrument_id, version_id) != (record.instrument_id, record.version_id):
+            raise ValueError(
+                f"{p.policy_clause_id}: not a clause of {record.instrument_id}:{record.version_id}"
+            )
+        if OBLIGATION_ID_RE.fullmatch(p.obligation_id) is None:
+            raise ValueError(f"{p.obligation_id!r} is not an obligation id")
+        if (
+            not p.rationale.strip()
+            or len(p.rationale.splitlines()) != 1
+            or "\n" in p.rationale
+            or "\r" in p.rationale
+            or len(p.rationale) > MAX_RATIONALE_CHARS
+        ):
+            raise ValueError(
+                f"a rationale is one non-blank line of at most {MAX_RATIONALE_CHARS} characters"
+            )
+        if "\x00" in p.rationale:
+            raise ValueError("text may not contain NUL")
+        key = (p.policy_clause_id, p.obligation_id, p.kind)
+        if key in seen:
+            raise ValueError("a run proposes the same mapping once")
+        seen.add(key)
+
+
+# --------------------------------------------------------------------------
 # Chat (#162, CONTEXT.md: Chat)
 # --------------------------------------------------------------------------
 
@@ -2039,6 +2181,64 @@ class LedgerStore(ABC):
         tenant's."""
 
     @abstractmethod
+    async def reserve_mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str, *, trace_id: str
+    ) -> None:
+        """Reserve one policy version's proposing run, atomically, before the model is
+        called (#305, ADR-0059 Q8), as `reserve_extraction` does for a check: of any
+        number of concurrent requests exactly one succeeds, and the rest raise
+        `MappingRunAlreadyReserved` and must not call the model. Pending until
+        `record_mapping_proposals` completes it or `fail_mapping_run` releases it. A
+        version whose last run is `done` or `failed`, or that has been pending longer
+        than `MAPPING_RESERVATION_TTL`, may be reserved again (a repeat proposes nothing
+        twice: `record_mapping_proposals` keeps each mapping once). A `ValueError` for a
+        blank trace id, and for a version this tenant does not hold as an internal
+        policy."""
+
+    @abstractmethod
+    async def fail_mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str, *, trace_id: str
+    ) -> None:
+        """Release a pending proposing run as failed, so it can be made again, if it is
+        still the one `trace_id` reserved. Nothing happens to one that is not pending, or
+        that another request now holds (a run that outlived its reservation must not
+        release its successor's), so it is safe to call from every failure path."""
+
+    @abstractmethod
+    async def record_mapping_proposals(self, record: MappingRunRecord) -> int:
+        """Complete a reserved proposing run (#305): every proposal it holds that is new,
+        as a `policy_mapping` row with status `proposed`, the model id as its proposer, no
+        approver and the run's `trace_id`, and the reservation marked done, in one
+        transaction. Returns how many rows were appended. **Idempotent per mapping**: a
+        proposal whose (policy clause, obligation, kind) the tenant already has, in any
+        status, appends nothing (so a rejected mapping is never proposed again, and an
+        approved one never twice). **Writes nothing else**: no graph node, no file, and no
+        status but `proposed`. A `ValueError` and nothing written for anything
+        `check_mapping_run_write` refuses, a version this tenant does not hold, a run not
+        reserved (pending) or already done, and a reservation that is no longer this
+        run's (it commits only for the request that holds it)."""
+
+    @abstractmethod
+    async def policy_mappings(
+        self,
+        tenant_id: str,
+        *,
+        instrument_id: str | None = None,
+        version_id: str | None = None,
+    ) -> tuple[PolicyMapping, ...]:
+        """The tenant's policy mappings in the order they were proposed, in every status,
+        for one policy version when `instrument_id` and `version_id` are given (both, or
+        neither: a `ValueError` for one alone). Another tenant's are never returned."""
+
+    @abstractmethod
+    async def mapping_run(
+        self, tenant_id: str, instrument_id: str, version_id: str
+    ) -> Reservation | None:
+        """Where the policy version's proposing run stands: its status and whether, pending,
+        it has outlived `MAPPING_RESERVATION_TTL` (so it is not running). None for a version
+        never proposed for. Reads only; reserves nothing."""
+
+    @abstractmethod
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:
         """Append a question and what the member was shown for it to a chat
         (#162), in one transaction: both rows land or neither does, as the
@@ -2386,6 +2586,9 @@ class ReplyKind(StrEnum):
     """The claims of a submitted document (`assessment/claims.py`, #298)."""
     FINDINGS = "findings"
     """The findings for one claim (`assessment/findings.py`, #299)."""
+    MAPPINGS = "mappings"
+    """The policy-to-law mappings proposed for one policy version
+    (`assessment/mapping_proposals.py`, #305)."""
 
 
 class Generator(ABC):
