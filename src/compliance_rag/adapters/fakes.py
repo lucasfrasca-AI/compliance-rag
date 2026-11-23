@@ -35,7 +35,6 @@ from compliance_rag.adapters.interfaces import (
     CheckNotExtracted,
     CheckRecord,
     CheckRun,
-    CheckStage,
     ClaimExtractionRecord,
     ClauseStore,
     Embedder,
@@ -67,6 +66,7 @@ from compliance_rag.adapters.interfaces import (
     check_claims_write,
     check_findings_write,
     check_run_of,
+    check_stage_of,
 )
 from compliance_rag.adapters.removal_authorization import RemovalAuthorization
 from compliance_rag.adapters.revision_authorization import RevisionAuthorization
@@ -615,13 +615,7 @@ class FakeLedgerStore(LedgerStore):
             assert record.created_at is not None  # stamped by `record_check`
             extraction = self._extractions.get((tenant, check_id))
             findings = self._findings_runs.get((tenant, check_id))
-            if findings is not None and findings.status == "done":
-                stage = CheckStage.FINDINGS
-            elif extraction is not None and extraction.status == "done":
-                stage = CheckStage.CLAIMS
-            else:
-                stage = CheckStage.SUBMITTED
-            run = check_run_of(
+            reservations = (
                 None
                 if extraction is None
                 else Reservation(extraction.status, extraction.reserved_at < now - RESERVATION_TTL),
@@ -631,6 +625,8 @@ class FakeLedgerStore(LedgerStore):
                     findings.status, findings.reserved_at < now - FINDINGS_RESERVATION_TTL
                 ),
             )
+            stage = check_stage_of(*reservations)
+            run = check_run_of(*reservations)
             rows.append(
                 CheckListing(
                     check_id=check_id,

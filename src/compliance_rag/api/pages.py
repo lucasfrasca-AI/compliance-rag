@@ -37,6 +37,7 @@ turns into the same redirect.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -77,6 +78,8 @@ PAGE_HEADERS = {
 }
 """On every response under `/chats`, `/checks` and `/admin`, a redirect, an error page, a
 fragment and its JSON refusals included (`PageHeaders`)."""
+
+log = logging.getLogger(__name__)
 
 PAGE_PREFIXES = ("/chats", "/checks", "/admin")
 
@@ -358,7 +361,7 @@ async def page_caller(
 async def sidebar_checks(request: Request, caller: Caller) -> tuple[CheckListing, ...]:
     """The reader's latest checks for the sidebar: those they may see
     (`CheckRecord.visible_to`), so an admin's are the tenant's. One indexed read
-    (`LedgerStore.list_checks`, ledger 0027). A ledger that can't be reached
+    (`LedgerStore.list_checks`, ledger 0028). A ledger that can't be reached
     leaves the sidebar without them rather than taking an unrelated page down."""
     with telemetry.span("api.check.recent") as span:
         try:
@@ -368,8 +371,15 @@ async def sidebar_checks(request: Request, caller: Caller) -> tuple[CheckListing
                 admin=bool(request.state.is_admin),
                 limit=SIDEBAR_CHECKS,
             )
-        except ConnectionError:  # the Postgres ledger's `LedgerUnreachable` is one
+        except ConnectionError as unreachable:  # the Postgres ledger's `LedgerUnreachable`
+            # The outage is on the span and in the log, by type alone: the message
+            # may name where the ledger is, which neither carries.
+            kind = type(unreachable).__name__
             span.set_attribute("check.recent_unavailable", True)
+            span.record_exception(ConnectionError(kind))
+            log.warning(
+                "the sidebar's recent checks were not read: the ledger was unreachable (%s)", kind
+            )
             return ()
         span.set_attribute("check.recent", len(recent))
         return recent

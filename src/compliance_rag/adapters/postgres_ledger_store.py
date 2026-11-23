@@ -45,7 +45,6 @@ from compliance_rag.adapters.interfaces import (
     CheckNotExtracted,
     CheckRecord,
     CheckRun,
-    CheckStage,
     Citation,
     ClaimExtractionRecord,
     ClaimRecord,
@@ -83,6 +82,7 @@ from compliance_rag.adapters.interfaces import (
     check_claims_write,
     check_findings_write,
     check_run_of,
+    check_stage_of,
 )
 from compliance_rag.assessment.coverage import (
     CoverageRow,
@@ -859,23 +859,35 @@ class PostgresLedgerStore(LedgerStore):
         params.append(limit)
         rows = await self._fetchall(sql + order, tuple(params))
         listings: list[CheckListing] = []
-        for r in rows:
-            extraction = None if r[5] is None else Reservation(str(r[5]), bool(r[6]))
-            findings = None if r[7] is None else Reservation(str(r[7]), bool(r[8]))
-            if findings is not None and findings.status == "done":
-                stage = CheckStage.FINDINGS
-            elif extraction is not None and extraction.status == "done":
-                stage = CheckStage.CLAIMS
-            else:
-                stage = CheckStage.SUBMITTED
+        for (
+            check_id,
+            user_id,
+            filename,
+            title,
+            created_at,
+            extraction_status,
+            extraction_lapsed,
+            findings_status,
+            findings_lapsed,
+        ) in rows:
+            extraction = (
+                None
+                if extraction_status is None
+                else Reservation(str(extraction_status), bool(extraction_lapsed))
+            )
+            findings = (
+                None
+                if findings_status is None
+                else Reservation(str(findings_status), bool(findings_lapsed))
+            )
             listings.append(
                 CheckListing(
-                    check_id=str(r[0]),
-                    user_id=str(r[1]),
-                    filename=str(r[2]),
-                    title=str(r[3]),
-                    created_at=r[4],
-                    stage=stage,
+                    check_id=str(check_id),
+                    user_id=str(user_id),
+                    filename=str(filename),
+                    title=str(title),
+                    created_at=created_at,
+                    stage=check_stage_of(extraction, findings),
                     run=check_run_of(extraction, findings),
                 )
             )

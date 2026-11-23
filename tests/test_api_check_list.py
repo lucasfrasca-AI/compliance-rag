@@ -22,9 +22,16 @@ import uuid
 
 import httpx
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from compliance_rag.adapters.fakes import FakeGenerator, FakeLedgerStore
-from compliance_rag.adapters.interfaces import CheckCursor, CheckRecord
+from compliance_rag.adapters.interfaces import (
+    CheckCursor,
+    CheckRecord,
+    CheckStage,
+    Reservation,
+    check_stage_of,
+)
 from compliance_rag.api.check_list import PAGE_SIZE, parse_cursor
 from compliance_rag.api.pages import SIDEBAR_CHECKS, nav_sections
 from compliance_rag.corpus.models import DocumentClass
@@ -377,19 +384,48 @@ def test_nav_marks_checks_only_on_the_list_and_on_a_check_not_in_the_latest() ->
     assert current(f"/checks/{uuid.UUID(int=1, version=4).hex}") == ["/checks"]
 
 
-async def test_a_ledger_that_cannot_be_reached_leaves_the_sidebar_bare_not_the_page_down() -> None:
+async def test_a_ledger_that_cannot_be_reached_leaves_the_sidebar_bare_not_the_page_down(
+    span_exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
     ledger = await acme_ledger()
+    detail = "db-host-7.internal:5432"
 
     async def unreachable(*args: object, **kwargs: object) -> object:
-        raise ConnectionError("the ledger can't be reached")
+        raise ConnectionError(f"the ledger at {detail} can't be reached")
 
     ledger.list_checks = unreachable  # type: ignore[method-assign]  # pyright: ignore
     async with await world(ledger) as client:
         await sign_in(client, SECOND_UID, SECOND)
-        response = await client.get("/chats/new")
+        span_exporter.clear()
+        with caplog.at_level("WARNING", logger="compliance_rag.api.pages"):
+            response = await client.get("/chats/new")
     assert response.status_code == 200
     assert "/checks" in links_of(sidebar_of(response.text))
     assert not [h for h in links_of(response.text) if re.fullmatch(r"/checks/[0-9a-f]{32}", h)]
+    # the outage is not a healthy-looking span, and neither record carries the detail
+    (span,) = (s for s in span_exporter.get_finished_spans() if s.name == "api.check.recent")
+    assert span.attributes is not None and span.attributes["check.recent_unavailable"] is True
+    assert [e.name for e in span.events] == ["exception"]
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "unreachable" in warnings[0].getMessage()
+    assert detail not in warnings[0].getMessage()
+    assert detail not in repr([dict(e.attributes or {}) for e in span.events])
+
+
+def test_one_rule_says_which_stage_a_check_is_at() -> None:
+    def held(status: str) -> Reservation:
+        return Reservation(status, lapsed=False)
+
+    for extraction, findings, stage in (
+        (None, None, CheckStage.SUBMITTED),
+        (held("pending"), None, CheckStage.SUBMITTED),
+        (held("failed"), None, CheckStage.SUBMITTED),
+        (held("done"), None, CheckStage.CLAIMS),
+        (held("done"), held("pending"), CheckStage.CLAIMS),
+        (held("done"), held("failed"), CheckStage.CLAIMS),
+        (held("done"), held("done"), CheckStage.FINDINGS),
+    ):
+        assert check_stage_of(extraction, findings) is stage, (extraction, findings)
 
 
 # ---- the shell --------------------------------------------------------------------------------

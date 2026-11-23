@@ -561,9 +561,9 @@ def check_check_write(record: CheckRecord) -> None:
 
 
 class CheckStage(StrEnum):
-    """How far a check has got, from what the ledger holds (#355): the document
-    is stored (`SUBMITTED`), its claims are extracted (`CLAIMS`, the extraction
-    is done, however few claims it found), its findings are made (`FINDINGS`)."""
+    """How far a check has got, from what the ledger holds (#355), by the one rule
+    `check_stage_of`: the document is stored (`SUBMITTED`), its claims are extracted
+    (`CLAIMS`), its findings are made (`FINDINGS`)."""
 
     SUBMITTED = "submitted"
     CLAIMS = "claims"
@@ -964,6 +964,17 @@ def check_run_of(extraction: Reservation | None, findings: Reservation | None) -
     if findings.status == "pending" and not findings.lapsed:
         return CheckRun(running=RunStage.FINDINGS)
     return CheckRun(failed=RunStage.FINDINGS)
+
+
+def check_stage_of(extraction: Reservation | None, findings: Reservation | None) -> CheckStage:
+    """The one rule, for every `LedgerStore`: findings done is `FINDINGS`; otherwise an
+    extraction done (however few claims it found) is `CLAIMS`; otherwise `SUBMITTED`,
+    whether or not a run is under way (that is `check_run_of`'s)."""
+    if findings is not None and findings.status == "done":
+        return CheckStage.FINDINGS
+    if extraction is not None and extraction.status == "done":
+        return CheckStage.CLAIMS
+    return CheckStage.SUBMITTED
 
 
 def check_findings_write(record: FindingsRecord, claim_count: int | None = None) -> None:
