@@ -53,6 +53,7 @@ from compliance_rag.adapters.interfaces import (
     ManifestMetadata,
     PolicyCorpus,
     PolicyVersion,
+    PolicyVersionRow,
     Profile,
     RemovalAuditEntry,
     ReplyKind,
@@ -476,6 +477,7 @@ class FakeLedgerStore(LedgerStore):
         self._versions: dict[tuple[str, str, str], tuple[dt.date, dt.date | None]] = {}
         self._classes: dict[tuple[str, str], DocumentClass] = {}  # (tenant, instrument)
         self._titles: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version)
+        self.backdate_reasons: dict[tuple[str, str, str], str] = {}  # (tenant, instrument, version)
         self.instrument_titles: dict[tuple[str, str], str] = {}  # (tenant, instrument): latest
         self.title_reads = 0
         """How many `version_titles` reads were made: a request makes one,
@@ -914,9 +916,12 @@ class FakeLedgerStore(LedgerStore):
         supersedes: str | None,
         document_class: DocumentClass,
         title: str,
+        backdate_reason: str | None = None,
     ) -> None:
         check_document_class(tenant_id, document_class)
         validate_title(title)
+        if backdate_reason is not None and not backdate_reason.strip():
+            raise ValueError("a backdate reason is a reason, not a blank one")
         key = (tenant_id, instrument_id, version_id)
         if key in self._versions:
             # Re-recording would reset valid_to and silently un-retire it.
@@ -926,6 +931,8 @@ class FakeLedgerStore(LedgerStore):
             raise ValueError(f"{instrument_id} is {known.value}, not {document_class.value}")
         self._versions[key] = (valid_from, None)
         self._titles[key] = title
+        if backdate_reason is not None:
+            self.backdate_reasons[key] = backdate_reason
         self.instrument_titles[(tenant_id, instrument_id)] = title
 
     async def version_titles(
@@ -976,6 +983,25 @@ class FakeLedgerStore(LedgerStore):
             and (tenant, instrument_id, version_id) not in self.withdrawn
             and (tenant, instrument_id, version_id) not in self.purged
         )
+
+    async def policy_version_rows(self, tenant_id: str) -> tuple[PolicyVersionRow, ...]:
+        rows = [
+            PolicyVersionRow(
+                instrument_id=instrument_id,
+                version_id=version_id,
+                title=self._titles[key],
+                valid_from=valid_from,
+                valid_to=valid_to,
+                withdrawn=key in self.withdrawn,
+                purged=key in self.purged,
+                backdate_reason=self.backdate_reasons.get(key),
+            )
+            for key, (valid_from, valid_to) in self._versions.items()
+            for tenant, instrument_id, version_id in (key,)
+            if tenant == tenant_id
+            and self._classes.get((tenant, instrument_id)) is DocumentClass.INTERNAL_POLICY
+        ]
+        return tuple(sorted(rows, key=lambda r: (r.instrument_id, r.valid_from, r.version_id)))
 
     async def document_class(self, *, tenant_id: str, instrument_id: str) -> DocumentClass | None:
         return self._classes.get((tenant_id, instrument_id))

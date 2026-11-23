@@ -24,6 +24,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from compliance_rag.api import (
     admin,
+    admin_policies,
+    admin_policy_pages,
     answers,
     chats,
     check_claims,
@@ -121,6 +123,8 @@ def create_app(services: ApiServices, *, redirect_root: bool = True) -> FastAPI:
     app.include_router(check_pages.router)
     app.include_router(check_list.router)
     app.include_router(admin.router)
+    app.include_router(admin_policies.router)
+    app.include_router(admin_policy_pages.router)
     app.include_router(questionnaire.router)
     app.add_exception_handler(pages.SignInRequired, pages.sign_in_required)
     app.add_exception_handler(pages.PageError, pages.page_error)

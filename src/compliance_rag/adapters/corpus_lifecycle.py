@@ -218,6 +218,8 @@ class CorpusLifecycle:
         supersedes: str | None,
         document_class: DocumentClass,
         title: str,
+        backdate_reason: str | None = None,
+        uploaded_bytes: bytes | None = None,
     ) -> None:
         """Publish a new version: its clauses' canonical text and its manifest
         to the clause store, the chunks derived from them (`count_tokens` is
@@ -238,6 +240,20 @@ class CorpusLifecycle:
         names the document by (ADR-0049). An empty or multi-line one is
         refused before anything is written.
 
+        `backdate_reason` is why `effective_from` is in the past, recorded with
+        the version (ledger 0030, #303, ADR-0053 U4). Whether a date is past,
+        and so whether a reason is owed, is the caller's to decide: the seed
+        and the operator scripts publish old dates with none. The admin route
+        refuses a past date without one before it calls this.
+
+        `uploaded_bytes` is the file an admin uploaded, when the clauses were
+        parsed from one (#303): while generation is offshore the upload is
+        refused unless those bytes are, whole, a registered synthetic policy
+        fixture (`TenantTextGate.check_policy_document`, ADR-0026), before
+        anything is written, on top of the chunk and clause check every publish
+        passes. A script publishing a fixture it holds as parsed clauses gives
+        none.
+
         Refused once retrieval holds any of the version: that is
         `complete_version`'s to finish, or a replace in place. Before then a
         re-run finishes one that stopped in the clause store (module
@@ -252,6 +268,7 @@ class CorpusLifecycle:
             version_id=version_id,
             document_class=document_class,
             title=title,
+            uploaded_bytes=uploaded_bytes,
         )
         if await self._retrieval.version_exists(
             instrument_id=instrument_id, tenant_id=tenant_id, version_id=version_id
@@ -276,6 +293,7 @@ class CorpusLifecycle:
             supersedes=supersedes,
             document_class=document_class,
             title=title,
+            backdate_reason=backdate_reason,
         )
 
     async def submit_document(
@@ -390,6 +408,7 @@ class CorpusLifecycle:
         version_id: str,
         document_class: DocumentClass,
         title: str,
+        uploaded_bytes: bytes | None = None,
     ) -> None:
         """Raise what `publish_version` would raise about these clauses, title
         and class before it wrote anything, and write nothing: the title, the
@@ -407,6 +426,7 @@ class CorpusLifecycle:
             version_id=version_id,
             document_class=document_class,
             title=title,
+            uploaded_bytes=uploaded_bytes,
         )
 
     async def _precheck(
@@ -419,9 +439,14 @@ class CorpusLifecycle:
         version_id: str,
         document_class: DocumentClass,
         title: str,
+        uploaded_bytes: bytes | None = None,
     ) -> tuple[Chunk, ...]:
         validate_title(title)
         await self._check_class(tenant_id, instrument_id, document_class)
+        if uploaded_bytes is not None:
+            TenantTextGate(self._generation_region, self._synthetic_registry).check_policy_document(
+                uploaded_bytes
+            )
         return self._admitted(
             clauses,
             count_tokens=count_tokens,
@@ -716,6 +741,7 @@ class CorpusLifecycle:
         supersedes: str | None,
         document_class: DocumentClass,
         title: str,
+        backdate_reason: str | None = None,
     ) -> None:
         # The ledger is the record the verifier trusts (ADR-0021 mechanism
         # 3): written alongside the payload dates, never derived from them.
@@ -727,6 +753,7 @@ class CorpusLifecycle:
             supersedes=supersedes,
             document_class=document_class,
             title=title,
+            backdate_reason=backdate_reason,
         )
         if supersedes is not None:
             # Ledger first: a crash between the two leaves the verifier
@@ -928,6 +955,7 @@ class CorpusLifecycle:
             reason=reason,
             findings_citing=findings_citing,
             detail=refusal or "",
+            trace_id=telemetry.current_trace_id_or_none(),
         )
         await self._ledger.record_removal_audit(entry)
         if refusal is not None:
@@ -964,6 +992,7 @@ class CorpusLifecycle:
                     reason=reason,
                     findings_citing=findings_citing,
                     detail=f"authorized by {authorization.audit_id}{detail}",
+                    trace_id=telemetry.current_trace_id_or_none(),
                 )
             )
 

@@ -203,3 +203,11 @@ def current_trace_id() -> str:
     """Hex trace ID for the active span, for storing on ledger rows."""
     context = trace.get_current_span().get_span_context()
     return format(context.trace_id, "032x")
+
+
+def current_trace_id_or_none() -> str | None:
+    """`current_trace_id`, or None when no span is active (the id is then all
+    zeros, which names no trace): for a ledger row an operator script may write
+    outside any request, which must not store a trace that never existed."""
+    context = trace.get_current_span().get_span_context()
+    return format(context.trace_id, "032x") if context.is_valid else None

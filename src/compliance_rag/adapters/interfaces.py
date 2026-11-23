@@ -315,9 +315,13 @@ class UsageRecord:
 
 
 class RemovalAction(StrEnum):
-    """The removal operations that are audited (ADR-0021). Unsubscribe isn't
-    one: it touches no store (ADR-0020)."""
+    """The operations on a tenant's own versions that are audited (ADR-0021).
+    Unsubscribe isn't one: it touches no store (ADR-0020). `PUBLISH` is not a
+    removal: it is the admin's upload of a policy version (#303, ADR-0053 U4),
+    audited in the same append-only table so one place holds every admin
+    action on a version, whatever its outcome."""
 
+    PUBLISH = "publish"
     WITHDRAW = "withdraw"
     PURGE = "purge"
     REPLACE_IN_PLACE = "replace_in_place"
@@ -341,10 +345,31 @@ class PolicyVersion:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyVersionRow:
+    """One version of a tenant's internal policy as the admin page lists it
+    (#303): every version the ledger holds, in force or not, withdrawn and
+    purged ones included, with what the ledger recorded about it."""
+
+    instrument_id: str
+    version_id: str
+    title: str
+    valid_from: dt.date
+    valid_to: dt.date | None
+    """None while no later version has superseded it."""
+    withdrawn: bool
+    purged: bool
+    backdate_reason: str | None
+    """Why it was given an effective date in the past (#303, ledger 0030);
+    None for a version published with today's date or a future one."""
+
+
+@dataclass(frozen=True, slots=True)
 class RemovalAuditEntry:
     audit_id: str
     tenant_id: str
-    instrument_id: str
+    instrument_id: str | None
+    """What the request named. None for a refused upload of a new policy (#303): it names no
+    instrument, and none was made, so the row doesn't invent one."""
     version_id: str | None
     action: RemovalAction
     outcome: RemovalOutcome
@@ -352,6 +377,9 @@ class RemovalAuditEntry:
     reason: str
     findings_citing: int | None
     detail: str = ""
+    trace_id: str | None = None
+    """The request's trace (CLAUDE.md: a ledger row stores the `trace_id` it
+    came from); None for an operator script run outside a span."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2112,6 +2140,7 @@ class LedgerStore(ABC):
         supersedes: str | None,
         document_class: DocumentClass,
         title: str,
+        backdate_reason: str | None = None,
     ) -> None:
         """A version comes into force (ledger `instrument_version`). The
         record the verifier checks a cited version against, independently of
@@ -2122,7 +2151,21 @@ class LedgerStore(ABC):
         `title` is the document's title as its publisher gives it, recorded
         on the version and as the instrument's latest (ADR-0049): what a
         policy citation names the document by. Never the instrument id by
-        default; an empty or multi-line one is refused (`validate_title`)."""
+        default; an empty or multi-line one is refused (`validate_title`).
+
+        `backdate_reason` is why `valid_from` is in the past, when an admin
+        gave the version a past effective date (#303, ADR-0053 U4); recorded
+        with the version, one line, never blank. Whether a date is past is the
+        caller's to decide (a seed or a revision records old dates with no
+        reason), so this only records what it is given."""
+
+    @abstractmethod
+    async def policy_version_rows(self, tenant_id: str) -> tuple[PolicyVersionRow, ...]:
+        """Every version of every internal policy the tenant has, for the admin
+        page (#303): withdrawn and purged ones too, which `policy_versions`
+        leaves out. Sorted by instrument, then `valid_from`, then version id,
+        bytewise. A submitted document and library law are not policies and
+        are not listed."""
 
     @abstractmethod
     async def version_titles(

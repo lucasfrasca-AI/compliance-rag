@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Policies{% endblock %}
+{% block body %}
+{% from "_policy_upload.html" import upload_form %}
+<main class="page policies">
+<h1>Policies</h1>
+<p class="note">Your workspace's own policies, with every version of each. A new version is chosen here, by the policy it is for, never matched by title: two policies may share a title. It takes effect today unless you pick a date. A future date leaves the version it replaces in force until then; a past date needs a reason, recorded with the version. Withdrawing keeps the text, so earlier citations still open. Purging deletes it, and asks you to type how many findings cite it.</p>
+{% if notice %}
+<p class="card ok" role="status">{{ notice }}</p>
+{% endif %}
+<noscript><p class="card notice">Uploading a policy needs JavaScript.</p></noscript>
+<section class="card" id="new-policy">
+<h2>New policy</h2>
+<p class="note">A new policy, even when its title matches one you already have. To add a version to a policy you have, use that policy's own form below.</p>
+{{ upload_form("new", "/v1/admin/policies", "Publish new policy", "", today, max_bytes, max_kib) }}
+</section>
+{% if policies %}
+{% for policy in policies %}
+<section class="policy" data-policy="{{ policy.group.slug }}" aria-labelledby="policy-{{ policy.group.slug }}">
+<h2 id="policy-{{ policy.group.slug }}">{{ policy.group.title }}</h2>
+<p class="meta"><code>{{ policy.group.instrument_id }}</code></p>
+<ul class="sub-list">
+{% for v in policy.versions %}
+<li data-version="{{ v.row.version_id }}" data-status="{{ v.status }}">
+<div class="sub-name">
+<span class="chat-name">{{ v.row.version_id }}: {{ v.row.title }}</span>
+<span class="meta"><strong>{{ v.status_words }}</strong> · effective {{ v.row.valid_from }}{% if v.row.valid_to %} to {{ v.row.valid_to }}{% endif %}{% if v.row.backdate_reason %} · backdated: {{ v.row.backdate_reason }}{% endif %}</span>
+</div>
+<a class="button secondary" href="{{ v.href }}" aria-label="Preview, withdraw or purge {{ v.row.version_id }} of {{ policy.group.title }}">Preview</a>
+</li>
+{% endfor %}
+</ul>
+<details>
+<summary>New version of {{ policy.group.title }}</summary>
+{{ upload_form(policy.group.slug, "/v1/admin/policies/" ~ (policy.group.slug | urlencode) ~ "/versions", "Publish new version", policy.group.title, today, max_bytes, max_kib) }}
+</details>
+</section>
+{% endfor %}
+{% else %}
+<p class="empty">This workspace has no policies yet.</p>
+{% endif %}
+</main>
+<script type="module" src="/static/admin_policies.js"></script>
+{% endblock %}

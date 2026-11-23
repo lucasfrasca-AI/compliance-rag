@@ -287,6 +287,33 @@ carries it (`pages.PageHeaders`).
 - `admin.js` is not exercised by CI (no browser there), like `ask.js`; the tests make the
   requests it causes.
 
+## The admin policy versions (`admin_policies.py`, `admin_policy_pages.py`, `policy_ops.py`, `policy_upload.py`, `policy_audit.py`, `uploads.py`)
+
+`/admin/policies` (#303, ADR-0053 U4 and I5, ADR-0021) lists the workspace's policies with every
+version's id, effective date, status (in force, future, superseded, withdrawn, purged) and
+recorded title. The JSON is under `/v1/admin/policies` (`CurrentAdmin`; the pages take
+`PageAdmin`); `admin_policies.py`'s module docstring is the full contract.
+
+- **Never by title.** `POST /v1/admin/policies` is always a new policy, with a fresh instrument id
+  that is not made from its title. `POST /v1/admin/policies/{policy}/versions` takes the policy
+  from the path (the instrument id without the tenant's prefix, which the page puts in each
+  policy's own form), and the document's title is only that version's recorded title.
+- **Effective date.** Today by default, a future date as it is (the replaced version stays in
+  force until then), a past date only with `backdate_reason`, stored on the version (ledger 0030).
+  A version cannot take effect on or before the one it replaces (ledger `valid_to > valid_from`):
+  withdraw that one first, or choose a later date.
+- **Upload.** `{filename, content, title, effective_from?, backdate_reason?}`, no other key (a
+  `synthetic` field is a 422, #78). Markdown only (a PDF is #307); size is counted on the raw
+  bytes before parsing; the lifecycle's `publish_version` writes the clause store, retrieval and
+  the ledger. Offshore, the admin must be a registered tester and the file byte-identical to a
+  registered policy fixture (`policy_documents` in `corpus/synthetic/registry.json`).
+- **Withdraw and purge** call `CorpusLifecycle.withdraw` and `purge`. The version page shows the
+  preview's findings-citing count; a purge is refused unless the typed count equals it now.
+- **Audit.** Every outcome is a `corpus_removal_audit` row with the admin, the reason and the
+  request's trace; a refusal's row names a reason code, never a document's text.
+- `admin_policies.js` is not exercised by CI (no browser there); the tests make the requests it
+  causes. The upload is script-only, like the Check page's: no multipart parser is installed.
+
 ## The admin questionnaire (`questionnaire.py`, `templates/_questionnaire.html`)
 
 `GET /admin/questionnaire` (#304, #123, ADR-0053 I5) asks an admin for the facts Track A says

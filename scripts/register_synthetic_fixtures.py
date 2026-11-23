@@ -4,7 +4,8 @@ the six Acme fixtures in `docs/research/fixtures/synthetic-policies/`, and one p
 of each synthetic submitted document in `docs/research/fixtures/synthetic-submitted/`
 (#296; a submitted document has passages, never chunks), over the owning tenant and
 the exact text, plus the sha256 of each submitted document's raw bytes (#297: offshore a
-submission is synthetic only if its whole bytes are registered, and every passage too).
+submission is synthetic only if its whole bytes are registered, and every passage too) and
+of each policy fixture's raw bytes (#303: the same for a policy an admin uploads).
 
 This script and a PR are the only way content becomes synthetic. The write
 path (`CorpusLifecycle`) derives every chunk's flag from the registry and
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 from compliance_rag.corpus.synthetic_registry import SYNTHETIC_REGISTRY_PATH, SyntheticRegistry
 from compliance_rag.eval.golden_corpus import (
+    policy_fixture_documents,
     submitted_fixture_clauses,
     submitted_fixture_documents,
     synthetic_fixture_chunks,
@@ -36,10 +38,18 @@ def main() -> None:
     chunks, clauses = synthetic_fixture_chunks(), synthetic_fixture_clauses()
     passages = submitted_fixture_clauses()
     documents = submitted_fixture_documents()
-    SyntheticRegistry.of(chunks, (*clauses, *passages), source=SOURCE, documents=documents).save()
+    policies = policy_fixture_documents()
+    SyntheticRegistry.of(
+        chunks,
+        (*clauses, *passages),
+        source=SOURCE,
+        documents=documents,
+        policy_documents=policies,
+    ).save()
     print(
         f"{len(chunks)} chunks, {len(clauses)} clauses, {len(passages)} submitted-document "
-        f"passages and {len(documents)} whole documents registered -> {SYNTHETIC_REGISTRY_PATH}"
+        f"passages, {len(documents)} whole submitted documents and {len(policies)} whole "
+        f"policies registered -> {SYNTHETIC_REGISTRY_PATH}"
     )
 
 

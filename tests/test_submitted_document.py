@@ -148,6 +148,7 @@ class _Ledger(FakeLedgerStore):
         supersedes: str | None,
         document_class: DocumentClass,
         title: str,
+        backdate_reason: str | None = None,
     ) -> None:
         if self.fail_next_record:
             self.fail_next_record = False
@@ -160,6 +161,7 @@ class _Ledger(FakeLedgerStore):
             supersedes=supersedes,
             document_class=document_class,
             title=title,
+            backdate_reason=backdate_reason,
         )
 
 
