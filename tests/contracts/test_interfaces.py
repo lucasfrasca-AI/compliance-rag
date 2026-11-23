@@ -726,9 +726,9 @@ async def assert_generator_contract(generator: Generator) -> Generation:
     assert isinstance(generation, Generation) and generation.text
     assert generation.input_tokens >= 0 and generation.output_tokens >= 0
     assert isinstance(generation.cached_prefix_hit, bool)
-    # Every implementation takes the shape of JSON a call wants (#298, #299), and a
+    # Every implementation takes the shape of JSON a call wants (#298, #299, #305), and a
     # call that does not say wants an answer, as every call did before it existed.
-    for kind in (ReplyKind.FINDINGS, ReplyKind.CLAIMS):
+    for kind in (ReplyKind.MAPPINGS, ReplyKind.FINDINGS, ReplyKind.CLAIMS):
         shaped = await generator.generate(
             system="s", cached_prefix="tenant policies", user="q", max_tokens=100, reply=kind
         )
