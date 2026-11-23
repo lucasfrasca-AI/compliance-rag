@@ -25,9 +25,9 @@ so what travels with an obligation is a set of exact ids. Checked against the
 graph first: every clause an item derives from, and every exception and
 qualifier, present and in force within the obligation's interval, and every
 item already loaded unchanged — properties and structural edges alike (an
-obligation's exceptions and qualifiers may grow, never shrink). Tenant policy mappings are never
-loaded into the graph (D-09, D-14: tenant content has no persisted node), so a
-`status: proposed` mapping can't be traversed by construction.
+obligation's exceptions and qualifiers may grow, never shrink). A tenant's policy mappings are
+ledger rows, never mapping YAML and never graph nodes (D-09, D-14, ADR-0059 C2): a mapping file
+carrying a `policy_mappings:` key is refused before it reaches the loader.
 
 Correcting a loaded item in place changes a node, which D-05 forbids: such a
 load is refused before any write, naming the item. A change of meaning is a
@@ -107,8 +107,6 @@ class LoadReport:
     edges_created: int
     counts: GraphCounts
     """Whole-graph totals after the load — the Aura <10% exit criterion."""
-    not_loaded: tuple[str, ...] = ()
-    """Ids validated but deliberately kept out of the graph (policy mappings)."""
 
 
 def version_ref(instrument_id: str, version_id: str) -> NodeRef:
@@ -742,8 +740,9 @@ async def load_mappings(
 ) -> LoadReport:
     """Every node and edge the mapping set describes, after checking the
     graph (`check_mappings`). Then nodes (every kind, batched), then edges.
-    Tenant policy mappings are validated and reported, never written (D-09,
-    D-14). A caller that records the load runs the checks and the writes apart
+    A tenant's policy mappings are ledger rows, never written here: a
+    `policy_mappings:` key is refused when the file is read (ADR-0059 C2). A
+    caller that records the load runs the checks and the writes apart
     (`check_mappings`, `write_mappings`)."""
     found = await check_mappings(
         graph, mappings, today=today, corrections=corrections, errata=errata
@@ -787,12 +786,7 @@ async def write_mappings(
             ]
         )
         created_edges = await graph.put_edges(_edges(mappings, found.inside))
-        report = LoadReport(
-            created_nodes,
-            created_edges,
-            await graph.counts(),
-            not_loaded=tuple(m.id for m in mappings.policy_mappings),
-        )
+        report = LoadReport(created_nodes, created_edges, await graph.counts())
         _record(span, report)
         return report
 
@@ -802,7 +796,6 @@ def _record(span: Span, report: LoadReport) -> None:
     span.set_attribute("graph.edges_created", report.edges_created)
     span.set_attribute("graph.nodes", report.counts.nodes)
     span.set_attribute("graph.edges", report.counts.edges)
-    span.set_attribute("graph.not_loaded", list(report.not_loaded))
 
 
 @asynccontextmanager
