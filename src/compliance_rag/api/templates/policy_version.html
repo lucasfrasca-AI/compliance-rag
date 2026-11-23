@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ version.row.title }}{% endblock %}
+{% block body %}
+<main class="page policy-version" data-status="{{ version.status }}">
+<p class="note"><a href="/admin/policies">Policies</a> / {{ policy.title }}</p>
+<h1>{{ version.row.title }}</h1>
+<p class="meta"><code>{{ policy.instrument_id }}:{{ version.row.version_id }}</code> · <strong>{{ version.status_words }}</strong> · effective {{ version.row.valid_from }}{% if version.row.valid_to %} to {{ version.row.valid_to }}{% endif %}</p>
+{% if version.row.backdate_reason %}
+<p class="note">Backdated. The reason recorded: {{ version.row.backdate_reason }}</p>
+{% endif %}
+{% if notice %}
+<p class="card notice" role="alert">{{ notice }}</p>
+{% endif %}
+<section class="card" id="preview">
+<h2>Preview</h2>
+<p data-findings-citing="{{ findings_citing }}">{{ findings_citing }} finding{{ "" if findings_citing == 1 else "s" }} cite{{ "s" if findings_citing == 1 else "" }} this version.</p>
+</section>
+{% if version.status == "purged" %}
+<p class="card">This version is purged. Its text and its search entries are deleted, and the ledger keeps a marker of who purged it, when and why.</p>
+{% else %}
+{% if version.status != "withdrawn" %}
+<section class="card" id="withdraw">
+<h2>Withdraw</h2>
+<p>Takes this version out of retrieval at every date. Its text is kept, so earlier citations still open and can be verified.</p>
+<form class="ask" method="post" action="/admin/policies/{{ policy.slug | urlencode }}/versions/{{ version.row.version_id | urlencode }}/withdraw">
+<label for="withdraw-reason">Reason</label>
+<input id="withdraw-reason" name="reason" type="text" maxlength="500" required>
+<div class="row"><button type="submit">Withdraw this version</button></div>
+</form>
+</section>
+{% endif %}
+<section class="card" id="purge">
+<h2>Purge</h2>
+<p>Deletes this version's text and its search entries for good. The ledger keeps a marker of who purged it, when and why. The {{ findings_citing }} finding{{ "" if findings_citing == 1 else "s" }} citing it will stop verifying.</p>
+<form class="ask" method="post" action="/admin/policies/{{ policy.slug | urlencode }}/versions/{{ version.row.version_id | urlencode }}/purge">
+<label for="purge-reason">Reason</label>
+<input id="purge-reason" name="reason" type="text" maxlength="500" required>
+<label for="purge-count">To confirm, type the number of findings that cite this version: <strong>{{ findings_citing }}</strong></label>
+<input id="purge-count" name="typed_count" type="text" inputmode="numeric" autocomplete="off" maxlength="9" required>
+<div class="row"><button type="submit">Purge this version</button></div>
+</form>
+</section>
+{% endif %}
+</main>
+{% endblock %}

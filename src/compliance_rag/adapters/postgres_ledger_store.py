@@ -66,6 +66,7 @@ from compliance_rag.adapters.interfaces import (
     PolicyChecked,
     PolicyMapping,
     PolicyVersion,
+    PolicyVersionRow,
     PrefixMeasure,
     Profile,
     RemovalAction,
@@ -1681,9 +1682,12 @@ class PostgresLedgerStore(LedgerStore):
         supersedes: str | None,
         document_class: DocumentClass,
         title: str,
+        backdate_reason: str | None = None,
     ) -> None:
         check_document_class(tenant_id, document_class)
         validate_title(title)
+        if backdate_reason is not None and not backdate_reason.strip():
+            raise ValueError("a backdate reason is a reason, not a blank one")
         scope = "public" if tenant_id == PUBLIC_TENANT_ID else "tenant"
         try:
             async with self._connection() as conn:
@@ -1708,9 +1712,17 @@ class PostgresLedgerStore(LedgerStore):
                     raise ValueError(f"{instrument_id} is {stored[0]}, not {document_class.value}")
                 await conn.execute(
                     "INSERT INTO instrument_version "
-                    "(tenant_id, instrument_id, version_id, title, valid_from, supersedes) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (tenant_id, instrument_id, version_id, title, valid_from, supersedes),
+                    "(tenant_id, instrument_id, version_id, title, valid_from, supersedes, "
+                    "backdate_reason) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        tenant_id,
+                        instrument_id,
+                        version_id,
+                        title,
+                        valid_from,
+                        supersedes,
+                        backdate_reason,
+                    ),
                 )
         except psycopg.errors.UniqueViolation as exc:
             # Re-recording would reset valid_to and silently un-retire it.
@@ -1761,6 +1773,29 @@ class PostgresLedgerStore(LedgerStore):
                 "0011): record the next version with its class, never a guessed one"
             )
         return tuple(PolicyVersion(str(r[0]), str(r[1])) for r in rows)
+
+    async def policy_version_rows(self, tenant_id: str) -> tuple[PolicyVersionRow, ...]:
+        rows = await self._fetchall(
+            "SELECT v.instrument_id, v.version_id, v.title, v.valid_from, v.valid_to, "
+            "v.withdrawn_at IS NOT NULL, v.purged_at IS NOT NULL, v.backdate_reason "
+            "FROM instrument_version v JOIN instrument i USING (tenant_id, instrument_id) "
+            "WHERE v.tenant_id = %s AND i.document_class = 'internal_policy' "
+            'ORDER BY v.instrument_id COLLATE "C", v.valid_from, v.version_id COLLATE "C"',
+            (tenant_id,),
+        )
+        return tuple(
+            PolicyVersionRow(
+                instrument_id=str(r[0]),
+                version_id=str(r[1]),
+                title=str(r[2]),
+                valid_from=r[3],
+                valid_to=r[4],
+                withdrawn=bool(r[5]),
+                purged=bool(r[6]),
+                backdate_reason=None if r[7] is None else str(r[7]),
+            )
+            for r in rows
+        )
 
     async def environment_titles(
         self, tenant_id: str, *, as_of: dt.date
@@ -1876,8 +1911,8 @@ class PostgresLedgerStore(LedgerStore):
     async def record_removal_audit(self, entry: RemovalAuditEntry) -> None:
         await self._execute(
             "INSERT INTO corpus_removal_audit (audit_id, tenant_id, instrument_id, version_id, "
-            "action, outcome, actor, reason, findings_citing, detail) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "action, outcome, actor, reason, findings_citing, detail, trace_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 entry.audit_id,
                 entry.tenant_id,
@@ -1889,13 +1924,14 @@ class PostgresLedgerStore(LedgerStore):
                 entry.reason,
                 entry.findings_citing,
                 entry.detail,
+                entry.trace_id,
             ),
         )
 
     async def removal_audit(self, tenant_id: str) -> tuple[RemovalAuditEntry, ...]:
         rows = await self._fetchall(
             "SELECT audit_id, tenant_id, instrument_id, version_id, action, outcome, actor, "
-            "reason, findings_citing, detail FROM corpus_removal_audit "
+            "reason, findings_citing, detail, trace_id FROM corpus_removal_audit "
             "WHERE tenant_id = %s ORDER BY seq",
             (tenant_id,),
         )
@@ -1903,7 +1939,7 @@ class PostgresLedgerStore(LedgerStore):
             RemovalAuditEntry(
                 audit_id=str(r[0]),
                 tenant_id=str(r[1]),
-                instrument_id=str(r[2]),
+                instrument_id=None if r[2] is None else str(r[2]),
                 version_id=r[3],
                 action=RemovalAction(r[4]),
                 outcome=RemovalOutcome(r[5]),
@@ -1911,6 +1947,7 @@ class PostgresLedgerStore(LedgerStore):
                 reason=str(r[7]),
                 findings_citing=r[8],
                 detail=str(r[9]),
+                trace_id=None if r[10] is None else str(r[10]),
             )
             for r in rows
         )

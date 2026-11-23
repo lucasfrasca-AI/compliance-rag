@@ -31,6 +31,15 @@ listed *and* every passage is vouched, so an excerpt, a reordering or a one-byte
 change of a fixture is real data. The per-passage `keys` are unchanged, so
 nothing for policies moves. An older file with no `documents` vouches for no
 submitted document.
+
+**A policy an admin uploads is vouched whole as well** (#303): `policy_documents`
+lists the sha256 of the raw bytes of each registered synthetic policy fixture
+(front matter included, as the file is uploaded). Offshore, an uploaded policy
+is synthetic only if its bytes are listed and every chunk and clause it yields is
+vouched, so an excerpt or a one-byte change of a fixture is real data, as for a
+submitted document. A separate set from `documents`, so a registered submitted
+document is never a registered policy or the other way about. An older file with
+none vouches for no uploaded policy.
 """
 
 from __future__ import annotations
@@ -72,6 +81,9 @@ class SyntheticRegistry:
     documents: AbstractSet[str] = frozenset()
     """sha256 of the raw bytes of each registered submitted fixture (#297): the
     whole-document half of what vouches for a submission."""
+    policy_documents: AbstractSet[str] = frozenset()
+    """sha256 of the raw bytes of each registered synthetic policy fixture
+    (#303): the whole-document half of what vouches for a policy upload."""
 
     @classmethod
     def load(cls, path: Path = SYNTHETIC_REGISTRY_PATH) -> SyntheticRegistry:
@@ -80,6 +92,7 @@ class SyntheticRegistry:
             keys=frozenset(str(k) for k in raw["keys"]),
             source=str(raw["source"]),
             documents=frozenset(str(d) for d in raw.get("documents", [])),
+            policy_documents=frozenset(str(d) for d in raw.get("policy_documents", [])),
         )
 
     @classmethod
@@ -90,15 +103,18 @@ class SyntheticRegistry:
         *,
         source: str,
         documents: Iterable[bytes] = (),
+        policy_documents: Iterable[bytes] = (),
     ) -> SyntheticRegistry:
         """Built by the operator script from fixtures — not an upload path.
-        `documents` are the raw bytes of each submitted fixture."""
+        `documents` are the raw bytes of each submitted fixture,
+        `policy_documents` of each policy fixture."""
         keys = {synthetic_key(c.tenant_id, c.text) for c in chunks}
         keys |= {synthetic_key(c.tenant_id, c.canonical_text) for c in clauses}
         return cls(
             keys=frozenset(keys),
             source=source,
             documents=frozenset(document_key(d) for d in documents),
+            policy_documents=frozenset(document_key(d) for d in policy_documents),
         )
 
     def save(self, path: Path = SYNTHETIC_REGISTRY_PATH) -> None:
@@ -107,12 +123,17 @@ class SyntheticRegistry:
             "source": self.source,
             "keys": sorted(self.keys),
             "documents": sorted(self.documents),
+            "policy_documents": sorted(self.policy_documents),
         }
         path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
     def vouches_for_document(self, raw: bytes) -> bool:
         """Whether `raw` is, byte for byte, a registered submitted fixture."""
         return document_key(raw) in self.documents
+
+    def vouches_for_policy_document(self, raw: bytes) -> bool:
+        """Whether `raw` is, byte for byte, a registered synthetic policy fixture."""
+        return document_key(raw) in self.policy_documents
 
     def vouches_for(self, chunk: Chunk) -> bool:
         return synthetic_key(chunk.tenant_id, chunk.text) in self.keys
