@@ -2334,7 +2334,8 @@ async def assert_mapping_contract(ledger: LedgerStore) -> None:
         ({"proposals": (a_proposal(), a_proposal(rationale="again"))}, "once"),
     ):
         with pytest.raises(ValueError, match=reason):
-            await ledger.record_mapping_proposals(a_mapping_run(**{"trace_id": trace, **changes}))
+            fields: dict[str, Any] = {"trace_id": trace, **changes}  # Any: record fields
+            await ledger.record_mapping_proposals(a_mapping_run(**fields))
     assert await ledger.policy_mappings("acme") == ()
     with pytest.raises(ValueError, match="no longer"):  # the reservation is another request's
         await ledger.record_mapping_proposals(a_mapping_run(a_proposal(), trace_id="0" * 32))

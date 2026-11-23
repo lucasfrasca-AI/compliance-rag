@@ -123,29 +123,36 @@ class CheckRun:
         return await asyncio.shield(task)
 
 
+def submission_gate(services: ApiServices, who: Caller) -> None:
+    """The offshore gate of a run over a submitted document: only a registered tester's
+    document leaves Australia (ADR-0032), as for a question."""
+    assert_submission_allowed(
+        generation_region=services.settings.generation_region,
+        submitter=who.member.email,
+        testers=services.settings.offshore_testers,
+    )
+
+
 async def run_stream(
     *,
     services: ApiServices,
     who: Caller,
-    check_id: str,
+    subject: dict[str, object],
     release: Callable[[], Awaitable[None]],
     error_of: Callable[[Exception], ErrorBody | None],
     failure: str,
     body: Callable[[CheckRun], AsyncIterator[str]],
+    gate: Callable[[ApiServices, Caller], None] = submission_gate,
 ) -> AsyncIterator[str]:
     """The events of one run: the offshore gate, then `body`'s, then, for anything
-    that goes wrong, one `error` event in our words. `error_of` is the endpoint's own
-    words for its own failures (None for any it has none for); `failure` is what a
-    failure it cannot name is logged and told as."""
+    that goes wrong, one `error` event in our words, naming the run's `subject` (what it
+    was for: `{"check_id": ...}`). `error_of` is the endpoint's own words for its own
+    failures (None for any it has none for); `failure` is what a failure it cannot name
+    is logged and told as. `gate` is the run's offshore gate, run first, before anything
+    is read or sent: a document check's by default (`submission_gate`)."""
     run = CheckRun(release)
     try:
-        # First: offshore, only a registered tester's document leaves Australia
-        # (ADR-0032), as for a question.
-        assert_submission_allowed(
-            generation_region=services.settings.generation_region,
-            submitter=who.member.email,
-            testers=services.settings.offshore_testers,
-        )
+        gate(services, who)
         async for chunk in body(run):
             yield chunk
     except Exception as failed:
@@ -160,7 +167,7 @@ async def run_stream(
             log.exception("%s failed", failure)
         else:
             log.warning("%s was not completed: %s", failure, message["error"])
-        yield event("error", {"check_id": check_id, **message})
+        yield event("error", {**subject, **message})
     except BaseException:  # the client left before the work was started
         if not run.handed_off:
             await release_quietly(release)

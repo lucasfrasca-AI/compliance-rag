@@ -164,9 +164,9 @@ def test_0031_is_idempotent_and_refuses_what_a_mapping_must_not_be() -> None:
             "trace_id) VALUES ('acme', %s, 'v1', %s)",
             (POLICY, "b" * 32),
         )
-        assert scratch.execute("SELECT status, completed_at FROM policy_mapping_run").fetchall() == [
-            ("pending", None)
-        ]
+        assert scratch.execute(
+            "SELECT status, completed_at FROM policy_mapping_run"
+        ).fetchall() == [("pending", None)]
         with pytest.raises(psycopg.errors.UniqueViolation):
             scratch.execute(
                 "INSERT INTO policy_mapping_run (tenant_id, policy_instrument_id, "
