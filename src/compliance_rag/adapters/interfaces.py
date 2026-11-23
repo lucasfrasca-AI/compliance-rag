@@ -1116,6 +1116,37 @@ def check_findings_write(record: FindingsRecord, claim_count: int | None = None)
             raise ValueError("usage rows are the run's tenant's")
 
 
+def check_derived_through_mappings(
+    findings: Sequence[FindingRecord], mappings: Mapping[int, PolicyMapping]
+) -> None:
+    """What every `LedgerStore` refuses about the mappings a run's derived findings went
+    through (#306), given the tenant's `mappings` by id as the store holds them (the store
+    reads them, in the same transaction that writes the findings): each goes through a mapping
+    the tenant holds that **derives** (approved, `implements`), the mapping's obligation is the
+    finding's, and the finding it carries over is against the mapping's policy clause. So a
+    derived finding can never rest on a proposed, rejected or partial mapping, or on another
+    clause's."""
+    by_id = {f.finding_id: f for f in findings}
+    for finding in findings:
+        if finding.derived_from is None:
+            continue
+        mapping = mappings.get(finding.mapping_id or 0)
+        if mapping is None or not mapping.derives:
+            raise ValueError(
+                "a derived finding goes through an approved implements mapping of the tenant's"
+            )
+        source = by_id.get(finding.derived_from)
+        if (
+            mapping.obligation_id != finding.obligation_id
+            or source is None
+            or source.policy_clause_id != mapping.policy_clause_id
+        ):
+            raise ValueError(
+                "a derived finding carries a finding against the mapping's policy clause over "
+                "to the mapping's obligation"
+            )
+
+
 # --------------------------------------------------------------------------
 # Claim confirmation, claim rejection and verdict acceptance (#301, ADR-0059 Q3, C1)
 # --------------------------------------------------------------------------

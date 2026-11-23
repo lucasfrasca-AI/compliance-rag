@@ -93,6 +93,7 @@ from compliance_rag.adapters.interfaces import (
     check_check_write,
     check_claims_write,
     check_decision_write,
+    check_derived_through_mappings,
     check_findings_write,
     check_mapping_decision_write,
     check_mapping_run_write,
@@ -1149,19 +1150,19 @@ class PostgresLedgerStore(LedgerStore):
                         )
                 derived_through = {f.mapping_id for f in record.findings if f.derived}
                 if derived_through:
-                    approved = await (
+                    held_mappings = await (
                         await conn.execute(
-                            "SELECT count(*) FROM policy_mapping WHERE tenant_id = %s "
-                            "AND mapping_id = ANY(%s) AND status = 'approved' "
-                            "AND kind = 'implements'",
+                            _MAPPING_SELECT + " AND mapping_id = ANY(%s)",
                             (assessment.tenant_id, list(derived_through)),
                         )
-                    ).fetchone()
-                    if approved is None or int(approved[0]) != len(derived_through):
-                        raise ValueError(
-                            "a derived finding goes through an approved implements mapping of "
-                            "the tenant's"
-                        )
+                    ).fetchall()
+                    check_derived_through_mappings(
+                        record.findings,
+                        {
+                            int(r[0]): _mapping_of_row(assessment.tenant_id, r)
+                            for r in held_mappings
+                        },
+                    )
                 await _write_assessment(conn, assessment, record.coverage)
                 async with conn.cursor() as cursor:
                     await cursor.executemany(
@@ -1586,7 +1587,8 @@ class PostgresLedgerStore(LedgerStore):
                     return _mapping_of_row(decision.tenant_id, row)
                 held = await (
                     await conn.execute(
-                        "SELECT status FROM policy_mapping WHERE tenant_id = %s AND mapping_id = %s",
+                        "SELECT status FROM policy_mapping "
+                        "WHERE tenant_id = %s AND mapping_id = %s",
                         (decision.tenant_id, decision.mapping_id),
                     )
                 ).fetchone()

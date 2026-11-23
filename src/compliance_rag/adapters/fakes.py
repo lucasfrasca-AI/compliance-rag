@@ -77,6 +77,7 @@ from compliance_rag.adapters.interfaces import (
     check_check_write,
     check_claims_write,
     check_decision_write,
+    check_derived_through_mappings,
     check_findings_write,
     check_mapping_decision_write,
     check_mapping_run_write,
@@ -663,11 +664,17 @@ class FakeLedgerStore(LedgerStore):
         one decides it, as the database's `WHERE status = 'proposed'` makes it. Only the
         decision's own fields are replaced."""
         check_mapping_decision_write(decision)
-        for at, held in enumerate(self._policy_mappings):
-            if held.tenant_id == decision.tenant_id and held.mapping_id == decision.mapping_id:
-                break
-        else:
+        at = next(
+            (
+                i
+                for i, m in enumerate(self._policy_mappings)
+                if m.tenant_id == decision.tenant_id and m.mapping_id == decision.mapping_id
+            ),
+            None,
+        )
+        if at is None:
             raise MappingNotFound(f"tenant {decision.tenant_id!r} holds no mapping")
+        held = self._policy_mappings[at]
         if held.status is not MappingStatus.PROPOSED:
             raise MappingAlreadyDecided(
                 f"mapping {decision.mapping_id} is already {held.status.value}", held.status
@@ -918,15 +925,10 @@ class FakeLedgerStore(LedgerStore):
         assessment_key = (assessment.tenant_id, assessment.assessment_id)
         if assessment_key in self._assessments:
             raise ValueError(f"assessment {assessment.assessment_id} is already recorded")
-        derives = {
-            m.mapping_id
-            for m in self._policy_mappings
-            if m.tenant_id == assessment.tenant_id and m.derives
-        }
-        if any(f.mapping_id not in derives for f in record.findings if f.derived):
-            raise ValueError(
-                "a derived finding goes through an approved implements mapping of the tenant's"
-            )
+        check_derived_through_mappings(
+            record.findings,
+            {m.mapping_id: m for m in self._policy_mappings if m.tenant_id == assessment.tenant_id},
+        )
         self._assessments[assessment_key] = assessment
         self._coverage[assessment_key] = {row.obligation_id: row for row in record.coverage}
         for finding in record.findings:

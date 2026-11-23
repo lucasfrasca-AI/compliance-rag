@@ -43,7 +43,6 @@ from compliance_rag.adapters.interfaces import (
 )
 from compliance_rag.assessment.evidence import EvidenceProvenance
 
-
 MAPPING_TIER = EvidenceProvenance.ASSERTED
 """What an approved mapping is: the admin said so. It is the one input of a derived finding that
 an approval raises, and it is the strongest a tier can be, so it never lifts the finding."""

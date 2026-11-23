@@ -247,3 +247,9 @@ button?.addEventListener("click", () => {
 if (run?.dataset.running && CHECK_ID.test(String(run.dataset.checkId))) {
   watch(run.dataset.checkId);
 }
+// A re-check (#306) opens here at "#run-now": the member has already asked for the check, so the
+// run starts, once, and the address is cleaned so that a reload does not ask again.
+if (button && !run?.dataset.running && window.location.hash === "#run-now") {
+  window.history.replaceState(null, "", window.location.pathname);
+  runCheck();
+}

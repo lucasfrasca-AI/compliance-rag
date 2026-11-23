@@ -58,7 +58,9 @@ ALTER TABLE policy_mapping ADD CONSTRAINT policy_mapping_reason CHECK (
         AND btrim(rejection_reason) <> '' AND char_length(rejection_reason) <= 300
         AND rejection_reason !~ E'[\\n\\r]'));
 
--- what a finding's mapping foreign key names: the mapping and its tenant
+-- what a finding's mapping foreign key names: the mapping and its tenant (the key is dropped
+-- first so that a second run can replace the constraint it depends on)
+ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_mapping_fk;
 ALTER TABLE policy_mapping DROP CONSTRAINT IF EXISTS policy_mapping_tenant_mapping;
 ALTER TABLE policy_mapping ADD CONSTRAINT policy_mapping_tenant_mapping
     UNIQUE (tenant_id, mapping_id);
@@ -100,7 +102,6 @@ CREATE TRIGGER policy_mapping_guard
 -- a derived finding: its mapping, with the source finding 0026 already names
 ALTER TABLE finding ADD COLUMN IF NOT EXISTS mapping_id BIGINT;
 
-ALTER TABLE finding DROP CONSTRAINT IF EXISTS finding_mapping_fk;
 ALTER TABLE finding ADD CONSTRAINT finding_mapping_fk
     FOREIGN KEY (tenant_id, mapping_id) REFERENCES policy_mapping (tenant_id, mapping_id);
 

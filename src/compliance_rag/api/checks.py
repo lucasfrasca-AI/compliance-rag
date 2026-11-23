@@ -66,6 +66,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 from compliance_rag import telemetry
@@ -219,59 +220,86 @@ async def submit_check(request: Request, who: CurrentCaller) -> JSONResponse:
             raise refused.http() from None
         fmt = _format_of(submission.filename)
         span.set_attribute("check.format", fmt.value)
-        check_id = uuid.uuid4().hex
-        instrument_id = f"{who.tenant_id}/check-{check_id}"
-        span.set_attribute("check.check_id", check_id)
-        title = submission.title or submission.filename
-        try:
-            # The one write: the lifecycle stores the passages, the source and
-            # the version, and refuses offshore any passage the synthetic
-            # registry does not vouch for before it writes anything.
-            passages = await services.lifecycle.submit_document(
-                submission.content,
-                document_format=fmt,
-                instrument_id=instrument_id,
-                tenant_id=who.tenant_id,
-                version_id=VERSION,
-                submitted_on=today(),
-                submitted_by=who.member.uid,
-                title=title,
-            )
-        except EmptyDocument:
-            raise _refusal(422, "no_words", "the document has no words to check") from None
-        except TooManyPassages as refused:
-            span.set_attribute("check.refused", "too_many_passages")
-            raise _refusal(422, "too_many_passages", str(refused)) from None
-        except GenerationResidencyError as refused:
-            span.set_attribute("check.refused", "residency")
-            raise _refusal(403, "residency", str(refused)) from None
-        span.set_attribute("check.passages", passages)
-        trace_id = telemetry.current_trace_id()
-        await services.ledger.record_check(
-            CheckRecord(
-                tenant_id=who.tenant_id,
-                check_id=check_id,
-                user_id=who.member.uid,
-                instrument_id=instrument_id,
-                version_id=VERSION,
-                filename=submission.filename,
-                document_format=fmt,
-                trace_id=trace_id,
-            )
+        made = await create_check(
+            services,
+            span,
+            tenant_id=who.tenant_id,
+            owner_uid=who.member.uid,
+            content=submission.content,
+            filename=submission.filename,
+            fmt=fmt,
+            title=submission.title or submission.filename,
         )
-    return JSONResponse(
-        {
-            "check_id": check_id,
-            "title": title,
-            "filename": submission.filename,
-            "format": fmt.value,
-            "passages": passages,
-            "href": f"/checks/{check_id}",
-            "source_href": source_path(instrument_id),
-            "trace_id": trace_id,
-        },
-        status_code=201,
+    return JSONResponse(made, status_code=201)
+
+
+async def create_check(
+    services: ApiServices,
+    span: Span,
+    *,
+    tenant_id: str,
+    owner_uid: str,
+    content: str,
+    filename: str,
+    fmt: SubmittedFormat,
+    title: str,
+) -> dict[str, object]:
+    """Store a document as a new check's `submitted_document` and record the check, the two
+    writes in the order that fails safe (the module docstring), and say what was made. The one
+    place a check is made: a submission (`POST /v1/checks`) and a re-check of a stored document
+    (`check_recheck.py`, #306) both come here, so a re-check is a check like any other, in a
+    version, a manifest and a ledger row of its own. `owner_uid` is whose it is (ADR-0059 Q5):
+    the submitter's, who may see it with the tenant's admins. Refused as `submit_check` is, in
+    the lifecycle's own order."""
+    check_id = uuid.uuid4().hex
+    instrument_id = f"{tenant_id}/check-{check_id}"
+    span.set_attribute("check.check_id", check_id)
+    try:
+        # The one write: the lifecycle stores the passages, the source and
+        # the version, and refuses offshore any passage the synthetic
+        # registry does not vouch for before it writes anything.
+        passages = await services.lifecycle.submit_document(
+            content,
+            document_format=fmt,
+            instrument_id=instrument_id,
+            tenant_id=tenant_id,
+            version_id=VERSION,
+            submitted_on=today(),
+            submitted_by=owner_uid,
+            title=title,
+        )
+    except EmptyDocument:
+        raise _refusal(422, "no_words", "the document has no words to check") from None
+    except TooManyPassages as refused:
+        span.set_attribute("check.refused", "too_many_passages")
+        raise _refusal(422, "too_many_passages", str(refused)) from None
+    except GenerationResidencyError as refused:
+        span.set_attribute("check.refused", "residency")
+        raise _refusal(403, "residency", str(refused)) from None
+    span.set_attribute("check.passages", passages)
+    trace_id = telemetry.current_trace_id()
+    await services.ledger.record_check(
+        CheckRecord(
+            tenant_id=tenant_id,
+            check_id=check_id,
+            user_id=owner_uid,
+            instrument_id=instrument_id,
+            version_id=VERSION,
+            filename=filename,
+            document_format=fmt,
+            trace_id=trace_id,
+        )
     )
+    return {
+        "check_id": check_id,
+        "title": title,
+        "filename": filename,
+        "format": fmt.value,
+        "passages": passages,
+        "href": f"/checks/{check_id}",
+        "source_href": source_path(instrument_id),
+        "trace_id": trace_id,
+    }
 
 
 # ---- reading a check back ---------------------------------------------------------

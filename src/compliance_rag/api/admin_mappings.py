@@ -1,12 +1,20 @@
 """The mapping queue page (#305, ADR-0053 I5, ADR-0059 Q8): `GET /admin/mappings`.
 
 An admin sees each policy version in force today, with a button, "Propose mappings for
-<policy version>", and the policy-to-law mappings the ledger holds for it, in every status,
-**read-only**. The button is the one way a proposing run starts (Q8): it asks
-`POST /v1/policy-mappings/proposals` for that version and the page reloads to show what the
-ledger holds. Approving and rejecting a mapping are #306's, and the page has no control for
-them: a proposal is shown as a proposal, the model's reasoning labelled as the model's, and
-nothing on this page changes a finding.
+<policy version>", and the policy-to-law mappings the ledger holds for it. The button is the
+one way a proposing run starts (Q8): it asks `POST /v1/policy-mappings/proposals` for that
+version and the page reloads to show what the ledger holds.
+
+**The approval queue (#306).** Each `proposed` mapping carries two buttons, **Approve** and
+**Reject**, and a rejection an optional one-line reason (the admin's own words, shown as
+theirs). Either asks `POST /v1/policy-mappings/{id}/decision` (`mapping_decisions.py`) and the
+page reloads. A decided mapping has no button: a decision is final, and it shows who decided it
+and when. The mappings can be filtered by status (`?status=proposed`, `approved` or `rejected`;
+anything else is every status), with the count of each beside its filter, by plain links: no
+script is needed to filter. The page says what an approval does: only an approved `implements`
+mapping changes a finding, in a check made after it, and an issued report never changes;
+`partially_implements` derives nothing. A proposal is shown as a proposal, the model's reasoning
+labelled as the model's, and nothing on this page changes a finding by itself.
 
 **Admin only, on every request**, as the subscriptions page is: a signed-out request
 redirects to `/signin`, a member who is not an admin gets the 403 page (`admin.PageAdmin`).
@@ -21,14 +29,16 @@ prefix to be proposed for), but its mappings stay listed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from compliance_rag.adapters.interfaces import PolicyMapping, PolicyVersion
+from compliance_rag.adapters.interfaces import MappingStatus, PolicyMapping, PolicyVersion
 from compliance_rag.api.admin import PageAdmin
-from compliance_rag.api.deps import services_of, today
+from compliance_rag.api.deps import services_of, sydney_label, today
+from compliance_rag.api.mapping_proposals import status_counts
 from compliance_rag.api.pages import render
 from compliance_rag.api.sources import source_href
 from compliance_rag.corpus.display_form import cite
@@ -49,6 +59,16 @@ class MappingRow:
     rationale: str
     proposer: str
     approver: str | None
+    """The address of whoever decided it, as it was when they did (#306)."""
+    decided_at: str | None
+    """When, as the page shows it (Sydney time), with `decided_at_iso` for the element."""
+    decided_at_iso: str | None
+    rejection_reason: str | None
+    """The admin's own words for a rejection; never the model's."""
+    decidable: bool
+    """Still `proposed`: the only status with Approve and Reject."""
+    derives: bool
+    """Approved and `implements`: the only mapping that changes a finding."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,11 +84,43 @@ class VersionBlock:
     mappings: tuple[MappingRow, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class StatusFilter:
+    """One link of the status filter: every status, then each of the three, with its count."""
+
+    label: str
+    href: str
+    count: int
+    current: bool
+
+
+def _filters(mappings: Sequence[PolicyMapping], chosen: MappingStatus | None) -> list[StatusFilter]:
+    """The filter links (plain links, no script), each with how many mappings it shows."""
+    held = status_counts(mappings)
+    return [
+        StatusFilter("All", "/admin/mappings", len(mappings), chosen is None),
+        *(
+            StatusFilter(
+                status.value.capitalize(),
+                f"/admin/mappings?status={status.value}",
+                held[status.value],
+                chosen is status,
+            )
+            for status in MappingStatus
+        ),
+    ]
+
+
 @router.get("/mappings", response_class=HTMLResponse)
-async def mappings_page(request: Request, who: PageAdmin) -> HTMLResponse:
+async def mappings_page(
+    request: Request, who: PageAdmin, status: str | None = None
+) -> HTMLResponse:
     ledger = services_of(request).ledger
     in_force = set(await ledger.policy_versions(who.tenant_id, as_of=today()))
-    mappings = await ledger.policy_mappings(who.tenant_id)
+    everything = await ledger.policy_mappings(who.tenant_id)
+    # an unknown status is every status: the filter is a view, never a refusal
+    chosen = next((s for s in MappingStatus if s.value == status), None)
+    mappings = [m for m in everything if chosen is None or m.status is chosen]
     by_version: dict[PolicyVersion, list[PolicyMapping]] = {}
     for m in mappings:
         by_version.setdefault(PolicyVersion(m.instrument_id, m.version_id), []).append(m)
@@ -105,10 +157,22 @@ async def mappings_page(request: Request, who: PageAdmin) -> HTMLResponse:
                         status=m.status.value,
                         rationale=m.rationale,
                         proposer=m.proposer,
-                        approver=m.approver,
+                        approver=m.approver_email,
+                        decided_at=None if m.decided_at is None else sydney_label(m.decided_at),
+                        decided_at_iso=None if m.decided_at is None else m.decided_at.isoformat(),
+                        rejection_reason=m.rejection_reason,
+                        decidable=m.status is MappingStatus.PROPOSED,
+                        derives=m.derives,
                     )
                     for m in by_version.get(version, ())
                 ),
             )
         )
-    return render(request, "mappings.html", blocks=blocks)
+    return render(
+        request,
+        "mappings.html",
+        blocks=blocks,
+        filters=_filters(everything, chosen),
+        chosen=None if chosen is None else chosen.value,
+        awaiting=status_counts(everything)[MappingStatus.PROPOSED.value],
+    )
