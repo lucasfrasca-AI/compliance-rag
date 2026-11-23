@@ -46,6 +46,7 @@ from compliance_rag.adapters.interfaces import (
     LedgerStore,
     PolicyChecked,
     PolicyVersion,
+    PolicyVersionRow,
     PrefixMeasure,
     Profile,
     RemovalAction,
@@ -448,6 +449,59 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
         )
         is None
     )
+    # The admin page's read (#303): every version of every internal policy, in
+    # force or not, withdrawn and purged included, and only policies. A backdate
+    # reason is kept with the version it explains.
+    await ledger.record_version(
+        tenant_id="beta-corp",
+        instrument_id="beta/backdated",
+        version_id="v1",
+        valid_from=JAN,
+        supersedes=None,
+        document_class=DocumentClass.INTERNAL_POLICY,
+        title="Backdated policy",
+        backdate_reason="the board approved it in January; the upload came later",
+    )
+    rows = await ledger.policy_version_rows("beta-corp")
+    assert [(r.instrument_id, r.version_id) for r in rows] == [
+        ("beta/acceptable-use", "v1"),
+        ("beta/backdated", "v1"),
+        ("beta/code-of-conduct", "v1"),
+        ("beta/handbook", "v1"),
+        ("beta/handbook", "v2"),
+        ("beta/old-policy", "v1"),
+        ("beta/old-policy", "v2"),
+        ("beta/remote-work", "v1"),
+    ]  # no external upload (beta/iso-extract), no submitted document (beta/proposal)
+    by_version = {(r.instrument_id, r.version_id): r for r in rows}
+    assert by_version[("beta/handbook", "v1")] == PolicyVersionRow(
+        instrument_id="beta/handbook",
+        version_id="v1",
+        title="The document's title",
+        valid_from=JAN,
+        valid_to=JUN,
+        withdrawn=False,
+        purged=False,
+        backdate_reason=None,
+    )
+    assert by_version[("beta/handbook", "v2")].valid_to is None
+    assert by_version[("beta/code-of-conduct", "v1")].withdrawn
+    assert by_version[("beta/old-policy", "v1")].purged
+    assert by_version[("beta/backdated", "v1")].backdate_reason == (
+        "the board approved it in January; the upload came later"
+    )
+    assert await ledger.policy_version_rows("nobody") == ()
+    with pytest.raises(ValueError, match="blank"):
+        await ledger.record_version(
+            tenant_id="beta-corp",
+            instrument_id="beta/blank-reason",
+            version_id="v1",
+            valid_from=JAN,
+            supersedes=None,
+            document_class=DocumentClass.INTERNAL_POLICY,
+            title="Blank reason",
+            backdate_reason="   ",
+        )
     # The ledger answers with each instrument's class.
     for instrument_id, document_class in (
         ("beta/handbook", DocumentClass.INTERNAL_POLICY),
@@ -547,12 +601,31 @@ async def assert_ledger_contract(ledger: LedgerStore, seed_finding: SeedFinding)
                 findings_citing=2,
             )
         )
+    # A publish is audited in the same trail (#303), with the request's trace.
+    await ledger.record_removal_audit(
+        RemovalAuditEntry(
+            audit_id="au-3",
+            tenant_id="acme",
+            instrument_id=POLICY,
+            version_id="v3",
+            action=RemovalAction.PUBLISH,
+            outcome=RemovalOutcome.COMPLETED,
+            actor="u1",
+            reason="backdated for the board's approval",
+            findings_citing=None,
+            detail="effective 2026-01-01",
+            trace_id="a" * 32,
+        )
+    )
     trail = await ledger.removal_audit("acme")
     assert [(e.audit_id, e.outcome) for e in trail] == [
         ("au-1", RemovalOutcome.AUTHORIZED),
         ("au-2", RemovalOutcome.FAILED),
+        ("au-3", RemovalOutcome.COMPLETED),
     ]
     assert trail[0].findings_citing == 2 and trail[0].version_id is None
+    assert trail[0].trace_id is None  # a row written outside any request has none
+    assert (trail[2].action, trail[2].trace_id) == (RemovalAction.PUBLISH, "a" * 32)
     assert await ledger.removal_audit("other-corp") == ()
 
 
