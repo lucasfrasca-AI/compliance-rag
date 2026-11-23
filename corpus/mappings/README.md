@@ -380,7 +380,7 @@ An admin asks for proposals for one policy version from the mapping queue page
 (`/admin/mappings`, ADR-0059 Q8): the model reads that version's clauses and the
 obligation digest, and each proposal names an obligation from the digest and a
 clause of that version, or it is dropped. A mapping is proposed once: the same
-clause, obligation and kind is never proposed twice, whatever its status. A new
+clause and obligation is never proposed twice, as either kind and in any status. A new
 policy version needs its own approvals.
 
 What stays here is public law: obligations, actors, conditions, controls,
