@@ -55,6 +55,7 @@ never as markup, and `settle_by` is labelled as the model's.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -73,6 +74,7 @@ from compliance_rag.adapters.interfaces import (
     Verdict,
 )
 from compliance_rag.api.check_claims import claims_json
+from compliance_rag.api.check_decisions import standing_json
 from compliance_rag.api.check_findings import facts_json, findings_with_titles
 from compliance_rag.api.checks import (
     NOT_FOUND,
@@ -86,6 +88,7 @@ from compliance_rag.api.deps import ApiServices, Caller, CurrentCaller, services
 from compliance_rag.api.sources import source_href, source_page_href
 from compliance_rag.api.tenant import version_json
 from compliance_rag.assessment.coverage import CoverageRow, Outcome
+from compliance_rag.assessment.decisions import Decisions
 from compliance_rag.corpus.display_form import NO_TITLES, Titles, cite
 from compliance_rag.corpus.models import (
     PUBLIC_TENANT_ID,
@@ -147,6 +150,9 @@ class CheckState:
     """The recorded claims, each with its quote read back from the stored passage
     (`check_claims.claims_json`), made once when the state is read; none before the
     extraction."""
+    decisions: Decisions
+    """What members decided about the claims and findings (#301): read once, in one query,
+    once there are findings to decide on; nothing before."""
 
     @property
     def state(self) -> State:
@@ -171,7 +177,10 @@ async def read_state(services: ApiServices, who: Caller, check_id: str) -> Check
         else tuple(cast("list[Json]", claims_json(extraction, view.passages)["claims"]))
     )
     run = await services.ledger.check_run(who.tenant_id, check_id)
-    return CheckState(view, extraction, findings, run, claims)
+    decisions = Decisions.of(
+        () if findings is None else await services.ledger.check_decisions(who.tenant_id, check_id)
+    )
+    return CheckState(view, extraction, findings, run, claims, decisions)
 
 
 # ---- the document, with its claims marked ----------------------------------------------
@@ -239,19 +248,28 @@ def passage_views(
 def claim_views(state: CheckState) -> list[dict[str, object]]:
     """The state's claims as a report names them, for a page that lists them before there
     are findings."""
-    return [claim_view(c, state.view.record.check_id) for c in state.claims]
+    return [claim_view(c, state.view.record.check_id, state.decisions) for c in state.claims]
 
 
-def claim_view(claim: Json, check_id: str) -> dict[str, object]:
+def claim_view(claim: Json, check_id: str, decisions: Decisions) -> dict[str, object]:
     """A claim as the report names it: its number, the model's label, the document's own
-    words and where they are (the passage's anchor on the check's page)."""
+    words and where they are (the passage's anchor on the check's page), its tier and what a
+    member decided about it (#301). The claim itself is as it was extracted: its decision is
+    read from the rows beside it, so `provenance` here is the tier **now** (`asserted` once
+    confirmed), computed when read, while the stored claim stays `inferred`."""
+    index = int(claim["index"])
+    standing = decisions.claims.get(index)
     return {
-        "index": claim["index"],
+        "index": index,
         "summary": claim["summary"],
         "quote": claim["quote"],
         "passage": claim["passage"],
         "anchor": claim["anchor"],
         "href": f"/checks/{check_id}#{claim['anchor']}",
+        "provenance": decisions.claim_tier(index).value,
+        "decision": standing_json(standing),
+        "confirmed": decisions.confirmed(index) is not None,
+        "rejected": decisions.rejected(index) is not None,
     }
 
 
@@ -288,6 +306,8 @@ def _disagreements(
     verdict named), from the payload's `policy_disagreements`."""
     by_claim: dict[int, Json] = {}
     for d in payload["policy_disagreements"]:
+        if int(d["claim_index"]) not in claims:  # a rejected claim's findings are not shown
+            continue
         entry = by_claim.setdefault(int(d["claim_index"]), {"conflicts": {}, "others": {}})
         clause = str(d["conflicts"]["policy_clause_id"])
         entry["conflicts"][clause] = _policy_ref(clause, titles)
@@ -308,6 +328,7 @@ def _finding_view(
     shown: Json,
     claims: dict[int, dict[str, object]],
     rows: dict[str, CoverageRow],
+    decisions: Decisions,
 ) -> dict[str, object]:
     if finding.obligation_id is not None:
         target = _law_target(finding.obligation_id, rows)
@@ -315,6 +336,11 @@ def _finding_view(
         target = {"label": shown["cite"], "href": shown["href"]}
     return {
         **shown,
+        # the tier **now**, computed when read (F5): the weakest of the claim's and the
+        # verdict's, not the `inferred` the run recorded
+        "provenance": decisions.finding_tier(finding).value,
+        "can_accept": finding.outcome is FindingOutcome.VERDICT,
+        "accepted": standing_json(decisions.accepted(finding.finding_id)),
         "claim": claims[finding.claim_index],
         "label": target["label"],
         "target_href": target["href"],
@@ -415,12 +441,22 @@ async def report_json(services: ApiServices, state: CheckState) -> dict[str, obj
         services, state.view.record.tenant_id, check_id, record
     )  # the titles of every policy the findings name, read once
     payload = cast("Json", shown)
-    claims = {int(c["index"]): claim_view(c, check_id) for c in state.claims}
+    decisions = state.decisions
+    everything = {int(c["index"]): claim_view(c, check_id, decisions) for c in state.claims}
+    # a rejected claim's findings leave the report (ADR-0059 Q3): the claim is shown under
+    # "Rejected claims", with who rejected it, and nothing else of it is
+    rejected = sorted(i for i, c in everything.items() if c["rejected"])
+    claims = {i: c for i, c in everything.items() if i not in rejected}
     rows = {r.obligation_id: r for r in record.coverage}
     ordered = sorted(
         zip(record.findings, payload["findings"], strict=True), key=lambda pair: pair[0].claim_index
     )  # stable: within a claim, the ledger's order
-    views = [(f, _finding_view(f, shown, claims, rows)) for f, shown in ordered]
+    views = [
+        (f, _finding_view(f, shown, claims, rows, decisions))
+        for f, shown in ordered
+        if f.claim_index in claims
+    ]
+    set_aside = Counter(f.claim_index for f in record.findings if f.claim_index in rejected)
 
     def of_outcome(outcome: FindingOutcome) -> list[dict[str, object]]:
         return [v for f, v in views if f.outcome is outcome]
@@ -446,6 +482,10 @@ async def report_json(services: ApiServices, state: CheckState) -> dict[str, obj
         "as_of": payload["as_of"],
         "trace_id": payload["trace_id"],
         "provenance": payload["provenance"],
+        "claims": [claims[i] for i in sorted(claims)],
+        "rejected_claims": [
+            {"claim": everything[i], "findings_set_aside": set_aside[i]} for i in rejected
+        ],
         "disagreements": _disagreements(payload, claims, titles),
         "groups": groups,
         "conditional": of_outcome(FindingOutcome.CONDITIONAL),

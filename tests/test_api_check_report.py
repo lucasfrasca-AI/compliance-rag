@@ -814,6 +814,7 @@ async def test_markup_in_a_claim_and_in_a_settle_by_reaches_the_browser_as_text(
     assert not parsed.where("img")
     assert sorted(a["src"] or "" for a in parsed.where("script")) == [
         "/static/ask.js",
+        "/static/check_decisions.js",
         "/static/vendor/htmx/htmx.min.js",
     ]
 

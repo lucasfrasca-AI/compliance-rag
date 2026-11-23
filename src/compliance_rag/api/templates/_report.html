@@ -14,13 +14,38 @@
 {% endif %}
 {% endmacro %}
 
+{#- A finding's one tier (ADR-0053 F5): the weakest of its claim's and its verdict's, computed
+    when the report is read (`assessment/decisions.py`). Inferred until its claim is confirmed
+    AND its verdict accepted by a person. -#}
+{% macro tier(f) %}
+<p class="tier" data-tier="{{ f.provenance }}"><span class="flag flag-tier-{{ f.provenance }}">{{ f.provenance | capitalize }}</span>
+{% if f.provenance == "asserted" %}its claim is confirmed and its verdict accepted{% else %}until its claim is confirmed and its verdict accepted{% endif %}</p>
+{% endmacro %}
+
+{#- Accepting a verdict, and taking the acceptance back (#301). Only a finding with a verdict can
+    be accepted. The button carries the decision; `static/check_decisions.js` sends it. -#}
+{% macro verdict_decision(f) %}
+{% if f.can_accept %}
+<div class="row decide" role="group" aria-label="Decide on this verdict">
+{% if f.accepted %}
+<span class="meta" data-accepted>Verdict accepted by {{ f.accepted.by }}{% if f.accepted.at %} on <time datetime="{{ f.accepted.at }}">{{ f.accepted.at | sydney }}</time>{% endif %}</span>
+<button type="button" class="secondary" data-decide="verdict_withdrawn" data-finding="{{ f.finding_id }}">Withdraw acceptance</button>
+{% else %}
+<button type="button" data-decide="verdict_accepted" data-finding="{{ f.finding_id }}">Accept this verdict</button>
+{% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
 {% macro target(f) %}
 <p class="target">{{ "Law" if f.kind == "law" else "Policy" }}:
 {% if f.target_href %}<a class="cite" href="{{ f.target_href }}" target="_blank" rel="noopener noreferrer">{{ f.label }}</a>{% else %}<span class="cite">{{ f.label }}</span>{% endif %}
 {% if f.kind == "law" %} <span class="meta">obligation <code>{{ f.obligation_id }}</code></span>{% endif %}</p>
 {% endmacro %}
 
-<p class="meta">As of <time datetime="{{ report.as_of }}">{{ report.as_of }}</time> · trace <code>{{ report.trace_id }}</code> · every finding is inferred from the document's claims; none is confirmed</p>
+<div class="decisions" id="decisions" data-check-id="{{ check.check_id }}">
+<p class="meta">As of <time datetime="{{ report.as_of }}">{{ report.as_of }}</time> · trace <code>{{ report.trace_id }}</code> · a finding is inferred from the document's claim until the claim is confirmed and its verdict accepted{% if report.claims %} · <a href="#claims-review">Review the claims</a>{% endif %}</p>
+<div id="decision-notice" class="card outcome notice" role="alert" hidden></div>
 
 {% if report.disagreements %}
 <section class="card disagreement" role="note" aria-label="Your policies disagree" data-disagreements>
@@ -57,6 +82,8 @@
 <p class="settle"><strong>What would settle it</strong>, in the model's words: {{ f.settle_by.text }}</p>
 {% endif %}
 {{ citations(f) }}
+{{ tier(f) }}
+{{ verdict_decision(f) }}
 </article>
 {% endfor %}
 </section>
@@ -81,6 +108,7 @@
 {% endfor %}
 </ul>
 {% endif %}
+{{ tier(f) }}
 </article>
 {% endfor %}
 <p class="actions">
@@ -113,6 +141,7 @@
 {% endfor %}
 </ul>
 {% endif %}
+{{ tier(f) }}
 </article>
 {% endfor %}
 </section>
@@ -128,6 +157,7 @@
 {{ target(f) }}
 {{ claim_ref(f.claim) }}
 <p>{{ f.failed[0] | upper }}{{ f.failed[1:] }}</p>
+{{ tier(f) }}
 </article>
 {% endfor %}
 </section>
@@ -143,6 +173,46 @@
 {% if not c.picked %}
 <p class="note">The model picked no obligation or policy clause to check it against.</p>
 {% endif %}
+</article>
+{% endfor %}
+</section>
+{% endif %}
+
+{% if report.claims %}
+<section class="claims-review" id="claims-review" aria-labelledby="h-claims-review" data-claims-review>
+<h2 id="h-claims-review">Claims <span class="count">{{ report.claims | length }}</span></h2>
+<p class="note">Confirm a claim when it says what the document means. Reject one that does not, and its findings leave this report. A confirmation is not evidence about your workspace and changes no coverage; it lifts the claim, and a finding is asserted only when its verdict is accepted too.</p>
+{% for c in report.claims %}
+<article class="card claim-review" data-claim="{{ c.index }}" data-state="{{ 'confirmed' if c.confirmed else 'unconfirmed' }}" data-tier="{{ c.provenance }}">
+{{ claim_ref(c) }}
+{% if c.confirmed %}
+<p class="standing" data-standing="confirmed"><span class="flag flag-tier-asserted">Confirmed</span> by {{ c.decision.by }}{% if c.decision.at %} on <time datetime="{{ c.decision.at }}">{{ c.decision.at | sydney }}</time>{% endif %}</p>
+{% else %}
+<p class="standing" data-standing="unconfirmed"><span class="flag flag-tier-inferred">Inferred</span> not confirmed yet</p>
+{% endif %}
+<div class="row decide" role="group" aria-label="Decide on claim {{ c.index }}">
+{% if not c.confirmed %}
+<button type="button" data-decide="claim_confirmed" data-claim="{{ c.index }}">Confirm claim</button>
+{% endif %}
+<button type="button" class="secondary" data-decide="claim_rejected" data-claim="{{ c.index }}">Reject claim</button>
+</div>
+</article>
+{% endfor %}
+</section>
+{% endif %}
+
+{% if report.rejected_claims %}
+<section class="rejected-group" id="rejected-claims" aria-labelledby="h-rejected" data-rejected-claims>
+<h2 id="h-rejected">Rejected claims <span class="count">{{ report.rejected_claims | length }}</span></h2>
+<p class="note">The findings of a rejected claim are not shown. The claim itself is as it was extracted. Confirm it to bring its findings back.</p>
+{% for r in report.rejected_claims %}
+<article class="card notice" data-claim="{{ r.claim.index }}" data-state="rejected">
+{{ claim_ref(r.claim) }}
+<p class="standing" data-standing="rejected"><span class="flag flag-tier-rejected">Rejected</span> by {{ r.claim.decision.by }}{% if r.claim.decision.at %} on <time datetime="{{ r.claim.decision.at }}">{{ r.claim.decision.at | sydney }}</time>{% endif %}</p>
+<p class="note">{{ r.findings_set_aside }} {{ "finding" if r.findings_set_aside == 1 else "findings" }} left out of this report.</p>
+<div class="row decide" role="group" aria-label="Decide on claim {{ r.claim.index }}">
+<button type="button" class="secondary" data-decide="claim_confirmed" data-claim="{{ r.claim.index }}">Confirm instead</button>
+</div>
 </article>
 {% endfor %}
 </section>
@@ -188,3 +258,5 @@
 <p><strong>Not checked: {{ cs.not_checked }}.</strong> {{ cs.not_reported }}</p>
 </section>
 {% endwith %}
+</div>
+<script type="module" src="/static/check_decisions.js"></script>

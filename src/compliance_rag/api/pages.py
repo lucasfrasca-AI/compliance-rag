@@ -127,8 +127,11 @@ class PageHeaders:
         await self.app(scope, receive, send_with_headers)
 
 
-def _sydney(value: dt.datetime) -> str:
-    return value.astimezone(SYDNEY).strftime("%-d %b %Y, %H:%M")
+def _sydney(value: dt.datetime | str) -> str:
+    """A moment in Sydney time. A string is the ISO form the report's JSON carries
+    (`check_decisions.standing_json`), so the page and the JSON are drawn from one value."""
+    moment = dt.datetime.fromisoformat(value) if isinstance(value, str) else value
+    return moment.astimezone(SYDNEY).strftime("%-d %b %Y, %H:%M")
 
 
 def _clause(clause_id: str) -> str:
