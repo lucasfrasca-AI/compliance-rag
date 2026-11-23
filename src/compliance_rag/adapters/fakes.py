@@ -19,7 +19,9 @@ from compliance_rag.adapters.fusion import cut, reciprocal_rank_fusion
 from compliance_rag.adapters.generation_residency import is_real_customer_data
 from compliance_rag.adapters.interfaces import (
     CHECK_PAGE_MAX,
+    DECISION_IS_REDUNDANT_AFTER,
     FINDINGS_RESERVATION_TTL,
+    NO_EARLIER_DECISION,
     NO_PREFIX,
     RESERVATION_TTL,
     AccountDirectory,
@@ -31,6 +33,7 @@ from compliance_rag.adapters.interfaces import (
     ChatSummary,
     ChatTurn,
     CheckCursor,
+    CheckDecision,
     CheckListing,
     CheckNotExtracted,
     CheckRecord,
@@ -39,6 +42,7 @@ from compliance_rag.adapters.interfaces import (
     ClauseStore,
     Embedder,
     ExtractionAlreadyReserved,
+    FindingOutcome,
     FindingsAlreadyReserved,
     FindingsRecord,
     Generation,
@@ -64,6 +68,7 @@ from compliance_rag.adapters.interfaces import (
     check_chat_exchange,
     check_check_write,
     check_claims_write,
+    check_decision_write,
     check_findings_write,
     check_run_of,
     check_stage_of,
@@ -483,6 +488,7 @@ class FakeLedgerStore(LedgerStore):
         self._checks: dict[tuple[str, str], CheckRecord] = {}  # (tenant, check) -> the check
         self._extractions: dict[tuple[str, str], _Extraction] = {}  # the same key
         self._findings_runs: dict[tuple[str, str], _FindingsRun] = {}  # the same key
+        self._decisions: list[CheckDecision] = []  # oldest first, append-only
         self._recorded_at = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     async def get_profile(self, tenant_id: str) -> Profile | None:
@@ -785,6 +791,61 @@ class FakeLedgerStore(LedgerStore):
             else Reservation(
                 findings.status, findings.reserved_at < now - FINDINGS_RESERVATION_TTL
             ),
+        )
+
+    async def record_check_decision(self, decision: CheckDecision) -> bool:
+        """Checked before anything is stored, in Postgres' order. No `await` between the
+        read of the latest decision and the append, so of concurrent requests one wins, as
+        the database's lock makes it."""
+        check_decision_write(decision)
+        key = (decision.tenant_id, decision.check_id)
+        extraction = self._extractions.get(key)
+        if extraction is None or extraction.status != "done" or extraction.record is None:
+            raise ValueError(
+                f"tenant {decision.tenant_id!r} holds no extracted check {decision.check_id}"
+            )
+        if decision.kind.of_claim:
+            if decision.claim_index not in {c.claim_index for c in extraction.record.claims}:
+                raise ValueError(
+                    f"tenant {decision.tenant_id!r} holds no extracted check "
+                    f"{decision.check_id} with a claim {decision.claim_index}"
+                )
+            same = [
+                d
+                for d in self._decisions
+                if (d.tenant_id, d.check_id) == key and d.claim_index == decision.claim_index
+            ]
+        else:
+            run = self._findings_runs.get(key)
+            held = (
+                ()
+                if run is None or run.status != "done" or run.record is None
+                else run.record.findings
+            )
+            if not any(
+                f.finding_id == decision.finding_id and f.outcome is FindingOutcome.VERDICT
+                for f in held
+            ):
+                raise ValueError(
+                    f"check {decision.check_id} has no finding {decision.finding_id} "
+                    "with a verdict: only a verdict can be accepted"
+                )
+            same = [
+                d
+                for d in self._decisions
+                if (d.tenant_id, d.check_id) == key and d.finding_id == decision.finding_id
+            ]
+        latest = same[-1].kind.value if same else NO_EARLIER_DECISION
+        if latest in DECISION_IS_REDUNDANT_AFTER[decision.kind]:
+            return False
+        self._decisions.append(
+            replace(decision, decision_id=len(self._decisions) + 1, decided_at=self._now())
+        )
+        return True
+
+    async def check_decisions(self, tenant_id: str, check_id: str) -> tuple[CheckDecision, ...]:
+        return tuple(
+            d for d in self._decisions if (d.tenant_id, d.check_id) == (tenant_id, check_id)
         )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:

@@ -1028,6 +1028,104 @@ def check_findings_write(record: FindingsRecord, claim_count: int | None = None)
 
 
 # --------------------------------------------------------------------------
+# Claim confirmation, claim rejection and verdict acceptance (#301, ADR-0059 Q3, C1)
+# --------------------------------------------------------------------------
+
+
+class DecisionKind(StrEnum):
+    """What a member decided about a check's claim or finding (#301). Four kinds, one
+    append-only table: a decision is never changed, so changing one's mind is a later
+    row, and the current state of a claim or a verdict is its **latest** row."""
+
+    CLAIM_CONFIRMED = "claim_confirmed"
+    """The claim says what the document means (CONTEXT.md: Claim confirmation). Lifts
+    the claim to `asserted`. Not evidence: it settles no condition and changes no
+    coverage."""
+    CLAIM_REJECTED = "claim_rejected"
+    """The claim is not what the document means. Its findings leave the report, which
+    says who rejected it. The claim row is never touched."""
+    VERDICT_ACCEPTED = "verdict_accepted"
+    """A person accepts a finding's verdict, which lifts the verdict to `asserted`.
+    Only a finding with a verdict (`FindingOutcome.VERDICT`) can be accepted."""
+    VERDICT_WITHDRAWN = "verdict_withdrawn"
+    """The acceptance is taken back: the verdict is `inferred` again."""
+
+    @property
+    def of_claim(self) -> bool:
+        return self in (DecisionKind.CLAIM_CONFIRMED, DecisionKind.CLAIM_REJECTED)
+
+
+NO_EARLIER_DECISION = ""
+"""Stands for "no earlier decision" in `DECISION_IS_REDUNDANT_AFTER`, and in the SQL that
+applies it."""
+
+DECISION_IS_REDUNDANT_AFTER: Mapping[DecisionKind, tuple[str, ...]] = {
+    DecisionKind.CLAIM_CONFIRMED: (DecisionKind.CLAIM_CONFIRMED.value,),
+    DecisionKind.CLAIM_REJECTED: (DecisionKind.CLAIM_REJECTED.value,),
+    DecisionKind.VERDICT_ACCEPTED: (DecisionKind.VERDICT_ACCEPTED.value,),
+    DecisionKind.VERDICT_WITHDRAWN: (
+        NO_EARLIER_DECISION,
+        DecisionKind.VERDICT_WITHDRAWN.value,
+    ),
+}
+"""The one rule, for every `LedgerStore`, for when a decision adds nothing: a request for
+the state a claim or a verdict is already in appends no row (so a double click is one
+row), and nothing is withdrawn that was not accepted. Keyed by the kind asked for, valued
+by the latest earlier decision on the same claim or finding after which it is redundant
+(`NO_EARLIER_DECISION` for none). Latest wins: a confirmation may be followed by a
+rejection and the reverse, and an acceptance by its withdrawal and the reverse."""
+
+
+@dataclass(frozen=True, slots=True)
+class CheckDecision:
+    """One row of a check's decisions (ledger `check_decision`): who decided what about
+    which claim or finding, and when. Append-only: nothing ever updates or deletes one,
+    and the claim and finding it points at are never changed by it (ADR-0034, CONTEXT.md:
+    Claim)."""
+
+    tenant_id: str
+    check_id: str
+    kind: DecisionKind
+    user_id: str
+    """Who decided, by the stable sign-in uid (ADR-0036)."""
+    email: str
+    """The address shown beside the decision ("rejected by ..."), as it was when it was made."""
+    trace_id: str
+    """The request that made it."""
+    claim_index: int | None = None
+    """The claim a claim decision is about, by its number in the check's extraction."""
+    finding_id: str | None = None
+    """The finding a verdict decision is about."""
+    decision_id: int | None = None
+    """Stamped by the ledger on write: the order decisions were made in."""
+    decided_at: dt.datetime | None = None
+    """Stamped by the ledger on write."""
+
+
+def check_decision_write(decision: CheckDecision) -> None:
+    """What every `LedgerStore` refuses before writing a decision; the database's own
+    constraints refuse each again (ledger 0029). What only a store can refuse (a check,
+    claim or finding it does not hold, a finding that has no verdict) comes after, in
+    both."""
+    if not decision.check_id.strip():
+        raise ValueError("a decision names its check")
+    if not decision.trace_id.strip():
+        raise ValueError("a decision carries the trace_id of its request")
+    if not decision.user_id.strip() or not decision.email.strip():
+        raise ValueError("a decision names who made it")
+    if decision.kind.of_claim:
+        if decision.claim_index is None or not 1 <= decision.claim_index <= MAX_CLAIMS:
+            raise ValueError("a claim decision names its claim, numbered from 1")
+        if decision.finding_id is not None:
+            raise ValueError("a claim decision names no finding")
+    else:
+        if decision.finding_id is None or not decision.finding_id.strip():
+            raise ValueError("a verdict decision names its finding")
+        if decision.claim_index is not None:
+            raise ValueError("a verdict decision names its finding, not a claim")
+
+
+# --------------------------------------------------------------------------
 # Chat (#162, CONTEXT.md: Chat)
 # --------------------------------------------------------------------------
 
@@ -1876,6 +1974,28 @@ class LedgerStore(ABC):
         reserved and still within its time-out, or the stage that failed or was abandoned.
         Reads only; reserves nothing. An empty `CheckRun` for a check with no run, and for
         one whose findings are done."""
+
+    @abstractmethod
+    async def record_check_decision(self, decision: CheckDecision) -> bool:
+        """Append one decision about a check's claim or finding (#301): a claim
+        confirmed or rejected, a verdict accepted or withdrawn, with who made it, when
+        (stamped here) and the request's `trace_id`. **Append-only**: nothing is updated
+        or deleted, and the claim and finding it points at are never changed. Returns
+        True when a row was appended and False when none was because the decision adds
+        nothing (`DECISION_IS_REDUNDANT_AFTER`: the claim or verdict is already in that
+        state), decided against the latest row in the same statement, so a double click
+        is one row. A `ValueError` and nothing written for anything `check_decision_write`
+        refuses; a tenant that holds no such check; a claim the check's extraction does
+        not hold; a finding that is not one of the check's findings, or that has no
+        verdict (only a verdict can be accepted)."""
+
+    @abstractmethod
+    async def check_decisions(self, tenant_id: str, check_id: str) -> tuple[CheckDecision, ...]:
+        """Every decision made about the check, oldest first: **one read** whatever the
+        number of claims and findings, so a report never reads per claim. Not
+        owner-keyed, like `get_claims`: who may see a check is `CheckRecord.visible_to`,
+        applied by every route first. Empty for a check with none, or that is not this
+        tenant's."""
 
     @abstractmethod
     async def record_chat_exchange(self, exchange: ChatExchange) -> None:

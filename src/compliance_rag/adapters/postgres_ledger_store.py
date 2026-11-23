@@ -31,6 +31,7 @@ from psycopg.types.json import Jsonb
 
 from compliance_rag.adapters.interfaces import (
     CHECK_PAGE_MAX,
+    DECISION_IS_REDUNDANT_AFTER,
     FINDINGS_RESERVATION_TTL,
     RESERVATION_TTL,
     AssessmentRecord,
@@ -41,6 +42,7 @@ from compliance_rag.adapters.interfaces import (
     ChatSummary,
     ChatTurn,
     CheckCursor,
+    CheckDecision,
     CheckListing,
     CheckNotExtracted,
     CheckRecord,
@@ -48,6 +50,7 @@ from compliance_rag.adapters.interfaces import (
     Citation,
     ClaimExtractionRecord,
     ClaimRecord,
+    DecisionKind,
     ExtractionAlreadyReserved,
     FailureReason,
     FindingCitation,
@@ -80,6 +83,7 @@ from compliance_rag.adapters.interfaces import (
     check_chat_exchange,
     check_check_write,
     check_claims_write,
+    check_decision_write,
     check_findings_write,
     check_run_of,
     check_stage_of,
@@ -1225,6 +1229,119 @@ class PostgresLedgerStore(LedgerStore):
                 )
                 for u in used
             ),
+        )
+
+    async def record_check_decision(self, decision: CheckDecision) -> bool:
+        check_decision_write(decision)
+        redundant = list(DECISION_IS_REDUNDANT_AFTER[decision.kind])
+        # Append-only: this is the only statement here that writes `check_decision`, and it
+        # only INSERTs. Whether the decision adds anything is judged against the latest row
+        # of the same claim or finding in the same statement, under a lock on the check, so
+        # two requests at once cannot both append the same state.
+        lock = f"{decision.tenant_id}/{decision.check_id}"
+        try:
+            async with self._connection() as conn, conn.transaction():
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock,))
+                if decision.kind.of_claim:
+                    row = await (
+                        await conn.execute(
+                            "INSERT INTO check_decision (tenant_id, check_id, kind, claim_index, "
+                            "user_id, email, trace_id, decided_at) "
+                            "SELECT %s, %s, %s, %s, %s, %s, %s, clock_timestamp() "
+                            "WHERE COALESCE((SELECT kind FROM check_decision WHERE tenant_id = %s "
+                            "AND check_id = %s AND claim_index = %s "
+                            "ORDER BY decision_id DESC LIMIT 1), '') <> ALL(%s::text[]) "
+                            "RETURNING 1",
+                            (
+                                decision.tenant_id,
+                                decision.check_id,
+                                decision.kind.value,
+                                decision.claim_index,
+                                decision.user_id,
+                                decision.email,
+                                decision.trace_id,
+                                decision.tenant_id,
+                                decision.check_id,
+                                decision.claim_index,
+                                redundant,
+                            ),
+                        )
+                    ).fetchone()
+                    return row is not None
+                # A verdict decision is of one of this check's findings that has a verdict:
+                # a foreign key names the finding, not its check or its outcome.
+                row = await (
+                    await conn.execute(
+                        "INSERT INTO check_decision (tenant_id, check_id, kind, finding_id, "
+                        "user_id, email, trace_id, decided_at) "
+                        "SELECT %s, %s, %s, f.finding_id, %s, %s, %s, clock_timestamp() "
+                        "FROM finding f WHERE f.tenant_id = %s AND f.check_id = %s "
+                        "AND f.finding_id = %s AND f.outcome = 'verdict' "
+                        "AND COALESCE((SELECT kind FROM check_decision WHERE tenant_id = %s "
+                        "AND check_id = %s AND finding_id = %s "
+                        "ORDER BY decision_id DESC LIMIT 1), '') <> ALL(%s::text[]) "
+                        "RETURNING 1",
+                        (
+                            decision.tenant_id,
+                            decision.check_id,
+                            decision.kind.value,
+                            decision.user_id,
+                            decision.email,
+                            decision.trace_id,
+                            decision.tenant_id,
+                            decision.check_id,
+                            decision.finding_id,
+                            decision.tenant_id,
+                            decision.check_id,
+                            decision.finding_id,
+                            redundant,
+                        ),
+                    )
+                ).fetchone()
+                if row is not None:
+                    return True
+                held = await (
+                    await conn.execute(
+                        "SELECT 1 FROM finding WHERE tenant_id = %s AND check_id = %s "
+                        "AND finding_id = %s AND outcome = 'verdict'",
+                        (decision.tenant_id, decision.check_id, decision.finding_id),
+                    )
+                ).fetchone()
+                if held is None:
+                    raise ValueError(
+                        f"check {decision.check_id} has no finding {decision.finding_id} "
+                        "with a verdict: only a verdict can be accepted"
+                    )
+                return False
+        except psycopg.errors.ForeignKeyViolation as exc:
+            raise ValueError(
+                f"tenant {decision.tenant_id!r} holds no extracted check {decision.check_id} "
+                f"with a claim {decision.claim_index}"
+            ) from exc
+        except psycopg.errors.CheckViolation as exc:
+            raise ValueError(f"decision refused: {exc.diag.constraint_name}") from None
+
+    async def check_decisions(self, tenant_id: str, check_id: str) -> tuple[CheckDecision, ...]:
+        rows = await self._fetchall(
+            "SELECT decision_id, kind, claim_index, finding_id, user_id, email, trace_id, "
+            "decided_at FROM check_decision WHERE tenant_id = %s AND check_id = %s "
+            "ORDER BY decision_id",
+            (tenant_id, check_id),
+        )
+        return tuple(
+            CheckDecision(
+                tenant_id=tenant_id,
+                check_id=check_id,
+                decision_id=int(r[0]),
+                kind=DecisionKind(str(r[1])),
+                claim_index=None if r[2] is None else int(r[2]),
+                finding_id=None if r[3] is None else str(r[3]),
+                user_id=str(r[4]),
+                email=str(r[5]),
+                trace_id=str(r[6]),
+                decided_at=r[7],
+            )
+            for r in rows
         )
 
     async def chat_turns(self, tenant_id: str, user_id: str, chat_id: str) -> tuple[ChatTurn, ...]:
